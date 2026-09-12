@@ -25,7 +25,7 @@ async function refreshModels() {
   catch (e) { models.value = []; modelsError.value = `cannot list models: ${(e as Error).message}` }
 }
 async function refreshLists() { harnessNames.value = (await api.harnesses()).map(h => h.name); runs.value = await api.runs() }
-async function load(name: string) { if (name) config.value = await api.harness(name) }
+async function load(name: string) { if (!name) return; const c = await api.harness(name); c.toolCalls.format ??= 'json'; config.value = c }
 async function saveAs(name: string) { error.value = ''; try { config.value.name = name; await api.saveHarness(name, outbound(config.value)); await refreshLists() } catch (e) { error.value = (e as Error).message } }
 function open(id: string) {
   unsub?.(); events.value = []; runId.value = id

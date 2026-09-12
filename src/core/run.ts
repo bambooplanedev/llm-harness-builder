@@ -68,9 +68,11 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
       parseError = 'response truncated by max tokens (finish_reason=length)'
     } else if (prompted) {
       const p = hermes ? parseHermes(res.content) : parsePrompted(res.content)
-      if (hermes && res.toolCalls.length && !(p.ok && p.calls.length)) {
+      if (hermes && res.toolCalls.length && !(p.ok && p.calls.length) && !res.content.includes('<tool_call>')) {
         // llama-server/Ollama (version- and template-dependent) may have lifted the <tool_call>
         // blocks into tool_calls and left content empty or prose-only. Use them; the trace keeps raw.
+        // Only when content carries no <tool_call> text at all — if it does, the block is malformed
+        // (parseHermes rejected it), and that must surface as a parse_error, not be silently swallowed.
         calls = res.toolCalls
       } else if (p.ok) {
         if (p.calls.length === 0 && (p.final === null || p.final.trim() === ''))

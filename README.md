@@ -28,7 +28,7 @@ starts in `./runs/*.jsonl`. Diff two traces with any tool.
 
 - `kind: "ollama"` talks to Ollama's native `/api/chat` so `num_ctx` is honoured.
   Ollama's OpenAI-compatible `/v1` ignores `num_ctx` and silently truncates the prompt.
-- `kind: "openai"` works with llama-server (`--jinja` required for tools), LM Studio, vLLM,
+- `kind: "openai"` works with llama-server (`--jinja` required for native tool calls), LM Studio, vLLM,
   and anything else serving `/v1/chat/completions`.
 
 ## CLI
@@ -84,9 +84,9 @@ The task: find a bug report on the single `ERROR` line near the end of a 3002-li
 
 | harness | verdict | turns | tool calls | how it ended |
 |---|---|---|---|---|
-| `bare` — native tool calls, minimal prompt, no truncation | **FAIL** | 5 | 4 | `backend_error`: two invented `edit_file` targets, then a reasoning chain that outlived the HTTP timeout |
-| `tuned` — prompted + `enforceSchema`, the `opencode-like` preset plus "run `node --test` before `final`" and `/no_think`, one call per response, 4000-char truncation | **PASS** | 5 | 5 | `final`: fixed `slugify`, ran `node --test`, answered only once it was green |
-| `tuned-hermes` — `tuned` with the `qwen3` family applied: same prompt, `/no_think`, one call per response, 4000-char truncation, but `<tool_call>` blocks instead of the JSON object and no `enforceSchema` | **PASS** | 6 | 5 | `final`: a plain-text summary, sent only after `node --test` came back green |
+| v1 run · `bare` — native tool calls, minimal prompt, no truncation | **FAIL** | 5 | 4 | `backend_error`: two invented `edit_file` targets, then a reasoning chain that outlived the HTTP timeout |
+| v1 run · `tuned` — prompted + `enforceSchema`, the `opencode-like` preset plus "run `node --test` before `final`" and `/no_think`, one call per response, 4000-char truncation | **PASS** | 5 | 5 | `final`: fixed `slugify`, ran `node --test`, answered only once it was green |
+| v2.0.1 run · `tuned-hermes` — `tuned` with the `qwen3` family applied: same prompt, `/no_think`, one call per response, 4000-char truncation, but `<tool_call>` blocks instead of the JSON object and no `enforceSchema` | **PASS** | 6 | 5 | `final`: a plain-text summary, sent only after `node --test` came back green |
 
 The `bare` and `tuned` rows are from the v1 run; the `tuned-hermes` row is from a v2.0.1 re-run of
 all three. On the re-run for v2.0.1, `bare` ended `final` instead of `backend_error` — the 300 s
@@ -94,7 +94,7 @@ transport limit is gone, so its two runaway turns (398 s and 371 s) now come bac
 `finish_reason: length` parse errors, and it still ended FAIL, answering with the JSON object it
 was supposed to send as tool calls while `node --test` was still red.
 
-`bare` found the report on its first turn (`grep -n 'ERROR' data/app.log | tail -1`) and then
+On the v1 run, `bare` found the report on its first turn (`grep -n 'ERROR' data/app.log | tail -1`) and then
 twice guessed the line it wanted to replace. First `return str.replace(/\s+/g, '-').toLowerCase();`,
 a function that is nowhere in the project; then, after `read_file` had shown it the real body, the
 real line plus a semicolon the file does not have. Both edits came back `found 0 occurrences`.
@@ -113,9 +113,10 @@ src/slugify.js`, one `edit_file` copied from what it had just read, `bash node -
 green — and then turn 6 was plain prose with no block at all, which in `hermes` format *is* the
 final answer. Six turns, five calls, one block per response, not one malformed block and not one
 parse error. 34 s of generation, against the 35 s `tuned` took in that same re-run: on this model
-the XML shape costs nothing and buys the trace. And the server did not do the parsing — prompted mode sends no `tools[]`, so
-llama-server left the blocks in `message.content` (visible in the raw response in the trace) and
-`parseHermes` read them. One run each; PASS rates over repeated runs are the next iteration's job.
+the XML shape costs nothing and buys the trace. And the server did not do the parsing — prompted
+mode sends no `tools[]`, so llama-server left the blocks in `message.content` (visible in the raw
+response in the trace) and `parseHermes` read them. One run each; PASS rates over repeated runs are
+the next iteration's job.
 
 ### Isolating the knobs: two more runs
 

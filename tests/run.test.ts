@@ -220,6 +220,18 @@ test('hermes: enforceSchema is ignored (no responseSchema in the request)', asyn
   expect(be.requests[0].responseSchema).toBeUndefined()
 })
 
+test('hermes: a malformed block in content is a parse error even if the server also returned tool_calls', async () => {
+  const be = new Fake([
+    { content: '<tool_call>{oops</tool_call>', toolCalls: [{ name: 'read_file', args: { path: 'a.txt' } }] },
+    { content: 'Done.' },
+  ])
+  const ev = await collect({ config: hermesCfg(), task: 'do', workdir: await wd() }, { backend: be })
+  expect(types(ev)).toContain('parse_error')
+  expect(types(ev)).not.toContain('tool_call')
+  expect(be.requests[1].messages.at(-1)).toMatchObject({ role: 'user', content: 'HINT' })
+  expect(last(ev)).toMatchObject({ reason: 'final', text: 'Done.', toolCallCount: 0 })
+})
+
 test('hermes: broken block -> parse_error with hint, second in a row -> parse_failed', async () => {
   const be = new Fake([{ content: '<tool_call>{oops</tool_call>' }, { content: '<tool_call>' }])
   const ev = await collect({ config: hermesCfg(), task: 'do', workdir: await wd() }, { backend: be })
