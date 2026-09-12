@@ -113,7 +113,11 @@ export async function startServer(opts: ServerOpts) {
         // duplicates between the snapshot and the buffer are harmless since emit() dedupes on `sent`.
         const buffered: HarnessEvent[] = []
         let replaying = true
-        const unsub = store.subscribe(id, e => { if (replaying) buffered.push(e); else emit(e) })
+        const unsub = store.subscribe(id, e => {
+          // Deltas are live-only: no id (Last-Event-ID stays on real events), dropped while replaying (headers not sent yet).
+          if (e.type === 'delta') { if (!replaying) res.write(`event: delta\ndata: ${JSON.stringify(e)}\n\n`) }
+          else if (replaying) buffered.push(e); else emit(e)
+        })
         req.on('close', unsub) // before the first await: a client that drops mid-read must not leave a listener behind
         let past: HarnessEvent[]
         try { past = await store.read(id) } catch { return json(res, 404, { error: 'not found' }) }

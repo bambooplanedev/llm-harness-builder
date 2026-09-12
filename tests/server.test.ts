@@ -4,12 +4,20 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import http from 'node:http'
 import { startServer } from '../src/server/index.js'
-import type { Backend, NormalizedResponse } from '../src/core/backends/types.js'
+import type { Backend, Delta, NormalizedResponse } from '../src/core/backends/types.js'
 
-const fake = (queue: Partial<NormalizedResponse>[]): Backend => ({
+type Queued = Partial<NormalizedResponse> & { deltas?: Delta[] }
+let gate: Promise<void> = Promise.resolve() // a test can hold send() until its SSE client is connected
+const fake = (queue: Queued[]): Backend => ({
   async listModels() { return ['fake-model'] },
   buildPayload: r => r,
-  async send() { const r = queue.shift(); if (!r) throw new Error('no more'); return { content: '', toolCalls: [], raw: {}, ...r } },
+  async send(_p, _s, onDelta) {
+    const r = queue.shift(); if (!r) throw new Error('no more')
+    await gate
+    const { deltas, ...rest } = r
+    for (const d of deltas ?? []) onDelta?.(d)
+    return { content: '', toolCalls: [], raw: {}, ...rest }
+  },
 })
 const config = (over = {}) => ({
   name: 'h', backend: { kind: 'openai', baseUrl: 'http://x/v1', model: 'fake-model', temperature: 0 },
@@ -21,7 +29,7 @@ const config = (over = {}) => ({
 const runsDir = await mkdtemp(join(tmpdir(), 'lhb-runs-'))
 const harnessesDir = await mkdtemp(join(tmpdir(), 'lhb-h-'))
 const workdir = await mkdtemp(join(tmpdir(), 'lhb-wd-'))
-let queue: Partial<NormalizedResponse>[] = []
+let queue: Queued[] = []
 const srv = await startServer({ port: 0, runsDir, harnessesDir, backendFactory: () => fake(queue) })
 const base = `http://127.0.0.1:${srv.port}`
 afterAll(() => srv.close())
@@ -202,4 +210,18 @@ test('PUT harness with a large multi-byte systemPrompt round-trips byte-exact', 
   expect(put.status).toBe(200)
   const got = await (await fetch(`${base}/api/harnesses/utf8`)).json()
   expect(got.systemPrompt).toBe(systemPrompt)
+})
+
+test('deltas stream live as event: delta and never reach the jsonl or a replay', async () => {
+  let open!: () => void; gate = new Promise(r => (open = r))
+  queue = [{ deltas: [{ reasoning: 'thinking ' }, { content: 'hi' }], content: 'hi' }]
+  const r = await fetch(`${base}/api/runs`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ config: config(), task: 't', workdir }) })
+  const { runId } = await r.json()
+  // Release send() only once this client has seen llm_request over SSE: by then its listener is registered and the replay is over.
+  const live = await sse(runId, e => { if (e.type === 'llm_request') open(); return e.type === 'done' })
+  gate = Promise.resolve()
+  const i = live.findIndex(e => e.type === 'delta')
+  expect(live.slice(i, i + 3)).toEqual([{ type: 'delta', reasoning: 'thinking ' }, { type: 'delta', content: 'hi' }, expect.objectContaining({ type: 'llm_response', content: 'hi' })])
+  expect(await readFile(join(runsDir, `${runId}.jsonl`), 'utf8')).not.toContain('"delta"')
+  expect((await collectSSE(`${base}/api/runs/${runId}/events`)).some(e => e.type === 'delta')).toBe(false)
 })

@@ -44,11 +44,12 @@ async function loadHarness(file: string, over: { model?: string; baseUrl?: strin
   return cfg
 }
 
-function describe(e: HarnessEvent): string {
+/** `streamed`: the turn's text was already written live to stderr, so llm_response skips its excerpt. */
+function describe(e: HarnessEvent, streamed = false): string {
   switch (e.type) {
     case 'context_stats': return `[t${e.turn}] context ${e.exactTokens !== undefined ? `${e.exactTokens} tok exact (~${e.estimatedTokens} est)` : `~${e.estimatedTokens} tok`}${e.droppedChars ? `, dropped ${e.droppedChars} chars` : ''}`
     case 'llm_request': return `[t${e.turn}] llm_request`
-    case 'llm_response': return `[t${e.turn}] llm_response ${e.latencyMs}ms${e.usage ? ` (${e.usage.promptTokens}+${e.usage.completionTokens} tok)` : ''}${e.content ? `\n    ${e.content.slice(0, 200).replace(/\n/g, ' ')}` : ''}`
+    case 'llm_response': return `[t${e.turn}] llm_response ${e.latencyMs}ms${e.usage ? ` (${e.usage.promptTokens}+${e.usage.completionTokens} tok)` : ''}${e.content && !streamed ? `\n    ${e.content.slice(0, 200).replace(/\n/g, ' ')}` : ''}`
     case 'parse_error': return `[t${e.turn}] parse_error: ${e.message}`
     case 'tool_call': return `[t${e.turn}] tool_call ${e.call.name} ${JSON.stringify(e.call.args).slice(0, 200)}`
     case 'approval_required': return `[t${e.turn}] approval_required ${e.call.name}`
@@ -68,12 +69,21 @@ async function execRun(config: HarnessConfig, task: string, workdir: string, o: 
     return /^y(es)?$/i.test(a.trim())
   }
   const opts: RunOpts = { approve, backend: await fakeBackendFromEnv(), signal: o.signal }
+  // Live text only on a terminal: reasoning dim, content plain; a pipe, bench (quiet) and --json see events only.
+  let streamed = false
+  if (!o.quiet && process.stderr.isTTY) opts.onDelta = d => {
+    if (d.reasoning) process.stderr.write(`\x1b[2m${d.reasoning}\x1b[0m`)
+    if (d.content) process.stderr.write(d.content)
+    streamed = true
+  }
   let last: HarnessEvent | undefined
   try {
     for await (const e of runAgent({ config, task, workdir }, opts)) {
       last = e
       if (o.json) process.stdout.write(JSON.stringify(e) + '\n')
-      if (!o.quiet) console.error(describe(e))
+      if (streamed) process.stderr.write('\n')
+      if (!o.quiet) console.error(describe(e, streamed))
+      if (e.type === 'llm_response') streamed = false
       o.onEvent?.(e)
     }
   } finally {

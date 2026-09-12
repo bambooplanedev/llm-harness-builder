@@ -4,11 +4,14 @@ import path from 'node:path'
 import { runAgent } from '../core/run.js'
 import type { RunParams } from '../core/config.js'
 import type { HarnessEvent, ToolCall } from '../core/events.js'
-import type { Backend } from '../core/backends/types.js'
+import type { Backend, Delta } from '../core/backends/types.js'
 
 export type RunSummary = { id: string; harness: string; task: string; workdir: string; started: number; reason?: string; turns?: number; toolCallCount?: number }
 type Meta = { meta: { id: string; harness: string; task: string; workdir: string; started: number } }
-type Active = { abort: AbortController; approvals: Map<string, (ok: boolean) => void>; workdir: string; listeners: Set<(e: HarnessEvent) => void>; timer?: NodeJS.Timeout }
+/** Live-only: fanned out to listeners, never written to the run file, no seq. */
+export type DeltaMsg = Delta & { type: 'delta' }
+type Listener = (e: HarnessEvent | DeltaMsg) => void
+type Active = { abort: AbortController; approvals: Map<string, (ok: boolean) => void>; workdir: string; listeners: Set<Listener>; timer?: NodeJS.Timeout }
 
 const APPROVAL_TIMEOUT_MS = 10 * 60_000
 const CHUNK = 64 * 1024
@@ -72,7 +75,8 @@ export class RunStore {
     void (async () => {
       let seq = 0
       try {
-        for await (const e of runAgent(params, { signal: a.abort.signal, approve, backend })) {
+        const onDelta = (d: Delta) => { for (const fn of a.listeners) fn({ type: 'delta', ...d }) }
+        for await (const e of runAgent(params, { signal: a.abort.signal, approve, backend, onDelta })) {
           seq = e.seq + 1
           await appendFile(this.file(id), JSON.stringify(e) + '\n')
           for (const fn of a.listeners) fn(e)
@@ -117,7 +121,7 @@ export class RunStore {
     return doneEvent
   }
 
-  subscribe(id: string, fn: (e: HarnessEvent) => void): () => void {
+  subscribe(id: string, fn: Listener): () => void {
     const a = this.active.get(id)
     a?.listeners.add(fn)
     return () => a?.listeners.delete(fn)

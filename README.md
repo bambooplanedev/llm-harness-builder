@@ -24,6 +24,10 @@ and `tuned-hermes`, and prints PASS/FAIL from a check script — not from eyebal
 Add `--json` to get the full event stream as JSONL on stdout; the workbench UI keeps every run it
 starts in `./runs/*.jsonl`. Diff two traces with any tool.
 
+The current turn streams live: `<think>` and the answer appear as they are generated, with a rough
+`~N tok` counter (in the UI, and in `run`/`demo` on a terminal). The trace keeps one `llm_response`
+per turn; the live text is not saved.
+
 `demo` is one run per harness. `bench` repeats it and reports PASS rates:
 
     npx llm-harness-builder bench --n 5 \
@@ -174,6 +178,12 @@ both harnesses failed on the very first run of this demo.
   disabled in thinking mode. The parser is lenient regardless. In the run above, `enforceSchema`
   did nothing at all until thinking was off — the model kept spending its whole budget inside
   `<think>` and never reached the JSON.
+- Streaming is always on. The raw response in the inspector is assembled from the stream (the last
+  chunk plus the collected message), not the chunk log. `<think>` shows as a separate grey block only
+  when the server separates it (llama-server `--jinja` with a reasoning format, Ollama `thinking`);
+  otherwise the tags arrive inside the text. Known failure path: llama-server builds before May 2025
+  answer 400 to `tools` together with `stream`; a buffering proxy delays the live text but the run
+  still completes.
 - Token counts are exact on llama-server (`/apply-template` + `/tokenize`: chat template and
   `tools[]` included) and a `chars / 4` estimate of the messages elsewhere; the budget trims by
   the estimate in both cases; the backend's `usage` is shown after each response.

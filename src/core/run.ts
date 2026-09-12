@@ -1,12 +1,12 @@
 import type { RunParams } from './config.js'
 import type { HarnessEvent, ToolCall, DoneReason } from './events.js'
-import { createBackend, type Backend, type ChatMessage, type ChatRequest, type NormalizedResponse, type Usage } from './backends/index.js'
+import { createBackend, type Backend, type ChatMessage, type ChatRequest, type Delta, type NormalizedResponse, type Usage } from './backends/index.js'
 import { TOOL_SCHEMAS, runTool } from './tools/index.js'
 import { renderTools, PROMPTED_SCHEMA } from './prompts.js'
 import { parsePrompted, parseHermes } from './parse.js'
 import { estimateTokens, applyBudget } from './tokens.js'
 
-export type RunOpts = { signal?: AbortSignal; approve?: (call: ToolCall) => Promise<boolean>; backend?: Backend }
+export type RunOpts = { signal?: AbortSignal; approve?: (call: ToolCall) => Promise<boolean>; backend?: Backend; onDelta?: (d: Delta) => void }
 
 // Plain Omit collapses the HarnessEvent union into one object type; distribute it manually
 // so each variant keeps its own extra fields (reason, payload, call, ...).
@@ -49,7 +49,7 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
     const t0 = Date.now()
     let res: NormalizedResponse
     try {
-      res = await backend.send(payload, opts.signal)
+      res = await backend.send(payload, opts.signal, opts.onDelta)
     } catch (e) {
       if (opts.signal?.aborted) { yield done('aborted'); return }
       const cause = (e as any)?.cause?.code ?? (e as any)?.cause?.message

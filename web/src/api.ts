@@ -1,7 +1,8 @@
 import type { HarnessConfig } from '../../src/core/config'
 import type { HarnessEvent } from '../../src/core/events'
 import type { RunSummary } from '../../src/server/runs'
-export type { HarnessConfig, HarnessEvent, RunSummary }
+import type { Delta } from '../../src/core/backends/types'
+export type { HarnessConfig, HarnessEvent, RunSummary, Delta }
 
 async function j<T>(url: string, init?: RequestInit): Promise<T> {
   const r = await fetch(url, { headers: { 'content-type': 'application/json' }, ...init })
@@ -20,9 +21,10 @@ export const api = {
   approve: (id: string, callId: string, ok: boolean) => j(`/api/runs/${id}/approve`, { method: 'POST', body: JSON.stringify({ callId, ok }) }),
   abort: (id: string) => j(`/api/runs/${id}/abort`, { method: 'POST' }),
   /** Subscribes to a run; browser EventSource handles Last-Event-ID on reconnect. */
-  events: (id: string, onEvent: (e: HarnessEvent) => void, onError: (message: string) => void): (() => void) => {
+  events: (id: string, onEvent: (e: HarnessEvent) => void, onError: (message: string) => void, onDelta?: (d: Delta) => void): (() => void) => {
     const es = new EventSource(`/api/runs/${id}/events`)
     es.onmessage = m => { const e = JSON.parse(m.data) as HarnessEvent; onEvent(e); if (e.type === 'done') es.close() }
+    es.addEventListener('delta', m => onDelta?.(JSON.parse((m as MessageEvent).data)))
     // While CONNECTING the browser retries on its own (with Last-Event-ID); CLOSED means it gave up, e.g. on a 404.
     es.onerror = () => { if (es.readyState === EventSource.CLOSED) onError('event stream closed: run not found or server gone') }
     return () => es.close()

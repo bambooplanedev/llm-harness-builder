@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, watch } from 'vue'
-import { api, type HarnessConfig, type HarnessEvent, type RunSummary } from './api'
+import { api, type Delta, type HarnessConfig, type HarnessEvent, type RunSummary } from './api'
 import { PRESETS, DEFAULT_PROMPTED_TEMPLATE, DEFAULT_PARSE_ERROR_HINT, DEMO_TASK } from '../../src/core/prompts'
 import ConfigForm from './ConfigForm.vue'
 import ContextBar from './ContextBar.vue'
@@ -16,6 +16,7 @@ const harnessNames = ref<string[]>([])
 const models = ref<string[]>([]); const modelsError = ref('')
 const workdir = ref(''); const task = ref(DEMO_TASK)
 const runs = ref<RunSummary[]>([]); const runId = ref(''); const events = ref<HarnessEvent[]>([]); const error = ref('')
+const live = ref<Delta>({}) // the current turn's streamed text; live-only, never in the trace
 let unsub: (() => void) | null = null
 const running = () => runId.value && !events.value.some(e => e.type === 'done')
 
@@ -28,8 +29,11 @@ async function refreshLists() { harnessNames.value = (await api.harnesses()).map
 async function load(name: string) { if (!name) return; const c = await api.harness(name); c.toolCalls.format ??= 'json'; config.value = c }
 async function saveAs(name: string) { error.value = ''; try { config.value.name = name; await api.saveHarness(name, outbound(config.value)); await refreshLists() } catch (e) { error.value = (e as Error).message } }
 function open(id: string) {
-  unsub?.(); events.value = []; runId.value = id
-  unsub = api.events(id, e => { events.value.push(e); if (e.type === 'done') refreshLists() }, msg => (error.value = msg))
+  unsub?.(); events.value = []; live.value = {}; runId.value = id
+  unsub = api.events(id,
+    e => { events.value.push(e); if (e.type === 'done') refreshLists(); else if (e.type !== 'error') live.value = {} }, // keep partial text visible after an abort
+    msg => (error.value = msg),
+    d => { live.value = { reasoning: (live.value.reasoning ?? '') + (d.reasoning ?? ''), content: (live.value.content ?? '') + (d.content ?? '') } })
 }
 async function start() {
   error.value = ''
@@ -66,7 +70,7 @@ watch(() => [config.value.backend.kind, config.value.backend.baseUrl], refreshMo
         <span class="err">{{ error }}</span>
       </div>
       <ContextBar :events="events" :num-ctx="config.backend.kind === 'ollama' ? config.backend.numCtx : undefined" />
-      <Trace v-if="runId" :events="events" :task="task" @approve="approve" />
+      <Trace v-if="runId" :events="events" :live="live" :task="task" @approve="approve" />
       <h4>Runs</h4>
       <div class="runs">
         <div v-for="r in runs" :key="r.id" @click="open(r.id)">
