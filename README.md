@@ -138,7 +138,7 @@ the same turn, and a final answer only after both tests were green. 36 s of gene
 src/slugify.js`, one `edit_file` copied from what it had just read, `bash node --test` — two tests
 green — and then turn 6 was plain prose with no block at all, which in `hermes` format *is* the
 final answer. Six turns, five calls, one block per response, not one malformed block and not one
-parse error. 34 s of generation, against the 35 s `tuned` took in that same re-run: on this model
+parse error. 34 s of generation, against the 35 s `tuned` took in the v2.0.1 re-run of all three: on this model
 the XML shape costs nothing and buys the trace. And the server did not do the parsing — prompted
 mode sends no `tools[]`, so llama-server left the blocks in `message.content` (visible in the raw
 response in the trace) and `parseHermes` read them.

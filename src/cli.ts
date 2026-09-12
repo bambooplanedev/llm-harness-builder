@@ -184,7 +184,7 @@ async function cmdBench(argv: string[]) {
   const finish = () => { console.log(formatTable(harnesses)); console.error(`wrote ${out}`) }
   await save()
   console.error(`bench: ${files.length} harnesses × ${n} runs, timeout ${timeoutS}s per run, writing ${out}`)
-  files.forEach((f, i) => console.error(`  ${harnesses[i].name.padEnd(14)}${f}`))
+  files.forEach((f, i) => console.error(`  ${harnesses[i].name.padEnd(13)} ${f}`))
   process.once('SIGINT', () => { finish(); process.exit(130) })
   for (let round = 1; round <= n; round++) {
     console.error(`--- round ${round}/${n}`)

@@ -20,4 +20,5 @@ test('formatTable: header, one row per harness, caption', () => {
   expect(lines[1]).toMatch(/^bare\s+1\/3\s+final×2 parse_failed×1\s+7\s+310$/)
   expect(lines[2]).toMatch(/^tuned-hermes\s+3\/3\s+final×3\s+5\s+40$/)
   expect(lines[3]).toBe('medians over all runs incl. failures; s = wall-clock per run')
+  expect(formatTable([h('x', 0, {}, 0, 0)]).split('\n')[1]).toMatch(/^x\s+0\/3\s+-\s/)
 })
