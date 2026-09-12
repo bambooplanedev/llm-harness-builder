@@ -73,3 +73,12 @@ test('run flags a final answer with zero tool calls', async () => {
   expect(r.status).toBe(0)
   expect(r.stderr).toMatch(/! final after 0 tool calls/)
 }, 30_000)
+
+test('run dies with a clear message when the harness has no backend object and an override is given', async () => {
+  const wd = await mkdtemp(join(tmpdir(), 'lhb-cli-'))
+  const bad = join(wd, 'bad.json')
+  await writeFile(bad, JSON.stringify({ name: 'bad' }))
+  const r = cli(['run', bad, '--workdir', wd, '--yes', '--model', 'x', 'task'])
+  expect(r.status).toBe(2)
+  expect(r.stderr).toMatch(/invalid harness .*backend must be an object/s)
+}, 30_000)

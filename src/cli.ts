@@ -18,6 +18,8 @@ import { DEMO_TASK } from './core/prompts.js'
 const PKG_ROOT = fileURLToPath(new URL('..', import.meta.url))
 const die = (msg: string): never => { console.error(msg); process.exit(2) }
 
+const DEMO_HARNESSES = ['bare', 'tuned', 'tuned-hermes']
+
 let fakeCache: Promise<Backend | undefined> | undefined
 /** Test hook: LHB_FAKE_BACKEND=<file.json> with an array of Partial<NormalizedResponse>. One shared queue per process. */
 function fakeBackendFromEnv(): Promise<Backend | undefined> {
@@ -31,6 +33,7 @@ function fakeBackendFromEnv(): Promise<Backend | undefined> {
 
 async function loadHarness(file: string, over: { model?: string; baseUrl?: string; kind?: string }): Promise<HarnessConfig> {
   const cfg = JSON.parse(await readFile(file, 'utf8'))
+  if (!cfg || typeof cfg.backend !== 'object' || cfg.backend === null) die(`invalid harness ${file}:\n  backend must be an object`)
   if (over.model) cfg.backend.model = over.model
   if (over.baseUrl) cfg.backend.baseUrl = over.baseUrl
   if (over.kind) cfg.backend.kind = over.kind
@@ -53,20 +56,23 @@ function describe(e: HarnessEvent): string {
   }
 }
 
-async function execRun(config: HarnessConfig, task: string, workdir: string, o: { yes: boolean; json: boolean; quiet?: boolean }): Promise<HarnessEvent> {
+type ExecOpts = { yes: boolean; json: boolean; quiet?: boolean; signal?: AbortSignal; onEvent?: (e: HarnessEvent) => void }
+
+async function execRun(config: HarnessConfig, task: string, workdir: string, o: ExecOpts): Promise<HarnessEvent> {
   const rl = o.yes ? null : createInterface({ input: process.stdin, output: process.stderr })
   const approve = async (call: ToolCall) => {
     if (o.yes) return true
     const a = await rl!.question(`run bash: ${call.args.command}\n[y/N] `)
     return /^y(es)?$/i.test(a.trim())
   }
-  const opts: RunOpts = { approve, backend: await fakeBackendFromEnv() }
+  const opts: RunOpts = { approve, backend: await fakeBackendFromEnv(), signal: o.signal }
   let last: HarnessEvent | undefined
   try {
     for await (const e of runAgent({ config, task, workdir }, opts)) {
       last = e
       if (o.json) process.stdout.write(JSON.stringify(e) + '\n')
       if (!o.quiet) console.error(describe(e))
+      o.onEvent?.(e)
     }
   } finally {
     rl?.close()
@@ -103,7 +109,7 @@ async function makeDemoWorkdir(): Promise<string> {
 async function cmdDemo(argv: string[]) {
   const { values } = parseArgs({ args: argv, options: { model: { type: 'string' }, 'base-url': { type: 'string' }, kind: { type: 'string' }, json: { type: 'boolean', default: false } } })
   const rows: string[] = []
-  for (const name of ['bare', 'tuned', 'tuned-hermes']) {
+  for (const name of DEMO_HARNESSES) {
     const config = await loadHarness(path.join(PKG_ROOT, 'harnesses', `${name}.json`), { model: values.model, baseUrl: values['base-url'], kind: values.kind })
     const workdir = await makeDemoWorkdir()
     console.error(`\n=== ${name} (${config.backend.model}) in ${workdir}`)
