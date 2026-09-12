@@ -111,7 +111,11 @@ export function applyFamily(config: HarnessConfig, key: string): HarnessConfig {
   if (!f) throw new Error(`unknown family "${key}"; available: ${Object.keys(FAMILIES).join(', ')}`)
   const suffixes = Object.values(FAMILIES).map(x => x.systemSuffix).filter(Boolean)
   const lines = config.systemPrompt.split('\n')
-  while (lines.length && suffixes.includes(lines[lines.length - 1].trim())) lines.pop()
+  while (lines.length) {
+    const last = lines[lines.length - 1].trim()
+    if (last === '' || suffixes.includes(last)) lines.pop()
+    else break
+  }
   if (f.systemSuffix) lines.push(f.systemSuffix)
   return {
     ...config,

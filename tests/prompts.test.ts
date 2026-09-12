@@ -70,3 +70,11 @@ test('applyFamily gemma after qwen3 removes /no_think and goes prompted/json; ll
   expect(() => applyFamily(validConfig, 'bogus')).toThrow(/qwen3/)
   expect(Object.keys(FAMILIES)).toEqual(['qwen3', 'gemma', 'llama3'])
 })
+
+test('applyFamily strips a trailing blank line together with the suffix', () => {
+  expect(applyFamily({ ...validConfig, systemPrompt: 'sys\n/no_think\n' }, 'qwen3').systemPrompt).toBe('sys\n/no_think')
+})
+
+test('applyFamily does not strip a line that merely contains the suffix as a substring', () => {
+  expect(applyFamily({ ...validConfig, systemPrompt: 'remember /no_think mode' }, 'qwen3').systemPrompt).toBe('remember /no_think mode\n/no_think')
+})
