@@ -26,6 +26,7 @@
     "node": ">=20"
   },
   "dependencies": {
+    "undici": "^7.29.1",
     "vue": "^3.5.42"
   },
   "devDependencies": {
