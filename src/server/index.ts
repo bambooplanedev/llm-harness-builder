@@ -115,7 +115,7 @@ export async function startServer(opts: ServerOpts) {
         let replaying = true
         const unsub = store.subscribe(id, e => {
           // Deltas are live-only: no id (Last-Event-ID stays on real events), dropped while replaying (headers not sent yet).
-          if (e.type === 'delta') { if (!replaying) res.write(`event: delta\ndata: ${JSON.stringify(e)}\n\n`) }
+          if (e.type === 'delta') { if (!replaying && !ended) res.write(`event: delta\ndata: ${JSON.stringify(e)}\n\n`) }
           else if (replaying) buffered.push(e); else emit(e)
         })
         req.on('close', unsub) // before the first await: a client that drops mid-read must not leave a listener behind

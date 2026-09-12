@@ -24,9 +24,9 @@ and `tuned-hermes`, and prints PASS/FAIL from a check script — not from eyebal
 Add `--json` to get the full event stream as JSONL on stdout; the workbench UI keeps every run it
 starts in `./runs/*.jsonl`. Diff two traces with any tool.
 
-The current turn streams live: `<think>` and the answer appear as they are generated, with a rough
-`~N tok` counter (in the UI, and in `run`/`demo` on a terminal). The trace keeps one `llm_response`
-per turn; the live text is not saved.
+The current turn streams live in the UI and in `run`/`demo` on a terminal: `<think>` and the answer
+appear as they are generated; the UI adds a rough `~N tok` counter. The trace keeps one
+`llm_response` per turn; the live text is not saved.
 
 `demo` is one run per harness. `bench` repeats it and reports PASS rates:
 

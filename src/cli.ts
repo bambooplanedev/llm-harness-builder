@@ -83,7 +83,7 @@ async function execRun(config: HarnessConfig, task: string, workdir: string, o: 
       if (o.json) process.stdout.write(JSON.stringify(e) + '\n')
       if (streamed) process.stderr.write('\n')
       if (!o.quiet) console.error(describe(e, streamed))
-      if (e.type === 'llm_response') streamed = false
+      streamed = false // nothing yields during send, so any event ends the streamed stretch
       o.onEvent?.(e)
     }
   } finally {
