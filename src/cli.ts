@@ -182,6 +182,7 @@ async function cmdBench(argv: string[]) {
   const result: BenchResult = { version: 1, date: started.toISOString(), task: DEMO_TASK, n, timeoutS, complete: false, harnesses }
   const save = () => writeFile(out, JSON.stringify(result, null, 2) + '\n')
   const finish = () => { console.log(formatTable(harnesses)); console.error(`wrote ${out}`) }
+  await save()
   console.error(`bench: ${files.length} harnesses × ${n} runs, timeout ${timeoutS}s per run, writing ${out}`)
   files.forEach((f, i) => console.error(`  ${harnesses[i].name.padEnd(14)}${f}`))
   process.once('SIGINT', () => { finish(); process.exit(130) })

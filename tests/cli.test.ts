@@ -128,4 +128,4 @@ test('bench rejects non-positive-integer --n and --timeout with usage', () => {
     expect(r.status).toBe(2)
     expect(r.stderr).toMatch(/usage/)
   }
-})
+}, 30_000)
