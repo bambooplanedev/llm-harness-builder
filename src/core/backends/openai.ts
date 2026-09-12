@@ -47,7 +47,7 @@ export class OpenAIBackend implements Backend {
     if (!r.ok) throw new BackendError(`POST /chat/completions: ${r.status}`, await r.text())
     let content = '', reasoning = '', finish: string | undefined, usage: any, last: any = {}
     const calls: { id?: string; name?: string; args: string }[] = []
-    for await (const c of jsonChunks(r, 'POST /chat/completions', 'data: ')) {
+    for await (const c of jsonChunks(r, 'POST /chat/completions', 'data:')) {
       last = c
       const ch = c.choices?.[0], d = ch?.delta ?? {}
       if (d.content) { content += d.content; onDelta?.({ content: d.content }) }

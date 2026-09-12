@@ -73,7 +73,7 @@ export async function readJson(r: { text(): Promise<string> }, what: string): Pr
 }
 
 /**
- * JSON chunks of a streamed 2xx body, one per line, with `prefix` ("data: " for SSE, "" for NDJSON) stripped.
+ * JSON chunks of a streamed 2xx body, one per line, with `prefix` ("data:" for SSE, "" for NDJSON) stripped.
  * `[DONE]`, blank, comment (`:`) and unparsable lines are skipped. A chunk carrying `error` and no payload
  * throws BackendError with it. A body that yields no chunk at all throws "response is not an event stream".
  */
@@ -82,8 +82,9 @@ export async function* jsonChunks(r: { body?: AsyncIterable<Uint8Array> | null }
   let buf = '', head = '', any = false
   const lines = async function* () {
     for await (const chunk of r.body ?? []) {
-      buf += dec.decode(chunk, { stream: true })
-      if (head.length < 2000) head += buf.slice(0, 2000 - head.length)
+      const text = dec.decode(chunk, { stream: true })
+      buf += text
+      if (head.length < 2000) head += text.slice(0, 2000 - head.length)
       let i
       while ((i = buf.indexOf('\n')) !== -1) { yield buf.slice(0, i); buf = buf.slice(i + 1) }
     }
@@ -93,7 +94,7 @@ export async function* jsonChunks(r: { body?: AsyncIterable<Uint8Array> | null }
   for await (const raw of lines()) {
     const line = raw.trimEnd()
     if (!line || line.startsWith(':') || !line.startsWith(prefix)) continue
-    const text = line.slice(prefix.length)
+    const text = line.slice(prefix.length).trim() // SSE allows "data:" with or without the space
     if (text === '[DONE]') break
     let c: any
     try { c = JSON.parse(text) } catch { continue }

@@ -154,3 +154,19 @@ test('openai countTokens: a server without the endpoints yields undefined, no th
   expect(await be.countTokens(be.buildPayload(req))).toBeUndefined()
   expect(await new OpenAIBackend('http://x:8080/v1', routeFetch({}).fn).countTokens({})).toBeUndefined()
 })
+
+const chunked = (parts: string[]) => (async () => new Response(new ReadableStream({ start(c) { for (const p of parts) c.enqueue(new TextEncoder().encode(p)); c.close() } }), { status: 200 })) as unknown as typeof fetch
+
+test('a line split across body chunks and a trailing line without newline are both parsed', async () => {
+  const r = await new OpenAIBackend('http://x/v1', chunked(['data: {"choices":[{"delta":{"con', 'tent":"x"}}]}\n\ndata: {"choices":[{"delta":{"content":"y"}}]}'])).send({})
+  expect(r.content).toBe('xy')
+})
+
+test('data: without a space is still a chunk', async () => {
+  const r = await new OpenAIBackend('http://x/v1', chunked(['data:{"choices":[{"delta":{"content":"z"}}]}\n\ndata:[DONE]\n\n'])).send({})
+  expect(r.content).toBe('z')
+})
+
+test('not-an-event-stream error carries the body as sent, not duplicated across chunks', async () => {
+  await expect(new OpenAIBackend('http://x/v1', chunked(['<html>abc', 'def</html>'])).send({})).rejects.toSatisfy((e: unknown) => (e as BackendError).body === '<html>abcdef</html>')
+})
