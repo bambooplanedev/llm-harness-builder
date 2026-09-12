@@ -1,6 +1,6 @@
 import { test, expect } from 'vitest'
 import { spawnSync } from 'node:child_process'
-import { mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdtemp, writeFile, readFile, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -82,3 +82,50 @@ test('run dies with a clear message when the harness has no backend object and a
   expect(r.status).toBe(2)
   expect(r.stderr).toMatch(/invalid harness .*backend must be an object/s)
 }, 30_000)
+
+const TUNED_EDIT = '{"calls":[{"name":"edit_file","args":{"path":"src/slugify.js","old":"replace(/[^a-z0-9]+/g, \'-\')","new":"replace(/[^a-z0-9]+/g, \'-\').replace(/^-+|-+$/g, \'\')"}}],"final":null}'
+const TUNED_FINAL = '{"calls":[],"final":"Fixed."}'
+const HERMES_EDIT = '<tool_call>\n{"name":"edit_file","arguments":{"path":"src/slugify.js","old":"replace(/[^a-z0-9]+/g, \'-\')","new":"replace(/[^a-z0-9]+/g, \'-\').replace(/^-+|-+$/g, \'\')"}}\n</tool_call>'
+
+test('bench --n 2 on one harness: table, JSON with per-run reason/parseErrors/workdir', async () => {
+  const wd = await mkdtemp(join(tmpdir(), 'lhb-cli-'))
+  const fake = join(wd, 'fake.json'); const out = join(wd, 'b.json')
+  // run 1: edit → final. run 2: garbage (parse_error, retried) → edit → final.
+  await writeFile(fake, JSON.stringify([{ content: TUNED_EDIT }, { content: TUNED_FINAL }, { content: 'not json' }, { content: TUNED_EDIT }, { content: TUNED_FINAL }]))
+  const r = cli(['bench', '--n', '2', '--out', out, 'harnesses/tuned.json'], { LHB_FAKE_BACKEND: fake })
+  expect(r.status).toBe(0)
+  expect(r.stdout).toMatch(/^tuned\s+2\/2\s+final×2\s/m)
+  expect(r.stderr).toMatch(/--- round 2\/2/)
+  const j = JSON.parse(await readFile(out, 'utf8'))
+  expect(j).toMatchObject({ version: 1, n: 2, timeoutS: 1800, complete: true })
+  const h = j.harnesses[0]
+  expect(h.name).toBe('tuned'); expect(h.config.name).toBe('tuned'); expect(h.pass).toBe(2); expect(h.reasons).toEqual({ final: 2 })
+  expect(h.runs.map((x: any) => [x.round, x.verdict, x.reason, x.parseErrors])).toEqual([[1, 'PASS', 'final', 0], [2, 'PASS', 'final', 1]])
+  expect(typeof h.runs[1].lastError).toBe('string'); expect(h.runs[1].lastError.length).toBeGreaterThan(0)
+  expect(h.runs[0].lastError).toBeUndefined()
+  for (const x of h.runs) { expect(x.ms).toBeGreaterThanOrEqual(0); expect((await stat(x.workdir)).isDirectory()).toBe(true) }
+}, 60_000)
+
+test('bench without files uses ./harnesses in demo order, round-robin', async () => {
+  const wd = await mkdtemp(join(tmpdir(), 'lhb-cli-'))
+  const fake = join(wd, 'fake.json'); const out = join(wd, 'b.json')
+  await writeFile(fake, JSON.stringify([{ content: 'Done.' }, { content: TUNED_EDIT }, { content: TUNED_FINAL }, { content: HERMES_EDIT }, { content: 'Fixed.' }]))
+  const r = cli(['bench', '--n', '1', '--out', out], { LHB_FAKE_BACKEND: fake })
+  expect(r.status).toBe(0)
+  expect(r.stdout).toMatch(/^bare\s+0\/1\s/m)
+  expect(r.stdout).toMatch(/^tuned\s+1\/1\s/m)
+  expect(r.stdout).toMatch(/^tuned-hermes\s+1\/1\s/m)
+  expect(r.stderr).toMatch(/--- round 1\/1/)
+  expect(r.stderr).toMatch(/harnesses\/bare\.json/)
+  const j = JSON.parse(await readFile(out, 'utf8'))
+  expect(j.harnesses.map((h: any) => h.name)).toEqual(['bare', 'tuned', 'tuned-hermes'])
+  expect(j.harnesses.flatMap((h: any) => h.runs.map((x: any) => x.reason))).toEqual(['final', 'final', 'final'])
+}, 90_000)
+
+test('bench rejects non-positive-integer --n and --timeout with usage', () => {
+  for (const args of [['bench', '--n', '0'], ['bench', '--n', '2.5'], ['bench', '--n', '1', '--timeout', 'x']]) {
+    const r = cli(args)
+    expect(r.status).toBe(2)
+    expect(r.stderr).toMatch(/usage/)
+  }
+})

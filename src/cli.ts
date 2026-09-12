@@ -2,6 +2,7 @@
 // src/cli.ts
 import { parseArgs } from 'node:util'
 import { readFile, mkdtemp, cp, writeFile, access, mkdir } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import { spawn, spawnSync } from 'node:child_process'
 import { createInterface } from 'node:readline/promises'
 import { tmpdir } from 'node:os'
@@ -14,6 +15,7 @@ import type { Backend, NormalizedResponse } from './core/backends/types.js'
 import type { HarnessEvent, ToolCall } from './core/events.js'
 import { startServer } from './server/index.js'
 import { DEMO_TASK } from './core/prompts.js'
+import { median, formatTable, type BenchRun, type BenchHarness, type BenchResult } from './core/bench.js'
 
 const PKG_ROOT = fileURLToPath(new URL('..', import.meta.url))
 const die = (msg: string): never => { console.error(msg); process.exit(2) }
@@ -124,6 +126,78 @@ async function cmdDemo(argv: string[]) {
   else console.log(summary)
 }
 
+const INT = /^[1-9]\d*$/
+const stamp = (d: Date) => { const p = (n: number) => String(n).padStart(2, '0'); return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}` }
+
+/** One bench run: fresh demo workdir → execRun (timed) → check.sh. Never throws; an exception becomes a FAIL row with reason 'error'. */
+async function benchOnce(config: HarnessConfig, round: number, timeoutS: number): Promise<BenchRun> {
+  let workdir = '', parseErrors = 0, lastError: string | undefined, t0 = Date.now(), run: BenchRun
+  process.stderr.write(`${config.name} #${round} `)
+  try {
+    workdir = await makeDemoWorkdir()
+    process.stderr.write(`${workdir} ... `)
+    t0 = Date.now()
+    const last = await execRun(config, DEMO_TASK, workdir, {
+      yes: true, json: false, quiet: true, signal: AbortSignal.timeout(timeoutS * 1000),
+      onEvent: e => { if (e.type === 'parse_error') parseErrors++; if (e.type === 'parse_error' || e.type === 'error') lastError = e.message },
+    })
+    const ms = Date.now() - t0
+    const verdict = spawnSync('sh', [path.join(workdir, 'check.sh')], { timeout: 60_000 }).status === 0 ? 'PASS' : 'FAIL'
+    const d = last.type === 'done' ? last : undefined
+    run = { round, verdict, reason: d?.reason ?? 'error', turns: d?.turns ?? 0, toolCalls: d?.toolCallCount ?? 0, parseErrors, lastError, ms, workdir }
+  } catch (e) {
+    run = { round, verdict: 'FAIL', reason: 'error', turns: 0, toolCalls: 0, parseErrors, lastError: String(e), ms: Date.now() - t0, workdir }
+  }
+  const tail = (run.reason === 'error' || run.reason === 'aborted') && run.lastError ? `  ${run.lastError.replace(/\s+/g, ' ').slice(0, 200)}` : ''
+  process.stderr.write(`${run.verdict}  reason=${run.reason} turns=${run.turns} toolCalls=${run.toolCalls} parseErrors=${run.parseErrors} ${Math.round(run.ms / 1000)}s${tail}\n`)
+  return run
+}
+
+function rollup(h: BenchHarness) {
+  h.pass = h.runs.filter(r => r.verdict === 'PASS').length
+  h.reasons = {}
+  for (const r of h.runs) h.reasons[r.reason] = (h.reasons[r.reason] ?? 0) + 1
+  h.median = { turns: median(h.runs.map(r => r.turns)), toolCalls: median(h.runs.map(r => r.toolCalls)), ms: median(h.runs.map(r => r.ms)) }
+}
+
+async function cmdBench(argv: string[]) {
+  const usage = 'usage: llm-harness-builder bench [harness.json ...] [--n 3] [--timeout 1800] [--out runs/bench-<ts>.json] [--model m] [--base-url u] [--kind openai|ollama]'
+  const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: {
+    n: { type: 'string', default: '3' }, timeout: { type: 'string', default: '1800' }, out: { type: 'string' },
+    model: { type: 'string' }, 'base-url': { type: 'string' }, kind: { type: 'string' },
+  } })
+  if (!INT.test(values.n) || !INT.test(values.timeout)) die(usage)
+  const n = Number(values.n), timeoutS = Number(values.timeout)
+  const started = new Date()
+  const out = values.out ?? path.join('runs', `bench-${stamp(started)}.json`)
+  const localDir = path.join(process.cwd(), 'harnesses')
+  const files = positionals.length ? positionals : DEMO_HARNESSES.map(h => path.join(existsSync(localDir) ? localDir : path.join(PKG_ROOT, 'harnesses'), `${h}.json`))
+  const over = { model: values.model, baseUrl: values['base-url'], kind: values.kind }
+  const harnesses: BenchHarness[] = []
+  for (const f of files) {
+    const config = await loadHarness(f, over)
+    harnesses.push({ name: config.name, config, pass: 0, reasons: {}, median: { turns: 0, toolCalls: 0, ms: 0 }, runs: [] })
+  }
+  await mkdir(path.dirname(out), { recursive: true })
+  const result: BenchResult = { version: 1, date: started.toISOString(), task: DEMO_TASK, n, timeoutS, complete: false, harnesses }
+  const save = () => writeFile(out, JSON.stringify(result, null, 2) + '\n')
+  const finish = () => { console.log(formatTable(harnesses)); console.error(`wrote ${out}`) }
+  console.error(`bench: ${files.length} harnesses × ${n} runs, timeout ${timeoutS}s per run, writing ${out}`)
+  files.forEach((f, i) => console.error(`  ${harnesses[i].name.padEnd(14)}${f}`))
+  process.once('SIGINT', () => { finish(); process.exit(130) })
+  for (let round = 1; round <= n; round++) {
+    console.error(`--- round ${round}/${n}`)
+    for (const h of harnesses) {
+      h.runs.push(await benchOnce(h.config, round, timeoutS))
+      rollup(h)
+      await save()
+    }
+  }
+  result.complete = true
+  await save()
+  finish()
+}
+
 async function cmdServe(argv: string[]) {
   const { values } = parseArgs({ args: argv, options: { port: { type: 'string', default: '7331' }, 'no-open': { type: 'boolean', default: false } } })
   const cwd = process.cwd()
@@ -140,6 +214,6 @@ async function cmdServe(argv: string[]) {
 }
 
 const [cmd = 'serve', ...rest] = process.argv.slice(2)
-const commands: Record<string, (a: string[]) => Promise<void>> = { serve: cmdServe, run: cmdRun, demo: cmdDemo }
-if (!commands[cmd]) die('usage: llm-harness-builder [serve|run|demo] ...')
+const commands: Record<string, (a: string[]) => Promise<void>> = { serve: cmdServe, run: cmdRun, demo: cmdDemo, bench: cmdBench }
+if (!commands[cmd]) die('usage: llm-harness-builder [serve|run|demo|bench] ...')
 commands[cmd](rest).catch(e => die(String(e?.stack ?? e)))
