@@ -117,7 +117,7 @@ the XML shape costs nothing and buys the trace. And the server did not do the pa
 llama-server left the blocks in `message.content` (visible in the raw response in the trace) and
 `parseHermes` read them. One run each; PASS rates over repeated runs are the next iteration's job.
 
-### The third run: `bare` plus one knob
+### Isolating the knobs: two more runs
 
 `tuned` differs from `bare` in several knobs at once, so the demo says nothing about which one
 carried it. Two runs isolate them:
