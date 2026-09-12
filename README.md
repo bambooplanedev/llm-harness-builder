@@ -24,6 +24,15 @@ and `tuned-hermes`, and prints PASS/FAIL from a check script — not from eyebal
 Add `--json` to get the full event stream as JSONL on stdout; the workbench UI keeps every run it
 starts in `./runs/*.jsonl`. Diff two traces with any tool.
 
+`demo` is one run per harness. `bench` repeats it and reports PASS rates:
+
+    npx llm-harness-builder bench --n 5 \
+      --kind openai --base-url http://127.0.0.1:8080/v1 \
+      --model unsloth/Qwen3-8B-GGUF:Q4_K_M
+
+Run `demo` first: it takes a few minutes and shows you the trace and that the backend is alive.
+`bench --n 5` on the setup below took 96 minutes, most of it `bare`.
+
 ## Backends
 
 - `kind: "ollama"` talks to Ollama's native `/api/chat` so `num_ctx` is honoured.
@@ -36,9 +45,17 @@ starts in `./runs/*.jsonl`. Diff two traces with any tool.
     llm-harness-builder serve [--port 7331] [--no-open]
     llm-harness-builder run <harness.json> --workdir <dir> "task" [--yes] [--json] [--model m] [--base-url u] [--kind k]
     llm-harness-builder demo [--model m] [--base-url u] [--kind k]
+    llm-harness-builder bench [harness.json ...] [--n 3] [--timeout 1800] [--out runs/bench-<ts>.json] [--model m] [--base-url u] [--kind k]
 
 `run` exits 0 only when the model finished with a final answer. `--json` writes the event
 stream as JSONL to stdout; human-readable progress goes to stderr.
+
+`bench` runs the demo task `--n` times per harness, round-robin, with a per-run `--timeout`
+(seconds). With no files it takes `bare`, `tuned` and `tuned-hermes` from `./harnesses` (the copies
+`serve` made, i.e. what you edited in the UI) or from the package. It prints a PASS-rate table and
+writes a JSON to `runs/` after every run, so Ctrl-C keeps what finished. The JSON carries each
+harness's full config and each run's `reason`, `parseErrors`, `lastError` and temp `workdir`, so
+two files are comparable by config, not by name. Exit code is 0 whatever the verdicts.
 
 ## Harness file
 
@@ -70,29 +87,38 @@ visible `parse_error` with a hint and a retry instead of an empty `content`; and
 exact text the model wrote. If the server does lift the blocks into `tool_calls` anyway, the run
 uses them and the raw response in the trace shows that it happened.
 
-## Demo results
+## Bench results
 
-Demo verified with: llama.cpp `llama-server` (`--jinja`), model
-`unsloth/Qwen3-8B-GGUF:Q4_K_M`, 8192-token context, ~20 tok/s, on 2026-09-12:
+Measured with llama.cpp `llama-server` (`--jinja`), model `unsloth/Qwen3-8B-GGUF:Q4_K_M`,
+8192-token context, ~20 tok/s, on 2026-09-12, five runs per harness:
 
-    llm-harness-builder demo --kind openai \
+    llm-harness-builder bench --n 5 --kind openai \
       --base-url http://127.0.0.1:8080/v1 --model unsloth/Qwen3-8B-GGUF:Q4_K_M
 
 The task: find a bug report on the single `ERROR` line near the end of a 3002-line
 `data/app.log`, fix `src/slugify.js`, and make `node --test` pass. Verdicts come from
 `examples/check.sh`, which just runs `node --test`.
 
-| harness | verdict | turns | tool calls | how it ended |
+| harness | PASS | how the runs ended | median turns | median s |
 |---|---|---|---|---|
-| v1 run · `bare` — native tool calls, minimal prompt, no truncation | **FAIL** | 5 | 4 | `backend_error`: two invented `edit_file` targets, then a reasoning chain that outlived the HTTP timeout |
-| v1 run · `tuned` — prompted + `enforceSchema`, the `opencode-like` preset plus "run `node --test` before `final`" and `/no_think`, one call per response, 4000-char truncation | **PASS** | 5 | 5 | `final`: fixed `slugify`, ran `node --test`, answered only once it was green |
-| v2.0.1 run · `tuned-hermes` — `tuned` with the `qwen3` family applied: same prompt, `/no_think`, one call per response, 4000-char truncation, but `<tool_call>` blocks instead of the JSON object and no `enforceSchema` | **PASS** | 6 | 5 | `final`: a plain-text summary, sent only after `node --test` came back green |
+| `bare` — native tool calls, minimal prompt, no truncation | **1/5** | `final×3 aborted×1 parse_failed×1` | 8 | 1159 |
+| `tuned` — prompted + `enforceSchema`, `opencode-like` preset, "run `node --test` before `final`", `/no_think`, one call per response, 4000-char truncation | **4/5** | `final×4 backend_error×1` | 5 | 35 |
+| `tuned-hermes` — `tuned` with the `qwen3` family: `<tool_call>` blocks instead of the JSON object, no `enforceSchema` | **4/5** | `final×4 max_turns×1` | 6 | 34 |
 
-The `bare` and `tuned` rows are from the v1 run; the `tuned-hermes` row is from a v2.0.1 re-run of
-all three. On the re-run for v2.0.1, `bare` ended `final` instead of `backend_error` — the 300 s
-transport limit is gone, so its two runaway turns (398 s and 371 s) now come back as
-`finish_reason: length` parse errors, and it still ended FAIL, answering with the JSON object it
-was supposed to send as tool calls while `node --test` was still red.
+Medians are over all five runs including failures; seconds are wall-clock per run, tools
+included. The whole bench took 96 minutes. Generation-time figures in the prose below
+are a different measure, from single runs.
+
+Two entries in that column are not harness failures in the usual sense. `tuned`'s one
+`backend_error` came 1 s after `bare`'s aborted run: llama-server had let `bare` fill the shared
+KV cache to the 8192-token limit, the abort from our side does not free the server instantly, and
+the next request on any slot got a 500. `tuned-hermes`'s one `max_turns` was a loop: fifteen tool
+calls in 87 s without ever stopping to answer.
+
+### One run, step by step
+
+The table says how often; a trace says how. What follows is one run per harness (the v1 and
+v2.0.1 demo runs), not the bench.
 
 On the v1 run, `bare` found the report on its first turn (`grep -n 'ERROR' data/app.log | tail -1`) and then
 twice guessed the line it wanted to replace. First `return str.replace(/\s+/g, '-').toLowerCase();`,
@@ -115,10 +141,11 @@ final answer. Six turns, five calls, one block per response, not one malformed b
 parse error. 34 s of generation, against the 35 s `tuned` took in that same re-run: on this model
 the XML shape costs nothing and buys the trace. And the server did not do the parsing — prompted
 mode sends no `tools[]`, so llama-server left the blocks in `message.content` (visible in the raw
-response in the trace) and `parseHermes` read them. One run each; PASS rates over repeated runs are
-the next iteration's job.
+response in the trace) and `parseHermes` read them.
 
 ### Isolating the knobs: two more runs
+
+Two single runs, not benched: they show which mechanism broke, not how often it does.
 
 `tuned` differs from `bare` in several knobs at once, so the demo says nothing about which one
 carried it. Two runs isolate them:
@@ -165,5 +192,12 @@ both harnesses failed on the very first run of this demo.
 - The token estimate counts messages only, not the native-mode `tools[]` payload (roughly
   500-600 tokens for the five tools); rely on the backend's `usage` figure next to it.
 - `demo --kind openai` needs `--base-url` (the default URL is Ollama's port).
-- The UI has no built-in workdir: run `demo` once and point the UI's workdir at the temp
-  directory it prints, or at any scratch project.
+- The UI has no built-in workdir: run `demo` once and point the UI's workdir at the temp directory it prints (or at any `workdir` from a bench JSON), or at any scratch project.
+- `bench` PASS means `node --test` came back green, not that the bug was fixed the right way: the
+  model has `write_file` and could edit the test instead. The trace of a single `run` shows what
+  changed; `bench` keeps no traces, only each run's temp `workdir` path (the directories stay in
+  `/tmp`) and its last error message.
+- `demo` runs `check.sh` without a timeout; `bench` gives it 60 s.
+- Aborting a run (`--timeout`) closes our side of the connection; llama-server keeps generating
+  until it notices, so the next run can start against a busy server and fail with
+  `backend_error`. The bench above has one such row.
