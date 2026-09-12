@@ -19,10 +19,10 @@ Against anything that speaks the OpenAI API (llama-server, LM Studio, vLLM):
       --kind openai --base-url http://127.0.0.1:8080/v1 \
       --model unsloth/Qwen3-8B-GGUF:Q4_K_M
 
-`demo` runs the same task twice on the same model with two harnesses, `bare` and `tuned`,
-and prints PASS/FAIL from a check script — not from eyeballing the output. Add `--json` to get
-the full event stream as JSONL on stdout; the workbench UI keeps every run it starts in
-`./runs/*.jsonl`. Diff two traces with any tool.
+`demo` runs the same task three times on the same model with three harnesses, `bare`, `tuned`
+and `tuned-hermes`, and prints PASS/FAIL from a check script — not from eyeballing the output.
+Add `--json` to get the full event stream as JSONL on stdout; the workbench UI keeps every run it
+starts in `./runs/*.jsonl`. Diff two traces with any tool.
 
 ## Backends
 
@@ -47,6 +47,29 @@ per-run parameters. The `prompted` mode expects the model to answer with
 `{"calls":[{"name":...,"args":{...}}],"final":null|"text"}`; `enforceSchema` passes that shape
 as `response_format` / `format`.
 
+`toolCalls.format` picks how a `prompted` run talks: `json` (the shape above) or `hermes`
+(`<tool_call>{"name":…,"arguments":…}</tool_call>` blocks, results in `<tool_response>`, and a
+plain-text reply means "done"). `enforceSchema` only applies to `json`.
+
+## Model families
+
+A family button in the UI (`applyFamily` in `src/core/prompts.ts`) fills the tool-call mode,
+format, prompted template and parse-error hint, and swaps the trailing family line of the system
+prompt. It never touches backend, tools, context or loop settings, and nothing about the family is
+stored in the harness file — only the resulting plain fields.
+
+| family | mode / format | prompt line | why |
+|---|---|---|---|
+| `qwen3` | prompted / hermes | `/no_think` | trained on `<tool_call>` XML; `/no_think` keeps an 8B from burning the window in `<think>` |
+| `gemma` | prompted / json | — | no native tool calling in the chat template (Ollama rejects `tools[]`); no thinking switch |
+| `llama3` | native / json | — | native tool calls work through the chat template; nothing to add |
+
+Why a prompted hermes format when llama-server (`--jinja`) and Ollama already parse Qwen's
+`<tool_call>` natively: it works without `--jinja` and on any `/v1`; a malformed block becomes a
+visible `parse_error` with a hint and a retry instead of an empty `content`; and the trace shows the
+exact text the model wrote. If the server does lift the blocks into `tool_calls` anyway, the run
+uses them and the raw response in the trace shows that it happened.
+
 ## Demo results
 
 Demo verified with: llama.cpp `llama-server` (`--jinja`), model
@@ -63,6 +86,13 @@ The task: find a bug report on the single `ERROR` line near the end of a 3002-li
 |---|---|---|---|---|
 | `bare` — native tool calls, minimal prompt, no truncation | **FAIL** | 5 | 4 | `backend_error`: two invented `edit_file` targets, then a reasoning chain that outlived the HTTP timeout |
 | `tuned` — prompted + `enforceSchema`, the `opencode-like` preset plus "run `node --test` before `final`" and `/no_think`, one call per response, 4000-char truncation | **PASS** | 5 | 5 | `final`: fixed `slugify`, ran `node --test`, answered only once it was green |
+| `tuned-hermes` — `tuned` with the `qwen3` family applied: same prompt, `/no_think`, one call per response, 4000-char truncation, but `<tool_call>` blocks instead of the JSON object and no `enforceSchema` | **PASS** | 6 | 5 | `final`: a plain-text summary, sent only after `node --test` came back green |
+
+The `bare` and `tuned` rows are from the v1 run; the `tuned-hermes` row is from a v2.0.1 re-run of
+all three. On the re-run for v2.0.1, `bare` ended `final` instead of `backend_error` — the 300 s
+transport limit is gone, so its two runaway turns (398 s and 371 s) now come back as
+`finish_reason: length` parse errors, and it still ended FAIL, answering with the JSON object it
+was supposed to send as tool calls while `node --test` was still red.
 
 `bare` found the report on its first turn (`grep -n 'ERROR' data/app.log | tail -1`) and then
 twice guessed the line it wanted to replace. First `return str.replace(/\s+/g, '-').toLowerCase();`,
@@ -76,6 +106,16 @@ truncation knob earned its place: it got the first 4000 chars plus a `[truncated
 marker instead of 250 KB, saw only INFO lines, and switched to `tail -n 20`. From there:
 `read_file src/slugify.js`, one `edit_file` copied from what it had just read, `node --test` in
 the same turn, and a final answer only after both tests were green. 36 s of generation.
+
+`tuned-hermes` walked the same path in `<tool_call>` blocks: `read_file data/app.log` (truncated at
+4000 chars, INFO lines only), `bash tail -n 20 data/app.log` for the ERROR line, `read_file
+src/slugify.js`, one `edit_file` copied from what it had just read, `bash node --test` — two tests
+green — and then turn 6 was plain prose with no block at all, which in `hermes` format *is* the
+final answer. Six turns, five calls, one block per response, not one malformed block and not one
+parse error. 34 s of generation, against the 35 s `tuned` took in that same re-run: on this model
+the XML shape costs nothing and buys the trace. And the server did not do the parsing — prompted mode sends no `tools[]`, so
+llama-server left the blocks in `message.content` (visible in the raw response in the trace) and
+`parseHermes` read them. One run each; PASS rates over repeated runs are the next iteration's job.
 
 ### The third run: `bare` plus one knob
 
@@ -107,11 +147,18 @@ both harnesses failed on the very first run of this demo.
   did nothing at all until thinking was off — the model kept spending its whole budget inside
   `<think>` and never reached the JSON.
 - Token estimates are `chars / 4`; exact counts are shown from the backend's `usage` when present.
-- Requests are not streamed, so a single generation that takes longer than 300 s dies with
-  `error: fetch failed` — that is Node's HTTP client giving up, not the model. On a ~20 tok/s
-  box a runaway reasoning chain reaches it; the trace shows the request that died.
-- `/no_think` is a Qwen3 convention. On another model family, drop that line from
-  `harnesses/tuned.json` and use whatever switch that model has.
+- `/no_think` is a Qwen3 convention. Applying another family removes it; on a model this tool has
+  no family for, delete the line by hand.
+- In `hermes` format a reply with no `<tool_call>` block is the final answer — that is how these
+  models were trained. A polite "let me read the file first" with no call therefore ends the run
+  with `final` and exit code 0. The trace and the CLI mark it as `final after 0 tool calls`; that
+  is the model quitting, not the parser.
+- `enforceSchema` is ignored for `hermes` (a JSON schema cannot describe the XML wrapper).
+- A literal `</tool_call>` inside a JSON string argument (say, `write_file` of a file that contains
+  that text) cuts the block short → `parse_error` → hint → retry.
+- A response cut off at max tokens (`finish_reason: length`) is treated as a parse error in every
+  format, so a model that spent its whole window inside `<think>` gets the hint and a retry rather
+  than having its thoughts accepted as the answer.
 - Abort cannot interrupt a tool that is already running; `bash` returns within its 30 s
   timeout, then the run ends.
 - The token estimate counts messages only, not the native-mode `tools[]` payload (roughly
