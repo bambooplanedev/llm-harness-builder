@@ -49,7 +49,7 @@ function describe(e: HarnessEvent): string {
     case 'approval_required': return `[t${e.turn}] approval_required ${e.call.name}`
     case 'tool_result': return `[t${e.turn}] tool_result ${e.name}${e.error ? ' (error)' : ''}${e.truncated ? ' (truncated)' : ''}: ${e.output.slice(0, 200).replace(/\n/g, ' ')}`
     case 'error': return `error: ${e.message}${e.body ? `\n${e.body}` : ''}`
-    case 'done': return `done: ${e.reason} after ${e.turns} turns, ${e.toolCallCount} tool calls${e.text ? `\n${e.text}` : ''}`
+    case 'done': return `done: ${e.reason} after ${e.turns} turns, ${e.toolCallCount} tool calls${e.reason === 'final' && e.toolCallCount === 0 ? '  ! final after 0 tool calls' : ''}${e.text ? `\n${e.text}` : ''}`
   }
 }
 
@@ -103,7 +103,7 @@ async function makeDemoWorkdir(): Promise<string> {
 async function cmdDemo(argv: string[]) {
   const { values } = parseArgs({ args: argv, options: { model: { type: 'string' }, 'base-url': { type: 'string' }, kind: { type: 'string' }, json: { type: 'boolean', default: false } } })
   const rows: string[] = []
-  for (const name of ['bare', 'tuned']) {
+  for (const name of ['bare', 'tuned', 'tuned-hermes']) {
     const config = await loadHarness(path.join(PKG_ROOT, 'harnesses', `${name}.json`), { model: values.model, baseUrl: values['base-url'], kind: values.kind })
     const workdir = await makeDemoWorkdir()
     console.error(`\n=== ${name} (${config.backend.model}) in ${workdir}`)
@@ -111,7 +111,7 @@ async function cmdDemo(argv: string[]) {
     const check = spawnSync('sh', [path.join(workdir, 'check.sh')])
     const verdict = check.status === 0 ? 'PASS' : 'FAIL'
     const d = last.type === 'done' ? last : undefined
-    rows.push(`${name.padEnd(6)} ${verdict}  reason=${d?.reason ?? '?'} turns=${d?.turns ?? '?'} toolCalls=${d?.toolCallCount ?? '?'}`)
+    rows.push(`${name.padEnd(12)} ${verdict}  reason=${d?.reason ?? '?'} turns=${d?.turns ?? '?'} toolCalls=${d?.toolCallCount ?? '?'}`)
   }
   const summary = '\n' + rows.join('\n')
   if (values.json) console.error(summary)

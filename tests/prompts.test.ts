@@ -34,6 +34,12 @@ test('shipped harnesses stay in sync with the defaults and presets', async () =>
   expect(bare.toolCalls.parseErrorHint).toBe(DEFAULT_PARSE_ERROR_HINT)
   for (const line of PRESETS['opencode-like'].split('\n')) expect(tuned.systemPrompt).toContain(line)
   expect(tuned.toolCalls.promptedTemplate).toBe(DEFAULT_PROMPTED_TEMPLATE)
+
+  const hermes = await load('tuned-hermes')
+  expect(hermes.toolCalls).toMatchObject({ mode: 'prompted', format: 'hermes', enforceSchema: false, promptedTemplate: HERMES_TEMPLATE, parseErrorHint: HERMES_PARSE_ERROR_HINT })
+  expect(hermes.systemPrompt).toBe(applyFamily(tuned, 'qwen3').systemPrompt)
+  expect(hermes.backend).toEqual(tuned.backend); expect(hermes.tools).toEqual(tuned.tools)
+  expect(hermes.context).toEqual(tuned.context); expect(hermes.loop).toEqual(tuned.loop)
 })
 
 test('default template carries the one-call-per-response rule', () => {

@@ -36,11 +36,14 @@ test('demo prints PASS/FAIL per harness', async () => {
     { content: 'Done.' },
     { content: '{"calls":[{"name":"edit_file","args":{"path":"src/slugify.js","old":"replace(/[^a-z0-9]+/g, \'-\')","new":"replace(/[^a-z0-9]+/g, \'-\').replace(/^-+|-+$/g, \'\')"}}],"final":null}' },
     { content: '{"calls":[],"final":"Fixed."}' },
+    { content: '<tool_call>\n{"name":"edit_file","arguments":{"path":"src/slugify.js","old":"replace(/[^a-z0-9]+/g, \'-\')","new":"replace(/[^a-z0-9]+/g, \'-\').replace(/^-+|-+$/g, \'\')"}}\n</tool_call>' },
+    { content: 'Fixed.' },
   ]))
   const r = cli(['demo'], { LHB_FAKE_BACKEND: fake })
   expect(r.status).toBe(0)
   expect(r.stdout).toMatch(/bare\s+FAIL/)
   expect(r.stdout).toMatch(/tuned\s+PASS/)
+  expect(r.stdout).toMatch(/tuned-hermes\s+PASS/)
 }, 60_000)
 
 test('demo --json keeps stdout pure JSONL and prints the summary on stderr', async () => {
@@ -49,6 +52,8 @@ test('demo --json keeps stdout pure JSONL and prints the summary on stderr', asy
     { content: 'Done.' },
     { content: '{"calls":[{"name":"edit_file","args":{"path":"src/slugify.js","old":"replace(/[^a-z0-9]+/g, \'-\')","new":"replace(/[^a-z0-9]+/g, \'-\').replace(/^-+|-+$/g, \'\')"}}],"final":null}' },
     { content: '{"calls":[],"final":"Fixed."}' },
+    { content: '<tool_call>\n{"name":"edit_file","arguments":{"path":"src/slugify.js","old":"replace(/[^a-z0-9]+/g, \'-\')","new":"replace(/[^a-z0-9]+/g, \'-\').replace(/^-+|-+$/g, \'\')"}}\n</tool_call>' },
+    { content: 'Fixed.' },
   ]))
   const r = cli(['demo', '--json'], { LHB_FAKE_BACKEND: fake })
   expect(r.status).toBe(0)
@@ -57,4 +62,14 @@ test('demo --json keeps stdout pure JSONL and prints the summary on stderr', asy
   expect(r.stdout).not.toMatch(/PASS|FAIL/)
   expect(r.stderr).toMatch(/bare\s+FAIL/)
   expect(r.stderr).toMatch(/tuned\s+PASS/)
+  expect(r.stderr).toMatch(/tuned-hermes\s+PASS/)
 }, 60_000)
+
+test('run flags a final answer with zero tool calls', async () => {
+  const wd = await mkdtemp(join(tmpdir(), 'lhb-cli-'))
+  const fake = join(wd, 'fake.json')
+  await writeFile(fake, JSON.stringify([{ content: 'Let me look at that first.' }]))
+  const r = cli(['run', 'harnesses/tuned-hermes.json', '--workdir', wd, '--yes', 'x'], { LHB_FAKE_BACKEND: fake })
+  expect(r.status).toBe(0)
+  expect(r.stderr).toMatch(/! final after 0 tool calls/)
+}, 30_000)
