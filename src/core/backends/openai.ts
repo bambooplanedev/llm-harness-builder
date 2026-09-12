@@ -26,6 +26,22 @@ export class OpenAIBackend implements Backend {
     }
   }
 
+  /** llama-server only: /apply-template renders the chat template (tools included), /tokenize counts it. Both live at the server root, not under /v1. */
+  async countTokens(payload: unknown, signal?: AbortSignal): Promise<number | undefined> {
+    const root = this.baseUrl.replace(/\/v1$/, '')
+    const post = async (path: string, body: unknown) => {
+      const r = await this.fetchFn(`${root}${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal })
+      if (!r.ok) throw new BackendError(`POST ${path}: ${r.status}`, await r.text())
+      return readJson(r, `POST ${path}`)
+    }
+    try {
+      const { prompt } = await post('/apply-template', payload)
+      if (typeof prompt !== 'string') return undefined
+      const { tokens } = await post('/tokenize', { content: prompt, add_special: true, model: (payload as { model?: string }).model })
+      return Array.isArray(tokens) ? tokens.length : undefined
+    } catch { return undefined }
+  }
+
   async send(payload: unknown, signal?: AbortSignal): Promise<NormalizedResponse> {
     const r = await this.fetchFn(`${this.baseUrl}/chat/completions`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload), signal })
     if (!r.ok) throw new BackendError(`POST /chat/completions: ${r.status}`, await r.text())

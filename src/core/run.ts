@@ -36,14 +36,14 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
     turn++
 
     const droppedChars = applyBudget(messages, config.context.budgetTokens)
-    yield ev({ type: 'context_stats', estimatedTokens: estimateTokens(messages), budgetTokens: config.context.budgetTokens, droppedChars, usage: lastUsage })
-
     const req: ChatRequest = {
       model: config.backend.model, messages, temperature: config.backend.temperature, numCtx: config.backend.numCtx,
       tools: prompted ? undefined : schemas,
       responseSchema: prompted && !hermes && config.toolCalls.enforceSchema ? PROMPTED_SCHEMA : undefined,
     }
     const payload = backend.buildPayload(req)
+    const exactTokens = await backend.countTokens?.(payload, opts.signal)
+    yield ev({ type: 'context_stats', estimatedTokens: estimateTokens(messages), exactTokens, budgetTokens: config.context.budgetTokens, droppedChars, usage: lastUsage })
     yield ev({ type: 'llm_request', payload })
 
     const t0 = Date.now()

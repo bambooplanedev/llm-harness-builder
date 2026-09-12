@@ -174,7 +174,9 @@ both harnesses failed on the very first run of this demo.
   disabled in thinking mode. The parser is lenient regardless. In the run above, `enforceSchema`
   did nothing at all until thinking was off — the model kept spending its whole budget inside
   `<think>` and never reached the JSON.
-- Token estimates are `chars / 4`; exact counts are shown from the backend's `usage` when present.
+- Token counts are exact on llama-server (`/apply-template` + `/tokenize`: chat template and
+  `tools[]` included) and a `chars / 4` estimate of the messages elsewhere; the budget trims by
+  the estimate in both cases; the backend's `usage` is shown after each response.
 - `/no_think` is a Qwen3 convention. Applying another family removes it; on a model this tool has
   no family for, delete the line by hand.
 - In `hermes` format a reply with no `<tool_call>` block is the final answer — that is how these
@@ -189,8 +191,6 @@ both harnesses failed on the very first run of this demo.
   than having its thoughts accepted as the answer.
 - Abort cannot interrupt a tool that is already running; `bash` returns within its 30 s
   timeout, then the run ends.
-- The token estimate counts messages only, not the native-mode `tools[]` payload (roughly
-  500-600 tokens for the five tools); rely on the backend's `usage` figure next to it.
 - `demo --kind openai` needs `--base-url` (the default URL is Ollama's port).
 - The UI has no built-in workdir: run `demo` once and point the UI's workdir at the temp directory it prints (or at any `workdir` from a bench JSON), or at any scratch project.
 - `bench` PASS means `node --test` came back green, not that the bug was fixed the right way: the

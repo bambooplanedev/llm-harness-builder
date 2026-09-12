@@ -238,3 +238,19 @@ test('hermes: broken block -> parse_error with hint, second in a row -> parse_fa
   expect(be.requests[1].messages.at(-1)).toMatchObject({ role: 'user', content: 'HINT' })
   expect(last(ev).reason).toBe('parse_failed')
 })
+
+test('context_stats carries exactTokens when the backend can count, from the same payload that is sent', async () => {
+  const be = new Fake([{ content: 'done!' }])
+  const seen: unknown[] = []
+  ;(be as any).countTokens = async (payload: unknown) => { seen.push(payload); return 4242 }
+  const ev = await collect({ config: base(), task: 'do', workdir: await wd() }, { backend: be })
+  expect(types(ev)).toEqual(['context_stats', 'llm_request', 'llm_response', 'done'])
+  expect(ev[0]).toMatchObject({ type: 'context_stats', exactTokens: 4242 })
+  expect(seen).toEqual([(ev[1] as any).payload])
+})
+
+test('context_stats has no exactTokens when the backend cannot count', async () => {
+  const ev = await collect({ config: base(), task: 'do', workdir: await wd() }, { backend: new Fake([{ content: 'x' }]) })
+  expect((ev[0] as any).exactTokens).toBeUndefined()
+  expect(JSON.parse(JSON.stringify(ev[0]))).not.toHaveProperty('exactTokens')
+})

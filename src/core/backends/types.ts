@@ -53,6 +53,8 @@ export interface Backend {
   buildPayload(req: ChatRequest): unknown
   /** Sends a payload produced by buildPayload. Throws BackendError on non-2xx / network failure. */
   send(payload: unknown, signal?: AbortSignal): Promise<NormalizedResponse>
+  /** Exact prompt token count for a payload from buildPayload; undefined when the server cannot count. */
+  countTokens?(payload: unknown, signal?: AbortSignal): Promise<number | undefined>
 }
 
 export class BackendError extends Error {

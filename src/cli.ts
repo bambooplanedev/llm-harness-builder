@@ -46,7 +46,7 @@ async function loadHarness(file: string, over: { model?: string; baseUrl?: strin
 
 function describe(e: HarnessEvent): string {
   switch (e.type) {
-    case 'context_stats': return `[t${e.turn}] context ~${e.estimatedTokens} tok${e.droppedChars ? `, dropped ${e.droppedChars} chars` : ''}`
+    case 'context_stats': return `[t${e.turn}] context ${e.exactTokens !== undefined ? `${e.exactTokens} tok exact (~${e.estimatedTokens} est)` : `~${e.estimatedTokens} tok`}${e.droppedChars ? `, dropped ${e.droppedChars} chars` : ''}`
     case 'llm_request': return `[t${e.turn}] llm_request`
     case 'llm_response': return `[t${e.turn}] llm_response ${e.latencyMs}ms${e.usage ? ` (${e.usage.promptTokens}+${e.usage.completionTokens} tok)` : ''}${e.content ? `\n    ${e.content.slice(0, 200).replace(/\n/g, ' ')}` : ''}`
     case 'parse_error': return `[t${e.turn}] parse_error: ${e.message}`

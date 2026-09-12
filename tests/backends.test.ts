@@ -100,3 +100,30 @@ test('defaultFetch reaches a local server that delays its headers, and honours a
     await expect(defaultFetch(`http://127.0.0.1:${port}/hang`, { signal: ac.signal })).rejects.toThrow()
   } finally { srv.closeAllConnections(); srv.close() }
 })
+
+const routeFetch = (routes: Record<string, unknown>) => {
+  const calls: { url: string; body: any }[] = []
+  const fn = (async (url: string, init?: RequestInit) => {
+    calls.push({ url, body: init?.body ? JSON.parse(init.body as string) : undefined })
+    const path = new URL(url).pathname
+    return new Response(JSON.stringify(routes[path] ?? { error: 'no route' }), { status: path in routes ? 200 : 404, headers: { 'content-type': 'application/json' } })
+  }) as unknown as typeof fetch
+  return { fn, calls }
+}
+
+test('openai countTokens: apply-template then tokenize at the server root, exact length', async () => {
+  const f = routeFetch({ '/apply-template': { prompt: '<|im_start|>rendered' }, '/tokenize': { tokens: [1, 2, 3, 4, 5] } })
+  const be = new OpenAIBackend('http://x:8080/v1', f.fn)
+  const payload = be.buildPayload(req)
+  expect(await be.countTokens(payload)).toBe(5)
+  expect(f.calls.map(c => c.url)).toEqual(['http://x:8080/apply-template', 'http://x:8080/tokenize'])
+  expect(f.calls[0].body).toEqual(payload)
+  expect(f.calls[1].body).toEqual({ content: '<|im_start|>rendered', add_special: true, model: 'm' })
+})
+
+test('openai countTokens: a server without the endpoints yields undefined, no throw', async () => {
+  const f = routeFetch({ '/apply-template': {} })
+  const be = new OpenAIBackend('http://x:8080/v1', f.fn)
+  expect(await be.countTokens(be.buildPayload(req))).toBeUndefined()
+  expect(await new OpenAIBackend('http://x:8080/v1', routeFetch({}).fn).countTokens({})).toBeUndefined()
+})

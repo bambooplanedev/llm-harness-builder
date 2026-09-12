@@ -4,13 +4,14 @@ import type { HarnessEvent } from './api'
 const props = defineProps<{ events: HarnessEvent[]; numCtx?: number }>()
 const stats = computed(() => [...props.events].reverse().find(e => e.type === 'context_stats') as Extract<HarnessEvent, { type: 'context_stats' }> | undefined)
 const ceiling = computed(() => props.numCtx ?? stats.value?.budgetTokens ?? 0)
-const pct = computed(() => ceiling.value ? Math.min(100, (stats.value?.estimatedTokens ?? 0) / ceiling.value * 100) : 0)
+const pct = computed(() => ceiling.value ? Math.min(100, (stats.value?.exactTokens ?? stats.value?.estimatedTokens ?? 0) / ceiling.value * 100) : 0)
 </script>
 <template>
   <div v-if="stats">
     <div class="bar"><div :style="{ width: pct + '%' }"></div></div>
     <small>
-      ~{{ stats.estimatedTokens }} tok estimated
+      <template v-if="stats.exactTokens !== undefined">{{ stats.exactTokens }} tok exact · ~{{ stats.estimatedTokens }} est</template>
+      <template v-else>~{{ stats.estimatedTokens }} tok estimated</template>
       <span v-if="stats.usage"> · last usage {{ stats.usage.promptTokens }}+{{ stats.usage.completionTokens }}</span>
       <span v-if="stats.budgetTokens"> · budget {{ stats.budgetTokens }}</span>
       <span v-if="numCtx"> · num_ctx {{ numCtx }}</span>
