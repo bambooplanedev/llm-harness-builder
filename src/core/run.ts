@@ -64,7 +64,9 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
     let calls: { name: string; args: Record<string, unknown>; backendId?: string; argsError?: string }[] = []
     let final: string | null = null
     let parseError: string | null = null
-    if (prompted) {
+    if (res.truncated) {
+      parseError = 'response truncated by max tokens (finish_reason=length)'
+    } else if (prompted) {
       const p = parsePrompted(res.content)
       if (p.ok) {
         if (p.calls.length === 0 && (p.final === null || p.final.trim() === ''))

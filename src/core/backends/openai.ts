@@ -42,6 +42,7 @@ export class OpenAIBackend implements Backend {
     return {
       content: msg.content ?? '', reasoning: msg.reasoning_content ?? msg.reasoning ?? undefined, toolCalls,
       usage: j.usage ? { promptTokens: j.usage.prompt_tokens ?? 0, completionTokens: j.usage.completion_tokens ?? 0 } : undefined,
+      truncated: j.choices?.[0]?.finish_reason === 'length' || undefined,
       raw: j,
     }
   }

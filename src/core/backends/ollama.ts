@@ -41,6 +41,7 @@ export class OllamaBackend implements Backend {
     return {
       content: msg.content ?? '', reasoning: msg.thinking || undefined, toolCalls,
       usage: j.prompt_eval_count !== undefined ? { promptTokens: j.prompt_eval_count ?? 0, completionTokens: j.eval_count ?? 0 } : undefined,
+      truncated: j.done_reason === 'length' || undefined,
       raw: j,
     }
   }

@@ -169,3 +169,11 @@ test('max_turns, backend_error, aborted', async () => {
   const ac = new AbortController(); ac.abort()
   expect(last(await collect({ config: base(), task: 'do', workdir: await wd() }, { backend: new Fake([{ content: 'x' }]), signal: ac.signal })).reason).toBe('aborted')
 })
+
+test('truncated response is a parse error in any format, then the loop continues', async () => {
+  const be = new Fake([{ content: '<think>endless', truncated: true }, { content: 'fin' }])
+  const ev = await collect({ config: base(), task: 'do', workdir: await wd() }, { backend: be })
+  const pe = ev.find(e => e.type === 'parse_error') as any
+  expect(pe.message).toMatch(/truncated/)
+  expect(last(ev)).toMatchObject({ reason: 'final', text: 'fin', turns: 2 })
+})

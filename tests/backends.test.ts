@@ -76,3 +76,11 @@ test('listModels', async () => {
   expect(await new OpenAIBackend('http://x/v1', fakeFetch(200, { data: [{ id: 'a' }, { id: 'b' }] })).listModels()).toEqual(['a', 'b'])
   expect(await new OllamaBackend('http://x', fakeFetch(200, { models: [{ name: 'q:8b' }] })).listModels()).toEqual(['q:8b'])
 })
+
+test('finish_reason/done_reason length sets truncated', async () => {
+  const o = fx('openai-tool-call'); o.choices[0].finish_reason = 'length'
+  const l = fx('ollama-tool-call'); l.done_reason = 'length'
+  expect((await new OpenAIBackend('http://x/v1', fakeFetch(200, o)).send({})).truncated).toBe(true)
+  expect((await new OllamaBackend('http://x', fakeFetch(200, l)).send({})).truncated).toBe(true)
+  expect((await new OpenAIBackend('http://x/v1', fakeFetch(200, fx('openai-tool-call'))).send({})).truncated).toBeFalsy()
+})

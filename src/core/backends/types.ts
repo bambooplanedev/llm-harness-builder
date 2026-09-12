@@ -29,6 +29,8 @@ export type NormalizedResponse = {
   reasoning?: string
   toolCalls: NormalizedToolCall[]
   usage?: Usage
+  /** Backend stopped at max tokens (finish_reason/done_reason "length"); the content is incomplete. */
+  truncated?: boolean
   raw: unknown
 }
 
