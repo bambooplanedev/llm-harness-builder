@@ -28,7 +28,7 @@ const pretty = (v: unknown) => JSON.stringify(v, null, 2)
       </div>
       <div v-else-if="e.type === 'tool_result'" class="ev tool_result" :class="{ err: e.error }">{{ e.output }}<small v-if="e.truncated" class="warn"> [truncated]</small></div>
       <div v-else-if="e.type === 'error'" class="ev error">{{ e.message }}<br>{{ e.body }}</div>
-      <div v-else-if="e.type === 'done'" class="ev"><b>done: {{ e.reason }}</b> · {{ e.turns }} turns · {{ e.toolCallCount }} tool calls</div>
+      <div v-else-if="e.type === 'done'" class="ev" :class="{ parse_error: e.reason === 'final' && e.toolCallCount === 0 }"><b>done: {{ e.reason }}</b> · {{ e.turns }} turns · {{ e.toolCallCount }} tool calls<span v-if="e.reason === 'final' && e.toolCallCount === 0"> · final after 0 tool calls: the model quit without doing anything</span></div>
     </template>
     <details class="inspector"><summary>turn {{ turn }} — raw request / response</summary>
       <template v-for="e in evs" :key="'raw' + e.seq">
