@@ -17,6 +17,7 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
   const { config, task, workdir } = params
   const backend = opts.backend ?? createBackend(config.backend)
   const prompted = config.toolCalls.mode === 'prompted'
+  const hermes = prompted && config.toolCalls.format === 'hermes'
   const schemas = config.tools.enabled.map(n => TOOL_SCHEMAS[n])
   const system = prompted
     ? config.systemPrompt + '\n\n' + config.toolCalls.promptedTemplate.split('{{tools}}').join(renderTools(schemas))
@@ -40,7 +41,7 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
     const req: ChatRequest = {
       model: config.backend.model, messages, temperature: config.backend.temperature, numCtx: config.backend.numCtx,
       tools: prompted ? undefined : schemas,
-      responseSchema: prompted && config.toolCalls.enforceSchema ? PROMPTED_SCHEMA : undefined,
+      responseSchema: prompted && !hermes && config.toolCalls.enforceSchema ? PROMPTED_SCHEMA : undefined,
     }
     const payload = backend.buildPayload(req)
     yield ev({ type: 'llm_request', payload })
