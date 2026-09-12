@@ -1,0 +1,40 @@
+<script setup lang="ts">
+import { computed } from 'vue'
+import type { HarnessEvent } from './api'
+const props = defineProps<{ events: HarnessEvent[]; task: string }>()
+const emit = defineEmits<{ approve: [callId: string, ok: boolean] }>()
+
+const turns = computed(() => {
+  const map = new Map<number, HarnessEvent[]>()
+  for (const e of props.events) { if (!map.has(e.turn)) map.set(e.turn, []); map.get(e.turn)!.push(e) }
+  return [...map.entries()]
+})
+const answered = computed(() => new Set(props.events.filter(e => e.type === 'tool_result').map(e => (e as any).callId)))
+const pretty = (v: unknown) => JSON.stringify(v, null, 2)
+</script>
+<template>
+  <div class="ev user">{{ task }}</div>
+  <div v-for="[turn, evs] in turns" :key="turn" class="turn">
+    <template v-for="e in evs" :key="e.seq">
+      <div v-if="e.type === 'llm_response'" class="ev assistant">
+        <div v-if="e.reasoning" style="color:#888">thinking: {{ e.reasoning }}</div>{{ e.content || '(empty content)' }}
+        <small style="color:#888"> · {{ e.latencyMs }}ms</small>
+      </div>
+      <div v-else-if="e.type === 'parse_error'" class="ev parse_error">parse error: {{ e.message }}</div>
+      <div v-else-if="e.type === 'tool_call'" class="ev tool_call">{{ e.call.name }} {{ pretty(e.call.args) }}</div>
+      <div v-else-if="e.type === 'approval_required' && !answered.has(e.call.callId)" class="ev approval">
+        run <code>{{ e.call.args.command }}</code>?
+        <button @click="emit('approve', e.call.callId, true)">Run</button> <button @click="emit('approve', e.call.callId, false)">Deny</button>
+      </div>
+      <div v-else-if="e.type === 'tool_result'" class="ev tool_result" :class="{ err: e.error }">{{ e.output }}<small v-if="e.truncated" class="warn"> [truncated]</small></div>
+      <div v-else-if="e.type === 'error'" class="ev error">{{ e.message }}<br>{{ e.body }}</div>
+      <div v-else-if="e.type === 'done'" class="ev"><b>done: {{ e.reason }}</b> · {{ e.turns }} turns · {{ e.toolCallCount }} tool calls</div>
+    </template>
+    <details class="inspector"><summary>turn {{ turn }} — raw request / response</summary>
+      <template v-for="e in evs" :key="'raw' + e.seq">
+        <pre v-if="e.type === 'llm_request'">{{ pretty(e.payload) }}</pre>
+        <pre v-if="e.type === 'llm_response'">{{ pretty(e.raw) }}</pre>
+      </template>
+    </details>
+  </div>
+</template>

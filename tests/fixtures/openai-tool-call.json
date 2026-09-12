@@ -1,0 +1,11 @@
+{
+  "choices": [{
+    "finish_reason": "tool_calls", "index": 0,
+    "message": {
+      "role": "assistant", "content": null, "reasoning_content": "I should read the file first.",
+      "tool_calls": [{ "type": "function", "id": "call_9f2a", "function": { "name": "read_file", "arguments": "{\"path\":\"src/slugify.js\"}" } }]
+    }
+  }],
+  "created": 1757600000, "model": "qwen3-8b", "object": "chat.completion",
+  "usage": { "completion_tokens": 31, "prompt_tokens": 612, "total_tokens": 643 }
+}

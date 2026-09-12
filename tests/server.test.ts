@@ -1,0 +1,205 @@
+import { test, expect, afterAll } from 'vitest'
+import { mkdtemp, writeFile, readFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import http from 'node:http'
+import { startServer } from '../src/server/index.js'
+import type { Backend, NormalizedResponse } from '../src/core/backends/types.js'
+
+const fake = (queue: Partial<NormalizedResponse>[]): Backend => ({
+  async listModels() { return ['fake-model'] },
+  buildPayload: r => r,
+  async send() { const r = queue.shift(); if (!r) throw new Error('no more'); return { content: '', toolCalls: [], raw: {}, ...r } },
+})
+const config = (over = {}) => ({
+  name: 'h', backend: { kind: 'openai', baseUrl: 'http://x/v1', model: 'fake-model', temperature: 0 },
+  systemPrompt: 's', tools: { enabled: ['bash'], approveBash: true },
+  toolCalls: { mode: 'native', enforceSchema: false, promptedTemplate: '{{tools}}', parseErrorHint: 'h' },
+  context: { maxToolOutputChars: 100, budgetTokens: 0 }, loop: { maxTurns: 3 }, ...over,
+})
+
+const runsDir = await mkdtemp(join(tmpdir(), 'lhb-runs-'))
+const harnessesDir = await mkdtemp(join(tmpdir(), 'lhb-h-'))
+const workdir = await mkdtemp(join(tmpdir(), 'lhb-wd-'))
+let queue: Partial<NormalizedResponse>[] = []
+const srv = await startServer({ port: 0, runsDir, harnessesDir, backendFactory: () => fake(queue) })
+const base = `http://127.0.0.1:${srv.port}`
+afterAll(() => srv.close())
+
+async function sse(id: string, until: (e: any) => boolean, lastId?: number): Promise<any[]> {
+  const r = await fetch(`${base}/api/runs/${id}/events`, { headers: lastId !== undefined ? { 'last-event-id': String(lastId) } : {} })
+  const reader = r.body!.getReader(); const dec = new TextDecoder(); let buf = ''; const out: any[] = []
+  while (true) {
+    const { value, done } = await reader.read(); if (done) break
+    buf += dec.decode(value)
+    let i; while ((i = buf.indexOf('\n\n')) !== -1) {
+      const block = buf.slice(0, i); buf = buf.slice(i + 2)
+      const data = block.split('\n').find(l => l.startsWith('data: '))?.slice(6)
+      if (data) { const e = JSON.parse(data); out.push(e); if (until(e)) { await reader.cancel(); return out } }
+    }
+  }
+  return out
+}
+
+// Like `sse` but ignores event content and just reads the stream to its natural end
+// (the server always closes the connection after emitting `done`).
+async function collectSSE(url: string, headers: Record<string, string> = {}): Promise<any[]> {
+  const r = await fetch(url, { headers })
+  const reader = r.body!.getReader(); const dec = new TextDecoder(); let buf = ''; const out: any[] = []
+  while (true) {
+    const { value, done } = await reader.read(); if (done) break
+    buf += dec.decode(value)
+    let i; while ((i = buf.indexOf('\n\n')) !== -1) {
+      const block = buf.slice(0, i); buf = buf.slice(i + 2)
+      const data = block.split('\n').find(l => l.startsWith('data: '))?.slice(6)
+      if (data) out.push(JSON.parse(data))
+    }
+  }
+  return out
+}
+
+test('run with approval over SSE, events persisted to jsonl', async () => {
+  queue = [{ toolCalls: [{ name: 'bash', args: { command: 'echo hi' } }] }, { content: 'done' }]
+  const r = await fetch(`${base}/api/runs`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ config: config(), task: 't', workdir }) })
+  expect(r.status).toBe(201)
+  const { runId } = await r.json()
+  const first = await sse(runId, e => e.type === 'approval_required')
+  const call = first.at(-1).call
+  const a = await fetch(`${base}/api/runs/${runId}/approve`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ callId: call.callId, ok: true }) })
+  expect(a.status).toBe(200)
+  const rest = await sse(runId, e => e.type === 'done', first.at(-1).seq)
+  expect(rest[0].seq).toBe(first.at(-1).seq + 1)
+  expect(rest.find(e => e.type === 'tool_result').output).toContain('hi')
+  expect(rest.at(-1)).toMatchObject({ type: 'done', reason: 'final' })
+  const lines = (await readFile(join(runsDir, `${runId}.jsonl`), 'utf8')).trim().split('\n').map(l => JSON.parse(l))
+  expect(lines[0].meta).toMatchObject({ harness: 'h', task: 't' })
+  expect(lines.at(-1)).toMatchObject({ type: 'done' })
+  const list = await (await fetch(`${base}/api/runs`)).json()
+  expect(list.find((s: any) => s.id === runId)).toMatchObject({ harness: 'h', reason: 'final', toolCallCount: 1 })
+})
+
+test('validation: bad config 400, bad workdir 400, busy workdir 409', async () => {
+  const bad = await fetch(`${base}/api/runs`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ config: {}, task: 't', workdir }) })
+  expect(bad.status).toBe(400)
+  const home = await fetch(`${base}/api/runs`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ config: config(), task: 't', workdir: '/' }) })
+  expect(home.status).toBe(400)
+  queue = [{ toolCalls: [{ name: 'bash', args: { command: 'true' } }] }]
+  const a = await fetch(`${base}/api/runs`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ config: config(), task: 't', workdir }) })
+  const { runId } = await a.json()
+  await sse(runId, e => e.type === 'approval_required')
+  const b = await fetch(`${base}/api/runs`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ config: config(), task: 't', workdir }) })
+  expect(b.status).toBe(409)
+  await fetch(`${base}/api/runs/${runId}/abort`, { method: 'POST' })
+  const ev = await sse(runId, e => e.type === 'done')
+  expect(ev.at(-1).reason).toBe('aborted')
+})
+
+const rawStatus = (headers: Record<string, string>) => new Promise<number>(resolve => {
+  const req = http.request({ host: '127.0.0.1', port: srv.port, path: '/api/runs', method: 'GET', headers }, res => { res.resume(); resolve(res.statusCode!) })
+  req.end()
+})
+test('host/origin checks', async () => {
+  expect(await rawStatus({ host: 'evil.com' })).toBe(403)
+  expect(await rawStatus({ host: '127.0.0.1', origin: 'http://evil.com' })).toBe(403)
+  expect(await rawStatus({ host: 'localhost:9', origin: 'http://localhost:5173' })).toBe(200)
+})
+
+test('harnesses and models', async () => {
+  await writeFile(join(harnessesDir, 'x.json'), JSON.stringify(config({ name: 'x' })))
+  expect(await (await fetch(`${base}/api/harnesses`)).json()).toEqual([{ name: 'x' }])
+  const put = await fetch(`${base}/api/harnesses/y`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(config({ name: 'y' })) })
+  expect(put.status).toBe(200)
+  expect((await (await fetch(`${base}/api/harnesses/y`)).json()).name).toBe('y')
+  expect(await (await fetch(`${base}/api/models?kind=openai&baseUrl=http://x/v1`)).json()).toEqual(['fake-model'])
+})
+
+test('concurrent POST /api/runs for the same workdir: exactly one 201, one 409', async () => {
+  const wd = await mkdtemp(join(tmpdir(), 'lhb-wd-race-'))
+  queue = [{ toolCalls: [{ name: 'bash', args: { command: 'true' } }] }]
+  const body = JSON.stringify({ config: config(), task: 't', workdir: wd })
+  const [r1, r2] = await Promise.all([
+    fetch(`${base}/api/runs`, { method: 'POST', headers: { 'content-type': 'application/json' }, body }),
+    fetch(`${base}/api/runs`, { method: 'POST', headers: { 'content-type': 'application/json' }, body }),
+  ])
+  expect([r1.status, r2.status].sort()).toEqual([201, 409])
+  const winner = r1.status === 201 ? r1 : r2
+  const { runId } = await winner.json()
+  await sse(runId, e => e.type === 'approval_required')
+  await fetch(`${base}/api/runs/${runId}/abort`, { method: 'POST' })
+  const ev = await sse(runId, e => e.type === 'done')
+  expect(ev.at(-1).reason).toBe('aborted')
+})
+
+test('malformed Last-Event-ID header still replays full history and ends with done', async () => {
+  const wd = await mkdtemp(join(tmpdir(), 'lhb-wd-bad-lei-'))
+  queue = [{ content: 'done fast' }]
+  const r = await fetch(`${base}/api/runs`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ config: config(), task: 't', workdir: wd }) })
+  const { runId } = await r.json()
+  await sse(runId, e => e.type === 'done')
+  const events = await collectSSE(`${base}/api/runs/${runId}/events`, { 'last-event-id': 'abc' })
+  expect(events.length).toBeGreaterThan(0)
+  expect(events.at(-1)).toMatchObject({ type: 'done' })
+})
+
+test('a stray empty run file does not break the run listing', async () => {
+  await writeFile(join(runsDir, 'broken.jsonl'), '')
+  const list = await fetch(`${base}/api/runs`)
+  expect(list.status).toBe(200)
+  const arr = await list.json()
+  expect(Array.isArray(arr)).toBe(true)
+  expect(arr.length).toBeGreaterThan(0)
+})
+
+test('run listing reads only the head and tail of large run files', async () => {
+  const id = 'bigfile1'
+  const now = Date.now()
+  const lines = [
+    { meta: { id, harness: 'h', task: 't', workdir, started: now } },
+    { seq: 0, turn: 1, ts: now, type: 'tool_result', callId: 'c1', name: 'read_file', output: 'é'.repeat(300_000), truncated: false, error: false },
+    { seq: 1, turn: 1, ts: now, type: 'done', reason: 'final', turns: 1, toolCallCount: 1 },
+  ]
+  await writeFile(join(runsDir, `${id}.jsonl`), lines.map(l => JSON.stringify(l)).join('\n') + '\n')
+  const list = await (await fetch(`${base}/api/runs`)).json()
+  expect(list.find((s: any) => s.id === id)).toMatchObject({ harness: 'h', reason: 'final', turns: 1, toolCallCount: 1 })
+})
+
+test('orphaned run file (no done, process killed mid-run) gets a synthetic aborted done and is listed', async () => {
+  const id = 'orphan01'
+  const now = Date.now()
+  const lines = [
+    { meta: { id, harness: 'h', task: 't', workdir, started: now } },
+    { seq: 0, turn: 1, ts: now, type: 'context_stats', estimatedTokens: 10, budgetTokens: 0, droppedChars: 0 },
+    { seq: 1, turn: 1, ts: now, type: 'llm_request', payload: {} },
+    { seq: 2, turn: 1, ts: now, type: 'tool_call', call: { callId: 'c1', name: 'bash', args: {} } },
+  ]
+  await writeFile(join(runsDir, `${id}.jsonl`), lines.map(l => JSON.stringify(l)).join('\n') + '\n')
+
+  const first = await collectSSE(`${base}/api/runs/${id}/events`)
+  expect(first.at(-1)).toMatchObject({ type: 'done', reason: 'aborted', toolCallCount: 1 })
+
+  const linesAfterFirst = (await readFile(join(runsDir, `${id}.jsonl`), 'utf8')).trim().split('\n')
+  expect(linesAfterFirst.length).toBe(lines.length + 1)
+
+  const second = await collectSSE(`${base}/api/runs/${id}/events`)
+  expect(second.at(-1)).toMatchObject({ type: 'done', reason: 'aborted' })
+  const linesAfterSecond = (await readFile(join(runsDir, `${id}.jsonl`), 'utf8')).trim().split('\n')
+  expect(linesAfterSecond.length).toBe(linesAfterFirst.length)
+
+  const list = await (await fetch(`${base}/api/runs`)).json()
+  expect(list.find((s: any) => s.id === id)).toMatchObject({ reason: 'aborted' })
+})
+
+test('malformed JSON body returns 400, not 500', async () => {
+  const r = await fetch(`${base}/api/runs`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{oops' })
+  expect(r.status).toBe(400)
+  const body = await r.json()
+  expect(body.error).toMatch(/invalid JSON/)
+})
+
+test('PUT harness with a large multi-byte systemPrompt round-trips byte-exact', async () => {
+  const systemPrompt = '€'.repeat(20000)
+  const put = await fetch(`${base}/api/harnesses/utf8`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(config({ name: 'utf8', systemPrompt })) })
+  expect(put.status).toBe(200)
+  const got = await (await fetch(`${base}/api/harnesses/utf8`)).json()
+  expect(got.systemPrompt).toBe(systemPrompt)
+})
