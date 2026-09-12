@@ -1,4 +1,4 @@
-import { BackendError, defaultFetch, readJson, type Backend, type ChatRequest, type FetchLike, type NormalizedResponse, type NormalizedToolCall } from './types.js'
+import { BackendError, defaultFetch, readJson, jsonChunks, type Backend, type ChatRequest, type Delta, type FetchLike, type NormalizedResponse, type NormalizedToolCall } from './types.js'
 
 export class OllamaBackend implements Backend {
   constructor(private baseUrl: string, private fetchFn: FetchLike = defaultFetch) { this.baseUrl = baseUrl.replace(/\/+$/, '') }
@@ -20,29 +20,36 @@ export class OllamaBackend implements Backend {
       return { role: m.role, content: m.content }
     })
     return {
-      model: req.model, messages, stream: false,
+      model: req.model, messages, stream: true,
       options: { temperature: req.temperature, ...(req.numCtx ? { num_ctx: req.numCtx } : {}) },
       ...(req.tools ? { tools: req.tools.map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } })) } : {}),
       ...(req.responseSchema ? { format: req.responseSchema } : {}),
     }
   }
 
-  async send(payload: unknown, signal?: AbortSignal): Promise<NormalizedResponse> {
+  async send(payload: unknown, signal?: AbortSignal, onDelta?: (d: Delta) => void): Promise<NormalizedResponse> {
     const r = await this.fetchFn(`${this.baseUrl}/api/chat`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload), signal })
     if (!r.ok) throw new BackendError(`POST /api/chat: ${r.status}`, await r.text())
-    const j = (await readJson(r, 'POST /api/chat')) as any
-    const msg = j.message ?? {}
-    const toolCalls: NormalizedToolCall[] = (msg.tool_calls ?? []).map((tc: any) => {
+    let content = '', thinking = '', last: any = {}
+    const rawCalls: any[] = []
+    for await (const c of jsonChunks(r, 'POST /api/chat', '')) {
+      last = c
+      const m = c.message ?? {}
+      if (m.content) { content += m.content; onDelta?.({ content: m.content }) }
+      if (m.thinking) { thinking += m.thinking; onDelta?.({ reasoning: m.thinking }) }
+      if (m.tool_calls) rawCalls.push(...m.tool_calls)
+    }
+    const toolCalls: NormalizedToolCall[] = rawCalls.map((tc: any) => {
       const fn = tc.function ?? {}
       const args = fn.arguments
       if (typeof args === 'object' && args !== null) return { name: fn.name, args }
       return { name: fn.name, args: {}, argsError: `arguments is not an object: ${JSON.stringify(args)}` }
     })
     return {
-      content: msg.content ?? '', reasoning: msg.thinking || undefined, toolCalls,
-      usage: j.prompt_eval_count !== undefined ? { promptTokens: j.prompt_eval_count ?? 0, completionTokens: j.eval_count ?? 0 } : undefined,
-      truncated: j.done_reason === 'length' || undefined,
-      raw: j,
+      content, reasoning: thinking || undefined, toolCalls,
+      usage: last.prompt_eval_count !== undefined ? { promptTokens: last.prompt_eval_count ?? 0, completionTokens: last.eval_count ?? 0 } : undefined,
+      truncated: last.done_reason === 'length' || undefined,
+      raw: { ...last, message: { role: 'assistant', content, thinking: thinking || undefined, tool_calls: rawCalls } },
     }
   }
 }

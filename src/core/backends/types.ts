@@ -4,7 +4,9 @@ import { fetch as undiciFetch, Agent } from 'undici'
 export type FetchLike = (
   url: string,
   init?: { method?: string; headers?: Record<string, string>; body?: string; signal?: AbortSignal },
-) => Promise<{ ok: boolean; status: number; text(): Promise<string> }>
+) => Promise<{ ok: boolean; status: number; text(): Promise<string>; body?: AsyncIterable<Uint8Array> | null }>
+// `body` is typed as AsyncIterable, not ReadableStream: undici's stream is the stream/web one, the global type
+// without `lib` is the DOM one, and the two do not unify; AsyncIterable covers both and `new Response` in tests.
 
 // A local model can take minutes before the first byte (model load, prompt eval, a long <think>).
 // undici's defaults kill any request without headers within 300 s; that is the "fetch failed" of v1.
@@ -12,6 +14,9 @@ const patient = new Agent({ headersTimeout: 0, bodyTimeout: 0 })
 export const defaultFetch: FetchLike = (url, init) => undiciFetch(url, { ...init, dispatcher: patient })
 
 export type Usage = { promptTokens: number; completionTokens: number }
+
+/** One streamed piece of the assistant turn; either field may be absent. */
+export type Delta = { content?: string; reasoning?: string }
 
 export type ToolSchema = { name: string; description: string; parameters: Record<string, unknown> }
 
@@ -52,7 +57,7 @@ export interface Backend {
   /** Pure: turns a ChatRequest into the exact JSON body that will be sent. */
   buildPayload(req: ChatRequest): unknown
   /** Sends a payload produced by buildPayload. Throws BackendError on non-2xx / network failure. */
-  send(payload: unknown, signal?: AbortSignal): Promise<NormalizedResponse>
+  send(payload: unknown, signal?: AbortSignal, onDelta?: (d: Delta) => void): Promise<NormalizedResponse>
   /** Exact prompt token count for a payload from buildPayload; undefined when the server cannot count. */
   countTokens?(payload: unknown, signal?: AbortSignal): Promise<number | undefined>
 }
@@ -65,4 +70,37 @@ export class BackendError extends Error {
 export async function readJson(r: { text(): Promise<string> }, what: string): Promise<any> {
   const text = await r.text()
   try { return JSON.parse(text) } catch { throw new BackendError(`${what}: response is not JSON`, text.slice(0, 2000)) }
+}
+
+/**
+ * JSON chunks of a streamed 2xx body, one per line, with `prefix` ("data: " for SSE, "" for NDJSON) stripped.
+ * `[DONE]`, blank, comment (`:`) and unparsable lines are skipped. A chunk carrying `error` and no payload
+ * throws BackendError with it. A body that yields no chunk at all throws "response is not an event stream".
+ */
+export async function* jsonChunks(r: { body?: AsyncIterable<Uint8Array> | null }, what: string, prefix: string): AsyncGenerator<any> {
+  const dec = new TextDecoder()
+  let buf = '', head = '', any = false
+  const lines = async function* () {
+    for await (const chunk of r.body ?? []) {
+      buf += dec.decode(chunk, { stream: true })
+      if (head.length < 2000) head += buf.slice(0, 2000 - head.length)
+      let i
+      while ((i = buf.indexOf('\n')) !== -1) { yield buf.slice(0, i); buf = buf.slice(i + 1) }
+    }
+    buf += dec.decode()
+    if (buf) yield buf
+  }
+  for await (const raw of lines()) {
+    const line = raw.trimEnd()
+    if (!line || line.startsWith(':') || !line.startsWith(prefix)) continue
+    const text = line.slice(prefix.length)
+    if (text === '[DONE]') break
+    let c: any
+    try { c = JSON.parse(text) } catch { continue }
+    if (c.error !== undefined && c.choices === undefined && c.message === undefined)
+      throw new BackendError(`${what}: ${typeof c.error === 'string' ? c.error : c.error?.message ?? 'stream error'}`, text)
+    any = true
+    yield c
+  }
+  if (!any) throw new BackendError(`${what}: response is not an event stream`, head.slice(0, 2000))
 }
