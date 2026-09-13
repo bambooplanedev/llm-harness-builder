@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest'
-import { median, formatTable, type BenchHarness } from '../src/core/bench'
+import { median, formatTable, mmss, type BenchHarness } from '../src/core/bench'
 
 test('median: lower-middle of a numerically sorted copy, [] → 0', () => {
   expect(median([])).toBe(0)
@@ -21,4 +21,12 @@ test('formatTable: header, one row per harness, caption', () => {
   expect(lines[2]).toMatch(/^tuned-hermes\s+3\/3\s+final×3\s+5\s+40$/)
   expect(lines[3]).toBe('medians over all runs incl. failures; s = wall-clock per run')
   expect(formatTable([h('x', 0, {}, 0, 0)]).split('\n')[1]).toMatch(/^x\s+0\/3\s+-\s/)
+})
+
+test('mmss: seconds under two minutes, m:ss from there', () => {
+  expect(mmss(0)).toBe('0s')
+  expect(mmss(95_400)).toBe('95s')
+  expect(mmss(119_400)).toBe('119s')
+  expect(mmss(120_000)).toBe('2:00')
+  expect(mmss(1_159_000)).toBe('19:19')
 })

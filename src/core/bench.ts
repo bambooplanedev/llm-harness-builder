@@ -22,6 +22,12 @@ export type ActiveTrace = { id: string; harness: string; round: number; started:
 /** Lower-middle element of the numerically sorted copy; [] → 0. Never mutates xs. */
 export const median = (xs: number[]): number => xs.length ? [...xs].sort((a, b) => a - b)[(xs.length - 1) >> 1] : 0
 
+/** Four of five `bare` runs are over 900 s: 1800s reads worse than 30:00. */
+export const mmss = (ms: number): string => {
+  const s = Math.round(ms / 1000)
+  return s < 120 ? `${s}s` : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+}
+
 export function formatTable(harnesses: BenchHarness[]): string {
   const head = ['harness', 'PASS', 'reasons', 'med turns', 'med s']
   const rows = harnesses.map(h => [

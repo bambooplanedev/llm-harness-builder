@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { api, type ActiveTrace, type BenchFile, type BenchResult, type Delta, type HarnessConfig, type HarnessEvent } from './api'
-import { formatTable } from '../../src/core/bench'
+import { formatTable, mmss } from '../../src/core/bench'
 import Trace from './Trace.vue'
 
 const emit = defineEmits<{ toWorkbench: [config: HarnessConfig, workdir: string] }>()
@@ -28,11 +28,6 @@ const runs = computed(() => result.value?.harnesses.flatMap(h => h.runs) ?? [])
 const total = computed(() => result.value ? result.value.n * result.value.harnesses.length : 0)
 const msDone = computed(() => runs.value.reduce((a, r) => a + r.ms, 0))
 const backend = computed(() => result.value?.harnesses[0].config.backend)
-/** Four of five `bare` runs are over 900 s: 1800s reads worse than 30:00. */
-const mmss = (ms: number) => {
-  const s = Math.round(ms / 1000)
-  return s < 120 ? `${s}s` : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
-}
 
 /**
  * One poll. A setTimeout chain, not setInterval: a tick reads the whole .part and every bench JSON,
