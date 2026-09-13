@@ -50,8 +50,9 @@ class Conn {
   }
 
   private onData(d: Buffer) {
+    if (this.dead) return
     this.buf += d.toString('utf8')
-    if (this.buf.length > MAX_LINE_BYTES) return this.die('server wrote a line over 1 MB')
+    if (this.buf.length > MAX_LINE_BYTES) return this.die('server wrote a line over 1 MB', true)
     for (let i; (i = this.buf.indexOf('\n')) >= 0; ) {
       const line = this.buf.slice(0, i).trim()
       this.buf = this.buf.slice(i + 1)
@@ -66,10 +67,18 @@ class Conn {
     }
   }
 
-  private die(why: string) {
+  /** killGroup: true when *we* decided the server is broken (timeout, oversize line) and it is
+   *  certainly still alive, so we must reap it ourselves. false when the child died on its own
+   *  (exit/error): the pid may already be recycled, and killing that group would be worse than
+   *  leaking it. */
+  private die(why: string, killGroup = false) {
     if (this.dead) return
     this.dead = true
-    if (this.pid) untrack(this.pid)   // the process group may already be gone; forget it either way
+    this.buf = ''
+    if (this.pid) {
+      if (killGroup) { try { process.kill(-this.pid, 'SIGKILL') } catch {} }
+      untrack(this.pid)
+    }
     for (const [, p] of this.pending) { clearTimeout(p.timer); p.reject(new Error(why)) }
     this.pending.clear()
   }
@@ -86,7 +95,7 @@ class Conn {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id)
-        this.die(`timed out after ${Math.round(timeoutMs / 1000)}s`)
+        this.die(`timed out after ${Math.round(timeoutMs / 1000)}s`, true)
         reject(new Error(`mcp server "${this.name}": ${method} timed out`))
       }, timeoutMs)
       this.pending.set(id, { resolve, reject, timer })
@@ -95,8 +104,7 @@ class Conn {
   }
 
   close() {
-    this.die('closed')   // idempotent: untrack already ran in die() if the child was still alive
-    if (this.pid) { try { process.kill(-this.pid, 'SIGKILL') } catch {} }
+    this.die('closed', true)
   }
 }
 

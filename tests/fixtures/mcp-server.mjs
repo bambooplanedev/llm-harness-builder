@@ -16,6 +16,8 @@ const TOOLS = [
   { name: 'rpcfail', description: 'Answers with a JSON-RPC error.', inputSchema: { type: 'object', properties: {}, required: [] } },
   { name: 'noisy', description: 'Writes an unparseable line before its answer.', inputSchema: { type: 'object', properties: {}, required: [] } },
   { name: 'weird', description: 'Its schema is not an object.', inputSchema: { type: 'string' } },
+  { name: 'stall', description: 'Never answers.', inputSchema: { type: 'object', properties: {}, required: [] } },
+  { name: 'flood', description: 'Writes stdout with no newline, forever, and never answers.', inputSchema: { type: 'object', properties: {}, required: [] } },
 ]
 
 const out = o => process.stdout.write(JSON.stringify(o) + '\n')
@@ -39,6 +41,8 @@ createInterface({ input: process.stdin }).on('line', line => {
     if (n === 'silent') return ok(m.id, { content: [] })
     if (n === 'rpcfail') return out({ jsonrpc: '2.0', id: m.id, error: { code: -32602, message: 'bad arguments' } })
     if (n === 'noisy') { process.stdout.write('this is not json\n'); return text(m.id, 'noisy ok') }
+    if (n === 'stall') return   // never answer
+    if (n === 'flood') { setInterval(() => process.stdout.write('x'.repeat(1 << 18)), 5); return }
     return text(m.id, `echo: ${m.params?.arguments?.text ?? ''}`)
   }
 })
