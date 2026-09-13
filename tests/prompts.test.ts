@@ -1,7 +1,7 @@
 import { test, expect } from 'vitest'
 import { readFile } from 'node:fs/promises'
 import { renderTools, applyFamily, FAMILIES, PRESETS, DEFAULT_PROMPTED_TEMPLATE, DEFAULT_PARSE_ERROR_HINT, HERMES_TEMPLATE, HERMES_PARSE_ERROR_HINT } from '../src/core/prompts.js'
-import type { HarnessConfig } from '../src/core/config.js'
+import { validateConfig, type HarnessConfig } from '../src/core/config.js'
 
 // Do not import validConfig from config.test.ts: importing a test file re-registers its tests here.
 const validConfig: HarnessConfig = {
@@ -83,4 +83,23 @@ test('applyFamily strips a trailing blank line together with the suffix', () => 
 
 test('applyFamily does not strip a line that merely contains the suffix as a substring', () => {
   expect(applyFamily({ ...validConfig, systemPrompt: 'remember /no_think mode' }, 'qwen3').systemPrompt).toBe('remember /no_think mode\n/no_think')
+})
+
+// The two arms of the mcp experiment must differ in one thing only, or the bench measures noise.
+test('mcp-off and mcp-on differ from tuned only in where the file tools come from', async () => {
+  const load = async (n: string) => JSON.parse(await readFile(new URL(`../harnesses/${n}.json`, import.meta.url), 'utf8'))
+  const tuned = await load('tuned'), off = await load('mcp-off'), on = await load('mcp-on')
+  for (const h of [off, on]) {
+    expect(validateConfig(h)).toEqual([])
+    for (const k of ['backend', 'toolCalls', 'context', 'loop']) expect(h[k]).toEqual(tuned[k])
+  }
+  // One prompt for both arms, and it names no tool: tuned's prompt says "read_file", which does not
+  // exist on the mcp side (there it is list_directory, and edit_file takes edits: [{oldText,newText}]).
+  expect(off.systemPrompt).toBe(on.systemPrompt)
+  for (const name of ['list_dir', 'read_file', 'write_file', 'edit_file', 'list_directory', 'read_text_file'])
+    expect(on.systemPrompt).not.toContain(name)
+  expect(off.tools).toEqual(tuned.tools)
+  expect(off.mcpServers).toBeUndefined()
+  expect(on.tools.enabled).toEqual(['bash'])   // bash stays: the demo task needs node --test, which the fs server cannot run
+  expect(on.mcpServers).toEqual({ fs: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-filesystem', '.'] } })
 })
