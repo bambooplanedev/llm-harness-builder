@@ -18,6 +18,9 @@ const harnessNames = ref<string[]>([])
 const models = ref<string[]>([]); const modelsError = ref('')
 const workdir = ref(''); const task = ref(DEMO_TASK)
 const runs = ref<RunSummary[]>([]); const runId = ref(''); const events = ref<HarnessEvent[]>([]); const error = ref('')
+/** Non-empty while the form's mcpServers box holds unparseable JSON: the config then still carries
+ *  the last valid value, so running would use something the user cannot see. */
+const mcpError = ref('')
 const live = ref<Delta>({}) // the current turn's streamed text; live-only, never in the trace
 let unsub: (() => void) | null = null
 const running = () => runId.value && !events.value.some(e => e.type === 'done')
@@ -70,7 +73,7 @@ watch(() => [config.value.backend.kind, config.value.backend.baseUrl], refreshMo
     <Bench v-if="tab === 'bench'" @to-workbench="toWorkbench" />
     <div class="layout" v-else>
       <div class="col left">
-        <ConfigForm v-model="config" :models="models" :models-error="modelsError" :harness-names="harnessNames" @refresh-models="refreshModels" @load="load" @save-as="saveAs" />
+        <ConfigForm v-model="config" v-model:mcp-error="mcpError" :models="models" :models-error="modelsError" :harness-names="harnessNames" @refresh-models="refreshModels" @load="load" @save-as="saveAs" />
       </div>
       <div class="col">
         <label>Workdir (absolute path to a scratch project; not / or your home)</label>
@@ -78,7 +81,7 @@ watch(() => [config.value.backend.kind, config.value.backend.baseUrl], refreshMo
         <label>Task</label>
         <textarea v-model="task" style="min-height:50px"></textarea>
         <div class="row" style="margin:8px 0">
-          <button @click="start" :disabled="!!running()">Run</button>
+          <button @click="start" :disabled="!!running() || !!mcpError">Run</button>
           <button @click="abort" :disabled="!running()">Abort</button>
           <span class="err">{{ error }}</span>
         </div>

@@ -28,20 +28,20 @@ const open = ref(-1)
 const groups = computed(() => [turnsOf(props.a.events), turnsOf(props.b.events)])
 /** The path is drawn from events, not the bench JSON: without both sides' events it would either
  *  mark a fake divergence at turn 0 (side B still streaming, or its trace file gone for good) or
- *  claim "шлях однаковий" against no data at all. */
+ *  claim "same path" against no data at all. */
 const hasEvents = computed(() => props.a.events.length > 0 && props.b.events.length > 0)
 </script>
 
 <template>
   <div class="diff">
     <div class="row">
-      <b>{{ head(a) }}</b> проти <b>{{ head(b) }}</b>
+      <b>{{ head(a) }}</b> vs <b>{{ head(b) }}</b>
       <button @click="$emit('close')">×</button>
     </div>
     <div class="hint">{{ task }}</div>
 
-    <h4>конфіг</h4>
-    <div v-if="!rows.length" class="hint">конфіги однакові</div>
+    <h4>config</h4>
+    <div v-if="!rows.length" class="hint">configs are identical</div>
     <table v-else class="cfg">
       <tr v-for="r in rows" :key="r.path">
         <td><code>{{ r.path }}</code></td>
@@ -49,7 +49,7 @@ const hasEvents = computed(() => props.a.events.length > 0 && props.b.events.len
           <td colspan="2">
             <div v-for="l in onlyIn(r).onlyA" :key="'a' + l" class="onlyA">− {{ l }}</div>
             <div v-for="l in onlyIn(r).onlyB" :key="'b' + l" class="onlyB">+ {{ l }}</div>
-            <details><summary>повний текст</summary>
+            <details><summary>full text</summary>
               <pre>{{ text(r.a) }}</pre>
               <pre>{{ text(r.b) }}</pre>
             </details>
@@ -63,8 +63,8 @@ const hasEvents = computed(() => props.a.events.length > 0 && props.b.events.len
     </table>
 
     <template v-if="hasEvents">
-      <h4>шлях</h4>
-      <div v-if="diverged === -1" class="hint">шлях однаковий — але однакові кроки не значать однакових слів</div>
+      <h4>path</h4>
+      <div v-if="diverged === -1" class="hint">same path — but identical steps do not mean identical words</div>
       <div v-for="(_, i) in rowsN" :key="i" class="turnrow" :class="{ split: i === diverged }" @click="open = open === i ? -1 : i">
         <div class="side">
           <span v-for="(c, j) in sa[i]?.chips ?? []" :key="j" class="chip" :class="{ err: c.bad }">{{ c.label }}{{ c.truncated ? ' ↯' : '' }}</span>
@@ -74,13 +74,13 @@ const hasEvents = computed(() => props.a.events.length > 0 && props.b.events.len
           <span v-for="(c, j) in sb[i]?.chips ?? []" :key="j" class="chip" :class="{ err: c.bad }">{{ c.label }}{{ c.truncated ? ' ↯' : '' }}</span>
           <small v-if="sb[i]"> {{ mmss(sb[i].ms) }} · {{ sb[i].tokens }} tok ctx</small>
         </div>
-        <div v-if="i === diverged" class="hint split-label">тут розійшлись</div>
+        <div v-if="i === diverged" class="hint split-label">diverged here</div>
       </div>
       <div v-if="open >= 0" class="layout">
         <div><Trace v-if="groups[0][open]" :events="groups[0][open]" :live="EMPTY" :approvable="false" /></div>
         <div><Trace v-if="groups[1][open]" :events="groups[1][open]" :live="EMPTY" :approvable="false" /></div>
       </div>
     </template>
-    <div v-else class="hint">події одного з боків ще не завантажились — шлях показати нема з чого</div>
+    <div v-else class="hint">one side's events have not loaded — nothing to draw the path from</div>
   </div>
 </template>

@@ -36,3 +36,23 @@ test('a harness without mcpServers shows an empty box, not "{}" or "undefined"',
   expect(html).toContain('MCP servers (0)')
   expect(mcpBox(html)).toBe('')
 })
+
+/**
+ * The UI, the CLI and the README are English. Two components were written in Ukrainian and shipped
+ * that way for three iterations before anyone looked; catch the next one at the commit, not the demo.
+ */
+test('no non-English text ships in the source', async () => {
+  const { readFile } = await import('node:fs/promises')
+  const { execFileSync } = await import('node:child_process')
+  const root = new URL('..', import.meta.url).pathname
+  const files = execFileSync('git', ['ls-files', 'src', 'web/src', 'tests'], { cwd: root, encoding: 'utf8' })
+    .split('\n').filter(Boolean)
+  const offenders: string[] = []
+  for (const f of files) {
+    const text = await readFile(new URL(`../${f}`, import.meta.url), 'utf8')
+    text.split('\n').forEach((line, i) => {
+      if ([...line].some(ch => ch.codePointAt(0)! >= 0x400 && ch.codePointAt(0)! <= 0x4ff)) offenders.push(`${f}:${i + 1}`)
+    })
+  }
+  expect(offenders).toEqual([])
+})

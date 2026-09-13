@@ -26,7 +26,8 @@ function toggleTool(n: HarnessConfig['tools']['enabled'][number]) {
 
 const fmtMcp = (m: HarnessConfig['mcpServers']) => (m && Object.keys(m).length ? JSON.stringify(m, null, 2) : '')
 const mcpText = ref(fmtMcp(config.value.mcpServers))
-const mcpErr = ref('')
+/** Lifted to App: it disables Run as well as Save as, so the two never disagree. */
+const mcpErr = defineModel<string>('mcpError', { default: '' })
 const mcpCount = () => Object.keys(config.value.mcpServers ?? {}).length
 // Not deep: fires when App replaces the whole config (load, a family button), never while typing here.
 watch(config, c => { mcpText.value = fmtMcp(c.mcpServers); mcpErr.value = '' })
@@ -40,7 +41,7 @@ function editMcp(text: string) {
     if (typeof v !== 'object' || v === null || Array.isArray(v)) throw new Error('expected an object of server name -> { command, args?, tools? }')
     config.value.mcpServers = v
     mcpErr.value = ''
-  } catch (e) { mcpErr.value = (e as Error).message } // last valid value stays in the config; Save as is disabled meanwhile
+  } catch (e) { mcpErr.value = (e as Error).message } // last valid value stays in the config; Run and Save as are disabled meanwhile
 }
 </script>
 
@@ -84,7 +85,7 @@ function editMcp(text: string) {
     <details><summary>MCP servers ({{ mcpCount() }})</summary>
       <textarea :value="mcpText" @input="editMcp(($event.target as HTMLTextAreaElement).value)" style="min-height:80px"
         placeholder='{"fs": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "."], "tools": ["read_text_file"]}}'></textarea>
-      <div v-if="mcpErr" class="err">not saved: {{ mcpErr }}</div>
+      <div v-if="mcpErr" class="err">invalid JSON — not saved, Run disabled: {{ mcpErr }}</div>
     </details>
 
     <label>Tool calls</label>
