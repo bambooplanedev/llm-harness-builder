@@ -64,7 +64,7 @@ stream as JSONL to stdout; human-readable progress goes to stderr.
 (seconds). With no files it takes `bare`, `tuned` and `tuned-hermes` from `./harnesses` (the copies
 `serve` made, i.e. what you edited in the UI) or from the package. It prints a PASS-rate table and
 writes a JSON to `runs/` after every run, so Ctrl-C keeps what finished. The JSON carries each
-harness's full config and each run's `reason`, `parseErrors`, `lastError`, temp `workdir` and
+harness's full config and each run's `reason`, `parseErrors`, `toolErrors`, `lastError`, temp `workdir` and
 `trace` (the run's `runs/<id>.jsonl`), so two files are comparable by config, not by name. Exit
 code is 0 whatever the verdicts.
 
@@ -97,6 +97,57 @@ Why a prompted hermes format when llama-server (`--jinja`) and Ollama already pa
 visible `parse_error` with a hint and a retry instead of an empty `content`; and the trace shows the
 exact text the model wrote. If the server does lift the blocks into `tool_calls` anyway, the run
 uses them and the raw response in the trace shows that it happened.
+
+## MCP
+
+A harness can take its tools from MCP servers over stdio instead of, or beside, the built-in five:
+
+    "tools": { "enabled": ["bash"], "approveBash": true },
+    "mcpServers": {
+      "fs": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "."] }
+    }
+
+Each server starts with `cwd` set to the run's `workdir` — the same relative-path behaviour `bash`
+already has — and every start asks for approval unless `--yes`. Tool names stay flat, with no server
+prefix; a name that collides with a built-in one ends the run before the first request to the model.
+A server's `tools: [...]` is an allow-list; absent or empty means everything the server offers.
+
+Worth measuring, because the tool text is the first thing to eat the context window. Against
+`@modelcontextprotocol/server-filesystem@2026.8.31`:
+
+| | tools | description + schema | ≈ tokens | of an 8192 `numCtx` |
+|---|---|---|---|---|
+| built-ins (all five) | 5 | 1193 chars | ~298 | 3.6% |
+| the MCP server as it comes | 14 | 7167 chars | ~1792 | **22%** |
+| the same server, allow-list of 4 | 4 | 1914 chars | ~479 | 5.8% |
+
+Six times the tool text and a fifth of the window gone before the model has seen the task — and
+that is the default, because nobody configures the allow-list. The structure is worse than the
+size: the server offers four ways to read a file (`read_file`, marked DEPRECATED in favour of
+`read_text_file`, plus `read_media_file` and `read_multiple_files`) and three ways to list a
+directory. That did not confuse Qwen3-8B in a probe run — `list_allowed_directories`,
+`list_directory`, `read_text_file`, three calls, no repeats, and it obeyed the DEPRECATED note the
+first time it read it. So the claim here is that an unconfigured MCP server costs a fifth of the
+window, not that it confuses the model; the trace shows which tool yours picked.
+
+`harnesses/mcp-off.json` and `harnesses/mcp-on.json` are the two arms: one tool-agnostic prompt,
+the same backend and loop settings, file tools from the built-ins in one and from the server in the
+other. `bash` is in both, because the demo task runs `node --test` and a filesystem server has no
+shell. They are not in the default bench set — that set should not need the network for `npx` — so
+run them by name:
+
+    llm-harness-builder bench harnesses/mcp-off.json harnesses/mcp-on.json --n 5
+
+The table then grows two columns: `toolChars`, what the servers put in front of the model, and
+`med errs`, tool results that came back as errors. Unlike the PASS rate, neither depends on the
+sample size.
+
+Two caveats, both honest. **The arms differ in more than the size of the descriptions**: tool names
+and argument shapes differ too, and MCP's `read_file` takes `head`/`tail`, which the built-in one
+does not — in places MCP is the stronger arm. The pair therefore measures "MCP as a whole way of
+handing tools to a model", not "the cost of tool descriptions". And **an MCP server runs outside
+the `workdir` sandbox**: the built-in file tools are locked in by `resolveInside`, while a server
+merely receives the directory as `cwd` and respects it out of goodwill.
 
 ## Bench results
 
@@ -179,6 +230,10 @@ both harnesses failed on the very first run of this demo.
 
 ## Honest notes
 
+- Five runs per harness is a small sample. By Fisher's exact test only 5-against-1 or 4-against-0
+  reaches p < 0.05: 4/5 against 2/5 is p = 0.52, and the `tuned` 4/5 against `bare` 1/5 above is
+  p = 0.21 — suggestive, not proof. `toolChars` and the tool-error counts are measured rather than
+  sampled, which is why the MCP pair reports them.
 - Traces are raw. Anything the model reads (including `.env`) ends up in `runs/`. `run` without
   `--workdir` works in the current directory, so `runs/` lands inside the project the agent reads;
   pass `--workdir`. Point `workdir` at a scratch copy or a git repo. `bash` asks for approval by
