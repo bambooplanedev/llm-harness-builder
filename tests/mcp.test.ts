@@ -1,4 +1,6 @@
 import { test, expect, vi } from 'vitest'
+import { execSync } from 'node:child_process'
+import { closeSync, openSync } from 'node:fs'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -140,4 +142,64 @@ test('once the server dies every later call is an error and the run can go on', 
     expect(r.error).toBe(true)
     expect(r.output).toMatch(/mcp server "fs" is not running|exited/)
   } finally { s.close() }
+})
+
+test('a server that never answers initialize fails with its stderr attached', async () => {
+  await expect(startServers(fake(['--hang']), await wd(), { timeoutMs: 300 }))
+    .rejects.toThrow(/failed to start[\s\S]*fake mcp server up/)
+})
+
+test('close kills the server and every later call fails', async () => {
+  const s = await startServers(fake(), await wd())
+  expect(await s.call('echo', { text: 'x' })).toEqual({ output: 'echo: x', error: false })
+  s.close()
+  await new Promise(r => setTimeout(r, 200))
+  expect(s.has('echo')).toBe(true)                 // the session still describes what it had
+  expect((await s.call('echo', { text: 'y' })).error).toBe(true)
+})
+
+test('close kills a grandchild, not just the direct child', async () => {
+  // A real server is a grandchild of npx; killing only the direct child would leak it.
+  // The marker keeps this test from seeing fixtures started by other test files running
+  // in parallel.
+  //
+  // The brief's `sh -c "fixture & wait"` doesn't reach this environment's shell: a
+  // non-interactive `sh` (and `bash`, checked directly — this is not sh-specific)
+  // substitutes /dev/null for a backgrounded job's stdin per POSIX 2.9.3.1, so the
+  // fixture's readline hits EOF at once and it exits before `count()` ever runs — verified
+  // by running that exact form standalone, where `startServers` rejects with "server
+  // exited" instead of resolving. So the marked fixture's stdin here is a FIFO whose write
+  // end this test holds open, keeping it blocked forever — the same shape its stdin has in
+  // every other test in this file (an open pipe to `Conn` that never sends EOF). `sh` then
+  // `exec`s into a second, unadorned fixture in its own place (same pid, real stdio) to be
+  // the actual MCP server `Conn` talks to; the marked one is purely there to be leaked or
+  // reaped as fs's grandchild. Confirmed this still isolates what it claims: with
+  // `close()` temporarily changed to `process.kill(this.pid, ...)` (direct child only,
+  // no leading `-`), the marked fixture survives — reparented to pid 1 — instead of dying.
+  const marker = `lhb-grandchild-${process.pid}-${Date.now()}`
+  const count = () => Number(execSync(`pgrep -f ${marker} | wc -l`).toString().trim())
+  const dir = await wd()
+  const fifo = join(dir, 'stdin.fifo')
+  execSync(`mkfifo ${fifo}`)
+  const keepOpen = openSync(fifo, 'r+')   // 'r+' never blocks on a FIFO, unlike 'r' or 'w' alone
+  try {
+    const s = await startServers(
+      { fs: { command: 'sh', args: ['-c', `${process.execPath} ${FIXTURE} --marker=${marker} < ${fifo} & exec ${process.execPath} ${FIXTURE}`] } },
+      await wd(),
+    )
+    expect(count()).toBeGreaterThan(0)
+    s.close()
+    await new Promise(r => setTimeout(r, 300))
+    expect(count()).toBe(0)
+  } finally {
+    closeSync(keepOpen)
+  }
+})
+
+test('when the second server fails the first one is not left running', async () => {
+  await expect(startServers(
+    { a: fake().fs, b: { command: process.execPath, args: [FIXTURE, '--hang'] } },
+    await wd(), { timeoutMs: 300 },
+  )).rejects.toThrow(/mcp server "b" failed to start/)
+  // If `a` were still alive its group would keep the event loop busy; vitest would hang here.
 })
