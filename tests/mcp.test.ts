@@ -185,7 +185,7 @@ test('close kills a grandchild, not just the direct child', async () => {
   try {
     const s = await startServers(
       { fs: { command: 'sh', args: ['-c', `${process.execPath} ${FIXTURE} --marker=${marker} < ${fifo} & exec ${process.execPath} ${FIXTURE}`] } },
-      await wd(),
+      await wd(), { timeoutMs: 2000 },   // happy path measured ~25ms; bounded so a stall fails inside vitest's 5s, not the module's 60s default
     )
     expect(count()).toBeGreaterThan(0)
     s.close()
