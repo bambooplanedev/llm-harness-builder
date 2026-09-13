@@ -8,39 +8,65 @@ const alive = (pid: number) => { try { process.kill(pid, 0); return true } catch
 // instance instead of relying on declaration order to isolate it.
 const freshProcs = async () => { vi.resetModules(); return import('../src/core/procs.js') }
 
+// hook() (triggered by the first track() call against a fresh module) adds one real SIGINT, one
+// real SIGTERM, and one real `exit` listener to the shared `process` object — resetting the
+// module registry does not undo that, since it's the same OS process underneath. Every test using
+// freshProcs() must remove exactly what its own track() call added, or listeners leak for the
+// rest of the vitest worker's life (MaxListenersExceededWarning, and dormant handlers that would
+// fire on a real Ctrl-C hitting this worker later). Diff before/after on all three events, same
+// technique already needed to identify "our" SIGINT listener.
+const hookEvents = ['SIGINT', 'SIGTERM', 'exit'] as const
+async function withFreshProcs<T>(
+  fn: (procs: { track: (pid: number) => void; untrack: (pid: number) => void }) => Promise<T> | T,
+): Promise<T> {
+  const before = Object.fromEntries(hookEvents.map(e => [e, process.listeners(e)])) as Record<(typeof hookEvents)[number], Function[]>
+  const procs = await freshProcs()
+  try {
+    return await fn(procs)
+  } finally {
+    for (const e of hookEvents) for (const l of process.listeners(e)) if (!before[e].includes(l)) process.removeListener(e, l as (...a: unknown[]) => void)
+  }
+}
+
 test('the SIGINT listener does not exit when another listener is already installed', async () => {
   // bench installs its own handler and writes the table asynchronously; ours must only kill
   // children and let bench decide when to exit, or the table of a 90-minute run is lost.
-  const { track, untrack } = await freshProcs()
   const other = () => {}
   process.on('SIGINT', other)
-  const child = spawn('sh', ['-c', 'sleep 30'], { detached: true, stdio: 'ignore' })
-  track(child.pid!)
-  const ours = process.listeners('SIGINT').at(-1) as () => void
-  expect(() => ours()).not.toThrow()          // must NOT call process.exit
-  await new Promise(r => setTimeout(r, 100))  // let the event loop reap the killed child
-  expect(alive(child.pid!)).toBe(false)        // but must still kill the group
-  untrack(child.pid!)
-  process.off('SIGINT', other)
+  try {
+    await withFreshProcs(async ({ track, untrack }) => {
+      const child = spawn('sh', ['-c', 'sleep 30'], { detached: true, stdio: 'ignore' })
+      track(child.pid!)
+      const ours = process.listeners('SIGINT').at(-1) as () => void
+      expect(() => ours()).not.toThrow()          // must NOT call process.exit
+      await new Promise(r => setTimeout(r, 100))  // let the event loop reap the killed child
+      expect(alive(child.pid!)).toBe(false)        // but must still kill the group
+      untrack(child.pid!)
+    })
+  } finally {
+    process.off('SIGINT', other)
+  }
 })
 
 test('track registers exactly one SIGINT listener however many pids are tracked', async () => {
-  const { track, untrack } = await freshProcs()
   const before = process.listenerCount('SIGINT')
-  const a = spawn('sh', ['-c', 'sleep 30'], { detached: true, stdio: 'ignore' })
-  const b = spawn('sh', ['-c', 'sleep 30'], { detached: true, stdio: 'ignore' })
-  track(a.pid!); track(b.pid!)
-  expect(process.listenerCount('SIGINT')).toBe(before + 1)
-  untrack(a.pid!); untrack(b.pid!)
-  process.kill(-a.pid!, 'SIGKILL'); process.kill(-b.pid!, 'SIGKILL')
+  await withFreshProcs(async ({ track, untrack }) => {
+    const a = spawn('sh', ['-c', 'sleep 30'], { detached: true, stdio: 'ignore' })
+    const b = spawn('sh', ['-c', 'sleep 30'], { detached: true, stdio: 'ignore' })
+    track(a.pid!); track(b.pid!)
+    expect(process.listenerCount('SIGINT')).toBe(before + 1)
+    untrack(a.pid!); untrack(b.pid!)
+    process.kill(-a.pid!, 'SIGKILL'); process.kill(-b.pid!, 'SIGKILL')
+  })
 })
 
 test('untrack forgets a pid so it is not killed later', async () => {
-  const { track, untrack } = await freshProcs()
-  const child = spawn('sh', ['-c', 'sleep 30'], { detached: true, stdio: 'ignore' })
-  track(child.pid!); untrack(child.pid!)
-  expect(alive(child.pid!)).toBe(true)
-  process.kill(-child.pid!, 'SIGKILL')
+  await withFreshProcs(async ({ track, untrack }) => {
+    const child = spawn('sh', ['-c', 'sleep 30'], { detached: true, stdio: 'ignore' })
+    track(child.pid!); untrack(child.pid!)
+    expect(alive(child.pid!)).toBe(true)
+    process.kill(-child.pid!, 'SIGKILL')
+  })
 })
 
 // R7: ownership is decided when the listener is registered, not when the signal fires — a `once`
@@ -56,16 +82,16 @@ test('the registry exits when it owns the signal (no earlier listener)', async (
   preexisting.forEach(l => process.removeListener('SIGINT', l))
   const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never)
   try {
-    const { track, untrack } = await freshProcs()
-    const child = spawn('sh', ['-c', 'sleep 30'], { detached: true, stdio: 'ignore' })
-    track(child.pid!)
-    const ours = process.listeners('SIGINT')[0] as () => void
-    ours()
-    expect(exitSpy).toHaveBeenCalledWith(130)
-    await new Promise(r => setTimeout(r, 100))
-    expect(alive(child.pid!)).toBe(false)
-    untrack(child.pid!)
-    process.off('SIGINT', ours)
+    await withFreshProcs(async ({ track, untrack }) => {
+      const child = spawn('sh', ['-c', 'sleep 30'], { detached: true, stdio: 'ignore' })
+      track(child.pid!)
+      const ours = process.listeners('SIGINT')[0] as () => void
+      ours()
+      expect(exitSpy).toHaveBeenCalledWith(130)
+      await new Promise(r => setTimeout(r, 100))
+      expect(alive(child.pid!)).toBe(false)
+      untrack(child.pid!)
+    })
   } finally {
     exitSpy.mockRestore()
     preexisting.forEach(l => process.on('SIGINT', l))
@@ -76,17 +102,20 @@ test('the registry kills the group but does not exit when another listener alrea
   const other = () => {}
   process.on('SIGINT', other)                 // installed before track(), so it owns the signal
   const before = process.listeners('SIGINT')
-  const { track, untrack } = await freshProcs()
-  const child = spawn('sh', ['-c', 'sleep 30'], { detached: true, stdio: 'ignore' })
   const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never)
-  track(child.pid!)
-  const ours = process.listeners('SIGINT').find(l => !before.includes(l)) as () => void
-  ours()
-  expect(exitSpy).not.toHaveBeenCalled()
-  await new Promise(r => setTimeout(r, 100))
-  expect(alive(child.pid!)).toBe(false)
-  untrack(child.pid!)
-  process.off('SIGINT', other)
-  process.off('SIGINT', ours)
-  exitSpy.mockRestore()
+  try {
+    await withFreshProcs(async ({ track, untrack }) => {
+      const child = spawn('sh', ['-c', 'sleep 30'], { detached: true, stdio: 'ignore' })
+      track(child.pid!)
+      const ours = process.listeners('SIGINT').find(l => !before.includes(l)) as () => void
+      ours()
+      expect(exitSpy).not.toHaveBeenCalled()
+      await new Promise(r => setTimeout(r, 100))
+      expect(alive(child.pid!)).toBe(false)
+      untrack(child.pid!)
+    })
+  } finally {
+    exitSpy.mockRestore()
+    process.off('SIGINT', other)
+  }
 })
