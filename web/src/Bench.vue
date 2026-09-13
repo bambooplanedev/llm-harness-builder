@@ -47,7 +47,7 @@ async function tick() {
     if (file.value) {
       result.value = r.result ?? null
       const prev = active.value?.id
-      active.value = r.active ?? null
+      active.value = r.active ?? null // always tracks reality; only `events` freezes below
       if (sel.value === 'live') {
         // The run we were watching just ended: freeze the panel on it. `{ id }` is the ordinary SSE
         // path, so its tail — llm_response and done — is read in for free, and from here on the tick
@@ -60,7 +60,7 @@ async function tick() {
   } catch (e) {
     if (my === gen) error.value = (e as Error).message
   } finally {
-    if (!stopped) timer = setTimeout(tick, 2000)
+    if (!stopped && my === gen) timer = setTimeout(tick, 2000)
   }
 }
 
@@ -82,7 +82,7 @@ watch(sel, s => {
 })
 
 const age = computed(() => active.value ? now.value - active.value.started : 0)
-const silence = computed(() => active.value ? now.value - (events.value.at(-1)?.ts ?? active.value.started) : 0)
+const silence = computed(() => active.value ? now.value - (active.value.events.at(-1)?.ts ?? active.value.started) : 0)
 
 // A bench run takes up to 30 minutes: without this, "live" means "scroll it yourself".
 watch(events, async () => {
