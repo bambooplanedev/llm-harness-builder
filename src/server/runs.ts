@@ -5,6 +5,7 @@ import { runAgent } from '../core/run.js'
 import type { RunParams } from '../core/config.js'
 import type { HarnessEvent, ToolCall } from '../core/events.js'
 import type { Backend, Delta } from '../core/backends/types.js'
+import type { BenchResult, BenchFile } from '../core/bench.js'
 
 export type RunSummary = { id: string; harness: string; task: string; workdir: string; started: number; reason?: string; turns?: number; toolCallCount?: number }
 export type Meta = { meta: {
@@ -19,6 +20,9 @@ type Active = { abort: AbortController; approvals: Map<string, (ok: boolean) => 
 
 const APPROVAL_TIMEOUT_MS = 10 * 60_000
 const CHUNK = 64 * 1024
+
+/** Safe single path segment: no separators, so path.join can never leave the directory. */
+export const safeName = (n: string) => /^[\w.-]{1,64}$/.test(n)
 
 /** First and last line of a run file without reading it whole: run files grow to hundreds of KB and are listed on every page load. */
 async function firstAndLastLine(file: string): Promise<[string, string]> {
@@ -168,5 +172,27 @@ export class RunStore {
       }
     }
     return out.sort((x, y) => y.started - x.started)
+  }
+
+  /** Every *.json in the runs dir that is a v1 bench result; anything else there is somebody's stray file. */
+  private async benchFiles(): Promise<{ file: string; result: BenchResult }[]> {
+    await mkdir(this.dir, { recursive: true })
+    const out: { file: string; result: BenchResult }[] = []
+    for (const f of await readdir(this.dir)) {
+      if (!f.endsWith('.json') || !safeName(f)) continue
+      try {
+        const result = JSON.parse(await readFile(path.join(this.dir, f), 'utf8'))
+        if (result?.version === 1) out.push({ file: f, result })
+      } catch { continue }
+    }
+    return out
+  }
+
+  async benchList(): Promise<BenchFile[]> {
+    const files = (await this.benchFiles()).map(({ file, result }) => ({
+      file, date: result.date, complete: result.complete,
+      model: result.harnesses[0]?.config.backend.model ?? '',
+    }))
+    return files.sort((a, b) => (a.date < b.date ? 1 : -1))
   }
 }

@@ -1,5 +1,5 @@
 // src/core/bench.ts — result shape of `bench` and the pure helpers that summarise it. No fs, no process.
-import type { DoneReason } from './events.js'
+import type { DoneReason, HarnessEvent } from './events.js'
 import type { HarnessConfig } from './config.js'
 
 export type BenchRun = {
@@ -13,6 +13,11 @@ export type BenchHarness = {
   median: { turns: number; toolCalls: number; ms: number }; runs: BenchRun[]
 }
 export type BenchResult = { version: 1; date: string; task: string; n: number; timeoutS: number; complete: boolean; harnesses: BenchHarness[] }
+
+/** One row of the Bench tab's file list. `model` is what actually tells two bench files apart: `task` is always DEMO_TASK. */
+export type BenchFile = { file: string; date: string; model: string; complete: boolean }
+/** The run a `bench` process is executing right now, read from its still-unrenamed runs/<id>.jsonl.part. */
+export type ActiveTrace = { id: string; harness: string; round: number; started: number; events: HarnessEvent[] }
 
 /** Lower-middle element of the numerically sorted copy; [] → 0. Never mutates xs. */
 export const median = (xs: number[]): number => xs.length ? [...xs].sort((a, b) => a - b)[(xs.length - 1) >> 1] : 0

@@ -1,7 +1,7 @@
 import http from 'node:http'
 import { readFile, readdir, writeFile, mkdir } from 'node:fs/promises'
 import path from 'node:path'
-import { RunStore, WorkdirBusyError } from './runs.js'
+import { RunStore, WorkdirBusyError, safeName } from './runs.js'
 import { validateConfig, type HarnessConfig, type RunParams } from '../core/config.js'
 import { validateWorkdir } from '../core/tools/sandbox.js'
 import { createBackend, type Backend } from '../core/backends/index.js'
@@ -34,7 +34,6 @@ const readBody = (req: http.IncomingMessage) => new Promise<any>((resolve, rejec
   })
   req.on('error', fail)
 })
-const safeName = (n: string) => /^[\w.-]{1,64}$/.test(n)
 
 export async function startServer(opts: ServerOpts) {
   const store = new RunStore(opts.runsDir)
@@ -78,6 +77,7 @@ export async function startServer(opts: ServerOpts) {
         return json(res, 200, { ok: true })
       }
       if (m('GET', /^\/api\/runs$/)) return json(res, 200, await store.list())
+      if (m('GET', /^\/api\/bench$/)) return json(res, 200, { files: await store.benchList() })
       if (m('POST', /^\/api\/runs$/)) {
         const body = await readBody(req) as Partial<RunParams>
         const errs = validateConfig(body.config)

@@ -34,6 +34,26 @@ const srv = await startServer({ port: 0, runsDir, harnessesDir, backendFactory: 
 const base = `http://127.0.0.1:${srv.port}`
 afterAll(() => srv.close())
 
+// --- bench page: its own runs dir, so hand-written fixtures never mix with the real runs above
+const benchDir = await mkdtemp(join(tmpdir(), 'lhb-bench-'))
+const bsrv = await startServer({ port: 0, runsDir: benchDir, harnessesDir, backendFactory: () => fake([]) })
+const bbase = `http://127.0.0.1:${bsrv.port}`
+afterAll(() => bsrv.close())
+
+const benchJson = (over: object = {}) => JSON.stringify({
+  version: 1, date: '2026-09-13T10:00:00.000Z', task: 't', n: 2, timeoutS: 60, complete: false,
+  harnesses: [{
+    name: 'tuned', config: config(), pass: 1, reasons: { final: 1 },
+    median: { turns: 2, toolCalls: 1, ms: 100 },
+    runs: [{ round: 1, verdict: 'PASS', reason: 'final', turns: 2, toolCalls: 1, parseErrors: 0, ms: 100, workdir: '/tmp/wd', trace: 'aabbccdd' }],
+  }],
+  ...over,
+})
+await writeFile(join(benchDir, 'b1.json'), benchJson())
+await writeFile(join(benchDir, 'b2.json'), benchJson({ date: '2026-09-13T11:00:00.000Z', complete: true }))
+await writeFile(join(benchDir, 'notbench.json'), JSON.stringify({ version: 2 }))
+await writeFile(join(benchDir, 'broken.json'), '{oops')
+
 async function sse(id: string, until: (e: any) => boolean, lastId?: number): Promise<any[]> {
   const r = await fetch(`${base}/api/runs/${id}/events`, { headers: lastId !== undefined ? { 'last-event-id': String(lastId) } : {} })
   const reader = r.body!.getReader(); const dec = new TextDecoder(); let buf = ''; const out: any[] = []
@@ -235,4 +255,10 @@ test('a run file with a truncated last line still opens instead of 404', async (
   const events = await collectSSE(`${base}/api/runs/${id}/events`)
   expect(events.map(e => e.type)).toEqual(['llm_request', 'done'])
   expect(events.at(-1).reason).toBe('aborted')
+})
+
+test('GET /api/bench lists bench files newest first and skips everything else', async () => {
+  const { files } = await (await fetch(`${bbase}/api/bench`)).json()
+  expect(files.map((f: any) => f.file)).toEqual(['b2.json', 'b1.json'])
+  expect(files[0]).toEqual({ file: 'b2.json', date: '2026-09-13T11:00:00.000Z', model: 'fake-model', complete: true })
 })
