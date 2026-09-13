@@ -62,7 +62,7 @@ export function validateConfig(c: unknown): string[] {
     if (!isObj(ms) || Array.isArray(ms)) e.push('mcpServers must be an object')
     else for (const [k, v] of Object.entries(ms)) {
       if (!k) { e.push('mcpServers key must be a non-empty string'); continue }
-      if (!isObj(v)) { e.push(`mcpServers.${k} must be an object`); continue }
+      if (!isObj(v) || Array.isArray(v)) { e.push(`mcpServers.${k} must be an object`); continue }
       if (typeof v.command !== 'string' || !v.command) e.push(`mcpServers.${k}.command must be a non-empty string`)
       const strs = (x: unknown) => Array.isArray(x) && x.every(s => typeof s === 'string')
       if (v.args !== undefined && !strs(v.args)) e.push(`mcpServers.${k}.args must be an array of strings`)

@@ -77,4 +77,17 @@ test('mcpServers is optional and validated per server', () => {
   const notObj = structuredClone(validConfig) as any
   notObj.mcpServers = []
   expect(validateConfig(notObj)).toContain('mcpServers must be an object')
+
+  // Test non-object server values
+  const serverString = structuredClone(validConfig) as any
+  serverString.mcpServers = { fs: 'nope' }
+  expect(validateConfig(serverString)).toContain('mcpServers.fs must be an object')
+
+  const serverNumber = structuredClone(validConfig) as any
+  serverNumber.mcpServers = { fs: 42 }
+  expect(validateConfig(serverNumber)).toContain('mcpServers.fs must be an object')
+
+  const serverArray = structuredClone(validConfig) as any
+  serverArray.mcpServers = { fs: [] }
+  expect(validateConfig(serverArray)).toContain('mcpServers.fs must be an object')
 })
