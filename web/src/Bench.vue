@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { api, type ActiveTrace, type BenchFile, type BenchResult, type Delta, type HarnessConfig, type HarnessEvent } from './api'
 import { formatTable } from '../../src/core/bench'
 import Trace from './Trace.vue'
@@ -15,7 +15,12 @@ const events = ref<HarnessEvent[]>([])
 /** 'live' follows the running trace; { id } pins the panel to one finished run (SSE). */
 const sel = ref<'live' | { id: string }>('live')
 const error = ref('')
+const now = ref(Date.now())
+const pane = ref<HTMLElement | null>(null)
 let unsub: (() => void) | null = null
+let gen = 0
+let timer: ReturnType<typeof setTimeout> | null = null
+let stopped = false
 
 const runs = computed(() => result.value?.harnesses.flatMap(h => h.runs) ?? [])
 const total = computed(() => result.value ? result.value.n * result.value.harnesses.length : 0)
@@ -27,22 +32,44 @@ const mmss = (ms: number) => {
   return s < 120 ? `${s}s` : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
 }
 
-async function load() {
+/**
+ * One poll. A setTimeout chain, not setInterval: a tick reads the whole .part and every bench JSON,
+ * and an overlapping pair of responses arriving out of order would rewind the trace. `gen` covers the
+ * other three races at once — switching file, switching tab, unmount.
+ */
+async function tick() {
+  const my = ++gen
   try {
     const r = await api.bench(file.value || undefined)
+    if (my !== gen || stopped) return
     files.value = r.files
-    if (!file.value) return
-    result.value = r.result ?? null
-    active.value = r.active ?? null
-    if (sel.value === 'live' && r.active) events.value = r.active.events
+    now.value = Date.now()
+    if (file.value) {
+      result.value = r.result ?? null
+      const prev = active.value?.id
+      active.value = r.active ?? null
+      if (sel.value === 'live') {
+        // The run we were watching just ended: freeze the panel on it. `{ id }` is the ordinary SSE
+        // path, so its tail — llm_response and done — is read in for free, and from here on the tick
+        // no longer touches `events`. Never clear on a missing `active`: between rounds it is normal.
+        if (prev && r.active?.id !== prev) sel.value = { id: prev }
+        else if (r.active) events.value = r.active.events
+      }
+    }
     error.value = ''
-  } catch (e) { error.value = (e as Error).message }
+  } catch (e) {
+    if (my === gen) error.value = (e as Error).message
+  } finally {
+    if (!stopped) timer = setTimeout(tick, 2000)
+  }
 }
+
+function restart() { if (timer) clearTimeout(timer); timer = null; void tick() }
 
 function openFile(f: string) {
   file.value = f; sel.value = 'live'; result.value = null; active.value = null; events.value = []
   unsub?.(); unsub = null
-  void load()
+  restart()
 }
 
 watch(sel, s => {
@@ -54,8 +81,19 @@ watch(sel, s => {
     m => (error.value = `${m} — якщо прогін убили, у runs/ лишився ${s.id}.jsonl.part; перейменуй його в .jsonl`))
 })
 
-onMounted(() => void load())
-onUnmounted(() => unsub?.())
+const age = computed(() => active.value ? now.value - active.value.started : 0)
+const silence = computed(() => active.value ? now.value - (events.value.at(-1)?.ts ?? active.value.started) : 0)
+
+// A bench run takes up to 30 minutes: without this, "live" means "scroll it yourself".
+watch(events, async () => {
+  const el = pane.value
+  if (!el || el.scrollHeight - el.scrollTop - el.clientHeight > 80) return // measured before the patch: flush is 'pre'
+  await nextTick()
+  el.scrollTop = el.scrollHeight
+}, { deep: true })
+
+onMounted(() => void tick())
+onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer); unsub?.(); document.title = 'llm-harness-builder' })
 </script>
 
 <template>
@@ -77,6 +115,9 @@ onUnmounted(() => unsub?.())
           {{ backend?.model }} · {{ backend?.kind }} {{ backend?.baseUrl }} · n={{ result.n }} · timeout {{ mmss(result.timeoutS * 1000) }}<br>
           {{ runs.length }}/{{ total }} прогонів · {{ mmss(msDone) }} позаду
         </div>
+        <div v-if="active" class="ev approval live" @click="sel = 'live'">
+          ● {{ active.harness }} #{{ active.round }} · {{ mmss(age) }} з {{ mmss(result.timeoutS * 1000) }} · тиша {{ mmss(silence) }}
+        </div>
         <div v-if="!runs.length" class="hint">раунд 1 ще йде, перших результатів нема</div>
         <pre v-else class="bench-table">{{ formatTable(result.harnesses) }}</pre>
         <div class="runs">
@@ -96,7 +137,7 @@ onUnmounted(() => unsub?.())
       </template>
       <div class="err">{{ error }}</div>
     </div>
-    <div class="col">
+    <div class="col" ref="pane">
       <Trace v-if="result && events.length" :events="events" :live="EMPTY" :task="result.task" :approvable="false" />
     </div>
   </div>

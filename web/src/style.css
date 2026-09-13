@@ -16,6 +16,7 @@ textarea { font-family: ui-monospace, monospace; min-height: 90px; }
 .ev.user { border-color: #36c; } .ev.assistant { border-color: #393; } .ev.tool_call { border-color: #c93; }
 .ev.tool_result { border-color: #999; } .ev.parse_error, .ev.error { border-color: #c33; background: #fee; }
 .ev.approval { border-color: #c60; background: #fff4e5; }
+.ev.approval.live { cursor: pointer; }
 .turn { margin: 12px 0; padding: 6px; border: 1px solid #e5e5e5; border-radius: 4px; }
 .turn summary { cursor: pointer; color: #666; }
 .bar { height: 8px; background: #eee; border-radius: 4px; overflow: hidden; margin: 4px 0; }
