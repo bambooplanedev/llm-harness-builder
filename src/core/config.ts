@@ -6,6 +6,8 @@ export type BackendKind = 'openai' | 'ollama'
 export type ToolCallFormat = 'json' | 'hermes'
 export const TOOL_CALL_FORMATS: ToolCallFormat[] = ['json', 'hermes']
 
+export type McpServerConfig = { command: string; args?: string[]; tools?: string[] }
+
 export type HarnessConfig = {
   name: string
   backend: { kind: BackendKind; baseUrl: string; model: string; numCtx?: number; temperature: number }
