@@ -108,6 +108,15 @@ function normalize(raw: unknown): Record<string, unknown> {
   return rest as Record<string, unknown>
 }
 
+/** MCP content blocks → one string. Non-text blocks cannot reach a local 8B, but must not vanish silently. */
+function flatten(content: unknown): string {
+  if (!Array.isArray(content) || content.length === 0) return '(empty result)'
+  const parts = content.map((b: any) =>
+    b?.type === 'text' ? String(b.text ?? '') : `[${String(b?.type ?? 'unknown')} content omitted]`)
+  const out = parts.join('\n')
+  return out.trim() === '' ? '(empty result)' : out
+}
+
 export async function startServers(
   servers: Record<string, McpServerConfig>,
   workdir: string,
@@ -160,7 +169,17 @@ export async function startServers(
   return {
     tools, servers: info,
     has: (n: string) => byTool.has(n),
-    call: async () => ({ output: 'not implemented', error: true }),   // Task 3
+    call: async (name, args) => {
+      const conn = byTool.get(name)
+      if (!conn) return { output: `no mcp server provides "${name}"`, error: true }
+      try {
+        const m = await conn.request('tools/call', { name, arguments: args }, opts.timeoutMs ?? MCP_CALL_TIMEOUT_MS)
+        if (m.error) return { output: `mcp error ${m.error.code}: ${m.error.message}`, error: true }
+        return { output: flatten(m.result?.content), error: m.result?.isError === true }
+      } catch (e) {
+        return { output: (e as Error).message, error: true }
+      }
+    },
     close: () => { for (const c of conns) c.close() },
   }
 }

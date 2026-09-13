@@ -88,3 +88,56 @@ test('a server that dies on its own is untracked, not just one that we close', a
     vi.resetModules()
   }
 })
+
+test('a text result comes back as text', async () => {
+  const s = await startServers(fake(), await wd())
+  try { expect(await s.call('echo', { text: 'hi' })).toEqual({ output: 'echo: hi', error: false }) } finally { s.close() }
+})
+
+test('isError marks the result as an error without throwing', async () => {
+  const s = await startServers(fake(), await wd())
+  try { expect(await s.call('boom', {})).toEqual({ output: 'it failed', error: true }) } finally { s.close() }
+})
+
+test('a JSON-RPC error is a tool error, not a throw', async () => {
+  const s = await startServers(fake(), await wd())
+  try {
+    const r = await s.call('rpcfail', {})
+    expect(r.error).toBe(true)
+    expect(r.output).toBe('mcp error -32602: bad arguments')
+  } finally { s.close() }
+})
+
+test('a non-text block becomes a marker and the text around it survives', async () => {
+  const s = await startServers(fake(), await wd())
+  try { expect(await s.call('picture', {})).toEqual({ output: 'before\n[image content omitted]', error: false }) } finally { s.close() }
+})
+
+test('an empty content list says so instead of returning nothing', async () => {
+  const s = await startServers(fake(), await wd())
+  try { expect(await s.call('silent', {})).toEqual({ output: '(empty result)', error: false }) } finally { s.close() }
+})
+
+test('junk written before a response is skipped and the response still arrives', async () => {
+  const s = await startServers(fake(), await wd())
+  try { expect(await s.call('noisy', {})).toEqual({ output: 'noisy ok', error: false }) } finally { s.close() }
+})
+
+test('calling a tool no server owns is an error, not a throw', async () => {
+  const s = await startServers(fake(), await wd())
+  try {
+    const r = await s.call('nowhere', {})
+    expect(r.error).toBe(true)
+    expect(r.output).toMatch(/no mcp server provides "nowhere"/)
+  } finally { s.close() }
+})
+
+test('once the server dies every later call is an error and the run can go on', async () => {
+  const s = await startServers(fake(['--die-after=1']), await wd())
+  try {
+    expect(await s.call('echo', { text: 'one' })).toEqual({ output: 'echo: one', error: false })
+    const r = await s.call('echo', { text: 'two' })
+    expect(r.error).toBe(true)
+    expect(r.output).toMatch(/mcp server "fs" is not running|exited/)
+  } finally { s.close() }
+})
