@@ -269,10 +269,19 @@ const withMcp = (over: Partial<HarnessConfig> = {}) =>
 test('mcp: approval, start event and the tool schema reaches the request', async () => {
   const be = new Fake([{ toolCalls: [{ name: 'echo', args: {} }] }, { content: 'fin' }])
   const asked: string[] = []
-  const ev = await collect({ config: withMcp(), task: 'do', workdir: await wd() }, {
-    backend: be, mcp: async () => fakeMcp(), approve: async c => { asked.push(c.name); return true },
+  const config = withMcp()
+  const workdir = await wd()
+  let seen: { servers: unknown; workdir: string; opts: { taken?: Set<string> } } | undefined
+  const ev = await collect({ config, task: 'do', workdir }, {
+    backend: be,
+    mcp: async (servers, w, o) => { seen = { servers, workdir: w, opts: o ?? {} }; return fakeMcp() },
+    approve: async c => { asked.push(c.name); return true },
   })
   expect(asked).toEqual(['mcp:fs'])
+  // startServers must see the real workdir and the enabled built-ins as `taken`, so it can
+  // detect a name collision itself — wiring this by inspection alone let it regress silently.
+  expect(seen?.workdir).toBe(workdir)
+  expect(seen?.opts.taken).toEqual(new Set(config.tools.enabled))
   expect(types(ev).slice(0, 3)).toEqual(['approval_required', 'mcp_server_start', 'context_stats'])
   expect(be.requests[0].tools!.map(t => t.name)).toContain('echo')
   const tr = ev.find(e => e.type === 'tool_result') as any
@@ -306,8 +315,12 @@ test('mcp: aborting while the approval is pending is aborted, not mcp_error', as
   const ac = new AbortController()
   const ev = await collect({ config: withMcp(), task: 'do', workdir: await wd() }, {
     backend: new Fake([]), mcp: async () => fakeMcp(),
-    signal: ac.signal, approve: async () => { ac.abort(); return true },
+    // Real callers (src/server/runs.ts) resolve a pending approval with `false` on abort — the
+    // refusal and the abort land together. Aborted must still win over mcp_error, and no server
+    // must have been started (no mcp_server_start event), or a cancelled run misreports as refused.
+    signal: ac.signal, approve: async () => { ac.abort(); return false },
   })
+  expect(types(ev)).toEqual(['approval_required', 'done'])
   expect(last(ev).reason).toBe('aborted')
 })
 
