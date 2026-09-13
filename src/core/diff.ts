@@ -1,6 +1,10 @@
 // src/core/diff.ts — pure helpers that compare two runs. No fs, no process, no Vue.
 import type { HarnessEvent } from './events.js'
 import type { HarnessConfig } from './config.js'
+import type { BenchRun } from './bench.js'
+
+/** One side of a comparison: the bench row with its verdict, the harness config behind it, its trace. */
+export type DiffSide = { name: string; run: BenchRun; config: HarnessConfig; events: HarnessEvent[] }
 
 /** One thing a turn did. `truncated` is shown but deliberately kept out of `sig`. */
 export type Chip = { label: string; bad: boolean; truncated?: boolean }

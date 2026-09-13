@@ -29,3 +29,9 @@ details.inspector pre { max-height: 300px; overflow: auto; background: #f4f4f4; 
 .runs div.bad { color: #c00; }
 .runs div.notrace { cursor: default; } .runs div.notrace:hover { text-decoration: none; }
 .runs .clip { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #a60; }
+
+.diff { font-size: 12px; }
+.diff table.cfg { border-collapse: collapse; width: 100%; }
+.diff table.cfg td { border-top: 1px solid #eee; padding: 3px 6px; vertical-align: top; font-family: ui-monospace, monospace; }
+.diff .onlyA { color: #c00; } .diff .onlyB { color: #070; }
+.diff pre { white-space: pre-wrap; background: #f4f4f4; padding: 6px; }
