@@ -33,6 +33,11 @@ test('json of wrong shape is a parse error', () => {
   expect(r.ok).toBe(false)
 })
 
+test('a closing think tag the reply never opened is stripped before parsing', () => {
+  const r = parsePrompted('picking a.ts, then {maybe} b.ts</think>\n{"calls":[],"final":"done"}')
+  expect(r).toEqual({ ok: true, calls: [], final: 'done' })
+})
+
 test('inline <think> block is stripped before parsing', () => {
   const r = parsePrompted('<think>maybe {"calls": []} hmm</think>\n{"calls":[{"name":"read_file","args":{"path":"a"}}],"final":null}')
   expect(r.ok && r.calls.length).toBe(1)
@@ -48,6 +53,10 @@ test.each<[string, string, { ok: boolean; calls?: number; name?: string; final?:
   ['text around blocks', 'Let me look.\n' + tc(rf) + '\nThen I will fix it.', { ok: true, calls: 1, final: null }],
   ['closed think before block', '<think>hmm</think>\n' + tc(rf), { ok: true, calls: 1 }],
   ['unclosed think', '<think>still thinking ' + tc(rf), { ok: false }],
+  // The Qwen3 chat template opens <think> itself, so the model's own text starts mid-block and
+  // only the closing tag comes back: everything up to it is reasoning, not the answer.
+  ['dangling closing think', 'hmm, a.ts first</think>\n' + tc(rf), { ok: true, calls: 1 }],
+  ['dangling closing think before final text', 'weighing it</think>\nAll done.', { ok: true, calls: 0, final: 'All done.' }],
   ['broken json inside block', '<tool_call>{oops</tool_call>', { ok: false }],
   ['block without name', '<tool_call>{"arguments":{}}</tool_call>', { ok: false }],
   ['unclosed tool_call', '<tool_call>' + JSON.stringify(rf), { ok: false }],
