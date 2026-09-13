@@ -47,6 +47,7 @@ function openFile(f: string) {
 
 watch(sel, s => {
   unsub?.(); unsub = null
+  error.value = ''
   if (s === 'live') { events.value = active.value?.events ?? [] ; return }
   events.value = []
   unsub = api.events(s.id, e => events.value.push(e),
