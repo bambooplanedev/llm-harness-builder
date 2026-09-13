@@ -23,6 +23,25 @@ function toggleTool(n: HarnessConfig['tools']['enabled'][number]) {
   set.has(n) ? set.delete(n) : set.add(n)
   config.value.tools.enabled = TOOL_NAMES.filter(t => set.has(t))
 }
+
+const fmtMcp = (m: HarnessConfig['mcpServers']) => (m && Object.keys(m).length ? JSON.stringify(m, null, 2) : '')
+const mcpText = ref(fmtMcp(config.value.mcpServers))
+const mcpErr = ref('')
+const mcpCount = () => Object.keys(config.value.mcpServers ?? {}).length
+// Not deep: fires when App replaces the whole config (load, a family button), never while typing here.
+watch(config, c => { mcpText.value = fmtMcp(c.mcpServers); mcpErr.value = '' })
+/** Empty box means no servers at all, so a harness without MCP saves byte-for-byte as before. */
+function editMcp(text: string) {
+  mcpText.value = text
+  const t = text.trim()
+  if (!t || t === '{}') { delete config.value.mcpServers; mcpErr.value = ''; return }
+  try {
+    const v = JSON.parse(t)
+    if (typeof v !== 'object' || v === null || Array.isArray(v)) throw new Error('expected an object of server name -> { command, args?, tools? }')
+    config.value.mcpServers = v
+    mcpErr.value = ''
+  } catch (e) { mcpErr.value = (e as Error).message } // last valid value stays in the config; Save as is disabled meanwhile
+}
 </script>
 
 <template>
@@ -33,7 +52,7 @@ function toggleTool(n: HarnessConfig['tools']['enabled'][number]) {
         <option value="">— load —</option><option v-for="n in harnessNames" :key="n" :value="n">{{ n }}</option>
       </select>
       <input type="text" v-model="saveName" placeholder="name" style="width:120px">
-      <button @click="emit('saveAs', saveName)">Save as</button>
+      <button @click="emit('saveAs', saveName)" :disabled="!!mcpErr">Save as</button>
     </div>
 
     <label>Backend</label>
@@ -62,6 +81,11 @@ function toggleTool(n: HarnessConfig['tools']['enabled'][number]) {
       <span v-for="n in TOOL_NAMES" :key="n"><input type="checkbox" :checked="config.tools.enabled.includes(n)" @change="toggleTool(n)"> {{ n }}</span>
     </div>
     <div><input type="checkbox" v-model="config.tools.approveBash"> ask before running bash</div>
+    <details><summary>MCP servers ({{ mcpCount() }})</summary>
+      <textarea :value="mcpText" @input="editMcp(($event.target as HTMLTextAreaElement).value)" style="min-height:80px"
+        placeholder='{"fs": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "."], "tools": ["read_text_file"]}}'></textarea>
+      <div v-if="mcpErr" class="err">not saved: {{ mcpErr }}</div>
+    </details>
 
     <label>Tool calls</label>
     <div class="row">
