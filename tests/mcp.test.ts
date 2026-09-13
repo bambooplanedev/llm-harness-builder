@@ -237,19 +237,40 @@ test('a call that times out actually kills the server, not just marks it dead', 
   }
 })
 
-// Regression for a review finding: onData appended to `buf` before checking for death, so once
-// the oversize-line guard tripped, a server that kept writing (or data already queued in the
-// pipe) kept the accumulator growing without bound. The reviewer measured ~55MB/1.5s; this checks
-// the same window stays flat once the guard has fired.
-test('the oversize-line guard trips once and the buffer does not keep growing while the server keeps writing', async () => {
-  const s = await startServers(fake(), await wd())
+// Regression for a review finding: the oversize-line guard used to die() without killing the
+// group, so a server that kept flooding stdout kept the accumulator growing without bound. The
+// fix's killGroup=true SIGKILLs the server the instant the guard trips, which both tears the
+// connection down and (as a side effect) stops any further data from arriving — so the process
+// actually being gone is what's externally observable here, the same shape as the timeout test.
+// (A prior version of this test asserted bounded heap growth over a 1.5s window instead; a
+// mutation check showed it passed even with the `if (this.dead) return` guard in onData deleted,
+// because once killGroup SIGKILLs the child no more data arrives regardless — so it wasn't
+// pinning what it claimed to. That guard stays in onData as defence-in-depth for data already
+// queued in the pipe before the kill lands; it just isn't separately observable from outside once
+// the kill happens, so this test doesn't try to reach it.)
+test('the oversize-line guard trips and actually kills the server, not just marks it dead', async () => {
+  const tracked: number[] = []
+  vi.doMock('../src/core/procs.js', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('../src/core/procs.js')>()
+    return { track: (pid: number) => { tracked.push(pid); actual.track(pid) }, untrack: actual.untrack }
+  })
+  vi.resetModules()
   try {
+    const { startServers: freshStartServers } = await import('../src/core/mcp.js')
+    const s = await freshStartServers(fake(), await wd())
+    const pid = tracked[0]
+    expect(pid).toBeTypeOf('number')
+    expect(isAlive(pid)).toBe(true)
+
     const r = await s.call('flood', {})
     expect(r.error).toBe(true)
     expect(r.output).toMatch(/over 1 MB/)
-    const afterGuard = process.memoryUsage().heapUsed
-    await sleep(1500)   // the fixture keeps flooding stdout in this window if it is still alive
-    const later = process.memoryUsage().heapUsed
-    expect(later - afterGuard).toBeLessThan(15 * 1024 * 1024)
-  } finally { s.close() }
+
+    const deadline = Date.now() + 2000
+    while (isAlive(pid) && Date.now() < deadline) await sleep(20)
+    expect(isAlive(pid)).toBe(false)   // gone, not merely forgotten
+  } finally {
+    vi.doUnmock('../src/core/procs.js')
+    vi.resetModules()
+  }
 })

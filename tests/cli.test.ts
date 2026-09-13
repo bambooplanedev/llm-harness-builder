@@ -262,19 +262,27 @@ test('Ctrl-C during bench with a live mcp server leaves the PASS table intact an
   const p = spawn(join(ROOT, 'node_modules', '.bin', 'tsx'),
     [join(ROOT, 'src', 'cli.ts'), 'bench', '--n', '1', '--out', out, harnessFile],
     { cwd, env: { ...process.env, LHB_FAKE_BACKEND: fake }, stdio: ['ignore', 'pipe', 'pipe'] })
-  let stdout = ''
-  p.stdout.on('data', (b: Buffer) => { stdout += b.toString() })
-  // benchOnce writes "<workdir> ... " to stderr once the round has started; the mcp server is up
-  // and the (never-answering) stall call is in flight shortly after.
-  await new Promise<void>(done => p.stderr.on('data', (b: Buffer) => { if (b.toString().includes('... ')) done() }))
-  const deadline1 = Date.now() + 2000
-  while (count() === 0 && Date.now() < deadline1) await new Promise(r => setTimeout(r, 20))
-  expect(count()).toBeGreaterThan(0)   // the server is really alive before we interrupt it
-  const code = await new Promise(done => { p.on('exit', done); p.kill('SIGINT') })
-  expect(code).toBe(130)
-  expect(stdout).toMatch(/^harness\s+PASS/m)
-  expect(stdout).toMatch(/^mcp-bench\s+0\/0/m)
-  const deadline2 = Date.now() + 2000
-  while (count() > 0 && Date.now() < deadline2) await new Promise(r => setTimeout(r, 50))
-  expect(count()).toBe(0)
+  // If an assertion below throws, or the stderr wait never resolves and vitest's timeout fires,
+  // this must still not leak: kill the spawned tsx process, and the marked mcp child directly
+  // (SIGKILLing tsx orphans it rather than reaping it, since it's a detached process group).
+  try {
+    let stdout = ''
+    p.stdout.on('data', (b: Buffer) => { stdout += b.toString() })
+    // benchOnce writes "<workdir> ... " to stderr once the round has started; the mcp server is up
+    // and the (never-answering) stall call is in flight shortly after.
+    await new Promise<void>(done => p.stderr.on('data', (b: Buffer) => { if (b.toString().includes('... ')) done() }))
+    const deadline1 = Date.now() + 2000
+    while (count() === 0 && Date.now() < deadline1) await new Promise(r => setTimeout(r, 20))
+    expect(count()).toBeGreaterThan(0)   // the server is really alive before we interrupt it
+    const code = await new Promise(done => { p.on('exit', done); p.kill('SIGINT') })
+    expect(code).toBe(130)
+    expect(stdout).toMatch(/^harness\s+PASS/m)
+    expect(stdout).toMatch(/^mcp-bench\s+0\/0/m)
+    const deadline2 = Date.now() + 2000
+    while (count() > 0 && Date.now() < deadline2) await new Promise(r => setTimeout(r, 50))
+    expect(count()).toBe(0)
+  } finally {
+    try { p.kill('SIGKILL') } catch {}
+    try { execSync(`pkill -9 -f ${marker}`) } catch {}
+  }
 }, 15_000)
