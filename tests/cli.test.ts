@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest'
-import { spawn, spawnSync } from 'node:child_process'
+import { spawn, spawnSync, execSync } from 'node:child_process'
 import { mkdtemp, writeFile, readFile, readdir, stat, cp } from 'node:fs/promises'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -234,3 +234,47 @@ test('run without --yes prompts "start mcp server", not "run bash", for an mcp a
   expect(stderr).not.toContain('run bash:')
   expect(code).toBe(1) // denied -> mcp_error, not final
 }, 30_000)
+
+// Spec regression test 12: Ctrl-C during bench with a live mcp server must not corrupt the PASS
+// table or leak the server. The mcp tool call ('stall') never answers, so the round hangs with a
+// real mcp child alive until we interrupt it — the same marker + pgrep technique as the grandchild
+// test in tests/mcp.test.ts, so this test does not see fixtures other test files start in parallel.
+test('Ctrl-C during bench with a live mcp server leaves the PASS table intact and no process behind', async () => {
+  const wd = await mkdtemp(join(tmpdir(), 'lhb-cli-'))
+  const fake = join(wd, 'fake.json'); const out = join(wd, 'b.json')
+  await writeFile(fake, JSON.stringify([{ toolCalls: [{ name: 'stall', args: {} }] }]))
+  const mcpFixture = join(ROOT, 'tests', 'fixtures', 'mcp-server.mjs')
+  const marker = `lhb-bench-mcp-${process.pid}-${Date.now()}`
+  const harnessFile = join(wd, 'mcp-harness.json')
+  await writeFile(harnessFile, JSON.stringify({
+    name: 'mcp-bench',
+    backend: { kind: 'openai', baseUrl: 'http://x/v1', model: 'm', temperature: 0 },
+    systemPrompt: 'sys',
+    tools: { enabled: [], approveBash: false },
+    toolCalls: { mode: 'native', enforceSchema: false, promptedTemplate: 'T:{{tools}}', parseErrorHint: 'HINT' },
+    context: { maxToolOutputChars: 1000, budgetTokens: 0 },
+    loop: { maxTurns: 5 },
+    mcpServers: { test: { command: process.execPath, args: [mcpFixture, `--marker=${marker}`], tools: ['stall'] } },
+  }))
+  const count = () => Number(execSync(`pgrep -f ${marker} | wc -l`).toString().trim())
+  const cwd = mkdtempSync(join(tmpdir(), 'lhb-cwd-'))
+  // Piped stdout (not inherited) so the async-flush path in bench's finish() is the one under test.
+  const p = spawn(join(ROOT, 'node_modules', '.bin', 'tsx'),
+    [join(ROOT, 'src', 'cli.ts'), 'bench', '--n', '1', '--out', out, harnessFile],
+    { cwd, env: { ...process.env, LHB_FAKE_BACKEND: fake }, stdio: ['ignore', 'pipe', 'pipe'] })
+  let stdout = ''
+  p.stdout.on('data', (b: Buffer) => { stdout += b.toString() })
+  // benchOnce writes "<workdir> ... " to stderr once the round has started; the mcp server is up
+  // and the (never-answering) stall call is in flight shortly after.
+  await new Promise<void>(done => p.stderr.on('data', (b: Buffer) => { if (b.toString().includes('... ')) done() }))
+  const deadline1 = Date.now() + 2000
+  while (count() === 0 && Date.now() < deadline1) await new Promise(r => setTimeout(r, 20))
+  expect(count()).toBeGreaterThan(0)   // the server is really alive before we interrupt it
+  const code = await new Promise(done => { p.on('exit', done); p.kill('SIGINT') })
+  expect(code).toBe(130)
+  expect(stdout).toMatch(/^harness\s+PASS/m)
+  expect(stdout).toMatch(/^mcp-bench\s+0\/0/m)
+  const deadline2 = Date.now() + 2000
+  while (count() > 0 && Date.now() < deadline2) await new Promise(r => setTimeout(r, 50))
+  expect(count()).toBe(0)
+}, 15_000)
