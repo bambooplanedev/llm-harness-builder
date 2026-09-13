@@ -9,7 +9,16 @@ const turns = computed(() => {
   for (const e of props.events) { if (!map.has(e.turn)) map.set(e.turn, []); map.get(e.turn)!.push(e) }
   return [...map.entries()]
 })
-const answered = computed(() => new Set(props.events.filter(e => e.type === 'tool_result').map(e => (e as any).callId)))
+const answered = computed(() => {
+  const ids = new Set(props.events.filter(e => e.type === 'tool_result').map(e => (e as any).callId))
+  // A server-start approval never produces a tool_result; once the server has started (or the
+  // run has ended some other way), treat every mcp: approval as answered so its buttons don't
+  // stay live forever and a second click doesn't 404.
+  if (props.events.some(e => e.type === 'mcp_server_start' || e.type === 'done')) {
+    for (const e of props.events) if (e.type === 'approval_required' && e.call.name.startsWith('mcp:')) ids.add(e.call.callId)
+  }
+  return ids
+})
 const pretty = (v: unknown) => JSON.stringify(v, null, 2)
 // The current turn is "open" from its llm_request until its llm_response; the live bubble shows the streamed text meanwhile,
 // and stays (without the cursor) if the run ended first, since that text is not in the trace.
@@ -34,10 +43,14 @@ const liveTok = computed(() => Math.ceil(liveText.value.length / 4))
       <div v-else-if="e.type === 'tool_call'" class="ev tool_call">{{ e.call.name }} {{ pretty(e.call.args) }}</div>
       <div v-else-if="e.type === 'approval_required' && !answered.has(e.call.callId)" class="ev approval">
         <template v-if="props.approvable !== false">
-          run <code>{{ e.call.args.command }}</code>?
+          <template v-if="e.call.name.startsWith('mcp:')">start mcp server <code>{{ e.call.name.slice(4) }}</code>: <code>{{ e.call.args.command }}</code>?</template>
+          <template v-else>run <code>{{ e.call.args.command }}</code>?</template>
           <button @click="emit('approve', e.call.callId, true)">Run</button> <button @click="emit('approve', e.call.callId, false)">Deny</button>
         </template>
         <template v-else>approval_required: <code>{{ e.call.args.command }}</code> (bench: auto-approved)</template>
+      </div>
+      <div v-else-if="e.type === 'mcp_server_start'" class="ev tool_call">
+        mcp <code>{{ e.server }}</code>: {{ e.offered }} offered → {{ e.tools.length }} tools, {{ e.descriptionChars }} desc + {{ e.schemaChars }} schema chars
       </div>
       <div v-else-if="e.type === 'tool_result'" class="ev tool_result" :class="{ err: e.error }">{{ e.output }}<small v-if="e.truncated" class="warn"> [truncated]</small></div>
       <div v-else-if="e.type === 'error'" class="ev error">{{ e.message }}<br>{{ e.body }}</div>
@@ -47,7 +60,7 @@ const liveTok = computed(() => Math.ceil(liveText.value.length / 4))
       <small style="color:#888">{{ live.content ? 'answering' : 'thinking' }}…<span v-if="liveText"> ~{{ liveTok }} tok</span><span v-if="done"> · partial, not in the trace</span></small>
       <div v-if="live.reasoning" style="color:#888">thinking: {{ live.reasoning }}</div>{{ live.content }}<span v-if="!done">▍</span>
     </div>
-    <details class="inspector"><summary>turn {{ turn }} — raw request / response</summary>
+    <details class="inspector"><summary>{{ turn === 0 ? 'setup' : `turn ${turn}` }} — raw request / response</summary>
       <template v-for="e in evs" :key="'raw' + e.seq">
         <pre v-if="e.type === 'llm_request'">{{ pretty(e.payload) }}</pre>
         <pre v-if="e.type === 'llm_response'">{{ pretty(e.raw) }}</pre>

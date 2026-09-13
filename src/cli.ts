@@ -83,7 +83,10 @@ async function execRun(config: HarnessConfig, task: string, workdir: string, o: 
   const rl = o.yes ? null : createInterface({ input: process.stdin, output: process.stderr })
   const approve = async (call: ToolCall) => {
     if (o.yes) return true
-    const a = await rl!.question(`run bash: ${call.args.command}\n[y/N] `)
+    const what = call.name.startsWith('mcp:')
+      ? `start mcp server "${call.name.slice(4)}": ${call.args.command}`
+      : `run bash: ${call.args.command}`
+    const a = await rl!.question(`${what}\n[y/N] `)
     return /^y(es)?$/i.test(a.trim())
   }
   const opts: RunOpts = { approve, backend: await fakeBackendFromEnv(), signal: o.signal }
