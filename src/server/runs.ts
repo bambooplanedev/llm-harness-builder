@@ -109,7 +109,12 @@ export class RunStore {
 
   /** Tolerates a half-written last line: the CLI appends while we read, and a killed process can leave one. */
   async read(id: string, part = false): Promise<HarnessEvent[]> {
-    const text = await readFile(this.file(id) + (part ? '.part' : ''), 'utf8')
+    return this.readPath(this.file(id) + (part ? '.part' : ''))
+  }
+
+  /** The parser behind read(), taking a full path so callers who already have a matched filename (e.g. benchOpen's scan) don't have to re-derive it from untrusted meta content. */
+  private async readPath(file: string): Promise<HarnessEvent[]> {
+    const text = await readFile(file, 'utf8')
     return text.split('\n').filter(Boolean)
       .flatMap(l => { try { return [JSON.parse(l)] } catch { return [] } })
       .filter(e => !('meta' in e))
@@ -191,9 +196,9 @@ export class RunStore {
   async benchList(): Promise<BenchFile[]> {
     const files = (await this.benchFiles()).map(({ file, result }) => ({
       file, date: result.date, complete: result.complete,
-      model: result.harnesses[0]?.config.backend.model ?? '',
+      model: result.harnesses[0]?.config?.backend?.model ?? '',
     }))
-    return files.sort((a, b) => (a.date < b.date ? 1 : -1))
+    return files.sort((a, b) => b.date.localeCompare(a.date))
   }
 
   /**
@@ -210,6 +215,7 @@ export class RunStore {
     // win the match in every pause between rounds and drag the panel onto an hours-old corpse.
     const floor = Date.parse(result.date)
     let best: Meta['meta'] | undefined
+    let bestFile: string | undefined
     for (const f of await readdir(this.dir)) {
       if (!f.endsWith('.jsonl.part')) continue
       try {
@@ -217,12 +223,14 @@ export class RunStore {
         const [first] = await firstAndLastLine(path.join(this.dir, f))
         const meta = (JSON.parse(first) as Meta).meta
         if (meta.bench?.file !== file || !(meta.started >= floor)) continue
-        if (!best || meta.started > best.started) best = meta
+        if (!best || meta.started > best.started) { best = meta; bestFile = f }
       } catch { continue }
     }
-    if (!best) return { result }
+    if (!best || !bestFile) return { result }
     try {
-      const events = await this.read(best.id, true)
+      // Read the filename the scan actually matched, not path.join(this.dir, `${best.id}.jsonl.part`):
+      // meta.id is untrusted file content and may disagree with the filename (hand-written or renamed file).
+      const events = await this.readPath(path.join(this.dir, bestFile))
       return { result, active: { id: best.id, harness: best.harness, round: best.bench!.round, started: best.started, events } }
     } catch {
       // The winner is exactly the file execRun is about to rename; a miss here is a normal state, not a 500.
