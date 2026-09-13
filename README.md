@@ -142,6 +142,30 @@ The table then grows two columns: `toolChars`, what the servers put in front of 
 `med errs`, tool results that came back as errors. Unlike the PASS rate, neither depends on the
 sample size.
 
+Five runs per arm, on the same setup as **Bench results** below, on 2026-09-13:
+
+| harness | PASS | how the runs ended | median turns | median s | `toolChars` | `med errs` |
+|---|---|---|---|---|---|---|
+| `mcp-off` — file tools from the built-ins | **5/5** | `final×5` | 5 | 31 | — | 0 |
+| `mcp-on` — the same tools from the server | **3/5** | `backend_error×2 final×3` | 5 | 45 | 6439 | 0 |
+
+Fisher's exact test puts 5-against-3 at p = 0.44, so read that PASS column as an illustration and
+nothing more. The traces are worth more than the count, because both failures are identical to the
+token.
+
+Every `mcp-off` run opened with 605 tokens of context and every `mcp-on` run with 1742. The prompt
+is fixed, so that 1137-token gap is the tool text, the same in all ten runs. In the two failing
+runs turn 4 ran away to 5062 completion tokens and came back `finish_reason=length` — a
+`parse_error`, which normally costs one retry and nothing else. The retry request carried 8229
+tokens against a `numCtx` of 8192, and llama-server answered 400.
+
+So the window cost does not surface as "the model got confused". It surfaces one step later: the
+runaway generation that `mcp-off` absorbs with room to spare leaves `mcp-on` no room to retry, and
+a recoverable parse error becomes an unrecoverable 400. This is the same wall `bare` hits in
+**Isolating the knobs** below, reached from the other direction — there by a tool result nothing
+truncated, here by tool descriptions nothing pruned. `med errs` is 0 on both sides: the model
+handled either set of tools without a single tool error.
+
 Two caveats, both honest. **The arms differ in more than the size of the descriptions**: tool names
 and argument shapes differ too, and MCP's `read_file` takes `head`/`tail`, which the built-in one
 does not — in places MCP is the stronger arm. The pair therefore measures "MCP as a whole way of
