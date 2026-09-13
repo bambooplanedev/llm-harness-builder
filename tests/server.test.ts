@@ -53,6 +53,7 @@ await writeFile(join(benchDir, 'b1.json'), benchJson())
 await writeFile(join(benchDir, 'b2.json'), benchJson({ date: '2026-09-13T11:00:00.000Z', complete: true }))
 await writeFile(join(benchDir, 'notbench.json'), JSON.stringify({ version: 2 }))
 await writeFile(join(benchDir, 'broken.json'), '{oops')
+await writeFile(join(benchDir, 'noharnesses.json'), JSON.stringify({ version: 1, date: '2026-09-13T12:00:00.000Z', complete: false }))
 
 async function sse(id: string, until: (e: any) => boolean, lastId?: number): Promise<any[]> {
   const r = await fetch(`${base}/api/runs/${id}/events`, { headers: lastId !== undefined ? { 'last-event-id': String(lastId) } : {} })
@@ -258,7 +259,9 @@ test('a run file with a truncated last line still opens instead of 404', async (
 })
 
 test('GET /api/bench lists bench files newest first and skips everything else', async () => {
-  const { files } = await (await fetch(`${bbase}/api/bench`)).json()
+  const r = await fetch(`${bbase}/api/bench`)
+  expect(r.status).toBe(200)
+  const { files } = await r.json()
   expect(files.map((f: any) => f.file)).toEqual(['b2.json', 'b1.json'])
   expect(files[0]).toEqual({ file: 'b2.json', date: '2026-09-13T11:00:00.000Z', model: 'fake-model', complete: true })
 })

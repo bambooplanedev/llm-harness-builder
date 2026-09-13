@@ -182,7 +182,7 @@ export class RunStore {
       if (!f.endsWith('.json') || !safeName(f)) continue
       try {
         const result = JSON.parse(await readFile(path.join(this.dir, f), 'utf8'))
-        if (result?.version === 1) out.push({ file: f, result })
+        if (result?.version === 1 && Array.isArray(result.harnesses)) out.push({ file: f, result })
       } catch { continue }
     }
     return out
