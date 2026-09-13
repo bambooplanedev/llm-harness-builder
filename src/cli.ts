@@ -2,7 +2,7 @@
 // src/cli.ts
 import { parseArgs } from 'node:util'
 import { readFile, mkdtemp, cp, writeFile, appendFile, rename, access, mkdir } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
+import { existsSync, renameSync } from 'node:fs'
 import { spawn, spawnSync } from 'node:child_process'
 import { createInterface } from 'node:readline/promises'
 import { tmpdir } from 'node:os'
@@ -70,6 +70,11 @@ async function execRun(config: HarnessConfig, task: string, workdir: string, o: 
   await mkdir('runs', { recursive: true })
   const meta: Meta = { meta: { id, harness: config.name, task, workdir, started: Date.now(), bench: o.bench } }
   await writeFile(part, JSON.stringify(meta) + '\n')
+  // Ctrl-C: keep what the run has written instead of leaving a .part nothing ever lists again
+  // (serve appends the synthetic done for any trace that ends without one). bench registers its
+  // own handler before ours and exits from it, so its .part stays for the Bench page to finish.
+  const onSigint = () => { try { renameSync(part, file) } catch {} ; process.exit(130) }
+  if (!o.bench) process.once('SIGINT', onSigint)
   const rl = o.yes ? null : createInterface({ input: process.stdin, output: process.stderr })
   const approve = async (call: ToolCall) => {
     if (o.yes) return true
@@ -97,6 +102,7 @@ async function execRun(config: HarnessConfig, task: string, workdir: string, o: 
     }
   } finally {
     rl?.close()
+    process.off('SIGINT', onSigint) // demo runs three harnesses in one process: a stale handler would rename the wrong run
   }
   await rename(part, file)
   if (!o.quiet) console.error(`trace ${file}`)

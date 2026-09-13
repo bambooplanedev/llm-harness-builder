@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { mkdtemp, writeFile, readFile, readdir, stat, cp } from 'node:fs/promises'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -153,4 +153,19 @@ test('bench rejects non-positive-integer --n and --timeout with usage', () => {
     expect(r.status).toBe(2)
     expect(r.stderr).toMatch(/usage/)
   }
+}, 30_000)
+
+test('Ctrl-C during run keeps the trace instead of an invisible .part', async () => {
+  const wd = await mkdtemp(join(tmpdir(), 'lhb-cli-'))
+  const fake = join(wd, 'fake.json')
+  // no --yes: the run parks on the approval prompt, so the SIGINT lands mid-run
+  await writeFile(fake, JSON.stringify([{ toolCalls: [{ name: 'bash', args: { command: 'echo hi' } }] }]))
+  const cwd = mkdtempSync(join(tmpdir(), 'lhb-cwd-'))
+  const p = spawn(join(ROOT, 'node_modules', '.bin', 'tsx'), [join(ROOT, 'src', 'cli.ts'), 'run', harness('bare'), '--workdir', wd, 'x'],
+    { cwd, env: { ...process.env, LHB_FAKE_BACKEND: fake } })
+  await new Promise<void>(done => p.stderr.on('data', (b: Buffer) => { if (b.toString().includes('run bash:')) done() }))
+  const code = await new Promise(done => { p.on('exit', done); p.kill('SIGINT') })
+  expect(code).toBe(130)
+  const files = await readdir(join(cwd, 'runs'))
+  expect(files).toEqual([expect.stringMatching(/^[0-9a-f]{8}\.jsonl$/)])
 }, 30_000)

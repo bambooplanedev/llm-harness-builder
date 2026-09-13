@@ -180,8 +180,9 @@ both harnesses failed on the very first run of this demo.
   `--workdir` works in the current directory, so `runs/` lands inside the project the agent reads;
   pass `--workdir`. Point `workdir` at a scratch copy or a git repo. `bash` asks for approval by
   default.
-- A CLI run writes `runs/<id>.jsonl.part` and renames it when done; a run killed mid-way leaves the
-  `.part`. Rename it to `.jsonl` to open it in the UI.
+- A CLI run writes `runs/<id>.jsonl.part` and renames it when done, on Ctrl-C included. Only a hard
+  kill (or Ctrl-C during `bench`, where the Bench page still reads the `.part`) leaves one behind:
+  rename it to `.jsonl` to open it in the UI.
 - `enforceSchema` is not a guarantee: llama.cpp's grammar can fail open in some cases and is
   disabled in thinking mode. The parser is lenient regardless. In the run above, `enforceSchema`
   did nothing at all until thinking was off — the model kept spending its whole budget inside
