@@ -21,11 +21,13 @@ let unsub: (() => void) | null = null
 let gen = 0
 let timer: ReturnType<typeof setTimeout> | null = null
 let stopped = false
+/** Set by the tick's own catch; only the tick clears its own failure, never an SSE error it did not cause. */
+let fetchFailed = false
 
 const runs = computed(() => result.value?.harnesses.flatMap(h => h.runs) ?? [])
 const total = computed(() => result.value ? result.value.n * result.value.harnesses.length : 0)
 const msDone = computed(() => runs.value.reduce((a, r) => a + r.ms, 0))
-const backend = computed(() => result.value?.harnesses[0]?.config.backend)
+const backend = computed(() => result.value?.harnesses[0]?.config?.backend)
 /** Four of five `bare` runs are over 900 s: 1800s reads worse than 30:00. */
 const mmss = (ms: number) => {
   const s = Math.round(ms / 1000)
@@ -56,9 +58,9 @@ async function tick() {
         else if (r.active) events.value = r.active.events
       }
     }
-    error.value = ''
+    if (fetchFailed) { fetchFailed = false; error.value = '' }
   } catch (e) {
-    if (my === gen) error.value = (e as Error).message
+    if (my === gen) { fetchFailed = true; error.value = (e as Error).message }
   } finally {
     if (!stopped && my === gen) timer = setTimeout(tick, 2000)
   }
@@ -85,12 +87,12 @@ const age = computed(() => active.value ? now.value - active.value.started : 0)
 const silence = computed(() => active.value ? now.value - (active.value.events.at(-1)?.ts ?? active.value.started) : 0)
 
 // A bench run takes up to 30 minutes: without this, "live" means "scroll it yourself".
-watch(events, async () => {
+watch(() => events.value.length, async () => {
   const el = pane.value
   if (!el || el.scrollHeight - el.scrollTop - el.clientHeight > 80) return // measured before the patch: flush is 'pre'
   await nextTick()
   el.scrollTop = el.scrollHeight
-}, { deep: true })
+})
 
 // Show progress in the browser tab title; reset on unmount handled by existing onUnmounted.
 watch([runs, total, () => result.value?.complete], () => {
@@ -117,7 +119,7 @@ onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer); unsub?.(); d
 
       <template v-if="result">
         <div class="hint">
-          {{ backend?.model }} · {{ backend?.kind }} {{ backend?.baseUrl }} · n={{ result.n }} · timeout {{ mmss(result.timeoutS * 1000) }}<br>
+          {{ backend?.model }} · {{ backend?.kind }} {{ backend?.baseUrl }} · n={{ result.n }} · timeout {{ mmss(result.timeoutS * 1000) }} · {{ new Date(result.date).toLocaleString() }}<br>
           {{ runs.length }}/{{ total }} прогонів · {{ mmss(msDone) }} позаду
         </div>
         <div v-if="active" class="ev approval live" @click="sel = 'live'">
