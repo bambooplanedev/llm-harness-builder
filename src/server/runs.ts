@@ -179,12 +179,16 @@ export class RunStore {
     return out.sort((x, y) => y.started - x.started)
   }
 
-  /** Every *.json in the runs dir that is a v1 bench result; anything else there is somebody's stray file. */
-  private async benchFiles(): Promise<{ file: string; result: BenchResult }[]> {
+  /**
+   * Every *.json in the runs dir that is a v1 bench result; anything else there is somebody's stray file.
+   * `only` narrows the scan to that one name: the Bench page polls benchOpen every two seconds, and
+   * parsing every bench JSON in the directory to answer for one of them is work nobody asked for.
+   */
+  private async benchFiles(only?: string): Promise<{ file: string; result: BenchResult }[]> {
     await mkdir(this.dir, { recursive: true })
     const out: { file: string; result: BenchResult }[] = []
     for (const f of await readdir(this.dir)) {
-      if (!f.endsWith('.json') || !safeName(f)) continue
+      if (!f.endsWith('.json') || !safeName(f) || (only !== undefined && f !== only)) continue
       try {
         const result = JSON.parse(await readFile(path.join(this.dir, f), 'utf8'))
         // A harness entry with no config is garbage, not a bench: skipping it here keeps such a file
@@ -209,7 +213,7 @@ export class RunStore {
    * (`bench.file`), and is read straight from the still-unrenamed .part file.
    */
   async benchOpen(file: string): Promise<{ result: BenchResult; active?: ActiveTrace } | null> {
-    const hit = (await this.benchFiles()).find(b => b.file === file)
+    const hit = (await this.benchFiles(file)).find(b => b.file === file)
     if (!hit) return null
     const { result } = hit
     if (result.complete) return { result }

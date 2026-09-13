@@ -36,7 +36,11 @@ function fakeBackendFromEnv(): Promise<Backend | undefined> {
 }
 
 async function loadHarness(file: string, over: { model?: string; baseUrl?: string; kind?: string }): Promise<HarnessConfig> {
-  const cfg = JSON.parse(await readFile(file, 'utf8'))
+  // One catch for the whole read: a missing file, a directory and malformed JSON all used to reach
+  // the top-level handler and print a stack at someone who mistyped a path.
+  let cfg: any
+  try { cfg = JSON.parse(await readFile(file, 'utf8')) }
+  catch (e) { return die(`cannot read harness ${file}:\n  ${(e as Error).message}`) }
   if (!cfg || typeof cfg.backend !== 'object' || cfg.backend === null) die(`invalid harness ${file}:\n  backend must be an object`)
   if (over.model) cfg.backend.model = over.model
   if (over.baseUrl) cfg.backend.baseUrl = over.baseUrl
@@ -211,11 +215,18 @@ async function cmdBench(argv: string[]) {
   // JSON would be the only thing left of a 90-minute run. `.tmp`, not `.json`, so /api/bench skips it.
   const tmpOut = `${out}.${process.pid}.tmp`
   const save = async () => { await writeFile(tmpOut, JSON.stringify(result, null, 2) + '\n'); await rename(tmpOut, out) }
-  const finish = () => { console.log(formatTable(harnesses)); console.error(`wrote ${out}`) }
-  await save()
+  // write() with a callback, not console.log: on a pipe stdout is async, and the SIGINT handler's
+  // exit() below would drop the table of a 90-minute run on the floor.
+  const finish = (code?: number) => {
+    console.error(`wrote ${out}`)
+    process.stdout.write(formatTable(harnesses) + '\n', () => code !== undefined && process.exit(code))
+  }
+  // The first save happens before any run, so an unwritable --out (a directory, a bad path) is a
+  // typo to report, not a crash after 90 minutes.
+  await save().catch(e => die(`cannot write ${out}:\n  ${(e as Error).message}`))
   console.error(`bench: ${files.length} harnesses × ${n} runs, timeout ${timeoutS}s per run, writing ${out}`)
   files.forEach((f, i) => console.error(`  ${harnesses[i].name.padEnd(13)} ${f}`))
-  process.once('SIGINT', () => { finish(); process.exit(130) })
+  process.once('SIGINT', () => finish(130))
   for (let round = 1; round <= n; round++) {
     console.error(`--- round ${round}/${n}`)
     for (const h of harnesses) {

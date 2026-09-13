@@ -169,3 +169,13 @@ test('Ctrl-C during run keeps the trace instead of an invisible .part', async ()
   const files = await readdir(join(cwd, 'runs'))
   expect(files).toEqual([expect.stringMatching(/^[0-9a-f]{8}\.jsonl$/)])
 }, 30_000)
+
+test('run dies with a clear message, not a stack, when the harness file is missing or unreadable', async () => {
+  const wd = await mkdtemp(join(tmpdir(), 'lhb-cli-'))
+  for (const file of [join(wd, 'nope.json'), wd]) {
+    const r = cli(['run', file, '--workdir', wd, '--yes', 'task'])
+    expect(r.status).toBe(2)
+    expect(r.stderr).toMatch(/cannot read harness/)
+    expect(r.stderr).not.toMatch(/at .*cli\.ts/)
+  }
+}, 30_000)
