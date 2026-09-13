@@ -35,3 +35,10 @@ details.inspector pre { max-height: 300px; overflow: auto; background: #f4f4f4; 
 .diff table.cfg td { border-top: 1px solid #eee; padding: 3px 6px; vertical-align: top; font-family: ui-monospace, monospace; }
 .diff .onlyA { color: #c00; } .diff .onlyB { color: #070; }
 .diff pre { white-space: pre-wrap; background: #f4f4f4; padding: 6px; }
+.diff .turnrow { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 3px 6px; cursor: pointer; border-top: 1px solid #eee; }
+.diff .turnrow:hover { background: #f7f7f7; }
+.diff .turnrow.split { background: #fff4e5; }
+.diff .split-label { grid-column: 1 / -1; margin: 0; color: #c60; }
+.diff .chip { display: inline-block; margin-right: 4px; padding: 0 4px; background: #eee; border-radius: 3px; font-family: ui-monospace, monospace; }
+.diff .chip.err { background: #fee; color: #c00; }
+.diff .layout { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; height: auto; }

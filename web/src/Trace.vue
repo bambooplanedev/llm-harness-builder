@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { Delta, HarnessEvent } from './api'
-const props = defineProps<{ events: HarnessEvent[]; live: Delta; task: string; approvable?: boolean }>()
+const props = defineProps<{ events: HarnessEvent[]; live: Delta; task?: string; approvable?: boolean }>()
 const emit = defineEmits<{ approve: [callId: string, ok: boolean] }>()
 
 const turns = computed(() => {
@@ -23,7 +23,7 @@ const liveText = computed(() => (props.live.reasoning ?? '') + (props.live.conte
 const liveTok = computed(() => Math.ceil(liveText.value.length / 4))
 </script>
 <template>
-  <div class="ev user">{{ task }}</div>
+  <div v-if="task" class="ev user">{{ task }}</div>
   <div v-for="[turn, evs] in turns" :key="turn" class="turn">
     <template v-for="e in evs" :key="e.seq">
       <div v-if="e.type === 'llm_response'" class="ev assistant">
