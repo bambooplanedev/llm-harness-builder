@@ -21,8 +21,9 @@ Against anything that speaks the OpenAI API (llama-server, LM Studio, vLLM):
 
 `demo` runs the same task three times on the same model with three harnesses, `bare`, `tuned`
 and `tuned-hermes`, and prints PASS/FAIL from a check script — not from eyeballing the output.
-Add `--json` to get the full event stream as JSONL on stdout; the workbench UI keeps every run it
-starts in `./runs/*.jsonl`. Diff two traces with any tool.
+Add `--json` to get the full event stream as JSONL on stdout. Every run, from the UI or the CLI,
+is kept in `./runs/*.jsonl`; start `serve` from the same directory to browse them (reload the list
+after a CLI run). Diff two traces with any tool.
 
 The current turn streams live in the UI and in `run`/`demo` on a terminal: `<think>` and the answer
 appear as they are generated; the UI adds a rough `~N tok` counter. The trace keeps one
@@ -58,8 +59,9 @@ stream as JSONL to stdout; human-readable progress goes to stderr.
 (seconds). With no files it takes `bare`, `tuned` and `tuned-hermes` from `./harnesses` (the copies
 `serve` made, i.e. what you edited in the UI) or from the package. It prints a PASS-rate table and
 writes a JSON to `runs/` after every run, so Ctrl-C keeps what finished. The JSON carries each
-harness's full config and each run's `reason`, `parseErrors`, `lastError` and temp `workdir`, so
-two files are comparable by config, not by name. Exit code is 0 whatever the verdicts.
+harness's full config and each run's `reason`, `parseErrors`, `lastError`, temp `workdir` and
+`trace` (the run's `runs/<id>.jsonl`), so two files are comparable by config, not by name. Exit
+code is 0 whatever the verdicts.
 
 ## Harness file
 
@@ -172,8 +174,12 @@ both harnesses failed on the very first run of this demo.
 
 ## Honest notes
 
-- Traces are raw. Anything the model reads (including `.env`) ends up in `runs/`.
-  Point `workdir` at a scratch copy or a git repo. `bash` asks for approval by default.
+- Traces are raw. Anything the model reads (including `.env`) ends up in `runs/`. `run` without
+  `--workdir` works in the current directory, so `runs/` lands inside the project the agent reads;
+  pass `--workdir`. Point `workdir` at a scratch copy or a git repo. `bash` asks for approval by
+  default.
+- A CLI run writes `runs/<id>.jsonl.part` and renames it when done; a run killed mid-way leaves the
+  `.part`. Rename it to `.jsonl` to open it in the UI.
 - `enforceSchema` is not a guarantee: llama.cpp's grammar can fail open in some cases and is
   disabled in thinking mode. The parser is lenient regardless. In the run above, `enforceSchema`
   did nothing at all until thinking was off — the model kept spending its whole budget inside
@@ -204,9 +210,8 @@ both harnesses failed on the very first run of this demo.
 - `demo --kind openai` needs `--base-url` (the default URL is Ollama's port).
 - The UI has no built-in workdir: run `demo` once and point the UI's workdir at the temp directory it prints (or at any `workdir` from a bench JSON), or at any scratch project.
 - `bench` PASS means `node --test` came back green, not that the bug was fixed the right way: the
-  model has `write_file` and could edit the test instead. The trace of a single `run` shows what
-  changed; `bench` keeps no traces, only each run's temp `workdir` path (the directories stay in
-  `/tmp`) and its last error message.
+  model has `write_file` and could edit the test instead. Open the run's trace (`runs[].trace` in
+  the JSON, or the run list in the UI) to see what it changed.
 - `demo` runs `check.sh` without a timeout; `bench` gives it 60 s.
 - Aborting a run (`--timeout`) closes our side of the connection; llama-server keeps generating
   until it notices, so the next run can start against a busy server and fail with

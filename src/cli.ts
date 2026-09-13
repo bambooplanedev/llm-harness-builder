@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 // src/cli.ts
 import { parseArgs } from 'node:util'
-import { readFile, mkdtemp, cp, writeFile, access, mkdir } from 'node:fs/promises'
+import { readFile, mkdtemp, cp, writeFile, appendFile, rename, access, mkdir } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { spawn, spawnSync } from 'node:child_process'
 import { createInterface } from 'node:readline/promises'
 import { tmpdir } from 'node:os'
+import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { runAgent, type RunOpts } from './core/run.js'
@@ -14,6 +15,7 @@ import { validateWorkdir } from './core/tools/sandbox.js'
 import type { Backend, NormalizedResponse } from './core/backends/types.js'
 import type { HarnessEvent, ToolCall } from './core/events.js'
 import { startServer } from './server/index.js'
+import type { Meta } from './server/runs.js'
 import { DEMO_TASK } from './core/prompts.js'
 import { median, formatTable, type BenchRun, type BenchHarness, type BenchResult } from './core/bench.js'
 
@@ -59,9 +61,10 @@ function describe(e: HarnessEvent, streamed = false): string {
   }
 }
 
-type ExecOpts = { yes: boolean; json: boolean; quiet?: boolean; signal?: AbortSignal; onEvent?: (e: HarnessEvent) => void }
+type ExecOpts = { yes: boolean; json: boolean; quiet?: boolean; signal?: AbortSignal; onEvent?: (e: HarnessEvent) => void; bench?: Meta['meta']['bench'] }
 
-async function execRun(config: HarnessConfig, task: string, workdir: string, o: ExecOpts): Promise<HarnessEvent> {
+/** Runs one agent loop and keeps its trace in ./runs/<id>.jsonl, the file format serve reads. Written as .part and renamed when the loop ends, so a live or killed run is never listed. */
+async function execRun(config: HarnessConfig, task: string, workdir: string, o: ExecOpts): Promise<{ id: string; last: HarnessEvent }> {
   const rl = o.yes ? null : createInterface({ input: process.stdin, output: process.stderr })
   const approve = async (call: ToolCall) => {
     if (o.yes) return true
@@ -76,10 +79,16 @@ async function execRun(config: HarnessConfig, task: string, workdir: string, o: 
     if (d.content) process.stderr.write(d.content)
     streamed = true
   }
+  const id = randomUUID().slice(0, 8)
+  const file = path.join('runs', `${id}.jsonl`), part = `${file}.part`
+  await mkdir('runs', { recursive: true })
+  const meta: Meta = { meta: { id, harness: config.name, task, workdir, started: Date.now(), bench: o.bench } }
+  await writeFile(part, JSON.stringify(meta) + '\n')
   let last: HarnessEvent | undefined
   try {
     for await (const e of runAgent({ config, task, workdir }, opts)) {
       last = e
+      await appendFile(part, JSON.stringify(e) + '\n')
       if (o.json) process.stdout.write(JSON.stringify(e) + '\n')
       if (streamed) process.stderr.write('\n')
       if (!o.quiet) console.error(describe(e, streamed))
@@ -89,7 +98,9 @@ async function execRun(config: HarnessConfig, task: string, workdir: string, o: 
   } finally {
     rl?.close()
   }
-  return last!
+  await rename(part, file)
+  if (!o.quiet) console.error(`trace ${file}`)
+  return { id, last: last! }
 }
 
 async function cmdRun(argv: string[]) {
@@ -102,7 +113,7 @@ async function cmdRun(argv: string[]) {
   const workdir = path.resolve(values.workdir ?? '.')
   const werr = await validateWorkdir(workdir); if (werr) die(werr)
   const config = await loadHarness(file, { model: values.model, baseUrl: values['base-url'], kind: values.kind })
-  const last = await execRun(config, taskParts.join(' '), workdir, { yes: values.yes, json: values.json })
+  const { last } = await execRun(config, taskParts.join(' '), workdir, { yes: values.yes, json: values.json })
   process.exitCode = last.type === 'done' && last.reason === 'final' ? 0 : 1
 }
 
@@ -125,11 +136,11 @@ async function cmdDemo(argv: string[]) {
     const config = await loadHarness(path.join(PKG_ROOT, 'harnesses', `${name}.json`), { model: values.model, baseUrl: values['base-url'], kind: values.kind })
     const workdir = await makeDemoWorkdir()
     console.error(`\n=== ${name} (${config.backend.model}) in ${workdir}`)
-    const last = await execRun(config, DEMO_TASK, workdir, { yes: true, json: values.json })
+    const { id, last } = await execRun(config, DEMO_TASK, workdir, { yes: true, json: values.json })
     const check = spawnSync('sh', [path.join(workdir, 'check.sh')])
     const verdict = check.status === 0 ? 'PASS' : 'FAIL'
     const d = last.type === 'done' ? last : undefined
-    rows.push(`${name.padEnd(12)} ${verdict}  reason=${d?.reason ?? '?'} turns=${d?.turns ?? '?'} toolCalls=${d?.toolCallCount ?? '?'}`)
+    rows.push(`${name.padEnd(12)} ${verdict}  reason=${d?.reason ?? '?'} turns=${d?.turns ?? '?'} toolCalls=${d?.toolCallCount ?? '?'} trace=${id}`)
   }
   const summary = '\n' + rows.join('\n')
   if (values.json) console.error(summary)
@@ -140,26 +151,26 @@ const INT = /^[1-9]\d*$/
 const stamp = (d: Date) => { const p = (n: number) => String(n).padStart(2, '0'); return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}` }
 
 /** One bench run: fresh demo workdir → execRun (timed) → check.sh. Never throws; an exception becomes a FAIL row with reason 'error'. */
-async function benchOnce(config: HarnessConfig, round: number, timeoutS: number): Promise<BenchRun> {
+async function benchOnce(config: HarnessConfig, round: number, timeoutS: number, out: string): Promise<BenchRun> {
   let workdir = '', parseErrors = 0, lastError: string | undefined, t0 = Date.now(), run: BenchRun
   process.stderr.write(`${config.name} #${round} `)
   try {
     workdir = await makeDemoWorkdir()
     process.stderr.write(`${workdir} ... `)
     t0 = Date.now()
-    const last = await execRun(config, DEMO_TASK, workdir, {
-      yes: true, json: false, quiet: true, signal: AbortSignal.timeout(timeoutS * 1000),
+    const { id, last } = await execRun(config, DEMO_TASK, workdir, {
+      yes: true, json: false, quiet: true, signal: AbortSignal.timeout(timeoutS * 1000), bench: { file: path.basename(out), round },
       onEvent: e => { if (e.type === 'parse_error') parseErrors++; if (e.type === 'parse_error' || e.type === 'error') lastError = e.message },
     })
     const ms = Date.now() - t0
     const verdict = spawnSync('sh', [path.join(workdir, 'check.sh')], { timeout: 60_000 }).status === 0 ? 'PASS' : 'FAIL'
     const d = last.type === 'done' ? last : undefined
-    run = { round, verdict, reason: d?.reason ?? 'error', turns: d?.turns ?? 0, toolCalls: d?.toolCallCount ?? 0, parseErrors, lastError, ms, workdir }
+    run = { round, verdict, reason: d?.reason ?? 'error', turns: d?.turns ?? 0, toolCalls: d?.toolCallCount ?? 0, parseErrors, lastError, ms, workdir, trace: id }
   } catch (e) {
     run = { round, verdict: 'FAIL', reason: 'error', turns: 0, toolCalls: 0, parseErrors, lastError: String(e), ms: Date.now() - t0, workdir }
   }
   const tail = (run.reason === 'error' || run.reason === 'aborted') && run.lastError ? `  ${run.lastError.replace(/\s+/g, ' ').slice(0, 200)}` : ''
-  process.stderr.write(`${run.verdict}  reason=${run.reason} turns=${run.turns} toolCalls=${run.toolCalls} parseErrors=${run.parseErrors} ${Math.round(run.ms / 1000)}s${tail}\n`)
+  process.stderr.write(`${run.verdict}  reason=${run.reason} turns=${run.turns} toolCalls=${run.toolCalls} parseErrors=${run.parseErrors} ${Math.round(run.ms / 1000)}s${run.trace ? ` trace=${run.trace}` : ''}${tail}\n`)
   return run
 }
 
@@ -199,7 +210,7 @@ async function cmdBench(argv: string[]) {
   for (let round = 1; round <= n; round++) {
     console.error(`--- round ${round}/${n}`)
     for (const h of harnesses) {
-      h.runs.push(await benchOnce(h.config, round, timeoutS))
+      h.runs.push(await benchOnce(h.config, round, timeoutS, out))
       rollup(h)
       await save()
     }

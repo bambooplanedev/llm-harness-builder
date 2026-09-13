@@ -5,6 +5,8 @@ import type { HarnessConfig } from './config.js'
 export type BenchRun = {
   round: number; verdict: 'PASS' | 'FAIL'; reason: DoneReason | 'error'
   turns: number; toolCalls: number; parseErrors: number; lastError?: string; ms: number; workdir: string
+  /** Id of the run's trace, runs/<trace>.jsonl. Absent when the run failed before it had one, and in JSON written before v2.0.3. */
+  trace?: string
 }
 export type BenchHarness = {
   name: string; config: HarnessConfig; pass: number; reasons: Record<string, number>

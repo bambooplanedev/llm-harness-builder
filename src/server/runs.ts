@@ -7,7 +7,11 @@ import type { HarnessEvent, ToolCall } from '../core/events.js'
 import type { Backend, Delta } from '../core/backends/types.js'
 
 export type RunSummary = { id: string; harness: string; task: string; workdir: string; started: number; reason?: string; turns?: number; toolCallCount?: number }
-type Meta = { meta: { id: string; harness: string; task: string; workdir: string; started: number } }
+export type Meta = { meta: {
+  id: string; harness: string; task: string; workdir: string; started: number
+  /** Only on runs started by `bench`: the bench JSON's basename (a label, not a key) and the round. */
+  bench?: { file: string; round: number }
+} }
 /** Live-only: fanned out to listeners, never written to the run file, no seq. */
 export type DeltaMsg = Delta & { type: 'delta' }
 type Listener = (e: HarnessEvent | DeltaMsg) => void
