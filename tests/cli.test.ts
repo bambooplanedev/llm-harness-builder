@@ -286,3 +286,29 @@ test('Ctrl-C during bench with a live mcp server leaves the PASS table intact an
     try { execSync(`pkill -9 -f ${marker}`) } catch {}
   }
 }, 15_000)
+
+// The two numbers README quotes for the mcp-off/mcp-on pair: what the server put in front of the
+// model, and how many tool results came back as errors. Measured on a real server child, not a mock.
+test('bench with an mcp server records toolChars/toolErrors and prints the tool columns', async () => {
+  const wd = await mkdtemp(join(tmpdir(), 'lhb-cli-'))
+  const fake = join(wd, 'fake.json'); const out = join(wd, 'b.json')
+  await writeFile(fake, JSON.stringify([{ toolCalls: [{ name: 'boom', args: {} }] }, { content: 'Done.' }]))
+  const harnessFile = join(wd, 'mcp-harness.json')
+  await writeFile(harnessFile, JSON.stringify({
+    name: 'mcp-bench',
+    backend: { kind: 'openai', baseUrl: 'http://x/v1', model: 'm', temperature: 0 },
+    systemPrompt: 'sys',
+    tools: { enabled: [], approveBash: false },
+    toolCalls: { mode: 'native', enforceSchema: false, promptedTemplate: 'T:{{tools}}', parseErrorHint: 'HINT' },
+    context: { maxToolOutputChars: 1000, budgetTokens: 0 },
+    loop: { maxTurns: 5 },
+    mcpServers: { test: { command: process.execPath, args: [join(ROOT, 'tests', 'fixtures', 'mcp-server.mjs')], tools: ['boom'] } },
+  }))
+  const r = cli(['bench', '--n', '1', '--out', out, harnessFile], { LHB_FAKE_BACKEND: fake })
+  expect(r.status).toBe(0)
+  const [run] = JSON.parse(await readFile(out, 'utf8')).harnesses[0].runs
+  expect(run.toolChars).toBeGreaterThan(0)
+  expect(run.toolErrors).toBe(1)
+  expect(r.stdout).toMatch(/^harness\s+PASS\s+reasons\s+med turns\s+med s\s+toolChars\s+med errs$/m)
+  expect(r.stdout).toMatch(new RegExp(`^mcp-bench\\s+0/1\\s+final×1\\s+\\d+\\s+\\d+\\s+${run.toolChars}\\s+1$`, 'm'))
+}, 60_000)

@@ -166,7 +166,7 @@ const stamp = (d: Date) => { const p = (n: number) => String(n).padStart(2, '0')
 
 /** One bench run: fresh demo workdir → execRun (timed) → check.sh. Never throws; an exception becomes a FAIL row with reason 'error'. */
 async function benchOnce(config: HarnessConfig, round: number, timeoutS: number, out: string): Promise<BenchRun> {
-  let workdir = '', parseErrors = 0, lastError: string | undefined, t0 = Date.now(), run: BenchRun
+  let workdir = '', parseErrors = 0, toolChars = 0, toolErrors = 0, lastError: string | undefined, t0 = Date.now(), run: BenchRun
   process.stderr.write(`${config.name} #${round} `)
   try {
     workdir = await makeDemoWorkdir()
@@ -174,14 +174,19 @@ async function benchOnce(config: HarnessConfig, round: number, timeoutS: number,
     t0 = Date.now()
     const { id, last } = await execRun(config, DEMO_TASK, workdir, {
       yes: true, json: false, quiet: true, signal: AbortSignal.timeout(timeoutS * 1000), bench: { file: path.basename(out), round },
-      onEvent: e => { if (e.type === 'parse_error') parseErrors++; if (e.type === 'parse_error' || e.type === 'error') lastError = e.message },
+      onEvent: e => {
+        if (e.type === 'parse_error') parseErrors++
+        if (e.type === 'mcp_server_start') toolChars += e.descriptionChars + e.schemaChars
+        if (e.type === 'tool_result' && e.error) toolErrors++
+        if (e.type === 'parse_error' || e.type === 'error') lastError = e.message
+      },
     })
     const ms = Date.now() - t0
     const verdict = spawnSync('sh', [path.join(workdir, 'check.sh')], { timeout: 60_000 }).status === 0 ? 'PASS' : 'FAIL'
     const d = last.type === 'done' ? last : undefined
-    run = { round, verdict, reason: d?.reason ?? 'error', turns: d?.turns ?? 0, toolCalls: d?.toolCallCount ?? 0, parseErrors, lastError, ms, workdir, trace: id }
+    run = { round, verdict, reason: d?.reason ?? 'error', turns: d?.turns ?? 0, toolCalls: d?.toolCallCount ?? 0, parseErrors, lastError, ms, workdir, trace: id, toolChars: toolChars || undefined, toolErrors }
   } catch (e) {
-    run = { round, verdict: 'FAIL', reason: 'error', turns: 0, toolCalls: 0, parseErrors, lastError: String(e), ms: Date.now() - t0, workdir }
+    run = { round, verdict: 'FAIL', reason: 'error', turns: 0, toolCalls: 0, parseErrors, lastError: String(e), ms: Date.now() - t0, workdir, toolChars: toolChars || undefined, toolErrors }
   }
   const tail = (run.reason === 'error' || run.reason === 'aborted') && run.lastError ? `  ${run.lastError.replace(/\s+/g, ' ').slice(0, 200)}` : ''
   process.stderr.write(`${run.verdict}  reason=${run.reason} turns=${run.turns} toolCalls=${run.toolCalls} parseErrors=${run.parseErrors} ${Math.round(run.ms / 1000)}s${run.trace ? ` trace=${run.trace}` : ''}${tail}\n`)

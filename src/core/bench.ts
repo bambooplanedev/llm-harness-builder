@@ -7,6 +7,10 @@ export type BenchRun = {
   turns: number; toolCalls: number; parseErrors: number; lastError?: string; ms: number; workdir: string
   /** Id of the run's trace, runs/<trace>.jsonl. Absent when the run failed before it had one, and in JSON written before v2.0.3. */
   trace?: string
+  /** description + schema characters every mcp server put in front of the model. Absent when the harness has no mcp server. */
+  toolChars?: number
+  /** Tool results that came back as errors — mcp or built-in. */
+  toolErrors?: number
 }
 export type BenchHarness = {
   name: string; config: HarnessConfig; pass: number; reasons: Record<string, number>
@@ -29,11 +33,16 @@ export const mmss = (ms: number): string => {
 }
 
 export function formatTable(harnesses: BenchHarness[]): string {
-  const head = ['harness', 'PASS', 'reasons', 'med turns', 'med s']
+  // The tool columns only earn their width when a run measured them: a bench of built-in harnesses
+  // prints exactly the table it printed before mcp existed.
+  const tools = harnesses.some(h => h.runs.some(r => r.toolChars))
+  const head = ['harness', 'PASS', 'reasons', 'med turns', 'med s', ...tools ? ['toolChars', 'med errs'] : []]
   const rows = harnesses.map(h => [
     h.name, `${h.pass}/${h.runs.length}`,
     Object.entries(h.reasons).map(([k, v]) => `${k}×${v}`).join(' ') || '-',
     String(h.median.turns), String(Math.round(h.median.ms / 1000)),
+    // toolChars is the same in every run of a harness, so it is taken, not averaged.
+    ...tools ? [String(h.runs.find(r => r.toolChars)?.toolChars ?? '-'), String(median(h.runs.map(r => r.toolErrors ?? 0)))] : [],
   ])
   const w = head.map((c, i) => Math.max(c.length, ...rows.map(r => r[i].length)) + 2)
   const line = (r: string[]) => r.map((c, i) => c.padEnd(w[i])).join('').trimEnd()
