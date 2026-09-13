@@ -1,6 +1,7 @@
 import { test, expect } from 'vitest'
-import { skeleton, turnsOf } from '../src/core/diff'
+import { skeleton, turnsOf, configDiff, lineDiff } from '../src/core/diff'
 import type { HarnessEvent } from '../src/core/events'
+import type { HarnessConfig } from '../src/core/config'
 
 /** Events carry seq/ts that nothing here reads; this keeps the fixtures to what matters. */
 const ev = (turn: number, e: Record<string, unknown>) => ({ seq: 0, ts: 0, turn, ...e }) as HarnessEvent
@@ -55,4 +56,43 @@ test('skeleton: tokens prefer the exact count, and neither cost lands in sig', (
   expect(stats({ estimatedTokens: 900, exactTokens: 1024 }).tokens).toBe(1024)
   expect(stats({ estimatedTokens: 900 }).tokens).toBe(900)
   expect(stats({ estimatedTokens: 900 }).sig).toBe('bash')
+})
+
+const cfg = (over: Record<string, unknown> = {}): HarnessConfig => ({
+  name: 'bare',
+  backend: { kind: 'openai', baseUrl: 'http://127.0.0.1:8080/v1', model: 'qwen3', temperature: 0.2 },
+  systemPrompt: 'be brief',
+  tools: { enabled: ['bash', 'read_file'], approveBash: true },
+  toolCalls: { mode: 'native', format: 'json', enforceSchema: false, promptedTemplate: '', parseErrorHint: '' },
+  context: { maxToolOutputChars: 4000, budgetTokens: 0 },
+  loop: { maxTurns: 15 },
+  ...over,
+} as HarnessConfig)
+
+test('configDiff: identical configs differ in nothing, and the name never counts', () => {
+  expect(configDiff(cfg(), cfg())).toEqual([])
+  expect(configDiff(cfg(), cfg({ name: 'tuned' }))).toEqual([])
+})
+
+test('configDiff: dotted paths for the knobs no llm_request carries', () => {
+  const d = configDiff(cfg(), cfg({ loop: { maxTurns: 30 }, context: { maxToolOutputChars: 0, budgetTokens: 0 } }))
+  expect(d).toEqual([
+    { path: 'context.maxToolOutputChars', a: '4000', b: '0' },
+    { path: 'loop.maxTurns', a: '15', b: '30' },
+  ])
+})
+
+test('configDiff: an array is one leaf, and a key missing on one side still shows', () => {
+  expect(configDiff(cfg(), cfg({ tools: { enabled: ['bash'], approveBash: true } })))
+    .toEqual([{ path: 'tools.enabled', a: '["bash","read_file"]', b: '["bash"]' }])
+  const noFormat = cfg({ toolCalls: { mode: 'native', enforceSchema: false, promptedTemplate: '', parseErrorHint: '' } })
+  expect(configDiff(cfg(), noFormat)).toEqual([{ path: 'toolCalls.format', a: '"json"', b: 'undefined' }])
+  expect(configDiff(noFormat, cfg())).toEqual([{ path: 'toolCalls.format', a: 'undefined', b: '"json"' }])
+})
+
+test('lineDiff: only the lines one side does not have, blank lines dropped', () => {
+  expect(lineDiff('be brief\n\n/no_think', 'be brief\nrun the tests')).toEqual({
+    onlyA: ['/no_think'],
+    onlyB: ['run the tests'],
+  })
 })

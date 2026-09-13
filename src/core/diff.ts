@@ -1,5 +1,6 @@
 // src/core/diff.ts — pure helpers that compare two runs. No fs, no process, no Vue.
 import type { HarnessEvent } from './events.js'
+import type { HarnessConfig } from './config.js'
 
 /** One thing a turn did. `truncated` is shown but deliberately kept out of `sig`. */
 export type Chip = { label: string; bad: boolean; truncated?: boolean }
@@ -50,4 +51,37 @@ export function skeleton(events: HarnessEvent[]): Turn[] {
     }
     return { chips, ms, tokens, sig: chips.map(c => `${c.label}${c.bad ? '!' : ''}`).join(' ') }
   })
+}
+
+/** Every scalar and array of a config object, as dotted path → JSON text. Arrays stay whole leaves. */
+function leaves(v: unknown, prefix = ''): [string, string][] {
+  if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
+    return Object.entries(v).flatMap(([k, x]) => leaves(x, prefix ? `${prefix}.${k}` : k))
+  }
+  return [[prefix, JSON.stringify(v) ?? 'undefined']]
+}
+
+/**
+ * Leaf-by-leaf difference of two harness configs. `name` is the harness's label, not a knob,
+ * so it never counts as a difference. Order: a's leaves in their own order, then b-only ones.
+ */
+export function configDiff(a: HarnessConfig, b: HarnessConfig): { path: string; a: string; b: string }[] {
+  const rest = new Map(leaves(b))
+  const out: { path: string; a: string; b: string }[] = []
+  for (const [path, av] of leaves(a)) {
+    const bv = rest.get(path) ?? 'undefined'
+    rest.delete(path)
+    if (path !== 'name' && bv !== av) out.push({ path, a: av, b: bv })
+  }
+  for (const [path, bv] of rest) if (path !== 'name') out.push({ path, a: 'undefined', b: bv })
+  return out
+}
+
+/**
+ * Which lines only one side has. A set difference, not an LCS: two 2 KB system prompts side by
+ * side are not a diff, "only in A: /no_think" is. Blank lines carry nothing and are dropped.
+ */
+export function lineDiff(a: string, b: string): { onlyA: string[]; onlyB: string[] } {
+  const [sa, sb] = [a, b].map(s => new Set(s.split('\n').filter(l => l.trim())))
+  return { onlyA: [...sa].filter(l => !sb.has(l)), onlyB: [...sb].filter(l => !sa.has(l)) }
 }
