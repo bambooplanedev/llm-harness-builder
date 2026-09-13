@@ -92,6 +92,11 @@ watch(events, async () => {
   el.scrollTop = el.scrollHeight
 }, { deep: true })
 
+// Show progress in the browser tab title; reset on unmount handled by existing onUnmounted.
+watch([runs, total, () => result.value?.complete], () => {
+  document.title = result.value ? `${runs.value.length}/${total.value}${result.value.complete ? ' готово' : ''} · bench` : 'llm-harness-builder'
+})
+
 onMounted(() => void tick())
 onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer); unsub?.(); document.title = 'llm-harness-builder' })
 </script>
@@ -130,6 +135,7 @@ onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer); unsub?.(); d
               <small>
                 <template v-if="r.trace">{{ r.trace }}</template>
                 <template v-else>трейс не писався (JSON до v2.0.3)</template> · {{ r.workdir }}
+                <button @click.stop="emit('toWorkbench', h.config, r.workdir)">у Workbench</button>
               </small>
             </div>
           </template>

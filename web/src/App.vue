@@ -52,6 +52,9 @@ function outbound(c: HarnessConfig): HarnessConfig {
   return { ...c, backend: { ...c.backend, numCtx } }
 }
 
+/** Loads a bench run's harness and workdir into the form; the user presses Run themselves. */
+function toWorkbench(c: HarnessConfig, wd: string) { config.value = c; workdir.value = wd; tab.value = 'workbench' }
+
 onMounted(async () => { await refreshLists(); await refreshModels() })
 watch(() => [config.value.backend.kind, config.value.backend.baseUrl], refreshModels)
 </script>
@@ -62,7 +65,7 @@ watch(() => [config.value.backend.kind, config.value.backend.baseUrl], refreshMo
       <button :class="{ on: tab === 'workbench' }" @click="tab = 'workbench'">Workbench</button>
       <button :class="{ on: tab === 'bench' }" @click="tab = 'bench'">Bench</button>
     </div>
-    <Bench v-if="tab === 'bench'" />
+    <Bench v-if="tab === 'bench'" @to-workbench="toWorkbench" />
     <div class="layout" v-else>
       <div class="col left">
         <ConfigForm v-model="config" :models="models" :models-error="modelsError" :harness-names="harnessNames" @refresh-models="refreshModels" @load="load" @save-as="saveAs" />

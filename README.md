@@ -23,7 +23,8 @@ Against anything that speaks the OpenAI API (llama-server, LM Studio, vLLM):
 and `tuned-hermes`, and prints PASS/FAIL from a check script — not from eyeballing the output.
 Add `--json` to get the full event stream as JSONL on stdout. Every run, from the UI or the CLI,
 is kept in `./runs/*.jsonl`; start `serve` from the same directory to browse them (reload the list
-after a CLI run). Diff two traces with any tool.
+after a CLI run). Diff two traces with any tool. The UI has two tabs: **Workbench** runs one harness and shows its trace, **Bench** watches a
+`bench` run happening in another terminal — its table, and the live trace of the run in flight.
 
 The current turn streams live in the UI and in `run`/`demo` on a terminal: `<think>` and the answer
 appear as they are generated; the UI adds a rough `~N tok` counter. The trace keeps one
