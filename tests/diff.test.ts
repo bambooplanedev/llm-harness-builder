@@ -58,6 +58,15 @@ test('skeleton: tokens prefer the exact count, and neither cost lands in sig', (
   expect(stats({ estimatedTokens: 900 }).sig).toBe('bash')
 })
 
+test('skeleton: llm_request and approval_required produce no chip either, same as llm_response', () => {
+  const t = skeleton([
+    ev(1, { type: 'llm_request', payload: {} }),
+    ev(1, { type: 'approval_required', call: { callId: 'c1', name: 'bash', args: {} } }),
+  ])
+  expect(t[0].chips).toEqual([])
+  expect(t[0].sig).toBe('')
+})
+
 const cfg = (over: Record<string, unknown> = {}): HarnessConfig => ({
   name: 'bare',
   backend: { kind: 'openai', baseUrl: 'http://127.0.0.1:8080/v1', model: 'qwen3', temperature: 0.2 },
@@ -90,9 +99,14 @@ test('configDiff: an array is one leaf, and a key missing on one side still show
   expect(configDiff(noFormat, cfg())).toEqual([{ path: 'toolCalls.format', a: 'undefined', b: '"json"' }])
 })
 
-test('lineDiff: only the lines one side does not have, blank lines dropped', () => {
-  expect(lineDiff('be brief\n\n/no_think', 'be brief\nrun the tests')).toEqual({
-    onlyA: ['/no_think'],
+test('lineDiff: only the lines one side does not have, in the order they appeared, blank lines dropped', () => {
+  expect(lineDiff('be brief\n\n/no_think\nzebra', 'be brief\nrun the tests')).toEqual({
+    onlyA: ['/no_think', 'zebra'],
     onlyB: ['run the tests'],
   })
+})
+
+test('lineDiff: a set difference, so reordering or duplicating lines shows no difference', () => {
+  expect(lineDiff('a\nb', 'b\na')).toEqual({ onlyA: [], onlyB: [] })
+  expect(lineDiff('a\na', 'a')).toEqual({ onlyA: [], onlyB: [] })
 })
