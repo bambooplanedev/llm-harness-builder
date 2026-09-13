@@ -1,5 +1,5 @@
 import { test, expect, afterAll } from 'vitest'
-import { mkdtemp, writeFile, readFile } from 'node:fs/promises'
+import { mkdtemp, writeFile, readFile, appendFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import http from 'node:http'
@@ -54,6 +54,28 @@ await writeFile(join(benchDir, 'b2.json'), benchJson({ date: '2026-09-13T11:00:0
 await writeFile(join(benchDir, 'notbench.json'), JSON.stringify({ version: 2 }))
 await writeFile(join(benchDir, 'broken.json'), '{oops')
 await writeFile(join(benchDir, 'noharnesses.json'), JSON.stringify({ version: 1, date: '2026-09-13T12:00:00.000Z', complete: false }))
+
+const B1_STARTED = Date.parse('2026-09-13T10:05:00Z')
+const part = (id: string, meta: object, events: object[]) => writeFile(
+  join(benchDir, `${id}.jsonl.part`),
+  [JSON.stringify({ meta: { id, harness: 'tuned', task: 't', workdir: '/tmp/wd', started: B1_STARTED, ...meta } }),
+   ...events.map(e => JSON.stringify(e))].join('\n') + '\n')
+
+await part('live0001', { bench: { file: 'b1.json', round: 2 } }, [
+  { seq: 0, turn: 0, ts: B1_STARTED + 1000, type: 'llm_request', payload: {} },
+  { seq: 1, turn: 0, ts: B1_STARTED + 2000, type: 'approval_required', call: { callId: 'c1', name: 'bash', args: { command: 'node --test' } } },
+])
+// a half-written line: the bench process is appending while we read
+await appendFile(join(benchDir, 'live0001.jsonl.part'), '{"seq":2,"turn":0,"ts":')
+// an orphan .part left by a bench that was killed before this one started
+await part('stale001', { bench: { file: 'b1.json', round: 1 }, started: Date.parse('2026-09-13T09:00:00Z') }, [])
+// a .part that belongs to another bench file, and is new enough to pass that file's date floor:
+// without the `complete` short-circuit it would surface as b2.json's live run
+await part('otherbe1', { bench: { file: 'b2.json', round: 1 }, started: Date.parse('2026-09-13T11:05:00Z') }, [])
+// a `run`/`demo` trace: no meta.bench at all
+await part('plainrun', { started: B1_STARTED + 60_000 }, [])
+// seen between open() and the meta write in execRun
+await writeFile(join(benchDir, 'empty000.jsonl.part'), '')
 
 async function sse(id: string, until: (e: any) => boolean, lastId?: number): Promise<any[]> {
   const r = await fetch(`${base}/api/runs/${id}/events`, { headers: lastId !== undefined ? { 'last-event-id': String(lastId) } : {} })
@@ -264,4 +286,27 @@ test('GET /api/bench lists bench files newest first and skips everything else', 
   const { files } = await r.json()
   expect(files.map((f: any) => f.file)).toEqual(['b2.json', 'b1.json'])
   expect(files[0]).toEqual({ file: 'b2.json', date: '2026-09-13T11:00:00.000Z', model: 'fake-model', complete: true })
+})
+
+test('GET /api/bench?file= returns the result and the one live trace that belongs to it', async () => {
+  const r = await (await fetch(`${bbase}/api/bench?file=b1.json`)).json()
+  expect(r.result.n).toBe(2)
+  expect(r.files.map((f: any) => f.file)).toEqual(['b2.json', 'b1.json'])
+  expect(r.active).toMatchObject({ id: 'live0001', harness: 'tuned', round: 2, started: B1_STARTED })
+  // the half-written line is dropped, the meta line never reaches events (it has no `turn` and would break Trace.vue)
+  expect(r.active.events.map((e: any) => e.type)).toEqual(['llm_request', 'approval_required'])
+})
+
+test('GET /api/bench?file= skips the live-trace lookup once the bench is complete', async () => {
+  const r = await (await fetch(`${bbase}/api/bench?file=b2.json`)).json()
+  expect(r.result.complete).toBe(true)
+  expect(r.active).toBeUndefined()
+})
+
+test('GET /api/bench?file= validates the name and 404s on anything that is not a bench', async () => {
+  expect((await fetch(`${bbase}/api/bench?file=..`)).status).toBe(400)
+  expect((await fetch(`${bbase}/api/bench?file=b1`)).status).toBe(400)
+  expect((await fetch(`${bbase}/api/bench?file=nope.json`)).status).toBe(404)
+  expect((await fetch(`${bbase}/api/bench?file=notbench.json`)).status).toBe(404)
+  expect((await (await fetch(`${bbase}/api/bench?file=nope.json`)).json()).error).toBe('not a bench file')
 })

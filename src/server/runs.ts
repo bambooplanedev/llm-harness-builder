@@ -5,7 +5,7 @@ import { runAgent } from '../core/run.js'
 import type { RunParams } from '../core/config.js'
 import type { HarnessEvent, ToolCall } from '../core/events.js'
 import type { Backend, Delta } from '../core/backends/types.js'
-import type { BenchResult, BenchFile } from '../core/bench.js'
+import type { BenchResult, BenchFile, ActiveTrace } from '../core/bench.js'
 
 export type RunSummary = { id: string; harness: string; task: string; workdir: string; started: number; reason?: string; turns?: number; toolCallCount?: number }
 export type Meta = { meta: {
@@ -194,5 +194,39 @@ export class RunStore {
       model: result.harnesses[0]?.config.backend.model ?? '',
     }))
     return files.sort((a, b) => (a.date < b.date ? 1 : -1))
+  }
+
+  /**
+   * One bench result plus the run its `bench` process is executing right now, if any.
+   * The live run is found by the back-link subproject 3 writes into every trace's meta
+   * (`bench.file`), and is read straight from the still-unrenamed .part file.
+   */
+  async benchOpen(file: string): Promise<{ result: BenchResult; active?: ActiveTrace } | null> {
+    const hit = (await this.benchFiles()).find(b => b.file === file)
+    if (!hit) return null
+    const { result } = hit
+    if (result.complete) return { result }
+    // Anything older than the bench itself is an orphan a killed run left behind: it would otherwise
+    // win the match in every pause between rounds and drag the panel onto an hours-old corpse.
+    const floor = Date.parse(result.date)
+    let best: Meta['meta'] | undefined
+    for (const f of await readdir(this.dir)) {
+      if (!f.endsWith('.jsonl.part')) continue
+      try {
+        // Whole step in the try: what throws is open() on a file the CLI renamed between readdir and here.
+        const [first] = await firstAndLastLine(path.join(this.dir, f))
+        const meta = (JSON.parse(first) as Meta).meta
+        if (meta.bench?.file !== file || !(meta.started >= floor)) continue
+        if (!best || meta.started > best.started) best = meta
+      } catch { continue }
+    }
+    if (!best) return { result }
+    try {
+      const events = await this.read(best.id, true)
+      return { result, active: { id: best.id, harness: best.harness, round: best.bench!.round, started: best.started, events } }
+    } catch {
+      // The winner is exactly the file execRun is about to rename; a miss here is a normal state, not a 500.
+      return { result }
+    }
   }
 }

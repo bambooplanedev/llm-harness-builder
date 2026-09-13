@@ -77,7 +77,14 @@ export async function startServer(opts: ServerOpts) {
         return json(res, 200, { ok: true })
       }
       if (m('GET', /^\/api\/runs$/)) return json(res, 200, await store.list())
-      if (m('GET', /^\/api\/bench$/)) return json(res, 200, { files: await store.benchList() })
+      if (m('GET', /^\/api\/bench$/)) {
+        const file = url.searchParams.get('file')
+        if (file === null) return json(res, 200, { files: await store.benchList() })
+        if (!safeName(file) || !file.endsWith('.json')) return json(res, 400, { error: 'bad name' })
+        const opened = await store.benchOpen(file)
+        if (!opened) return json(res, 404, { error: 'not a bench file' })
+        return json(res, 200, { files: await store.benchList(), ...opened })
+      }
       if (m('POST', /^\/api\/runs$/)) {
         const body = await readBody(req) as Partial<RunParams>
         const errs = validateConfig(body.config)
