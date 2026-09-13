@@ -28,7 +28,9 @@ async function refreshModels() {
   catch (e) { models.value = []; modelsError.value = `cannot list models: ${(e as Error).message}` }
 }
 async function refreshLists() { harnessNames.value = (await api.harnesses()).map(h => h.name); runs.value = await api.runs() }
-async function load(name: string) { if (!name) return; const c = await api.harness(name); c.toolCalls.format ??= 'json'; config.value = c }
+/** Normalises a config from either door (saved harness, bench JSON) before it lands in the form. */
+function setConfig(c: HarnessConfig) { c.toolCalls.format ??= 'json'; config.value = c }
+async function load(name: string) { if (!name) return; setConfig(await api.harness(name)) }
 async function saveAs(name: string) { error.value = ''; try { config.value.name = name; await api.saveHarness(name, outbound(config.value)); await refreshLists() } catch (e) { error.value = (e as Error).message } }
 function open(id: string) {
   unsub?.(); events.value = []; live.value = {}; runId.value = id
@@ -53,7 +55,7 @@ function outbound(c: HarnessConfig): HarnessConfig {
 }
 
 /** Loads a bench run's harness and workdir into the form; the user presses Run themselves. */
-function toWorkbench(c: HarnessConfig, wd: string) { config.value = c; workdir.value = wd; tab.value = 'workbench' }
+function toWorkbench(c: HarnessConfig, wd: string) { setConfig(c); workdir.value = wd; tab.value = 'workbench' }
 
 onMounted(async () => { await refreshLists(); await refreshModels() })
 watch(() => [config.value.backend.kind, config.value.backend.baseUrl], refreshModels)
