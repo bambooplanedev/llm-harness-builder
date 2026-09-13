@@ -179,3 +179,25 @@ test('run dies with a clear message, not a stack, when the harness file is missi
     expect(r.stderr).not.toMatch(/at .*cli\.ts/)
   }
 }, 30_000)
+
+test('run starts an mcp server and reports its counts on stderr', async () => {
+  const wd = await mkdtemp(join(tmpdir(), 'lhb-cli-'))
+  const fake = join(wd, 'fake.json')
+  await writeFile(fake, JSON.stringify([{ content: 'fin' }]))
+  const mcpFixture = join(ROOT, 'tests', 'fixtures', 'mcp-server.mjs')
+  const harnessFile = join(wd, 'mcp-harness.json')
+  await writeFile(harnessFile, JSON.stringify({
+    name: 'mcp-test',
+    backend: { kind: 'openai', baseUrl: 'http://x/v1', model: 'm', temperature: 0 },
+    systemPrompt: 'sys',
+    tools: { enabled: [], approveBash: false },
+    toolCalls: { mode: 'native', enforceSchema: false, promptedTemplate: 'T:{{tools}}', parseErrorHint: 'HINT' },
+    context: { maxToolOutputChars: 1000, budgetTokens: 0 },
+    loop: { maxTurns: 5 },
+    mcpServers: { test: { command: process.execPath, args: [mcpFixture], tools: ['echo'] } },
+  }))
+  const r = cli(['run', harnessFile, '--workdir', wd, '--yes', 'do'], { LHB_FAKE_BACKEND: fake })
+  expect(r.status).toBe(0)
+  // server name, offered count, kept-tools count, description chars, schema chars
+  expect(r.stderr).toMatch(/mcp test: 7 offered, 1 tools, 15 desc \+ 77 schema chars/)
+}, 30_000)

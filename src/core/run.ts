@@ -5,8 +5,16 @@ import { TOOL_SCHEMAS, runTool } from './tools/index.js'
 import { renderTools, PROMPTED_SCHEMA } from './prompts.js'
 import { parsePrompted, parseHermes } from './parse.js'
 import { estimateTokens, applyBudget } from './tokens.js'
+import { startServers, type McpSession } from './mcp.js'
 
-export type RunOpts = { signal?: AbortSignal; approve?: (call: ToolCall) => Promise<boolean>; backend?: Backend; onDelta?: (d: Delta) => void }
+export type RunOpts = {
+  signal?: AbortSignal
+  approve?: (call: ToolCall) => Promise<boolean>
+  backend?: Backend
+  onDelta?: (d: Delta) => void
+  /** Seam for tests; defaults to the real stdio client. */
+  mcp?: typeof startServers
+}
 
 // Plain Omit collapses the HarnessEvent union into one object type; distribute it manually
 // so each variant keeps its own extra fields (reason, payload, call, ...).
@@ -18,18 +26,51 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
   const backend = opts.backend ?? createBackend(config.backend)
   const prompted = config.toolCalls.mode === 'prompted'
   const hermes = prompted && config.toolCalls.format === 'hermes'
-  const schemas = config.tools.enabled.map(n => TOOL_SCHEMAS[n])
-  const system = prompted
-    ? config.systemPrompt + '\n\n' + config.toolCalls.promptedTemplate.split('{{tools}}').join(renderTools(schemas, hermes ? 'hermes' : 'json'))
-    : config.systemPrompt
-  const messages: ChatMessage[] = [{ role: 'system', content: system }, { role: 'user', content: task }]
-  const ctx = { workdir, maxToolOutputChars: config.context.maxToolOutputChars }
 
   let seq = 0, turn = 0, toolCallCount = 0, parseFails = 0, callSeq = 0
   let lastUsage: Usage | undefined
   const ev = (e: Ev): HarnessEvent => ({ seq: seq++, turn, ts: Date.now(), ...e } as HarnessEvent)
   const done = (reason: DoneReason, text?: string) => ev({ type: 'done', reason, text, turns: turn, toolCallCount })
 
+  let mcp: McpSession | undefined
+  const mcpNames = Object.keys(config.mcpServers ?? {})
+  if (mcpNames.length) {
+    let i = 0
+    for (const name of mcpNames) {
+      const s = config.mcpServers![name]
+      const call: ToolCall = {
+        callId: `mcp${++i}`, name: `mcp:${name}`,
+        args: { command: [s.command, ...(s.args ?? [])].join(' ') },
+      }
+      yield ev({ type: 'approval_required', call })
+      if (!opts.approve) {
+        yield ev({ type: 'error', message: `mcp server "${name}" needs approval but no approval handler is available` })
+        yield done('mcp_error'); return
+      }
+      const ok = await opts.approve(call)
+      if (opts.signal?.aborted) { yield done('aborted'); return }
+      if (!ok) { yield done('mcp_error'); return }
+    }
+    try {
+      mcp = await (opts.mcp ?? startServers)(config.mcpServers!, workdir, {
+        signal: opts.signal, taken: new Set(config.tools.enabled),
+      })
+    } catch (e) {
+      if (opts.signal?.aborted) { yield done('aborted'); return }
+      yield ev({ type: 'error', message: (e as Error).message })
+      yield done('mcp_error'); return
+    }
+    for (const s of mcp.servers) yield ev({ type: 'mcp_server_start', ...s })
+  }
+
+  const schemas = [...config.tools.enabled.map(n => TOOL_SCHEMAS[n]), ...(mcp?.tools ?? [])]
+  const system = prompted
+    ? config.systemPrompt + '\n\n' + config.toolCalls.promptedTemplate.split('{{tools}}').join(renderTools(schemas, hermes ? 'hermes' : 'json'))
+    : config.systemPrompt
+  const messages: ChatMessage[] = [{ role: 'system', content: system }, { role: 'user', content: task }]
+  const ctx = { workdir, maxToolOutputChars: config.context.maxToolOutputChars }
+
+  try {
   while (true) {
     if (opts.signal?.aborted) { yield done('aborted'); return }
     if (turn >= config.loop.maxTurns) { yield done('max_turns'); return }
@@ -122,7 +163,7 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
         if (!ok) result = { output: 'denied by user', error: true }
       }
       if (!result) {
-        result = await runTool(c.name, c.args, ctx, config.tools.enabled)
+        result = await runTool(c.name, c.args, ctx, config.tools.enabled, mcp)
       }
       const max = config.context.maxToolOutputChars
       const truncated = result.output.length > max
@@ -134,5 +175,8 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
       else messages.push({ role: 'tool', content: output, toolCallId: call.backendId!, name: call.name, isToolResult: true })
     }
     if (prompted) messages.push({ role: 'user', content: wrapped.join('\n'), isToolResult: true })
+  }
+  } finally {
+    mcp?.close()
   }
 }
