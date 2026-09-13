@@ -111,6 +111,8 @@ test('bench --n 2 on one harness: table, JSON with per-run reason/parseErrors/wo
   expect(r.stderr).toMatch(/--- round 2\/2/)
   const j = JSON.parse(await readFile(out, 'utf8'))
   expect(j).toMatchObject({ version: 1, n: 2, timeoutS: 1800, complete: true })
+  // the JSON is written via a tmp file + rename, so a Ctrl-C mid-write can never truncate it; no tmp is left behind
+  expect((await readdir(wd)).filter(f => f.endsWith('.tmp'))).toEqual([])
   const h = j.harnesses[0]
   expect(h.name).toBe('tuned'); expect(h.config.name).toBe('tuned'); expect(h.pass).toBe(2); expect(h.reasons).toEqual({ final: 2 })
   expect(h.runs.map((x: any) => [x.round, x.verdict, x.reason, x.parseErrors])).toEqual([[1, 'PASS', 'final', 0], [2, 'PASS', 'final', 1]])

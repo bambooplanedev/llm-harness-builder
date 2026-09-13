@@ -201,7 +201,10 @@ async function cmdBench(argv: string[]) {
   }
   await mkdir(path.dirname(out), { recursive: true })
   const result: BenchResult = { version: 1, date: started.toISOString(), task: DEMO_TASK, n, timeoutS, complete: false, harnesses }
-  const save = () => writeFile(out, JSON.stringify(result, null, 2) + '\n')
+  // tmp + rename in the same directory: the SIGINT handler exits immediately, and a half-written
+  // JSON would be the only thing left of a 90-minute run. `.tmp`, not `.json`, so /api/bench skips it.
+  const tmpOut = `${out}.${process.pid}.tmp`
+  const save = async () => { await writeFile(tmpOut, JSON.stringify(result, null, 2) + '\n'); await rename(tmpOut, out) }
   const finish = () => { console.log(formatTable(harnesses)); console.error(`wrote ${out}`) }
   await save()
   console.error(`bench: ${files.length} harnesses × ${n} runs, timeout ${timeoutS}s per run, writing ${out}`)
