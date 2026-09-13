@@ -187,7 +187,9 @@ export class RunStore {
       if (!f.endsWith('.json') || !safeName(f)) continue
       try {
         const result = JSON.parse(await readFile(path.join(this.dir, f), 'utf8'))
-        if (result?.version === 1 && Array.isArray(result.harnesses)) out.push({ file: f, result })
+        // A harness entry with no config is garbage, not a bench: skipping it here keeps such a file
+        // out of the list, so nothing downstream has to survive opening one (§3.1).
+        if (result?.version === 1 && Array.isArray(result.harnesses) && result.harnesses[0]?.config?.backend) out.push({ file: f, result })
       } catch { continue }
     }
     return out
@@ -196,7 +198,7 @@ export class RunStore {
   async benchList(): Promise<BenchFile[]> {
     const files = (await this.benchFiles()).map(({ file, result }) => ({
       file, date: result.date, complete: result.complete,
-      model: result.harnesses[0]?.config?.backend?.model ?? '',
+      model: result.harnesses[0].config.backend.model ?? '',
     }))
     return files.sort((a, b) => b.date.localeCompare(a.date))
   }

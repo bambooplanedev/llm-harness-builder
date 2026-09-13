@@ -56,7 +56,7 @@ await writeFile(join(benchDir, 'broken.json'), '{oops')
 await writeFile(join(benchDir, 'noharnesses.json'), JSON.stringify({ version: 1, date: '2026-09-13T12:00:00.000Z', complete: false }))
 // isolates the date-floor clause: its only .part is a stale orphan, started before b3.json's own date
 await writeFile(join(benchDir, 'b3.json'), benchJson({ date: '2026-09-13T13:00:00.000Z', complete: false }))
-// a bench file whose harnesses[0].config is empty: must still be listed, with model falling back to ''
+// a harness entry with no config is garbage, not a bench: skipped silently like every other malformed file
 await writeFile(join(benchDir, 'emptyharness.json'), JSON.stringify({ version: 1, date: '2026-09-13T09:00:00.000Z', complete: false, harnesses: [{}] }))
 // a name safeName rejects (space): newest date of all, so it would sort first if it were listed at all
 await writeFile(join(benchDir, 'bad name.json'), benchJson({ date: '2026-09-13T15:00:00.000Z' }))
@@ -292,15 +292,13 @@ test('GET /api/bench lists bench files newest first and skips everything else', 
   const r = await fetch(`${bbase}/api/bench`)
   expect(r.status).toBe(200)
   const { files } = await r.json()
-  expect(files.map((f: any) => f.file)).toEqual(['b3.json', 'b2.json', 'b1.json', 'emptyharness.json'])
+  expect(files.map((f: any) => f.file)).toEqual(['b3.json', 'b2.json', 'b1.json'])
   expect(files[1]).toEqual({ file: 'b2.json', date: '2026-09-13T11:00:00.000Z', model: 'fake-model', complete: true })
-  // harnesses: [{}] is still a bench file (version: 1); model falls back to '' instead of throwing
-  expect(files[3]).toEqual({ file: 'emptyharness.json', date: '2026-09-13T09:00:00.000Z', model: '', complete: false })
 })
 
-test('GET /api/bench?file= on a version:1 file with harnesses:[{}] does not 500', async () => {
+test('GET /api/bench?file= on a version:1 file whose harness has no config is a 404, not a listed file', async () => {
   const r = await fetch(`${bbase}/api/bench?file=emptyharness.json`)
-  expect(r.status).toBe(200)
+  expect(r.status).toBe(404)
 })
 
 test('GET /api/bench on a runs dir that does not exist yet returns 200 with no files', async () => {
@@ -312,7 +310,7 @@ test('GET /api/bench on a runs dir that does not exist yet returns 200 with no f
 test('GET /api/bench?file= returns the result and the one live trace that belongs to it', async () => {
   const r = await (await fetch(`${bbase}/api/bench?file=b1.json`)).json()
   expect(r.result.n).toBe(2)
-  expect(r.files.map((f: any) => f.file)).toEqual(['b3.json', 'b2.json', 'b1.json', 'emptyharness.json'])
+  expect(r.files.map((f: any) => f.file)).toEqual(['b3.json', 'b2.json', 'b1.json'])
   expect(r.active).toMatchObject({ id: 'live0001', harness: 'tuned', round: 2, started: B1_STARTED })
   // the half-written line is dropped, the meta line never reaches events (it has no `turn` and would break Trace.vue)
   expect(r.active.events.map((e: any) => e.type)).toEqual(['llm_request', 'approval_required'])

@@ -27,7 +27,7 @@ let fetchFailed = false
 const runs = computed(() => result.value?.harnesses.flatMap(h => h.runs) ?? [])
 const total = computed(() => result.value ? result.value.n * result.value.harnesses.length : 0)
 const msDone = computed(() => runs.value.reduce((a, r) => a + r.ms, 0))
-const backend = computed(() => result.value?.harnesses[0]?.config?.backend)
+const backend = computed(() => result.value?.harnesses[0].config.backend)
 /** Four of five `bare` runs are over 900 s: 1800s reads worse than 30:00. */
 const mmss = (ms: number) => {
   const s = Math.round(ms / 1000)
