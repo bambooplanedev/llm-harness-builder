@@ -1,4 +1,4 @@
-import { test, expect } from 'vitest'
+import { test, expect, vi } from 'vitest'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -50,4 +50,41 @@ test('servers info reports what was offered, what survived, and what it costs', 
 test('a name that is already taken is a collision, and the started server is cleaned up', async () => {
   await expect(startServers(fake(), await wd(), { taken: new Set(['echo']) }))
     .rejects.toThrow(/collision.*"echo".*mcp server "fs"/)
+})
+
+// Regression for a review finding: `close()` used to be the only path that called `untrack`, so a
+// server that dies on its own (crash, killed out from under us) left its pid in procs.ts's shared
+// registry until the whole harness process exits. procs.ts deliberately exposes no way to inspect
+// that registry, so this drives it the same way tests/procs.test.ts does: wrap `track`/`untrack`
+// via vi.doMock (an ESM named-export cannot be vi.spyOn'd directly — see the module's own error
+// message) and observe which pids each is called with, against a fresh module graph so the mock
+// is in place before `mcp.js` resolves its import of `procs.js`.
+test('a server that dies on its own is untracked, not just one that we close', async () => {
+  const tracked: number[] = []
+  const untracked: number[] = []
+  vi.doMock('../src/core/procs.js', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('../src/core/procs.js')>()
+    return {
+      track: (pid: number) => { tracked.push(pid); actual.track(pid) },
+      untrack: (pid: number) => { untracked.push(pid); actual.untrack(pid) },
+    }
+  })
+  vi.resetModules()
+  try {
+    const { startServers: freshStartServers } = await import('../src/core/mcp.js')
+    const s = await freshStartServers(fake(), await wd())
+    const pid = tracked[0]
+    expect(pid).toBeTypeOf('number')
+
+    process.kill(pid, 'SIGKILL')   // the server dies on its own; we never call close()
+    const deadline = Date.now() + 2000
+    while (!untracked.includes(pid) && Date.now() < deadline) await new Promise(r => setTimeout(r, 20))
+    expect(untracked).toEqual([pid])   // untracked exactly once, without close() ever running
+
+    expect(() => s.close()).not.toThrow()   // a close() after natural death must not double-untrack
+    expect(untracked).toEqual([pid])
+  } finally {
+    vi.doUnmock('../src/core/procs.js')
+    vi.resetModules()
+  }
 })

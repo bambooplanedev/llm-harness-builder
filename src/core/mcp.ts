@@ -28,6 +28,7 @@ type Pending = { resolve: (m: any) => void; reject: (e: Error) => void; timer: N
 /** One live server connection. Owns its child, its own id counter and its own pending map. */
 class Conn {
   private child: ChildProcess
+  private pid?: number
   private buf = ''
   private id = 0
   private pending = new Map<number, Pending>()
@@ -36,7 +37,8 @@ class Conn {
 
   constructor(readonly name: string, readonly command: string, readonly args: string[], cwd: string) {
     this.child = spawn(command, args, { cwd, detached: true, stdio: ['pipe', 'pipe', 'pipe'] })
-    if (this.child.pid) track(this.child.pid)
+    this.pid = this.child.pid
+    if (this.pid) track(this.pid)
     this.child.stdout!.on('data', (d: Buffer) => this.onData(d))
     this.child.stderr!.on('data', (d: Buffer) => {
       this.stderr = (this.stderr + d.toString('utf8')).slice(-STDERR_TAIL)
@@ -67,6 +69,7 @@ class Conn {
   private die(why: string) {
     if (this.dead) return
     this.dead = true
+    if (this.pid) untrack(this.pid)   // the process group may already be gone; forget it either way
     for (const [, p] of this.pending) { clearTimeout(p.timer); p.reject(new Error(why)) }
     this.pending.clear()
   }
@@ -92,9 +95,8 @@ class Conn {
   }
 
   close() {
-    this.die('closed')
-    const pid = this.child.pid
-    if (pid) { untrack(pid); try { process.kill(-pid, 'SIGKILL') } catch {} }
+    this.die('closed')   // idempotent: untrack already ran in die() if the child was still alive
+    if (this.pid) { try { process.kill(-this.pid, 'SIGKILL') } catch {} }
   }
 }
 
