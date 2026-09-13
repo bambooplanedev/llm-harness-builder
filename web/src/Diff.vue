@@ -26,6 +26,10 @@ const diverged = computed(() => {
 })
 const open = ref(-1)
 const groups = computed(() => [turnsOf(props.a.events), turnsOf(props.b.events)])
+/** The path is drawn from events, not the bench JSON: without both sides' events it would either
+ *  mark a fake divergence at turn 0 (side B still streaming, or its trace file gone for good) or
+ *  claim "шлях однаковий" against no data at all. */
+const hasEvents = computed(() => props.a.events.length > 0 && props.b.events.length > 0)
 </script>
 
 <template>
@@ -58,22 +62,25 @@ const groups = computed(() => [turnsOf(props.a.events), turnsOf(props.b.events)]
       </tr>
     </table>
 
-    <h4>шлях</h4>
-    <div v-if="diverged === -1" class="hint">шлях однаковий — але однакові кроки не значать однакових слів</div>
-    <div v-for="(_, i) in rowsN" :key="i" class="turnrow" :class="{ split: i === diverged }" @click="open = open === i ? -1 : i">
-      <div class="side">
-        <span v-for="(c, j) in sa[i]?.chips ?? []" :key="j" class="chip" :class="{ err: c.bad }">{{ c.label }}{{ c.truncated ? ' ↯' : '' }}</span>
-        <small v-if="sa[i]"> {{ Math.round(sa[i].ms / 1000) }}s · {{ sa[i].tokens }} tok</small>
+    <template v-if="hasEvents">
+      <h4>шлях</h4>
+      <div v-if="diverged === -1" class="hint">шлях однаковий — але однакові кроки не значать однакових слів</div>
+      <div v-for="(_, i) in rowsN" :key="i" class="turnrow" :class="{ split: i === diverged }" @click="open = open === i ? -1 : i">
+        <div class="side">
+          <span v-for="(c, j) in sa[i]?.chips ?? []" :key="j" class="chip" :class="{ err: c.bad }">{{ c.label }}{{ c.truncated ? ' ↯' : '' }}</span>
+          <small v-if="sa[i]"> {{ mmss(sa[i].ms) }} · {{ sa[i].tokens }} tok ctx</small>
+        </div>
+        <div class="side">
+          <span v-for="(c, j) in sb[i]?.chips ?? []" :key="j" class="chip" :class="{ err: c.bad }">{{ c.label }}{{ c.truncated ? ' ↯' : '' }}</span>
+          <small v-if="sb[i]"> {{ mmss(sb[i].ms) }} · {{ sb[i].tokens }} tok ctx</small>
+        </div>
+        <div v-if="i === diverged" class="hint split-label">тут розійшлись</div>
       </div>
-      <div class="side">
-        <span v-for="(c, j) in sb[i]?.chips ?? []" :key="j" class="chip" :class="{ err: c.bad }">{{ c.label }}{{ c.truncated ? ' ↯' : '' }}</span>
-        <small v-if="sb[i]"> {{ Math.round(sb[i].ms / 1000) }}s · {{ sb[i].tokens }} tok</small>
+      <div v-if="open >= 0" class="layout">
+        <div><Trace v-if="groups[0][open]" :events="groups[0][open]" :live="EMPTY" :approvable="false" /></div>
+        <div><Trace v-if="groups[1][open]" :events="groups[1][open]" :live="EMPTY" :approvable="false" /></div>
       </div>
-      <div v-if="i === diverged" class="hint split-label">тут розійшлись</div>
-    </div>
-    <div v-if="open >= 0" class="layout">
-      <div><Trace v-if="groups[0][open]" :events="groups[0][open]" :live="EMPTY" :approvable="false" /></div>
-      <div><Trace v-if="groups[1][open]" :events="groups[1][open]" :live="EMPTY" :approvable="false" /></div>
-    </div>
+    </template>
+    <div v-else class="hint">події одного з боків ще не завантажились — шлях показати нема з чого</div>
   </div>
 </template>
