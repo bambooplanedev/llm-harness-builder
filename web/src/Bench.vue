@@ -29,7 +29,8 @@ let diffUnsub: (() => void) | null = null
 function compare(name: string, run: BenchRun, config: HarnessConfig) {
   diffUnsub?.(); diffEvents.value = []
   diff.value = { name, run, config }
-  diffUnsub = api.events(run.trace!, e => diffEvents.value.push(e), m => (error.value = m))
+  diffUnsub = api.events(run.trace!, e => diffEvents.value.push(e),
+    m => (error.value = `${m} — порівнюваний прогін: якщо його вбили, у runs/ лишився ${run.trace}.jsonl.part; перейменуй його в .jsonl`))
 }
 function closeDiff() { diffUnsub?.(); diffUnsub = null; diff.value = null; diffEvents.value = [] }
 
@@ -161,7 +162,7 @@ onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer); unsub?.(); d
                 <template v-if="r.trace">{{ r.trace }}</template>
                 <template v-else>трейс не писався (JSON до v2.0.3)</template> · {{ r.workdir }}
                 <button @click.stop="emit('toWorkbench', h.config, r.workdir)">у Workbench</button>
-                <button v-if="r.trace && sideA && r.trace !== sideA.run.trace" @click.stop="compare(h.name, r, h.config)">⇄</button>
+                <button v-if="r.trace && sideA && r.trace !== sideA.run.trace && r.trace !== diff?.run.trace" @click.stop="compare(h.name, r, h.config)">⇄</button>
               </small>
             </div>
           </template>
