@@ -5,7 +5,9 @@ import { PRESETS, DEFAULT_PROMPTED_TEMPLATE, DEFAULT_PARSE_ERROR_HINT, DEMO_TASK
 import ConfigForm from './ConfigForm.vue'
 import ContextBar from './ContextBar.vue'
 import Trace from './Trace.vue'
+import Bench from './Bench.vue'
 
+const tab = ref<'workbench' | 'bench'>('workbench')
 const config = ref<HarnessConfig>({
   name: 'new', backend: { kind: 'ollama', baseUrl: 'http://localhost:11434', model: '', numCtx: 8192, temperature: 0.2 },
   systemPrompt: PRESETS.minimal, tools: { enabled: ['list_dir', 'read_file', 'write_file', 'edit_file', 'bash'], approveBash: true },
@@ -55,26 +57,33 @@ watch(() => [config.value.backend.kind, config.value.backend.baseUrl], refreshMo
 </script>
 
 <template>
-  <div class="layout">
-    <div class="col left">
-      <ConfigForm v-model="config" :models="models" :models-error="modelsError" :harness-names="harnessNames" @refresh-models="refreshModels" @load="load" @save-as="saveAs" />
+  <div class="app">
+    <div class="tabs">
+      <button :class="{ on: tab === 'workbench' }" @click="tab = 'workbench'">Workbench</button>
+      <button :class="{ on: tab === 'bench' }" @click="tab = 'bench'">Bench</button>
     </div>
-    <div class="col">
-      <label>Workdir (absolute path to a scratch project; not / or your home)</label>
-      <input type="text" v-model="workdir" placeholder="/path/to/project">
-      <label>Task</label>
-      <textarea v-model="task" style="min-height:50px"></textarea>
-      <div class="row" style="margin:8px 0">
-        <button @click="start" :disabled="!!running()">Run</button>
-        <button @click="abort" :disabled="!running()">Abort</button>
-        <span class="err">{{ error }}</span>
+    <Bench v-if="tab === 'bench'" />
+    <div class="layout" v-else>
+      <div class="col left">
+        <ConfigForm v-model="config" :models="models" :models-error="modelsError" :harness-names="harnessNames" @refresh-models="refreshModels" @load="load" @save-as="saveAs" />
       </div>
-      <ContextBar :events="events" :num-ctx="config.backend.kind === 'ollama' ? config.backend.numCtx : undefined" />
-      <Trace v-if="runId" :events="events" :live="live" :task="task" @approve="approve" />
-      <h4>Runs</h4>
-      <div class="runs">
-        <div v-for="r in runs" :key="r.id" @click="open(r.id)">
-          {{ r.harness }} · {{ r.reason ?? 'running' }} · {{ r.turns ?? '-' }} turns · {{ r.toolCallCount ?? '-' }} tool calls · {{ new Date(r.started).toLocaleTimeString() }}
+      <div class="col">
+        <label>Workdir (absolute path to a scratch project; not / or your home)</label>
+        <input type="text" v-model="workdir" placeholder="/path/to/project">
+        <label>Task</label>
+        <textarea v-model="task" style="min-height:50px"></textarea>
+        <div class="row" style="margin:8px 0">
+          <button @click="start" :disabled="!!running()">Run</button>
+          <button @click="abort" :disabled="!running()">Abort</button>
+          <span class="err">{{ error }}</span>
+        </div>
+        <ContextBar :events="events" :num-ctx="config.backend.kind === 'ollama' ? config.backend.numCtx : undefined" />
+        <Trace v-if="runId" :events="events" :live="live" :task="task" @approve="approve" />
+        <h4>Runs</h4>
+        <div class="runs">
+          <div v-for="r in runs" :key="r.id" @click="open(r.id)">
+            {{ r.harness }} · {{ r.reason ?? 'running' }} · {{ r.turns ?? '-' }} turns · {{ r.toolCallCount ?? '-' }} tool calls · {{ new Date(r.started).toLocaleTimeString() }}
+          </div>
         </div>
       </div>
     </div>

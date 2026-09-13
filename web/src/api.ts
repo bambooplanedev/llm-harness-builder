@@ -2,7 +2,8 @@ import type { HarnessConfig } from '../../src/core/config'
 import type { HarnessEvent } from '../../src/core/events'
 import type { RunSummary } from '../../src/server/runs'
 import type { Delta } from '../../src/core/backends/types'
-export type { HarnessConfig, HarnessEvent, RunSummary, Delta }
+import type { BenchFile, BenchResult, BenchHarness, BenchRun, ActiveTrace } from '../../src/core/bench'
+export type { HarnessConfig, HarnessEvent, RunSummary, Delta, BenchFile, BenchResult, BenchHarness, BenchRun, ActiveTrace }
 
 async function j<T>(url: string, init?: RequestInit): Promise<T> {
   const r = await fetch(url, { headers: { 'content-type': 'application/json' }, ...init })
@@ -17,6 +18,8 @@ export const api = {
   harness: (name: string) => j<HarnessConfig>(`/api/harnesses/${name}`),
   saveHarness: (name: string, c: HarnessConfig) => j(`/api/harnesses/${name}`, { method: 'PUT', body: JSON.stringify(c) }),
   runs: () => j<RunSummary[]>('/api/runs'),
+  bench: (file?: string) => j<{ files: BenchFile[]; result?: BenchResult; active?: ActiveTrace }>(
+    `/api/bench${file ? `?file=${encodeURIComponent(file)}` : ''}`),
   startRun: (config: HarnessConfig, task: string, workdir: string) => j<{ runId: string }>('/api/runs', { method: 'POST', body: JSON.stringify({ config, task, workdir }) }),
   approve: (id: string, callId: string, ok: boolean) => j(`/api/runs/${id}/approve`, { method: 'POST', body: JSON.stringify({ callId, ok }) }),
   abort: (id: string) => j(`/api/runs/${id}/abort`, { method: 'POST' }),
