@@ -65,6 +65,11 @@ type ExecOpts = { yes: boolean; json: boolean; quiet?: boolean; signal?: AbortSi
 
 /** Runs one agent loop and keeps its trace in ./runs/<id>.jsonl, the file format serve reads. Written as .part and renamed when the loop ends, so a live or killed run is never listed. */
 async function execRun(config: HarnessConfig, task: string, workdir: string, o: ExecOpts): Promise<{ id: string; last: HarnessEvent }> {
+  const id = randomUUID().slice(0, 8)
+  const file = path.join('runs', `${id}.jsonl`), part = `${file}.part`
+  await mkdir('runs', { recursive: true })
+  const meta: Meta = { meta: { id, harness: config.name, task, workdir, started: Date.now(), bench: o.bench } }
+  await writeFile(part, JSON.stringify(meta) + '\n')
   const rl = o.yes ? null : createInterface({ input: process.stdin, output: process.stderr })
   const approve = async (call: ToolCall) => {
     if (o.yes) return true
@@ -79,11 +84,6 @@ async function execRun(config: HarnessConfig, task: string, workdir: string, o: 
     if (d.content) process.stderr.write(d.content)
     streamed = true
   }
-  const id = randomUUID().slice(0, 8)
-  const file = path.join('runs', `${id}.jsonl`), part = `${file}.part`
-  await mkdir('runs', { recursive: true })
-  const meta: Meta = { meta: { id, harness: config.name, task, workdir, started: Date.now(), bench: o.bench } }
-  await writeFile(part, JSON.stringify(meta) + '\n')
   let last: HarnessEvent | undefined
   try {
     for await (const e of runAgent({ config, task, workdir }, opts)) {
