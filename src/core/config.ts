@@ -16,6 +16,7 @@ export type HarnessConfig = {
   toolCalls: { mode: 'native' | 'prompted'; format?: ToolCallFormat; enforceSchema: boolean; promptedTemplate: string; parseErrorHint: string }
   context: { maxToolOutputChars: number; budgetTokens: number }
   loop: { maxTurns: number }
+  mcpServers?: Record<string, McpServerConfig>
 }
 
 export type RunParams = { config: HarnessConfig; task: string; workdir: string }
@@ -56,5 +57,17 @@ export function validateConfig(c: unknown): string[] {
   const cx = c.context
   if (!isObj(cx) || !(cx.maxToolOutputChars > 0) || !(cx.budgetTokens >= 0)) e.push('context.maxToolOutputChars > 0 and budgetTokens >= 0 required')
   if (!isObj(c.loop) || !(Number.isInteger(c.loop.maxTurns) && c.loop.maxTurns > 0)) e.push('loop.maxTurns must be a positive integer')
+  const ms = c.mcpServers
+  if (ms !== undefined) {
+    if (!isObj(ms) || Array.isArray(ms)) e.push('mcpServers must be an object')
+    else for (const [k, v] of Object.entries(ms)) {
+      if (!k) { e.push('mcpServers key must be a non-empty string'); continue }
+      if (!isObj(v)) { e.push(`mcpServers.${k} must be an object`); continue }
+      if (typeof v.command !== 'string' || !v.command) e.push(`mcpServers.${k}.command must be a non-empty string`)
+      const strs = (x: unknown) => Array.isArray(x) && x.every(s => typeof s === 'string')
+      if (v.args !== undefined && !strs(v.args)) e.push(`mcpServers.${k}.args must be an array of strings`)
+      if (v.tools !== undefined && !strs(v.tools)) e.push(`mcpServers.${k}.tools must be an array of strings`)
+    }
+  }
   return e
 }
