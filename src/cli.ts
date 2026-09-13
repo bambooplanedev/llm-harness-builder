@@ -58,6 +58,7 @@ function describe(e: HarnessEvent, streamed = false): string {
     case 'llm_response': return `[t${e.turn}] llm_response ${e.latencyMs}ms${e.usage ? ` (${e.usage.promptTokens}+${e.usage.completionTokens} tok)` : ''}${e.content && !streamed ? `\n    ${e.content.slice(0, 200).replace(/\n/g, ' ')}` : ''}`
     case 'parse_error': return `[t${e.turn}] parse_error: ${e.message}`
     case 'tool_call': return `[t${e.turn}] tool_call ${e.call.name} ${JSON.stringify(e.call.args).slice(0, 200)}`
+    case 'mcp_server_start': return `mcp ${e.server}: ${e.offered} offered, ${e.tools.length} tools, ${e.descriptionChars} desc + ${e.schemaChars} schema chars`
     case 'approval_required': return `[t${e.turn}] approval_required ${e.call.name}`
     case 'tool_result': return `[t${e.turn}] tool_result ${e.name}${e.error ? ' (error)' : ''}${e.truncated ? ' (truncated)' : ''}: ${e.output.slice(0, 200).replace(/\n/g, ' ')}`
     case 'error': return `error: ${e.message}${e.body ? `\n${e.body}` : ''}`

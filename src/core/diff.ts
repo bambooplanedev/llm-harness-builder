@@ -15,6 +15,9 @@ export type Turn = { chips: Chip[]; sig: string; ms: number; tokens: number }
 export function turnsOf(events: HarnessEvent[]): HarnessEvent[][] {
   const map = new Map<number, HarnessEvent[]>()
   for (const e of events) {
+    // turn 0 is pre-loop setup (mcp servers), not a turn: counting it would shift every
+    // later turn on one side of a diff and put the divergence marker in the wrong place.
+    if (e.turn === 0) continue
     const g = map.get(e.turn)
     if (g) g.push(e); else map.set(e.turn, [e])
   }

@@ -13,6 +13,16 @@ test('turnsOf groups by turn in the order the turns appear', () => {
   expect(turnsOf([])).toEqual([])
 })
 
+test('turnsOf ignores the pre-loop group so mcp setup does not shift every turn', () => {
+  const evs = [
+    ev(0, { type: 'mcp_server_start', server: 'fs', command: 'npx', args: [], offered: 14, tools: ['echo'], descriptionChars: 10, schemaChars: 20 }),
+    ev(1, { type: 'llm_request', payload: {} }),
+    ev(2, { type: 'error', message: 'boom' }),
+  ]
+  expect(turnsOf(evs).map(g => g.length)).toEqual([1, 1])
+  expect(turnsOf(evs)[0][0].type).toBe('llm_request')
+})
+
 test('skeleton: a tool call plus its result is one chip, an error result makes it bad', () => {
   const t = skeleton([
     ev(1, { type: 'llm_response', raw: {}, content: '', latencyMs: 1200 }),
