@@ -103,9 +103,12 @@ export class RunStore {
     return id
   }
 
-  async read(id: string): Promise<HarnessEvent[]> {
-    const text = await readFile(this.file(id), 'utf8')
-    return text.split('\n').filter(Boolean).map(l => JSON.parse(l)).filter(e => !('meta' in e))
+  /** Tolerates a half-written last line: the CLI appends while we read, and a killed process can leave one. */
+  async read(id: string, part = false): Promise<HarnessEvent[]> {
+    const text = await readFile(this.file(id) + (part ? '.part' : ''), 'utf8')
+    return text.split('\n').filter(Boolean)
+      .flatMap(l => { try { return [JSON.parse(l)] } catch { return [] } })
+      .filter(e => !('meta' in e))
   }
 
   /**

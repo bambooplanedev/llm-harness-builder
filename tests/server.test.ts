@@ -225,3 +225,14 @@ test('deltas stream live as event: delta and never reach the jsonl or a replay',
   expect(await readFile(join(runsDir, `${runId}.jsonl`), 'utf8')).not.toContain('"delta"')
   expect((await collectSSE(`${base}/api/runs/${runId}/events`)).some(e => e.type === 'delta')).toBe(false)
 })
+
+test('a run file with a truncated last line still opens instead of 404', async () => {
+  const id = 'trunc123'
+  await writeFile(join(runsDir, `${id}.jsonl`),
+    JSON.stringify({ meta: { id, harness: 'h', task: 't', workdir: '/tmp', started: 1 } }) + '\n' +
+    JSON.stringify({ seq: 0, turn: 0, ts: 1, type: 'llm_request', payload: {} }) + '\n' +
+    '{"seq":1,"turn":0,"ts":2,"type":"tool_c')
+  const events = await collectSSE(`${base}/api/runs/${id}/events`)
+  expect(events.map(e => e.type)).toEqual(['llm_request', 'done'])
+  expect(events.at(-1).reason).toBe('aborted')
+})
