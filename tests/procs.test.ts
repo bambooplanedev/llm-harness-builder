@@ -42,3 +42,51 @@ test('untrack forgets a pid so it is not killed later', async () => {
   expect(alive(child.pid!)).toBe(true)
   process.kill(-child.pid!, 'SIGKILL')
 })
+
+// R7: ownership is decided when the listener is registered, not when the signal fires — a `once`
+// listener (bench's) removes itself from the registry before later listeners run, so a fire-time
+// `listenerCount` check cannot tell "I am alone" from "a peer's handler already fired and is
+// still mid-write". These two tests pin that decision by its actual effect (was process.exit
+// called?), not by where our listener sits in the listener array.
+
+test('the registry exits when it owns the signal (no earlier listener)', async () => {
+  // Clear the field so this test's "no pre-existing listener" premise holds regardless of what
+  // other tests in this file left behind, then restore it exactly, whatever it was.
+  const preexisting = process.listeners('SIGINT') as Array<(...a: unknown[]) => void>
+  preexisting.forEach(l => process.removeListener('SIGINT', l))
+  const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never)
+  try {
+    const { track, untrack } = await freshProcs()
+    const child = spawn('sh', ['-c', 'sleep 30'], { detached: true, stdio: 'ignore' })
+    track(child.pid!)
+    const ours = process.listeners('SIGINT')[0] as () => void
+    ours()
+    expect(exitSpy).toHaveBeenCalledWith(130)
+    await new Promise(r => setTimeout(r, 100))
+    expect(alive(child.pid!)).toBe(false)
+    untrack(child.pid!)
+    process.off('SIGINT', ours)
+  } finally {
+    exitSpy.mockRestore()
+    preexisting.forEach(l => process.on('SIGINT', l))
+  }
+})
+
+test('the registry kills the group but does not exit when another listener already owns the signal', async () => {
+  const other = () => {}
+  process.on('SIGINT', other)                 // installed before track(), so it owns the signal
+  const before = process.listeners('SIGINT')
+  const { track, untrack } = await freshProcs()
+  const child = spawn('sh', ['-c', 'sleep 30'], { detached: true, stdio: 'ignore' })
+  const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never)
+  track(child.pid!)
+  const ours = process.listeners('SIGINT').find(l => !before.includes(l)) as () => void
+  ours()
+  expect(exitSpy).not.toHaveBeenCalled()
+  await new Promise(r => setTimeout(r, 100))
+  expect(alive(child.pid!)).toBe(false)
+  untrack(child.pid!)
+  process.off('SIGINT', other)
+  process.off('SIGINT', ours)
+  exitSpy.mockRestore()
+})

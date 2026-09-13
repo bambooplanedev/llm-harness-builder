@@ -13,12 +13,16 @@ function hook() {
   hooked = true
   process.on('exit', killAll)
   for (const [sig, code] of [['SIGINT', 130], ['SIGTERM', 143]] as const) {
+    // Decide now, not when the signal fires: a `once` listener (e.g. bench's) removes itself
+    // from the registry before later listeners run, so a fire-time count cannot tell "I am
+    // alone" from "a peer's handler already fired and its async work is still in flight".
+    const owns = process.listenerCount(sig) === 0
     process.on(sig, () => {
       killAll()
-      // Exit only when nothing else is handling the signal. `bench` installs its own handler
-      // first and finishes an async stdout write before exiting (src/cli.ts:228); exiting here
-      // would cut that write and drop the table of a 90-minute run.
-      if (process.listenerCount(sig) === 1) process.exit(code)
+      if (owns) process.exit(code)
+      // Someone else owns the exit (bench flushes its PASS table asynchronously first).
+      // Back-stop it: if they have not exited shortly, we do, so Ctrl-C never hangs.
+      else setTimeout(() => process.exit(code), 2000).unref()
     })
   }
 }
