@@ -54,6 +54,8 @@ await writeFile(join(benchDir, 'b2.json'), benchJson({ date: '2026-09-13T11:00:0
 await writeFile(join(benchDir, 'notbench.json'), JSON.stringify({ version: 2 }))
 await writeFile(join(benchDir, 'broken.json'), '{oops')
 await writeFile(join(benchDir, 'noharnesses.json'), JSON.stringify({ version: 1, date: '2026-09-13T12:00:00.000Z', complete: false }))
+// isolates the date-floor clause: its only .part is a stale orphan, started before b3.json's own date
+await writeFile(join(benchDir, 'b3.json'), benchJson({ date: '2026-09-13T13:00:00.000Z', complete: false }))
 
 const B1_STARTED = Date.parse('2026-09-13T10:05:00Z')
 const part = (id: string, meta: object, events: object[]) => writeFile(
@@ -76,6 +78,8 @@ await part('otherbe1', { bench: { file: 'b2.json', round: 1 }, started: Date.par
 await part('plainrun', { started: B1_STARTED + 60_000 }, [])
 // seen between open() and the meta write in execRun
 await writeFile(join(benchDir, 'empty000.jsonl.part'), '')
+// b3.json's only .part: a stale orphan started before the bench's own date, testing the floor in isolation
+await part('stale003', { bench: { file: 'b3.json', round: 1 }, started: Date.parse('2026-09-13T12:00:00Z') }, [])
 
 async function sse(id: string, until: (e: any) => boolean, lastId?: number): Promise<any[]> {
   const r = await fetch(`${base}/api/runs/${id}/events`, { headers: lastId !== undefined ? { 'last-event-id': String(lastId) } : {} })
@@ -284,17 +288,23 @@ test('GET /api/bench lists bench files newest first and skips everything else', 
   const r = await fetch(`${bbase}/api/bench`)
   expect(r.status).toBe(200)
   const { files } = await r.json()
-  expect(files.map((f: any) => f.file)).toEqual(['b2.json', 'b1.json'])
-  expect(files[0]).toEqual({ file: 'b2.json', date: '2026-09-13T11:00:00.000Z', model: 'fake-model', complete: true })
+  expect(files.map((f: any) => f.file)).toEqual(['b3.json', 'b2.json', 'b1.json'])
+  expect(files[1]).toEqual({ file: 'b2.json', date: '2026-09-13T11:00:00.000Z', model: 'fake-model', complete: true })
 })
 
 test('GET /api/bench?file= returns the result and the one live trace that belongs to it', async () => {
   const r = await (await fetch(`${bbase}/api/bench?file=b1.json`)).json()
   expect(r.result.n).toBe(2)
-  expect(r.files.map((f: any) => f.file)).toEqual(['b2.json', 'b1.json'])
+  expect(r.files.map((f: any) => f.file)).toEqual(['b3.json', 'b2.json', 'b1.json'])
   expect(r.active).toMatchObject({ id: 'live0001', harness: 'tuned', round: 2, started: B1_STARTED })
   // the half-written line is dropped, the meta line never reaches events (it has no `turn` and would break Trace.vue)
   expect(r.active.events.map((e: any) => e.type)).toEqual(['llm_request', 'approval_required'])
+})
+
+test('GET /api/bench?file= ignores a .part started before the bench (the date floor)', async () => {
+  const r = await (await fetch(`${bbase}/api/bench?file=b3.json`)).json()
+  expect(r.result).toBeDefined()
+  expect(r.active).toBeUndefined()
 })
 
 test('GET /api/bench?file= skips the live-trace lookup once the bench is complete', async () => {
