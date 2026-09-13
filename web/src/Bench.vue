@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
-import { api, type ActiveTrace, type BenchFile, type BenchResult, type Delta, type HarnessConfig, type HarnessEvent } from './api'
+import { api, type ActiveTrace, type BenchFile, type BenchResult, type BenchRun, type Delta, type HarnessConfig, type HarnessEvent } from './api'
 import { formatTable, mmss } from '../../src/core/bench'
 import Trace from './Trace.vue'
+import Diff from './Diff.vue'
+import type { DiffSide } from '../../src/core/diff'
 
 const emit = defineEmits<{ toWorkbench: [config: HarnessConfig, workdir: string] }>()
 
@@ -18,6 +20,19 @@ const error = ref('')
 const now = ref(Date.now())
 const pane = ref<HTMLElement | null>(null)
 let unsub: (() => void) | null = null
+
+/** Side B of the comparison: side A is whatever `sel` has open. */
+const diff = ref<{ name: string; run: BenchRun; config: HarnessConfig } | null>(null)
+const diffEvents = ref<HarnessEvent[]>([])
+let diffUnsub: (() => void) | null = null
+
+function compare(name: string, run: BenchRun, config: HarnessConfig) {
+  diffUnsub?.(); diffEvents.value = []
+  diff.value = { name, run, config }
+  diffUnsub = api.events(run.trace!, e => diffEvents.value.push(e), m => (error.value = m))
+}
+function closeDiff() { diffUnsub?.(); diffUnsub = null; diff.value = null; diffEvents.value = [] }
+
 let gen = 0
 let timer: ReturnType<typeof setTimeout> | null = null
 let stopped = false
@@ -25,6 +40,17 @@ let stopped = false
 let fetchFailed = false
 
 const runs = computed(() => result.value?.harnesses.flatMap(h => h.runs) ?? [])
+/** A is the open run: its row in the JSON carries the verdict, its harness carries the config. */
+const sideA = computed<DiffSide | null>(() => {
+  if (sel.value === 'live' || !result.value) return null
+  const id = sel.value.id
+  for (const h of result.value.harnesses) {
+    const run = h.runs.find(r => r.trace === id)
+    if (run) return { name: h.name, run, config: h.config, events: events.value }
+  }
+  return null
+})
+const sideB = computed<DiffSide | null>(() => diff.value && { ...diff.value, events: diffEvents.value })
 const total = computed(() => result.value ? result.value.n * result.value.harnesses.length : 0)
 const msDone = computed(() => runs.value.reduce((a, r) => a + r.ms, 0))
 const backend = computed(() => result.value?.harnesses[0].config.backend)
@@ -64,12 +90,14 @@ async function tick() {
 function restart() { if (timer) clearTimeout(timer); timer = null; void tick() }
 
 function openFile(f: string) {
+  closeDiff()
   file.value = f; sel.value = 'live'; result.value = null; active.value = null; events.value = []
   unsub?.(); unsub = null
   restart()
 }
 
 watch(sel, s => {
+  closeDiff()
   unsub?.(); unsub = null
   error.value = ''
   if (s === 'live') { events.value = active.value?.events ?? [] ; return }
@@ -95,7 +123,7 @@ watch([runs, total, () => result.value?.complete], () => {
 })
 
 onMounted(() => void tick())
-onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer); unsub?.(); document.title = 'llm-harness-builder' })
+onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer); unsub?.(); diffUnsub?.(); document.title = 'llm-harness-builder' })
 </script>
 
 <template>
@@ -133,6 +161,7 @@ onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer); unsub?.(); d
                 <template v-if="r.trace">{{ r.trace }}</template>
                 <template v-else>трейс не писався (JSON до v2.0.3)</template> · {{ r.workdir }}
                 <button @click.stop="emit('toWorkbench', h.config, r.workdir)">у Workbench</button>
+                <button v-if="r.trace && sideA && r.trace !== sideA.run.trace" @click.stop="compare(h.name, r, h.config)">⇄</button>
               </small>
             </div>
           </template>
@@ -141,7 +170,8 @@ onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer); unsub?.(); d
       <div class="err">{{ error }}</div>
     </div>
     <div class="col" ref="pane">
-      <Trace v-if="result && events.length" :events="events" :live="EMPTY" :task="result.task" :approvable="false" />
+      <Diff v-if="sideA && sideB" :a="sideA" :b="sideB" :task="result!.task" @close="closeDiff" />
+      <Trace v-else-if="result && events.length" :events="events" :live="EMPTY" :task="result.task" :approvable="false" />
     </div>
   </div>
 </template>
