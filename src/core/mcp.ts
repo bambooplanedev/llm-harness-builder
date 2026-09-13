@@ -142,6 +142,7 @@ export async function startServers(
       if (opts.signal?.aborted) throw new Error('aborted')
       const args = cfg.args ?? []
       const conn = new Conn(name, cfg.command, args, workdir)
+      opts.signal?.addEventListener('abort', () => conn.close(), { once: true })
       conns.push(conn)
       try {
         await conn.request('initialize', {

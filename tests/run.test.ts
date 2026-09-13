@@ -289,6 +289,13 @@ test('mcp: approval, start event and the tool schema reaches the request', async
   expect(last(ev).reason).toBe('final')
 })
 
+test('mcp: prompted mode renders the mcp tool into the system message the backend receives', async () => {
+  const be = new Fake([{ content: '{"calls":[],"final":"fin"}' }])
+  const config = withMcp({ toolCalls: { mode: 'prompted', enforceSchema: false, promptedTemplate: 'T:{{tools}}', parseErrorHint: 'HINT' } })
+  await collect({ config, task: 'do', workdir: await wd() }, { backend: be, mcp: async () => fakeMcp(), approve: async () => true })
+  expect((be.requests[0].messages.find(m => m.role === 'system') as any).content).toContain('echo')
+})
+
 test('mcp: refusing the server ends the run before any llm_request', async () => {
   const be = new Fake([])
   const ev = await collect({ config: withMcp(), task: 'do', workdir: await wd() }, {

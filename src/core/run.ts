@@ -42,6 +42,7 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
         callId: `mcp${++i}`, name: `mcp:${name}`,
         args: { command: [s.command, ...(s.args ?? [])].join(' ') },
       }
+      if (opts.signal?.aborted) { yield done('aborted'); return }
       yield ev({ type: 'approval_required', call })
       if (!opts.approve) {
         yield ev({ type: 'error', message: `mcp server "${name}" needs approval but no approval handler is available` })
