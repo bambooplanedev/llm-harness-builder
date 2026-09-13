@@ -23,6 +23,15 @@ test('turnsOf ignores the pre-loop group so mcp setup does not shift every turn'
   expect(turnsOf(evs)[0][0].type).toBe('llm_request')
 })
 
+test('turnsOf keeps the turn-0 group when the run ended there (mcp startup failure, abort before turn 1)', () => {
+  const evs = [
+    ev(0, { type: 'error', message: 'mcp server "fs" failed to start: boom' }),
+    ev(0, { type: 'done', reason: 'mcp_error', turns: 0, toolCallCount: 0 }),
+  ]
+  expect(turnsOf(evs).map(g => g.length)).toEqual([2])
+  expect(turnsOf(evs)[0].map(e => e.type)).toEqual(['error', 'done'])
+})
+
 test('skeleton: a tool call plus its result is one chip, an error result makes it bad', () => {
   const t = skeleton([
     ev(1, { type: 'llm_response', raw: {}, content: '', latencyMs: 1200 }),

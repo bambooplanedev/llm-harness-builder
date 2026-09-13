@@ -13,11 +13,13 @@ export type Turn = { chips: Chip[]; sig: string; ms: number; tokens: number }
 
 /** Events grouped by turn, in the order the turns appear in the trace. */
 export function turnsOf(events: HarnessEvent[]): HarnessEvent[][] {
+  // turn 0 is pre-loop setup (mcp servers), not a turn — unless the run *ended* there, in which
+  // case it is the only thing the diff has to show: counting it otherwise would shift every
+  // later turn on one side of a diff and put the divergence marker in the wrong place.
+  const endedAtZero = events.some(e => e.turn === 0 && e.type === 'done')
   const map = new Map<number, HarnessEvent[]>()
   for (const e of events) {
-    // turn 0 is pre-loop setup (mcp servers), not a turn: counting it would shift every
-    // later turn on one side of a diff and put the divergence marker in the wrong place.
-    if (e.turn === 0) continue
+    if (e.turn === 0 && !endedAtZero) continue
     const g = map.get(e.turn)
     if (g) g.push(e); else map.set(e.turn, [e])
   }
