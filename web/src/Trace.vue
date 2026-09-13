@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { Delta, HarnessEvent } from './api'
-const props = defineProps<{ events: HarnessEvent[]; live: Delta; task?: string; approvable?: boolean }>()
+// approvable is a Boolean-typed prop, so Vue casts an ABSENT value to `false` (not `undefined`).
+// App.vue's live Workbench never passes this prop and needs the opposite default -- only a
+// finished/replayed trace (Bench.vue, Diff.vue) opts out by passing `false` explicitly.
+const props = withDefaults(defineProps<{ events: HarnessEvent[]; live: Delta; task?: string; approvable?: boolean }>(), { approvable: true })
 const emit = defineEmits<{ approve: [callId: string, ok: boolean] }>()
 
 const turns = computed(() => {
