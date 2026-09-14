@@ -28,3 +28,28 @@ test('tool failure is returned as error text', async () => {
   const r = await runTool('read_file', { path: 'nope' }, ctx, ['read_file'])
   expect(r.error).toBe(true); expect(r.output).toMatch(/ENOENT|no such file/i)
 })
+
+test('an mcp tool is dispatched to the session, and unknown names list both sources', async () => {
+  const ctx = { workdir: await mkdtemp(join(tmpdir(), 'lhb-reg-')), maxToolOutputChars: 100 }
+  const calls: string[] = []
+  const mcp = {
+    tools: [{ name: 'echo', description: '', parameters: {} }], servers: [],
+    has: (n: string) => n === 'echo',
+    call: async (n: string) => { calls.push(n); return { output: 'from mcp', error: false } },
+    close: () => {},
+  }
+  const hit = await runTool('echo', { text: 'x' }, ctx, ['read_file'], mcp as any)
+  expect(hit).toEqual({ output: 'from mcp', error: false })
+  expect(calls).toEqual(['echo'])
+
+  const miss = await runTool('nope', {}, ctx, ['read_file'], mcp as any)
+  expect(miss.error).toBe(true)
+  expect(miss.output).toMatch(/unknown tool nope.*read_file.*echo/)
+})
+
+test('a built-in wins over an mcp tool of the same name', async () => {
+  const ctx = { workdir: await mkdtemp(join(tmpdir(), 'lhb-reg-')), maxToolOutputChars: 100 }
+  const mcp = { tools: [], servers: [], has: () => true, call: async () => ({ output: 'mcp', error: false }), close: () => {} }
+  const r = await runTool('read_file', { path: 'nope' }, ctx, ['read_file'], mcp as any)
+  expect(r.output).not.toBe('mcp')
+})

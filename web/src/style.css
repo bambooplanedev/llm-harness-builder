@@ -1,6 +1,10 @@
 :root { font: 14px/1.4 system-ui, sans-serif; color: #222; background: #fafafa; }
 body { margin: 0; }
-.layout { display: grid; grid-template-columns: 380px 1fr; height: 100vh; }
+.app { display: grid; grid-template-rows: auto 1fr; height: 100vh; }
+.layout { display: grid; grid-template-columns: 380px 1fr; height: 100%; }
+.layout.bench { grid-template-columns: 460px 1fr; }
+.tabs { display: flex; gap: 4px; padding: 6px 12px; border-bottom: 1px solid #ddd; background: #fff; }
+.tabs button.on { font-weight: 600; }
 .col { overflow: auto; padding: 12px; }
 .col.left { border-right: 1px solid #ddd; background: #fff; }
 label { display: block; margin: 8px 0 2px; font-weight: 600; }
@@ -12,9 +16,29 @@ textarea { font-family: ui-monospace, monospace; min-height: 90px; }
 .ev.user { border-color: #36c; } .ev.assistant { border-color: #393; } .ev.tool_call { border-color: #c93; }
 .ev.tool_result { border-color: #999; } .ev.parse_error, .ev.error { border-color: #c33; background: #fee; }
 .ev.approval { border-color: #c60; background: #fff4e5; }
+.ev.approval.live { cursor: pointer; }
 .turn { margin: 12px 0; padding: 6px; border: 1px solid #e5e5e5; border-radius: 4px; }
 .turn summary { cursor: pointer; color: #666; }
 .bar { height: 8px; background: #eee; border-radius: 4px; overflow: hidden; margin: 4px 0; }
 .bar > div { height: 100%; background: #6a6; }
 .runs { font-size: 12px; } .runs div { cursor: pointer; padding: 2px 0; } .runs div:hover { text-decoration: underline; }
 details.inspector pre { max-height: 300px; overflow: auto; background: #f4f4f4; padding: 6px; font-size: 11px; }
+.hint { font-size: 12px; color: #666; margin: 8px 0; }
+.bench-table { font-size: 11px; background: #f4f4f4; padding: 6px; overflow: auto; }
+.runs div.on { font-weight: 600; }
+.runs div.bad { color: #c00; }
+.runs div.notrace { cursor: default; } .runs div.notrace:hover { text-decoration: none; }
+.runs .clip { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #a60; }
+
+.diff { font-size: 12px; }
+.diff table.cfg { border-collapse: collapse; width: 100%; }
+.diff table.cfg td { border-top: 1px solid #eee; padding: 3px 6px; vertical-align: top; font-family: ui-monospace, monospace; }
+.diff .onlyA { color: #c00; } .diff .onlyB { color: #070; }
+.diff pre { white-space: pre-wrap; background: #f4f4f4; padding: 6px; }
+.diff .turnrow { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 3px 6px; cursor: pointer; border-top: 1px solid #eee; }
+.diff .turnrow:hover { background: #f7f7f7; }
+.diff .turnrow.split { background: #fff4e5; }
+.diff .split-label { grid-column: 1 / -1; margin: 0; color: #c60; }
+.diff .chip { display: inline-block; margin-right: 4px; padding: 0 4px; background: #eee; border-radius: 3px; font-family: ui-monospace, monospace; }
+.diff .chip.err { background: #fee; color: #c00; }
+.diff .layout { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; height: auto; }

@@ -1,5 +1,6 @@
 import type { ToolName } from '../config.js'
 import type { ToolSchema } from '../backends/types.js'
+import type { McpSession } from '../mcp.js'
 import { listDir, readFile, writeFile, editFile, type ToolCtx } from './fs.js'
 import { bash } from './bash.js'
 export type { ToolCtx } from './fs.js'
@@ -19,8 +20,14 @@ const IMPL: Record<ToolName, (a: Record<string, unknown>, c: ToolCtx) => Promise
   list_dir: listDir, read_file: readFile, write_file: writeFile, edit_file: editFile, bash,
 }
 
-export async function runTool(name: string, args: Record<string, unknown>, ctx: ToolCtx, enabled: ToolName[]): Promise<{ output: string; error: boolean }> {
-  if (!enabled.includes(name as ToolName)) return { error: true, output: `unknown tool ${name}; available: ${enabled.join(', ')}` }
+export async function runTool(
+  name: string, args: Record<string, unknown>, ctx: ToolCtx, enabled: ToolName[], mcp?: McpSession,
+): Promise<{ output: string; error: boolean }> {
+  if (!enabled.includes(name as ToolName)) {
+    if (mcp?.has(name)) return mcp.call(name, args)
+    const available = [...enabled, ...(mcp?.tools.map(t => t.name) ?? [])]
+    return { error: true, output: `unknown tool ${name}; available: ${available.join(', ')}` }
+  }
   const schema = TOOL_SCHEMAS[name as ToolName]
   const required = (schema.parameters as { required: string[] }).required
   for (const k of required) if (typeof args[k] !== 'string') return { error: true, output: `tool ${name}: missing or non-string argument "${k}"; required: ${required.join(', ')}` }

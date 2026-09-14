@@ -1,7 +1,7 @@
 import http from 'node:http'
 import { readFile, readdir, writeFile, mkdir } from 'node:fs/promises'
 import path from 'node:path'
-import { RunStore, WorkdirBusyError } from './runs.js'
+import { RunStore, WorkdirBusyError, safeName } from './runs.js'
 import { validateConfig, type HarnessConfig, type RunParams } from '../core/config.js'
 import { validateWorkdir } from '../core/tools/sandbox.js'
 import { createBackend, type Backend } from '../core/backends/index.js'
@@ -34,7 +34,6 @@ const readBody = (req: http.IncomingMessage) => new Promise<any>((resolve, rejec
   })
   req.on('error', fail)
 })
-const safeName = (n: string) => /^[\w.-]{1,64}$/.test(n)
 
 export async function startServer(opts: ServerOpts) {
   const store = new RunStore(opts.runsDir)
@@ -78,6 +77,14 @@ export async function startServer(opts: ServerOpts) {
         return json(res, 200, { ok: true })
       }
       if (m('GET', /^\/api\/runs$/)) return json(res, 200, await store.list())
+      if (m('GET', /^\/api\/bench$/)) {
+        const file = url.searchParams.get('file')
+        if (file === null) return json(res, 200, { files: await store.benchList() })
+        if (!safeName(file) || !file.endsWith('.json')) return json(res, 400, { error: 'bad name' })
+        const opened = await store.benchOpen(file)
+        if (!opened) return json(res, 404, { error: 'not a bench file' })
+        return json(res, 200, { files: await store.benchList(), ...opened })
+      }
       if (m('POST', /^\/api\/runs$/)) {
         const body = await readBody(req) as Partial<RunParams>
         const errs = validateConfig(body.config)
@@ -113,7 +120,11 @@ export async function startServer(opts: ServerOpts) {
         // duplicates between the snapshot and the buffer are harmless since emit() dedupes on `sent`.
         const buffered: HarnessEvent[] = []
         let replaying = true
-        const unsub = store.subscribe(id, e => { if (replaying) buffered.push(e); else emit(e) })
+        const unsub = store.subscribe(id, e => {
+          // Deltas are live-only: no id (Last-Event-ID stays on real events), dropped while replaying (headers not sent yet).
+          if (e.type === 'delta') { if (!replaying && !ended) res.write(`event: delta\ndata: ${JSON.stringify(e)}\n\n`) }
+          else if (replaying) buffered.push(e); else emit(e)
+        })
         req.on('close', unsub) // before the first await: a client that drops mid-read must not leave a listener behind
         let past: HarnessEvent[]
         try { past = await store.read(id) } catch { return json(res, 404, { error: 'not found' }) }

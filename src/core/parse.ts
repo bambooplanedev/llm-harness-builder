@@ -8,9 +8,16 @@ function tryParse(s: string): unknown | undefined {
   try { return JSON.parse(s) } catch { return undefined }
 }
 
+/**
+ * Drops reasoning: closed <think> blocks, and a closing tag the reply never opened. The Qwen3
+ * template opens <think> in the prompt itself, so the model's text starts mid-block and comes
+ * back with the close alone — everything before it is reasoning, not an answer.
+ */
+const stripThink = (t: string) => t.replace(/<think>[\s\S]*?<\/think>/g, '').replace(/^[\s\S]*?<\/think>/, '')
+
 /** Finds a {calls, final} object in model text: bare JSON, ```json fence, or embedded in prose. */
 export function parsePrompted(text: string): ParsedPrompted {
-  text = text.replace(/<think>[\s\S]*?<\/think>/g, '')
+  text = stripThink(text)
   const candidates = [text.trim()]
   const fence = /```(?:json)?\s*([\s\S]*?)```/.exec(text)
   if (fence) candidates.push(fence[1].trim())
@@ -42,7 +49,7 @@ const TOOL_CALL_RE = /<tool_call>([\s\S]*?)<\/tool_call>/g
  */
 export function parseHermes(text: string): ParsedPrompted {
   if (text.includes('<think>') && !text.includes('</think>')) return { ok: false, message: 'unclosed <think> block' }
-  text = text.replace(/<think>[\s\S]*?<\/think>/g, '')
+  text = stripThink(text)
   const calls: { name: string; args: Record<string, unknown> }[] = []
   let n = 0
   for (const m of text.matchAll(TOOL_CALL_RE)) {

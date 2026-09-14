@@ -1,15 +1,23 @@
 import { test, expect, afterAll } from 'vitest'
-import { mkdtemp, writeFile, readFile } from 'node:fs/promises'
+import { mkdtemp, writeFile, readFile, appendFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import http from 'node:http'
 import { startServer } from '../src/server/index.js'
-import type { Backend, NormalizedResponse } from '../src/core/backends/types.js'
+import type { Backend, Delta, NormalizedResponse } from '../src/core/backends/types.js'
 
-const fake = (queue: Partial<NormalizedResponse>[]): Backend => ({
+type Queued = Partial<NormalizedResponse> & { deltas?: Delta[] }
+let gate: Promise<void> = Promise.resolve() // a test can hold send() until its SSE client is connected
+const fake = (queue: Queued[]): Backend => ({
   async listModels() { return ['fake-model'] },
   buildPayload: r => r,
-  async send() { const r = queue.shift(); if (!r) throw new Error('no more'); return { content: '', toolCalls: [], raw: {}, ...r } },
+  async send(_p, _s, onDelta) {
+    const r = queue.shift(); if (!r) throw new Error('no more')
+    await gate
+    const { deltas, ...rest } = r
+    for (const d of deltas ?? []) onDelta?.(d)
+    return { content: '', toolCalls: [], raw: {}, ...rest }
+  },
 })
 const config = (over = {}) => ({
   name: 'h', backend: { kind: 'openai', baseUrl: 'http://x/v1', model: 'fake-model', temperature: 0 },
@@ -21,10 +29,61 @@ const config = (over = {}) => ({
 const runsDir = await mkdtemp(join(tmpdir(), 'lhb-runs-'))
 const harnessesDir = await mkdtemp(join(tmpdir(), 'lhb-h-'))
 const workdir = await mkdtemp(join(tmpdir(), 'lhb-wd-'))
-let queue: Partial<NormalizedResponse>[] = []
+let queue: Queued[] = []
 const srv = await startServer({ port: 0, runsDir, harnessesDir, backendFactory: () => fake(queue) })
 const base = `http://127.0.0.1:${srv.port}`
 afterAll(() => srv.close())
+
+// --- bench page: its own runs dir, so hand-written fixtures never mix with the real runs above
+const benchDir = await mkdtemp(join(tmpdir(), 'lhb-bench-'))
+const bsrv = await startServer({ port: 0, runsDir: benchDir, harnessesDir, backendFactory: () => fake([]) })
+const bbase = `http://127.0.0.1:${bsrv.port}`
+afterAll(() => bsrv.close())
+
+const benchJson = (over: object = {}) => JSON.stringify({
+  version: 1, date: '2026-09-13T10:00:00.000Z', task: 't', n: 2, timeoutS: 60, complete: false,
+  harnesses: [{
+    name: 'tuned', config: config(), pass: 1, reasons: { final: 1 },
+    median: { turns: 2, toolCalls: 1, ms: 100 },
+    runs: [{ round: 1, verdict: 'PASS', reason: 'final', turns: 2, toolCalls: 1, parseErrors: 0, ms: 100, workdir: '/tmp/wd', trace: 'aabbccdd' }],
+  }],
+  ...over,
+})
+await writeFile(join(benchDir, 'b1.json'), benchJson())
+await writeFile(join(benchDir, 'b2.json'), benchJson({ date: '2026-09-13T11:00:00.000Z', complete: true }))
+await writeFile(join(benchDir, 'notbench.json'), JSON.stringify({ version: 2 }))
+await writeFile(join(benchDir, 'broken.json'), '{oops')
+await writeFile(join(benchDir, 'noharnesses.json'), JSON.stringify({ version: 1, date: '2026-09-13T12:00:00.000Z', complete: false }))
+// isolates the date-floor clause: its only .part is a stale orphan, started before b3.json's own date
+await writeFile(join(benchDir, 'b3.json'), benchJson({ date: '2026-09-13T13:00:00.000Z', complete: false }))
+// a harness entry with no config is garbage, not a bench: skipped silently like every other malformed file
+await writeFile(join(benchDir, 'emptyharness.json'), JSON.stringify({ version: 1, date: '2026-09-13T09:00:00.000Z', complete: false, harnesses: [{}] }))
+// a name safeName rejects (space): newest date of all, so it would sort first if it were listed at all
+await writeFile(join(benchDir, 'bad name.json'), benchJson({ date: '2026-09-13T15:00:00.000Z' }))
+
+const B1_STARTED = Date.parse('2026-09-13T10:05:00Z')
+const part = (id: string, meta: object, events: object[]) => writeFile(
+  join(benchDir, `${id}.jsonl.part`),
+  [JSON.stringify({ meta: { id, harness: 'tuned', task: 't', workdir: '/tmp/wd', started: B1_STARTED, ...meta } }),
+   ...events.map(e => JSON.stringify(e))].join('\n') + '\n')
+
+await part('live0001', { bench: { file: 'b1.json', round: 2 } }, [
+  { seq: 0, turn: 0, ts: B1_STARTED + 1000, type: 'llm_request', payload: {} },
+  { seq: 1, turn: 0, ts: B1_STARTED + 2000, type: 'approval_required', call: { callId: 'c1', name: 'bash', args: { command: 'node --test' } } },
+])
+// a half-written line: the bench process is appending while we read
+await appendFile(join(benchDir, 'live0001.jsonl.part'), '{"seq":2,"turn":0,"ts":')
+// an orphan .part left by a bench that was killed before this one started
+await part('stale001', { bench: { file: 'b1.json', round: 1 }, started: Date.parse('2026-09-13T09:00:00Z') }, [])
+// a .part that belongs to another bench file, and is new enough to pass that file's date floor:
+// without the `complete` short-circuit it would surface as b2.json's live run
+await part('otherbe1', { bench: { file: 'b2.json', round: 1 }, started: Date.parse('2026-09-13T11:05:00Z') }, [])
+// a `run`/`demo` trace: no meta.bench at all
+await part('plainrun', { started: B1_STARTED + 60_000 }, [])
+// seen between open() and the meta write in execRun
+await writeFile(join(benchDir, 'empty000.jsonl.part'), '')
+// b3.json's only .part: a stale orphan started before the bench's own date, testing the floor in isolation
+await part('stale003', { bench: { file: 'b3.json', round: 1 }, started: Date.parse('2026-09-13T12:00:00Z') }, [])
 
 async function sse(id: string, until: (e: any) => boolean, lastId?: number): Promise<any[]> {
   const r = await fetch(`${base}/api/runs/${id}/events`, { headers: lastId !== undefined ? { 'last-event-id': String(lastId) } : {} })
@@ -202,4 +261,78 @@ test('PUT harness with a large multi-byte systemPrompt round-trips byte-exact', 
   expect(put.status).toBe(200)
   const got = await (await fetch(`${base}/api/harnesses/utf8`)).json()
   expect(got.systemPrompt).toBe(systemPrompt)
+})
+
+test('deltas stream live as event: delta and never reach the jsonl or a replay', async () => {
+  let open!: () => void; gate = new Promise(r => (open = r))
+  queue = [{ deltas: [{ reasoning: 'thinking ' }, { content: 'hi' }], content: 'hi' }]
+  const r = await fetch(`${base}/api/runs`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ config: config(), task: 't', workdir }) })
+  const { runId } = await r.json()
+  // Release send() only once this client has seen llm_request over SSE: by then its listener is registered and the replay is over.
+  const live = await sse(runId, e => { if (e.type === 'llm_request') open(); return e.type === 'done' })
+  gate = Promise.resolve()
+  const i = live.findIndex(e => e.type === 'delta')
+  expect(live.slice(i, i + 3)).toEqual([{ type: 'delta', reasoning: 'thinking ' }, { type: 'delta', content: 'hi' }, expect.objectContaining({ type: 'llm_response', content: 'hi' })])
+  expect(await readFile(join(runsDir, `${runId}.jsonl`), 'utf8')).not.toContain('"delta"')
+  expect((await collectSSE(`${base}/api/runs/${runId}/events`)).some(e => e.type === 'delta')).toBe(false)
+})
+
+test('a run file with a truncated last line still opens instead of 404', async () => {
+  const id = 'trunc123'
+  await writeFile(join(runsDir, `${id}.jsonl`),
+    JSON.stringify({ meta: { id, harness: 'h', task: 't', workdir: '/tmp', started: 1 } }) + '\n' +
+    JSON.stringify({ seq: 0, turn: 0, ts: 1, type: 'llm_request', payload: {} }) + '\n' +
+    '{"seq":1,"turn":0,"ts":2,"type":"tool_c')
+  const events = await collectSSE(`${base}/api/runs/${id}/events`)
+  expect(events.map(e => e.type)).toEqual(['llm_request', 'done'])
+  expect(events.at(-1).reason).toBe('aborted')
+})
+
+test('GET /api/bench lists bench files newest first and skips everything else', async () => {
+  const r = await fetch(`${bbase}/api/bench`)
+  expect(r.status).toBe(200)
+  const { files } = await r.json()
+  expect(files.map((f: any) => f.file)).toEqual(['b3.json', 'b2.json', 'b1.json'])
+  expect(files[1]).toEqual({ file: 'b2.json', date: '2026-09-13T11:00:00.000Z', model: 'fake-model', complete: true })
+})
+
+test('GET /api/bench?file= on a version:1 file whose harness has no config is a 404, not a listed file', async () => {
+  const r = await fetch(`${bbase}/api/bench?file=emptyharness.json`)
+  expect(r.status).toBe(404)
+})
+
+test('GET /api/bench on a runs dir that does not exist yet returns 200 with no files', async () => {
+  const fresh = await startServer({ port: 0, runsDir: join(tmpdir(), 'nope-' + Date.now()), harnessesDir, backendFactory: () => fake([]) })
+  expect(await (await fetch(`http://127.0.0.1:${fresh.port}/api/bench`)).json()).toEqual({ files: [] })
+  await fresh.close()
+})
+
+test('GET /api/bench?file= returns the result and the one live trace that belongs to it', async () => {
+  const r = await (await fetch(`${bbase}/api/bench?file=b1.json`)).json()
+  expect(r.result.n).toBe(2)
+  expect(r.files.map((f: any) => f.file)).toEqual(['b3.json', 'b2.json', 'b1.json'])
+  expect(r.active).toMatchObject({ id: 'live0001', harness: 'tuned', round: 2, started: B1_STARTED })
+  // the half-written line is dropped, the meta line never reaches events (it has no `turn` and would break Trace.vue)
+  expect(r.active.events.map((e: any) => e.type)).toEqual(['llm_request', 'approval_required'])
+})
+
+test('GET /api/bench?file= ignores a .part started before the bench (the date floor)', async () => {
+  const r = await (await fetch(`${bbase}/api/bench?file=b3.json`)).json()
+  expect(r.result).toBeDefined()
+  expect(r.active).toBeUndefined()
+})
+
+test('GET /api/bench?file= skips the live-trace lookup once the bench is complete', async () => {
+  const r = await (await fetch(`${bbase}/api/bench?file=b2.json`)).json()
+  expect(r.result.complete).toBe(true)
+  expect(r.active).toBeUndefined()
+})
+
+test('GET /api/bench?file= validates the name and 404s on anything that is not a bench', async () => {
+  expect((await fetch(`${bbase}/api/bench?file=..`)).status).toBe(400)
+  expect((await fetch(`${bbase}/api/bench?file=b1`)).status).toBe(400)
+  expect((await fetch(`${bbase}/api/bench?file=${encodeURIComponent('../b.json')}`)).status).toBe(400)
+  expect((await fetch(`${bbase}/api/bench?file=nope.json`)).status).toBe(404)
+  expect((await fetch(`${bbase}/api/bench?file=notbench.json`)).status).toBe(404)
+  expect((await (await fetch(`${bbase}/api/bench?file=nope.json`)).json()).error).toBe('not a bench file')
 })

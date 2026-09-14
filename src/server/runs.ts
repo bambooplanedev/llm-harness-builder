@@ -4,14 +4,25 @@ import path from 'node:path'
 import { runAgent } from '../core/run.js'
 import type { RunParams } from '../core/config.js'
 import type { HarnessEvent, ToolCall } from '../core/events.js'
-import type { Backend } from '../core/backends/types.js'
+import type { Backend, Delta } from '../core/backends/types.js'
+import type { BenchResult, BenchFile, ActiveTrace } from '../core/bench.js'
 
 export type RunSummary = { id: string; harness: string; task: string; workdir: string; started: number; reason?: string; turns?: number; toolCallCount?: number }
-type Meta = { meta: { id: string; harness: string; task: string; workdir: string; started: number } }
-type Active = { abort: AbortController; approvals: Map<string, (ok: boolean) => void>; workdir: string; listeners: Set<(e: HarnessEvent) => void>; timer?: NodeJS.Timeout }
+export type Meta = { meta: {
+  id: string; harness: string; task: string; workdir: string; started: number
+  /** Only on runs started by `bench`: the bench JSON's basename (a label, not a key) and the round. */
+  bench?: { file: string; round: number }
+} }
+/** Live-only: fanned out to listeners, never written to the run file, no seq. */
+export type DeltaMsg = Delta & { type: 'delta' }
+type Listener = (e: HarnessEvent | DeltaMsg) => void
+type Active = { abort: AbortController; approvals: Map<string, (ok: boolean) => void>; workdir: string; listeners: Set<Listener>; timer?: NodeJS.Timeout }
 
 const APPROVAL_TIMEOUT_MS = 10 * 60_000
 const CHUNK = 64 * 1024
+
+/** Safe single path segment: no separators, so path.join can never leave the directory. */
+export const safeName = (n: string) => /^[\w.-]{1,64}$/.test(n)
 
 /** First and last line of a run file without reading it whole: run files grow to hundreds of KB and are listed on every page load. */
 async function firstAndLastLine(file: string): Promise<[string, string]> {
@@ -72,7 +83,8 @@ export class RunStore {
     void (async () => {
       let seq = 0
       try {
-        for await (const e of runAgent(params, { signal: a.abort.signal, approve, backend })) {
+        const onDelta = (d: Delta) => { for (const fn of a.listeners) fn({ type: 'delta', ...d }) }
+        for await (const e of runAgent(params, { signal: a.abort.signal, approve, backend, onDelta })) {
           seq = e.seq + 1
           await appendFile(this.file(id), JSON.stringify(e) + '\n')
           for (const fn of a.listeners) fn(e)
@@ -95,9 +107,17 @@ export class RunStore {
     return id
   }
 
-  async read(id: string): Promise<HarnessEvent[]> {
-    const text = await readFile(this.file(id), 'utf8')
-    return text.split('\n').filter(Boolean).map(l => JSON.parse(l)).filter(e => !('meta' in e))
+  /** Tolerates a half-written last line: the CLI appends while we read, and a killed process can leave one. */
+  async read(id: string, part = false): Promise<HarnessEvent[]> {
+    return this.readPath(this.file(id) + (part ? '.part' : ''))
+  }
+
+  /** The parser behind read(), taking a full path so callers who already have a matched filename (e.g. benchOpen's scan) don't have to re-derive it from untrusted meta content. */
+  private async readPath(file: string): Promise<HarnessEvent[]> {
+    const text = await readFile(file, 'utf8')
+    return text.split('\n').filter(Boolean)
+      .flatMap(l => { try { return [JSON.parse(l)] } catch { return [] } })
+      .filter(e => !('meta' in e))
   }
 
   /**
@@ -117,7 +137,7 @@ export class RunStore {
     return doneEvent
   }
 
-  subscribe(id: string, fn: (e: HarnessEvent) => void): () => void {
+  subscribe(id: string, fn: Listener): () => void {
     const a = this.active.get(id)
     a?.listeners.add(fn)
     return () => a?.listeners.delete(fn)
@@ -157,5 +177,70 @@ export class RunStore {
       }
     }
     return out.sort((x, y) => y.started - x.started)
+  }
+
+  /**
+   * Every *.json in the runs dir that is a v1 bench result; anything else there is somebody's stray file.
+   * `only` narrows the scan to that one name: the Bench page polls benchOpen every two seconds, and
+   * parsing every bench JSON in the directory to answer for one of them is work nobody asked for.
+   */
+  private async benchFiles(only?: string): Promise<{ file: string; result: BenchResult }[]> {
+    await mkdir(this.dir, { recursive: true })
+    const out: { file: string; result: BenchResult }[] = []
+    for (const f of await readdir(this.dir)) {
+      if (!f.endsWith('.json') || !safeName(f) || (only !== undefined && f !== only)) continue
+      try {
+        const result = JSON.parse(await readFile(path.join(this.dir, f), 'utf8'))
+        // A harness entry with no config is garbage, not a bench: skipping it here keeps such a file
+        // out of the list, so nothing downstream has to survive opening one (§3.1).
+        if (result?.version === 1 && Array.isArray(result.harnesses) && result.harnesses[0]?.config?.backend) out.push({ file: f, result })
+      } catch { continue }
+    }
+    return out
+  }
+
+  async benchList(): Promise<BenchFile[]> {
+    const files = (await this.benchFiles()).map(({ file, result }) => ({
+      file, date: result.date, complete: result.complete,
+      model: result.harnesses[0].config.backend.model ?? '',
+    }))
+    return files.sort((a, b) => b.date.localeCompare(a.date))
+  }
+
+  /**
+   * One bench result plus the run its `bench` process is executing right now, if any.
+   * The live run is found by the back-link subproject 3 writes into every trace's meta
+   * (`bench.file`), and is read straight from the still-unrenamed .part file.
+   */
+  async benchOpen(file: string): Promise<{ result: BenchResult; active?: ActiveTrace } | null> {
+    const hit = (await this.benchFiles(file)).find(b => b.file === file)
+    if (!hit) return null
+    const { result } = hit
+    if (result.complete) return { result }
+    // Anything older than the bench itself is an orphan a killed run left behind: it would otherwise
+    // win the match in every pause between rounds and drag the panel onto an hours-old corpse.
+    const floor = Date.parse(result.date)
+    let best: Meta['meta'] | undefined
+    let bestFile: string | undefined
+    for (const f of await readdir(this.dir)) {
+      if (!f.endsWith('.jsonl.part')) continue
+      try {
+        // Whole step in the try: what throws is open() on a file the CLI renamed between readdir and here.
+        const [first] = await firstAndLastLine(path.join(this.dir, f))
+        const meta = (JSON.parse(first) as Meta).meta
+        if (meta.bench?.file !== file || !(meta.started >= floor)) continue
+        if (!best || meta.started > best.started) { best = meta; bestFile = f }
+      } catch { continue }
+    }
+    if (!best || !bestFile) return { result }
+    try {
+      // Read the filename the scan actually matched, not path.join(this.dir, `${best.id}.jsonl.part`):
+      // meta.id is untrusted file content and may disagree with the filename (hand-written or renamed file).
+      const events = await this.readPath(path.join(this.dir, bestFile))
+      return { result, active: { id: best.id, harness: best.harness, round: best.bench!.round, started: best.started, events } }
+    } catch {
+      // The winner is exactly the file execRun is about to rename; a miss here is a normal state, not a 500.
+      return { result }
+    }
   }
 }
