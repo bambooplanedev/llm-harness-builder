@@ -169,3 +169,72 @@ test('max_turns, backend_error, aborted', async () => {
   const ac = new AbortController(); ac.abort()
   expect(last(await collect({ config: base(), task: 'do', workdir: await wd() }, { backend: new Fake([{ content: 'x' }]), signal: ac.signal })).reason).toBe('aborted')
 })
+
+test('truncated response is a parse error in any format, then the loop continues', async () => {
+  const be = new Fake([{ content: '<think>endless', truncated: true }, { content: 'fin' }])
+  const ev = await collect({ config: base(), task: 'do', workdir: await wd() }, { backend: be })
+  const pe = ev.find(e => e.type === 'parse_error') as any
+  expect(pe.message).toMatch(/truncated/)
+  expect(last(ev)).toMatchObject({ reason: 'final', text: 'fin', turns: 2 })
+})
+
+const hermesCfg = (over: Partial<HarnessConfig['toolCalls']> = {}) => base({
+  toolCalls: { mode: 'prompted', format: 'hermes', enforceSchema: false, promptedTemplate: 'T:{{tools}}', parseErrorHint: 'HINT', ...over },
+})
+const block = (name: string, args: unknown) => `<tool_call>\n${JSON.stringify({ name, arguments: args })}\n</tool_call>`
+
+test('hermes: tool call, <tool_response> wrapping without attributes, plain text ends the run', async () => {
+  const be = new Fake([{ content: 'Reading.\n' + block('read_file', { path: 'a.txt' }) }, { content: 'Done.' }])
+  const ev = await collect({ config: hermesCfg(), task: 'do', workdir: await wd() }, { backend: be })
+  expect(types(ev)).toContain('tool_call')
+  const sys = be.requests[0].messages[0].content
+  expect(sys).toContain('"type":"function"')
+  expect(be.requests[0].responseSchema).toBeUndefined()
+  const back = be.requests[1].messages.at(-1) as any
+  expect(back.role).toBe('user')
+  expect(back.content).toMatch(/^<tool_response>\n[\s\S]*\n<\/tool_response>$/)
+  expect(back.content).not.toContain('id=')
+  expect(last(ev)).toMatchObject({ reason: 'final', text: 'Done.', toolCallCount: 1, turns: 2 })
+})
+
+test('hermes: plain text on the first turn is final with 0 tool calls', async () => {
+  const be = new Fake([{ content: 'Sure, let me read the file first.' }])
+  const ev = await collect({ config: hermesCfg(), task: 'do', workdir: await wd() }, { backend: be })
+  expect(last(ev)).toMatchObject({ reason: 'final', toolCallCount: 0 })
+})
+
+test('hermes: server-parsed tool_calls with empty content are used and re-serialised into history', async () => {
+  const be = new Fake([{ content: '', toolCalls: [{ name: 'read_file', args: { path: 'a.txt' } }] }, { content: 'ok' }])
+  const ev = await collect({ config: hermesCfg(), task: 'do', workdir: await wd() }, { backend: be })
+  expect(ev.find(e => e.type === 'tool_result')).toBeTruthy()
+  const asst = be.requests[1].messages.at(-2) as any
+  expect(asst.role).toBe('assistant')
+  expect(asst.content).toContain('<tool_call>')
+  expect(asst.content).toContain('"name":"read_file"')
+  expect(asst.toolCalls).toBeUndefined()
+})
+
+test('hermes: enforceSchema is ignored (no responseSchema in the request)', async () => {
+  const be = new Fake([{ content: 'x' }])
+  await collect({ config: hermesCfg({ enforceSchema: true }), task: 'do', workdir: await wd() }, { backend: be })
+  expect(be.requests[0].responseSchema).toBeUndefined()
+})
+
+test('hermes: a malformed block in content is a parse error even if the server also returned tool_calls', async () => {
+  const be = new Fake([
+    { content: '<tool_call>{oops</tool_call>', toolCalls: [{ name: 'read_file', args: { path: 'a.txt' } }] },
+    { content: 'Done.' },
+  ])
+  const ev = await collect({ config: hermesCfg(), task: 'do', workdir: await wd() }, { backend: be })
+  expect(types(ev)).toContain('parse_error')
+  expect(types(ev)).not.toContain('tool_call')
+  expect(be.requests[1].messages.at(-1)).toMatchObject({ role: 'user', content: 'HINT' })
+  expect(last(ev)).toMatchObject({ reason: 'final', text: 'Done.', toolCallCount: 0 })
+})
+
+test('hermes: broken block -> parse_error with hint, second in a row -> parse_failed', async () => {
+  const be = new Fake([{ content: '<tool_call>{oops</tool_call>' }, { content: '<tool_call>' }])
+  const ev = await collect({ config: hermesCfg(), task: 'do', workdir: await wd() }, { backend: be })
+  expect(be.requests[1].messages.at(-1)).toMatchObject({ role: 'user', content: 'HINT' })
+  expect(last(ev).reason).toBe('parse_failed')
+})

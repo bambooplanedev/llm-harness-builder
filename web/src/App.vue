@@ -9,7 +9,7 @@ import Trace from './Trace.vue'
 const config = ref<HarnessConfig>({
   name: 'new', backend: { kind: 'ollama', baseUrl: 'http://localhost:11434', model: '', numCtx: 8192, temperature: 0.2 },
   systemPrompt: PRESETS.minimal, tools: { enabled: ['list_dir', 'read_file', 'write_file', 'edit_file', 'bash'], approveBash: true },
-  toolCalls: { mode: 'native', enforceSchema: false, promptedTemplate: DEFAULT_PROMPTED_TEMPLATE, parseErrorHint: DEFAULT_PARSE_ERROR_HINT },
+  toolCalls: { mode: 'native', format: 'json', enforceSchema: false, promptedTemplate: DEFAULT_PROMPTED_TEMPLATE, parseErrorHint: DEFAULT_PARSE_ERROR_HINT },
   context: { maxToolOutputChars: 4000, budgetTokens: 0 }, loop: { maxTurns: 15 },
 })
 const harnessNames = ref<string[]>([])
@@ -25,7 +25,7 @@ async function refreshModels() {
   catch (e) { models.value = []; modelsError.value = `cannot list models: ${(e as Error).message}` }
 }
 async function refreshLists() { harnessNames.value = (await api.harnesses()).map(h => h.name); runs.value = await api.runs() }
-async function load(name: string) { if (name) config.value = await api.harness(name) }
+async function load(name: string) { if (!name) return; const c = await api.harness(name); c.toolCalls.format ??= 'json'; config.value = c }
 async function saveAs(name: string) { error.value = ''; try { config.value.name = name; await api.saveHarness(name, outbound(config.value)); await refreshLists() } catch (e) { error.value = (e as Error).message } }
 function open(id: string) {
   unsub?.(); events.value = []; runId.value = id

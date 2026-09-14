@@ -3,12 +3,15 @@ export const TOOL_NAMES: ToolName[] = ['list_dir', 'read_file', 'write_file', 'e
 
 export type BackendKind = 'openai' | 'ollama'
 
+export type ToolCallFormat = 'json' | 'hermes'
+export const TOOL_CALL_FORMATS: ToolCallFormat[] = ['json', 'hermes']
+
 export type HarnessConfig = {
   name: string
   backend: { kind: BackendKind; baseUrl: string; model: string; numCtx?: number; temperature: number }
   systemPrompt: string
   tools: { enabled: ToolName[]; approveBash: boolean }
-  toolCalls: { mode: 'native' | 'prompted'; enforceSchema: boolean; promptedTemplate: string; parseErrorHint: string }
+  toolCalls: { mode: 'native' | 'prompted'; format?: ToolCallFormat; enforceSchema: boolean; promptedTemplate: string; parseErrorHint: string }
   context: { maxToolOutputChars: number; budgetTokens: number }
   loop: { maxTurns: number }
 }
@@ -42,6 +45,7 @@ export function validateConfig(c: unknown): string[] {
   if (!isObj(tc)) e.push('toolCalls is required')
   else {
     if (tc.mode !== 'native' && tc.mode !== 'prompted') e.push('toolCalls.mode must be native|prompted')
+    if (tc.format !== undefined && !TOOL_CALL_FORMATS.includes(tc.format)) e.push('toolCalls.format must be json|hermes')
     if (typeof tc.enforceSchema !== 'boolean') e.push('toolCalls.enforceSchema must be boolean')
     if (typeof tc.promptedTemplate !== 'string') e.push('toolCalls.promptedTemplate must be a string')
     if (tc.mode === 'prompted' && !String(tc.promptedTemplate ?? '').includes('{{tools}}')) e.push('toolCalls.promptedTemplate must contain {{tools}} in prompted mode')

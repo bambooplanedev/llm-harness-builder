@@ -41,3 +41,18 @@ test('prompted mode requires {{tools}} in promptedTemplate; native mode does not
   native.toolCalls.promptedTemplate = ''
   expect(validateConfig(native)).toEqual([])
 })
+
+test('format is optional; hermes + enforceSchema is valid; unknown format is an error', () => {
+  const noFormat = structuredClone(validConfig) as any
+  expect(validateConfig(noFormat)).toEqual([])
+
+  const hermes = structuredClone(validConfig) as any
+  hermes.toolCalls.mode = 'prompted'
+  hermes.toolCalls.format = 'hermes'
+  hermes.toolCalls.enforceSchema = true
+  expect(validateConfig(hermes)).toEqual([])
+
+  const bad = structuredClone(validConfig) as any
+  bad.toolCalls.format = 'xml'
+  expect(validateConfig(bad).some(e => e.includes('format'))).toBe(true)
+})

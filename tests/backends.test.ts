@@ -1,8 +1,9 @@
 import { test, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
+import { createServer } from 'node:http'
 import { OpenAIBackend } from '../src/core/backends/openai.js'
 import { OllamaBackend } from '../src/core/backends/ollama.js'
-import { BackendError, type ChatRequest } from '../src/core/backends/types.js'
+import { BackendError, defaultFetch, type ChatRequest } from '../src/core/backends/types.js'
 
 const fx = (n: string) => JSON.parse(readFileSync(new URL(`./fixtures/${n}.json`, import.meta.url), 'utf8'))
 const fakeFetch = (status: number, body: unknown) => (async (_url: string, init?: RequestInit) => {
@@ -75,4 +76,27 @@ test('2xx with a non-JSON body throws BackendError', async () => {
 test('listModels', async () => {
   expect(await new OpenAIBackend('http://x/v1', fakeFetch(200, { data: [{ id: 'a' }, { id: 'b' }] })).listModels()).toEqual(['a', 'b'])
   expect(await new OllamaBackend('http://x', fakeFetch(200, { models: [{ name: 'q:8b' }] })).listModels()).toEqual(['q:8b'])
+})
+
+test('finish_reason/done_reason length sets truncated', async () => {
+  const o = fx('openai-tool-call'); o.choices[0].finish_reason = 'length'
+  const l = fx('ollama-tool-call'); l.done_reason = 'length'
+  expect((await new OpenAIBackend('http://x/v1', fakeFetch(200, o)).send({})).truncated).toBe(true)
+  expect((await new OllamaBackend('http://x', fakeFetch(200, l)).send({})).truncated).toBe(true)
+  expect((await new OpenAIBackend('http://x/v1', fakeFetch(200, fx('openai-tool-call'))).send({})).truncated).toBeFalsy()
+})
+
+test('defaultFetch reaches a local server that delays its headers, and honours abort', async () => {
+  const srv = createServer((req, res) => {
+    if (req.url === '/slow') return void setTimeout(() => { res.setHeader('content-type', 'application/json'); res.end('{"ok":1}') }, 100)
+    setTimeout(() => res.end('{}'), 5000) // /hang: never answers in time
+  })
+  await new Promise<void>(r => srv.listen(0, '127.0.0.1', r))
+  const port = (srv.address() as { port: number }).port
+  try {
+    const r = await defaultFetch(`http://127.0.0.1:${port}/slow`, { method: 'POST', body: '{}', headers: { 'content-type': 'application/json' } })
+    expect(r.ok).toBe(true); expect(JSON.parse(await r.text())).toEqual({ ok: 1 })
+    const ac = new AbortController(); setTimeout(() => ac.abort(), 50)
+    await expect(defaultFetch(`http://127.0.0.1:${port}/hang`, { signal: ac.signal })).rejects.toThrow()
+  } finally { srv.closeAllConnections(); srv.close() }
 })

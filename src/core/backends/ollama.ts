@@ -1,7 +1,7 @@
-import { BackendError, readJson, type Backend, type ChatRequest, type NormalizedResponse, type NormalizedToolCall } from './types.js'
+import { BackendError, defaultFetch, readJson, type Backend, type ChatRequest, type FetchLike, type NormalizedResponse, type NormalizedToolCall } from './types.js'
 
 export class OllamaBackend implements Backend {
-  constructor(private baseUrl: string, private fetchFn: typeof fetch = fetch) { this.baseUrl = baseUrl.replace(/\/+$/, '') }
+  constructor(private baseUrl: string, private fetchFn: FetchLike = defaultFetch) { this.baseUrl = baseUrl.replace(/\/+$/, '') }
 
   async listModels(): Promise<string[]> {
     const r = await this.fetchFn(`${this.baseUrl}/api/tags`)
@@ -41,6 +41,7 @@ export class OllamaBackend implements Backend {
     return {
       content: msg.content ?? '', reasoning: msg.thinking || undefined, toolCalls,
       usage: j.prompt_eval_count !== undefined ? { promptTokens: j.prompt_eval_count ?? 0, completionTokens: j.eval_count ?? 0 } : undefined,
+      truncated: j.done_reason === 'length' || undefined,
       raw: j,
     }
   }

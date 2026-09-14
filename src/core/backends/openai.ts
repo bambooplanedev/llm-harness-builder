@@ -1,7 +1,7 @@
-import { BackendError, readJson, type Backend, type ChatRequest, type NormalizedResponse, type NormalizedToolCall } from './types.js'
+import { BackendError, defaultFetch, readJson, type Backend, type ChatRequest, type FetchLike, type NormalizedResponse, type NormalizedToolCall } from './types.js'
 
 export class OpenAIBackend implements Backend {
-  constructor(private baseUrl: string, private fetchFn: typeof fetch = fetch) { this.baseUrl = baseUrl.replace(/\/+$/, '') }
+  constructor(private baseUrl: string, private fetchFn: FetchLike = defaultFetch) { this.baseUrl = baseUrl.replace(/\/+$/, '') }
 
   async listModels(): Promise<string[]> {
     const r = await this.fetchFn(`${this.baseUrl}/models`)
@@ -42,6 +42,7 @@ export class OpenAIBackend implements Backend {
     return {
       content: msg.content ?? '', reasoning: msg.reasoning_content ?? msg.reasoning ?? undefined, toolCalls,
       usage: j.usage ? { promptTokens: j.usage.prompt_tokens ?? 0, completionTokens: j.usage.completion_tokens ?? 0 } : undefined,
+      truncated: j.choices?.[0]?.finish_reason === 'length' || undefined,
       raw: j,
     }
   }
