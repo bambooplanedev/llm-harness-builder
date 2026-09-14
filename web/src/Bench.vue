@@ -30,7 +30,7 @@ function compare(name: string, run: BenchRun, config: HarnessConfig) {
   diffUnsub?.(); diffEvents.value = []
   diff.value = { name, run, config }
   diffUnsub = api.events(run.trace!, e => diffEvents.value.push(e),
-    m => (error.value = `${m} — порівнюваний прогін: якщо його вбили, у runs/ лишився ${run.trace}.jsonl.part; перейменуй його в .jsonl`))
+    m => (error.value = `${m} — the compared run: if it was killed, runs/${run.trace}.jsonl.part is left behind; rename it to .jsonl`))
 }
 function closeDiff() { diffUnsub?.(); diffUnsub = null; diff.value = null; diffEvents.value = [] }
 
@@ -104,7 +104,7 @@ watch(sel, s => {
   if (s === 'live') { events.value = active.value?.events ?? [] ; return }
   events.value = []
   unsub = api.events(s.id, e => events.value.push(e),
-    m => (error.value = `${m} — якщо прогін убили, у runs/ лишився ${s.id}.jsonl.part; перейменуй його в .jsonl`))
+    m => (error.value = `${m} — if the run was killed, runs/${s.id}.jsonl.part is left behind; rename it to .jsonl`))
 })
 
 const age = computed(() => active.value ? now.value - active.value.started : 0)
@@ -120,7 +120,7 @@ watch(() => events.value.length, async () => {
 
 // Show progress in the browser tab title; reset on unmount handled by existing onUnmounted.
 watch([runs, total, () => result.value?.complete], () => {
-  document.title = result.value ? `${runs.value.length}/${total.value}${result.value.complete ? ' готово' : ''} · bench` : 'llm-harness-builder'
+  document.title = result.value ? `${runs.value.length}/${total.value}${result.value.complete ? ' done' : ''} · bench` : 'llm-harness-builder'
 })
 
 onMounted(() => void tick())
@@ -132,36 +132,36 @@ onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer); unsub?.(); d
     <div class="col left">
       <h4>Bench</h4>
       <div v-if="!files.length" class="hint">
-        ще нема бенчів: запусти <code>llm-harness-builder bench</code><br>
-        сторінка читає лише <code>runs/*.json</code> — бенч із <code>--out</code> в іншому каталозі тут не з'явиться
+        no benches yet: run <code>llm-harness-builder bench</code><br>
+        this page reads only <code>runs/*.json</code> — a bench written with <code>--out</code> elsewhere will not show up here
       </div>
       <div class="runs">
         <div v-for="f in files" :key="f.file" :class="{ on: f.file === file }" @click="openFile(f.file)">
-          {{ f.file }} · {{ f.model || '?' }} · {{ new Date(f.date).toLocaleString() }}<span v-if="!f.complete"> · не завершено</span>
+          {{ f.file }} · {{ f.model || '?' }} · {{ new Date(f.date).toLocaleString() }}<span v-if="!f.complete"> · incomplete</span>
         </div>
       </div>
 
       <template v-if="result">
         <div class="hint">
           {{ backend?.model }} · {{ backend?.kind }} {{ backend?.baseUrl }} · n={{ result.n }} · timeout {{ mmss(result.timeoutS * 1000) }} · {{ new Date(result.date).toLocaleString() }}<br>
-          {{ runs.length }}/{{ total }} прогонів · {{ mmss(msDone) }} позаду
+          {{ runs.length }}/{{ total }} runs · {{ mmss(msDone) }} in
         </div>
         <div v-if="active" class="ev approval live" @click="sel = 'live'">
-          ● {{ active.harness }} #{{ active.round }} · {{ mmss(age) }} з {{ mmss(result.timeoutS * 1000) }} · тиша {{ mmss(silence) }}
+          ● {{ active.harness }} #{{ active.round }} · {{ mmss(age) }} of {{ mmss(result.timeoutS * 1000) }} · silent {{ mmss(silence) }}
         </div>
-        <div v-if="!runs.length" class="hint">раунд 1 ще йде, перших результатів нема</div>
+        <div v-if="!runs.length" class="hint">round 1 still running, no results yet</div>
         <pre v-else class="bench-table">{{ formatTable(result.harnesses) }}</pre>
         <div class="runs">
           <template v-for="h in result.harnesses" :key="h.name">
             <div v-for="r in h.runs" :key="h.name + '#' + r.round" :class="{ notrace: !r.trace, bad: r.verdict === 'FAIL' }"
                  @click="r.trace && (sel = { id: r.trace })">
               {{ h.name }} #{{ r.round }} {{ r.verdict }} {{ r.reason }} {{ mmss(r.ms) }}<span
-                v-if="r.verdict === 'FAIL' && r.reason === 'final'"> — модель відповіла, тести червоні</span>
+                v-if="r.verdict === 'FAIL' && r.reason === 'final'"> — the model answered, tests are red</span>
               <div v-if="r.lastError" class="clip" :title="r.lastError">{{ r.lastError }}</div>
               <small>
                 <template v-if="r.trace">{{ r.trace }}</template>
-                <template v-else>трейс не писався (JSON до v2.0.3)</template> · {{ r.workdir }}
-                <button @click.stop="emit('toWorkbench', h.config, r.workdir)">у Workbench</button>
+                <template v-else>no trace written (JSON predates v2.0.3)</template> · {{ r.workdir }}
+                <button @click.stop="emit('toWorkbench', h.config, r.workdir)">to Workbench</button>
                 <button v-if="r.trace && sideA && r.trace !== sideA.run.trace && r.trace !== diff?.run.trace" @click.stop="compare(h.name, r, h.config)">⇄</button>
               </small>
             </div>
