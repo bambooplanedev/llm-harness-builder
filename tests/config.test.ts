@@ -1,15 +1,8 @@
 import { test, expect } from 'vitest'
-import { validateConfig, type HarnessConfig } from '../src/core/config.js'
+import { validateConfig } from '../src/core/config.js'
+import { harness } from './helpers.js'
 
-export const validConfig: HarnessConfig = {
-  name: 'test',
-  backend: { kind: 'openai', baseUrl: 'http://localhost:8080/v1', model: 'm', temperature: 0 },
-  systemPrompt: 'You are a coding agent.',
-  tools: { enabled: ['read_file', 'bash'], approveBash: true },
-  toolCalls: { mode: 'native', enforceSchema: false, promptedTemplate: 'Tools:\n{{tools}}', parseErrorHint: 'Reply with valid JSON.' },
-  context: { maxToolOutputChars: 4000, budgetTokens: 0 },
-  loop: { maxTurns: 10 },
-}
+const validConfig = harness()
 
 test('valid config has no errors', () => {
   expect(validateConfig(validConfig)).toEqual([])

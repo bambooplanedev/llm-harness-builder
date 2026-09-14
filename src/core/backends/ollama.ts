@@ -1,4 +1,4 @@
-import { BackendError, defaultFetch, readJson, jsonChunks, type Backend, type ChatRequest, type Delta, type FetchLike, type NormalizedResponse, type NormalizedToolCall } from './types.js'
+import { BackendError, defaultFetch, readJson, jsonChunks, toolsField, type Backend, type ChatRequest, type Delta, type FetchLike, type NormalizedResponse, type NormalizedToolCall } from './types.js'
 
 export class OllamaBackend implements Backend {
   constructor(private baseUrl: string, private fetchFn: FetchLike = defaultFetch) { this.baseUrl = baseUrl.replace(/\/+$/, '') }
@@ -22,7 +22,7 @@ export class OllamaBackend implements Backend {
     return {
       model: req.model, messages, stream: true,
       options: { temperature: req.temperature, ...(req.numCtx ? { num_ctx: req.numCtx } : {}) },
-      ...(req.tools ? { tools: req.tools.map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } })) } : {}),
+      ...toolsField(req.tools),
       ...(req.responseSchema ? { format: req.responseSchema } : {}),
     }
   }

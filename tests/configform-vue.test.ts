@@ -4,16 +4,13 @@ import { renderToString } from 'vue/server-renderer'
 // @ts-expect-error -- vue SFC, no .d.ts; typechecked separately by vue-tsc
 import ConfigForm from '../web/src/ConfigForm.vue'
 import type { HarnessConfig } from '../src/core/config.js'
+import { harness } from './helpers.js'
 
-const base: HarnessConfig = {
-  name: 'x',
+// An ollama/prompted harness: the form renders more knobs for it than for the shared default.
+const base = harness({
   backend: { kind: 'ollama', baseUrl: 'http://localhost:11434', model: 'qwen3:8b', numCtx: 8192, temperature: 0.2 },
-  systemPrompt: 's',
-  tools: { enabled: ['bash'], approveBash: true },
   toolCalls: { mode: 'prompted', format: 'json', enforceSchema: true, promptedTemplate: '{{tools}}', parseErrorHint: 'h' },
-  context: { maxToolOutputChars: 4000, budgetTokens: 0 },
-  loop: { maxTurns: 15 },
-}
+})
 const render = (c: HarnessConfig) =>
   renderToString(createSSRApp(ConfigForm, { modelValue: c, models: [], modelsError: '', harnessNames: [] }))
 

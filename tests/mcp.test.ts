@@ -1,14 +1,14 @@
 import { test, expect, vi } from 'vitest'
 import { execSync } from 'node:child_process'
 import { closeSync, openSync } from 'node:fs'
-import { mkdtemp } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+
 import { join } from 'node:path'
+import { tmp } from './helpers.js'
 import { fileURLToPath } from 'node:url'
 import { startServers } from '../src/core/mcp.js'
 
 const FIXTURE = fileURLToPath(new URL('./fixtures/mcp-server.mjs', import.meta.url))
-const wd = () => mkdtemp(join(tmpdir(), 'lhb-mcp-'))
+const wd = () => tmp('lhb-mcp-')
 const fake = (args: string[] = []) => ({ fs: { command: process.execPath, args: [FIXTURE, ...args] } })
 
 test('handshake lists tools, and $schema is stripped from every schema', async () => {

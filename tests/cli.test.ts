@@ -1,9 +1,10 @@
 import { test, expect } from 'vitest'
 import { spawn, spawnSync, execSync } from 'node:child_process'
-import { mkdtemp, writeFile, readFile, readdir, stat, cp } from 'node:fs/promises'
+import { writeFile, readFile, readdir, stat, cp } from 'node:fs/promises'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { tmp } from './helpers.js'
 import { RunStore } from '../src/server/runs'
 
 const ROOT = process.cwd()
@@ -13,7 +14,7 @@ const cli = (args: string[], env: Record<string, string> = {}, cwd = mkdtempSync
   Object.assign(spawnSync(join(ROOT, 'node_modules', '.bin', 'tsx'), [join(ROOT, 'src', 'cli.ts'), ...args], { cwd, encoding: 'utf8', env: { ...process.env, ...env } }), { cwd })
 
 test('run --json prints jsonl and exits 0 on final', async () => {
-  const wd = await mkdtemp(join(tmpdir(), 'lhb-cli-'))
+  const wd = await tmp('lhb-cli-')
   const fake = join(wd, 'fake.json')
   // a large final response makes truncation observable if the process exits before stdout drains
   await writeFile(fake, JSON.stringify([{ toolCalls: [{ name: 'bash', args: { command: 'echo hi' } }] }, { content: 'x'.repeat(200_000) }]))
@@ -35,7 +36,7 @@ test('run --json prints jsonl and exits 0 on final', async () => {
 }, 30_000)
 
 test('run exits 1 on parse_failed', async () => {
-  const wd = await mkdtemp(join(tmpdir(), 'lhb-cli-'))
+  const wd = await tmp('lhb-cli-')
   const fake = join(wd, 'fake.json')
   await writeFile(fake, JSON.stringify([{ content: '' }, { content: '' }]))
   const r = cli(['run', harness('bare'), '--workdir', wd, '--yes', 'x'], { LHB_FAKE_BACKEND: fake })
@@ -43,7 +44,7 @@ test('run exits 1 on parse_failed', async () => {
 }, 30_000)
 
 test('demo prints PASS/FAIL per harness', async () => {
-  const fake = join(await mkdtemp(join(tmpdir(), 'lhb-cli-')), 'fake.json')
+  const fake = join(await tmp('lhb-cli-'), 'fake.json')
   // bare: model answers without doing anything -> check.sh fails. tuned: fixes the bug via edit_file.
   await writeFile(fake, JSON.stringify([
     { content: 'Done.' },
@@ -60,7 +61,7 @@ test('demo prints PASS/FAIL per harness', async () => {
 }, 60_000)
 
 test('demo --json keeps stdout pure JSONL and prints the summary on stderr', async () => {
-  const fake = join(await mkdtemp(join(tmpdir(), 'lhb-cli-')), 'fake.json')
+  const fake = join(await tmp('lhb-cli-'), 'fake.json')
   await writeFile(fake, JSON.stringify([
     { content: 'Done.' },
     { content: '{"calls":[{"name":"edit_file","args":{"path":"src/slugify.js","old":"replace(/[^a-z0-9]+/g, \'-\')","new":"replace(/[^a-z0-9]+/g, \'-\').replace(/^-+|-+$/g, \'\')"}}],"final":null}' },
@@ -79,7 +80,7 @@ test('demo --json keeps stdout pure JSONL and prints the summary on stderr', asy
 }, 60_000)
 
 test('run flags a final answer with zero tool calls', async () => {
-  const wd = await mkdtemp(join(tmpdir(), 'lhb-cli-'))
+  const wd = await tmp('lhb-cli-')
   const fake = join(wd, 'fake.json')
   await writeFile(fake, JSON.stringify([{ content: 'Let me look at that first.' }]))
   const r = cli(['run', harness('tuned-hermes'), '--workdir', wd, '--yes', 'x'], { LHB_FAKE_BACKEND: fake })
@@ -88,7 +89,7 @@ test('run flags a final answer with zero tool calls', async () => {
 }, 30_000)
 
 test('run dies with a clear message when the harness has no backend object and an override is given', async () => {
-  const wd = await mkdtemp(join(tmpdir(), 'lhb-cli-'))
+  const wd = await tmp('lhb-cli-')
   const bad = join(wd, 'bad.json')
   await writeFile(bad, JSON.stringify({ name: 'bad' }))
   const r = cli(['run', bad, '--workdir', wd, '--yes', '--model', 'x', 'task'])
@@ -101,7 +102,7 @@ const TUNED_FINAL = '{"calls":[],"final":"Fixed."}'
 const HERMES_EDIT = '<tool_call>\n{"name":"edit_file","arguments":{"path":"src/slugify.js","old":"replace(/[^a-z0-9]+/g, \'-\')","new":"replace(/[^a-z0-9]+/g, \'-\').replace(/^-+|-+$/g, \'\')"}}\n</tool_call>'
 
 test('bench --n 2 on one harness: table, JSON with per-run reason/parseErrors/workdir', async () => {
-  const wd = await mkdtemp(join(tmpdir(), 'lhb-cli-'))
+  const wd = await tmp('lhb-cli-')
   const fake = join(wd, 'fake.json'); const out = join(wd, 'b.json')
   // run 1: edit → final. run 2: garbage (parse_error, retried) → edit → final.
   await writeFile(fake, JSON.stringify([{ content: TUNED_EDIT }, { content: TUNED_FINAL }, { content: 'not json' }, { content: TUNED_EDIT }, { content: TUNED_FINAL }]))
@@ -131,7 +132,7 @@ test('bench --n 2 on one harness: table, JSON with per-run reason/parseErrors/wo
 }, 60_000)
 
 test('bench without files uses ./harnesses in demo order, round-robin', async () => {
-  const wd = await mkdtemp(join(tmpdir(), 'lhb-cli-'))
+  const wd = await tmp('lhb-cli-')
   const fake = join(wd, 'fake.json'); const out = join(wd, 'b.json')
   await cp(join(ROOT, 'harnesses'), join(wd, 'harnesses'), { recursive: true })
   await writeFile(fake, JSON.stringify([{ content: 'Done.' }, { content: TUNED_EDIT }, { content: TUNED_FINAL }, { content: HERMES_EDIT }, { content: 'Fixed.' }]))
@@ -156,7 +157,7 @@ test('bench rejects non-positive-integer --n and --timeout with usage', () => {
 }, 30_000)
 
 test('Ctrl-C during run keeps the trace instead of an invisible .part', async () => {
-  const wd = await mkdtemp(join(tmpdir(), 'lhb-cli-'))
+  const wd = await tmp('lhb-cli-')
   const fake = join(wd, 'fake.json')
   // no --yes: the run parks on the approval prompt, so the SIGINT lands mid-run
   await writeFile(fake, JSON.stringify([{ toolCalls: [{ name: 'bash', args: { command: 'echo hi' } }] }]))
@@ -171,7 +172,7 @@ test('Ctrl-C during run keeps the trace instead of an invisible .part', async ()
 }, 30_000)
 
 test('run dies with a clear message, not a stack, when the harness file is missing or unreadable', async () => {
-  const wd = await mkdtemp(join(tmpdir(), 'lhb-cli-'))
+  const wd = await tmp('lhb-cli-')
   for (const file of [join(wd, 'nope.json'), wd]) {
     const r = cli(['run', file, '--workdir', wd, '--yes', 'task'])
     expect(r.status).toBe(2)
@@ -181,7 +182,7 @@ test('run dies with a clear message, not a stack, when the harness file is missi
 }, 30_000)
 
 test('run starts an mcp server and reports its counts on stderr', async () => {
-  const wd = await mkdtemp(join(tmpdir(), 'lhb-cli-'))
+  const wd = await tmp('lhb-cli-')
   const fake = join(wd, 'fake.json')
   await writeFile(fake, JSON.stringify([{ content: 'fin' }]))
   const mcpFixture = join(ROOT, 'tests', 'fixtures', 'mcp-server.mjs')
@@ -203,7 +204,7 @@ test('run starts an mcp server and reports its counts on stderr', async () => {
 }, 30_000)
 
 test('run without --yes prompts "start mcp server", not "run bash", for an mcp approval', async () => {
-  const wd = await mkdtemp(join(tmpdir(), 'lhb-cli-'))
+  const wd = await tmp('lhb-cli-')
   const fake = join(wd, 'fake.json')
   await writeFile(fake, JSON.stringify([])) // denial ends the run before any LLM request
   const mcpFixture = join(ROOT, 'tests', 'fixtures', 'mcp-server.mjs')
@@ -240,7 +241,7 @@ test('run without --yes prompts "start mcp server", not "run bash", for an mcp a
 // real mcp child alive until we interrupt it — the same marker + pgrep technique as the grandchild
 // test in tests/mcp.test.ts, so this test does not see fixtures other test files start in parallel.
 test('Ctrl-C during bench with a live mcp server leaves the PASS table intact and no process behind', async () => {
-  const wd = await mkdtemp(join(tmpdir(), 'lhb-cli-'))
+  const wd = await tmp('lhb-cli-')
   const fake = join(wd, 'fake.json'); const out = join(wd, 'b.json')
   await writeFile(fake, JSON.stringify([{ toolCalls: [{ name: 'stall', args: {} }] }]))
   const mcpFixture = join(ROOT, 'tests', 'fixtures', 'mcp-server.mjs')
@@ -290,7 +291,7 @@ test('Ctrl-C during bench with a live mcp server leaves the PASS table intact an
 // The two numbers README quotes for the mcp-off/mcp-on pair: what the server put in front of the
 // model, and how many tool results came back as errors. Measured on a real server child, not a mock.
 test('bench with an mcp server records toolChars/toolErrors and prints the tool columns', async () => {
-  const wd = await mkdtemp(join(tmpdir(), 'lhb-cli-'))
+  const wd = await tmp('lhb-cli-')
   const fake = join(wd, 'fake.json'); const out = join(wd, 'b.json')
   await writeFile(fake, JSON.stringify([{ toolCalls: [{ name: 'boom', args: {} }] }, { content: 'Done.' }]))
   const harnessFile = join(wd, 'mcp-harness.json')

@@ -1,4 +1,4 @@
-import { BackendError, defaultFetch, readJson, jsonChunks, type Backend, type ChatRequest, type Delta, type FetchLike, type NormalizedResponse, type NormalizedToolCall } from './types.js'
+import { BackendError, defaultFetch, readJson, jsonChunks, toolsField, type Backend, type ChatRequest, type Delta, type FetchLike, type NormalizedResponse, type NormalizedToolCall } from './types.js'
 
 export class OpenAIBackend implements Backend {
   constructor(private baseUrl: string, private fetchFn: FetchLike = defaultFetch) { this.baseUrl = baseUrl.replace(/\/+$/, '') }
@@ -21,7 +21,7 @@ export class OpenAIBackend implements Backend {
     })
     return {
       model: req.model, messages, temperature: req.temperature, stream: true, stream_options: { include_usage: true },
-      ...(req.tools ? { tools: req.tools.map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } })) } : {}),
+      ...toolsField(req.tools),
       ...(req.responseSchema ? { response_format: { type: 'json_schema', json_schema: { name: 'harness', schema: req.responseSchema } } } : {}),
     }
   }

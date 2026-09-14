@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { Delta, HarnessEvent } from './api'
+import { mcpApprovalServer, mcpCounts } from '../../src/core/events'
 // approvable is a Boolean-typed prop, so Vue casts an ABSENT value to `false` (not `undefined`).
 // App.vue's live Workbench never passes this prop and needs the opposite default -- only a
 // finished/replayed trace (Bench.vue, Diff.vue) opts out by passing `false` explicitly.
-const props = withDefaults(defineProps<{ events: HarnessEvent[]; live: Delta; task?: string; approvable?: boolean }>(), { approvable: true })
+// `live` is only ever set by the live Workbench; a replayed trace (Bench.vue, Diff.vue) omits it.
+const props = withDefaults(defineProps<{ events: HarnessEvent[]; live?: Delta; task?: string; approvable?: boolean }>(), { approvable: true, live: () => ({}) })
 const emit = defineEmits<{ approve: [callId: string, ok: boolean] }>()
 
 const turns = computed(() => {
@@ -18,7 +20,7 @@ const answered = computed(() => {
   // run has ended some other way), treat every mcp: approval as answered so its buttons don't
   // stay live forever and a second click doesn't 404.
   if (props.events.some(e => e.type === 'mcp_server_start' || e.type === 'done')) {
-    for (const e of props.events) if (e.type === 'approval_required' && e.call.name.startsWith('mcp:')) ids.add(e.call.callId)
+    for (const e of props.events) if (e.type === 'approval_required' && mcpApprovalServer(e.call.name)) ids.add(e.call.callId)
   }
   return ids
 })
@@ -46,14 +48,14 @@ const liveTok = computed(() => Math.ceil(liveText.value.length / 4))
       <div v-else-if="e.type === 'tool_call'" class="ev tool_call">{{ e.call.name }} {{ pretty(e.call.args) }}</div>
       <div v-else-if="e.type === 'approval_required' && !answered.has(e.call.callId)" class="ev approval">
         <template v-if="props.approvable !== false">
-          <template v-if="e.call.name.startsWith('mcp:')">start mcp server <code>{{ e.call.name.slice(4) }}</code>: <code>{{ e.call.args.command }}</code>?</template>
+          <template v-if="mcpApprovalServer(e.call.name)">start mcp server <code>{{ mcpApprovalServer(e.call.name) }}</code>: <code>{{ e.call.args.command }}</code>?</template>
           <template v-else>run <code>{{ e.call.args.command }}</code>?</template>
           <button @click="emit('approve', e.call.callId, true)">Run</button> <button @click="emit('approve', e.call.callId, false)">Deny</button>
         </template>
         <template v-else>approval_required: <code>{{ e.call.args.command }}</code> (bench: auto-approved)</template>
       </div>
       <div v-else-if="e.type === 'mcp_server_start'" class="ev tool_call">
-        mcp <code>{{ e.server }}</code>: {{ e.offered }} offered → {{ e.tools.length }} tools, {{ e.descriptionChars }} desc + {{ e.schemaChars }} schema chars
+        mcp <code>{{ e.server }}</code>: {{ mcpCounts(e) }}
       </div>
       <div v-else-if="e.type === 'tool_result'" class="ev tool_result" :class="{ err: e.error }">{{ e.output }}<small v-if="e.truncated" class="warn"> [truncated]</small></div>
       <div v-else-if="e.type === 'error'" class="ev error">{{ e.message }}<br>{{ e.body }}</div>

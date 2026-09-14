@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
-import { api, type ActiveTrace, type BenchFile, type BenchResult, type BenchRun, type Delta, type HarnessConfig, type HarnessEvent } from './api'
+import { api, type ActiveTrace, type BenchFile, type BenchResult, type BenchRun, type HarnessConfig, type HarnessEvent } from './api'
 import { formatTable, mmss } from '../../src/core/bench'
 import Trace from './Trace.vue'
 import Diff from './Diff.vue'
@@ -8,7 +8,6 @@ import type { DiffSide } from '../../src/core/diff'
 
 const emit = defineEmits<{ toWorkbench: [config: HarnessConfig, workdir: string] }>()
 
-const EMPTY: Delta = {} // a stable object: a fresh literal per render would churn the prop
 const files = ref<BenchFile[]>([])
 const file = ref('')
 const result = ref<BenchResult | null>(null)
@@ -26,11 +25,15 @@ const diff = ref<{ name: string; run: BenchRun; config: HarnessConfig } | null>(
 const diffEvents = ref<HarnessEvent[]>([])
 let diffUnsub: (() => void) | null = null
 
+const TITLE = 'llm-harness-builder'
+/** An SSE stream that never opens usually means a killed run: its trace is still a .part file. */
+const killedHint = (msg: string, id: string) => `${msg} — if the run was killed, runs/${id}.jsonl.part is left behind; rename it to .jsonl`
+
 function compare(name: string, run: BenchRun, config: HarnessConfig) {
   diffUnsub?.(); diffEvents.value = []
   diff.value = { name, run, config }
   diffUnsub = api.events(run.trace!, e => diffEvents.value.push(e),
-    m => (error.value = `${m} — the compared run: if it was killed, runs/${run.trace}.jsonl.part is left behind; rename it to .jsonl`))
+    m => (error.value = killedHint(`${m} — the compared run`, run.trace!)))
 }
 function closeDiff() { diffUnsub?.(); diffUnsub = null; diff.value = null; diffEvents.value = [] }
 
@@ -104,7 +107,7 @@ watch(sel, s => {
   if (s === 'live') { events.value = active.value?.events ?? [] ; return }
   events.value = []
   unsub = api.events(s.id, e => events.value.push(e),
-    m => (error.value = `${m} — if the run was killed, runs/${s.id}.jsonl.part is left behind; rename it to .jsonl`))
+    m => (error.value = killedHint(m, s.id)))
 })
 
 const age = computed(() => active.value ? now.value - active.value.started : 0)
@@ -120,11 +123,11 @@ watch(() => events.value.length, async () => {
 
 // Show progress in the browser tab title; reset on unmount handled by existing onUnmounted.
 watch([runs, total, () => result.value?.complete], () => {
-  document.title = result.value ? `${runs.value.length}/${total.value}${result.value.complete ? ' done' : ''} · bench` : 'llm-harness-builder'
+  document.title = result.value ? `${runs.value.length}/${total.value}${result.value.complete ? ' done' : ''} · bench` : TITLE
 })
 
 onMounted(() => void tick())
-onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer); unsub?.(); diffUnsub?.(); document.title = 'llm-harness-builder' })
+onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer); unsub?.(); diffUnsub?.(); document.title = TITLE })
 </script>
 
 <template>
@@ -172,7 +175,7 @@ onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer); unsub?.(); d
     </div>
     <div class="col" ref="pane">
       <Diff v-if="sideA && sideB" :a="sideA" :b="sideB" :task="result!.task" @close="closeDiff" />
-      <Trace v-else-if="result && events.length" :events="events" :live="EMPTY" :task="result.task" :approvable="false" />
+      <Trace v-else-if="result && events.length" :events="events" :task="result.task" :approvable="false" />
     </div>
   </div>
 </template>

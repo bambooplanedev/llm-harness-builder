@@ -1,21 +1,20 @@
 #!/usr/bin/env node
 // src/cli.ts
 import { parseArgs } from 'node:util'
-import { readFile, mkdtemp, cp, writeFile, appendFile, rename, access, mkdir } from 'node:fs/promises'
-import { existsSync, renameSync } from 'node:fs'
+import { readFile, mkdtemp, cp, writeFile, rename, access, mkdir } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import { spawn, spawnSync } from 'node:child_process'
 import { createInterface } from 'node:readline/promises'
 import { tmpdir } from 'node:os'
-import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { runAgent, type RunOpts } from './core/run.js'
 import { validateConfig, type HarnessConfig } from './core/config.js'
 import { validateWorkdir } from './core/tools/sandbox.js'
 import type { Backend, NormalizedResponse } from './core/backends/types.js'
-import type { HarnessEvent, ToolCall } from './core/events.js'
+import { mcpApprovalServer, mcpCounts, quitWithoutWork, type HarnessEvent, type ToolCall } from './core/events.js'
 import { startServer } from './server/index.js'
-import type { Meta } from './server/runs.js'
+import { TraceWriter, type Meta } from './server/runs.js'
 import { DEMO_TASK } from './core/prompts.js'
 import { median, formatTable, type BenchRun, type BenchHarness, type BenchResult } from './core/bench.js'
 
@@ -58,11 +57,11 @@ function describe(e: HarnessEvent, streamed = false): string {
     case 'llm_response': return `[t${e.turn}] llm_response ${e.latencyMs}ms${e.usage ? ` (${e.usage.promptTokens}+${e.usage.completionTokens} tok)` : ''}${e.content && !streamed ? `\n    ${e.content.slice(0, 200).replace(/\n/g, ' ')}` : ''}`
     case 'parse_error': return `[t${e.turn}] parse_error: ${e.message}`
     case 'tool_call': return `[t${e.turn}] tool_call ${e.call.name} ${JSON.stringify(e.call.args).slice(0, 200)}`
-    case 'mcp_server_start': return `mcp ${e.server}: ${e.offered} offered, ${e.tools.length} tools, ${e.descriptionChars} desc + ${e.schemaChars} schema chars`
+    case 'mcp_server_start': return `mcp ${e.server}: ${mcpCounts(e)}`
     case 'approval_required': return `[t${e.turn}] approval_required ${e.call.name}`
     case 'tool_result': return `[t${e.turn}] tool_result ${e.name}${e.error ? ' (error)' : ''}${e.truncated ? ' (truncated)' : ''}: ${e.output.slice(0, 200).replace(/\n/g, ' ')}`
     case 'error': return `error: ${e.message}${e.body ? `\n${e.body}` : ''}`
-    case 'done': return `done: ${e.reason} after ${e.turns} turns, ${e.toolCallCount} tool calls${e.reason === 'final' && e.toolCallCount === 0 ? '  ! final after 0 tool calls' : ''}${e.text ? `\n${e.text}` : ''}`
+    case 'done': return `done: ${e.reason} after ${e.turns} turns, ${e.toolCallCount} tool calls${quitWithoutWork(e) ? '  ! final after 0 tool calls' : ''}${e.text ? `\n${e.text}` : ''}`
   }
 }
 
@@ -70,21 +69,19 @@ type ExecOpts = { yes: boolean; json: boolean; quiet?: boolean; signal?: AbortSi
 
 /** Runs one agent loop and keeps its trace in ./runs/<id>.jsonl, the file format serve reads. Written as .part and renamed when the loop ends, so a live or killed run is never listed. */
 async function execRun(config: HarnessConfig, task: string, workdir: string, o: ExecOpts): Promise<{ id: string; last: HarnessEvent }> {
-  const id = randomUUID().slice(0, 8)
-  const file = path.join('runs', `${id}.jsonl`), part = `${file}.part`
-  await mkdir('runs', { recursive: true })
-  const meta: Meta = { meta: { id, harness: config.name, task, workdir, started: Date.now(), bench: o.bench } }
-  await writeFile(part, JSON.stringify(meta) + '\n')
+  const trace = new TraceWriter('runs', true)
+  await trace.open({ harness: config.name, task, workdir, started: Date.now(), bench: o.bench })
   // Ctrl-C: keep what the run has written instead of leaving a .part nothing ever lists again
   // (serve appends the synthetic done for any trace that ends without one). bench registers its
   // own handler before ours and exits from it, so its .part stays for the Bench page to finish.
-  const onSigint = () => { try { renameSync(part, file) } catch {} ; process.exit(130) }
+  const onSigint = () => { trace.closeSync(); process.exit(130) }
   if (!o.bench) process.once('SIGINT', onSigint)
   const rl = o.yes ? null : createInterface({ input: process.stdin, output: process.stderr })
   const approve = async (call: ToolCall) => {
     if (o.yes) return true
-    const what = call.name.startsWith('mcp:')
-      ? `start mcp server "${call.name.slice(4)}": ${call.args.command}`
+    const server = mcpApprovalServer(call.name)
+    const what = server
+      ? `start mcp server "${server}": ${call.args.command}`
       : `run bash: ${call.args.command}`
     const a = await rl!.question(`${what}\n[y/N] `)
     return /^y(es)?$/i.test(a.trim())
@@ -101,7 +98,7 @@ async function execRun(config: HarnessConfig, task: string, workdir: string, o: 
   try {
     for await (const e of runAgent({ config, task, workdir }, opts)) {
       last = e
-      await appendFile(part, JSON.stringify(e) + '\n')
+      await trace.append(e)
       if (o.json) process.stdout.write(JSON.stringify(e) + '\n')
       if (streamed) process.stderr.write('\n')
       if (!o.quiet) console.error(describe(e, streamed))
@@ -112,9 +109,9 @@ async function execRun(config: HarnessConfig, task: string, workdir: string, o: 
     rl?.close()
     process.off('SIGINT', onSigint) // demo runs three harnesses in one process: a stale handler would rename the wrong run
   }
-  await rename(part, file)
-  if (!o.quiet) console.error(`trace ${file}`)
-  return { id, last: last! }
+  await trace.close()
+  if (!o.quiet) console.error(`trace ${trace.file}`)
+  return { id: trace.id, last: last! }
 }
 
 async function cmdRun(argv: string[]) {

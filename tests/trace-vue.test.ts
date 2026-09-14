@@ -26,3 +26,12 @@ test('approvable=false (Bench/Diff replay) still renders the auto-approved text'
   expect(html).toContain('auto-approved')
   expect(html).not.toContain('<button>Run</button>')
 })
+
+// Bench.vue and Diff.vue replay a trace and pass no :live at all. An absent object prop is `undefined`,
+// and an open turn (llm_request with no llm_response yet) makes the template read live.reasoning and
+// live.content -- which is where a missing default throws instead of rendering.
+test('omitting live renders an open turn instead of throwing', async () => {
+  const openTurn: HarnessEvent[] = [{ seq: 0, turn: 1, ts: 0, type: 'llm_request', payload: {} }]
+  const html = await renderToString(createSSRApp(Trace, { events: openTurn, task: 'x', approvable: false }))
+  expect(html).toContain('thinking')
+})

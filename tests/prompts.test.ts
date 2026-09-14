@@ -1,18 +1,10 @@
 import { test, expect } from 'vitest'
 import { readFile } from 'node:fs/promises'
 import { renderTools, applyFamily, FAMILIES, PRESETS, DEFAULT_PROMPTED_TEMPLATE, DEFAULT_PARSE_ERROR_HINT, HERMES_TEMPLATE, HERMES_PARSE_ERROR_HINT } from '../src/core/prompts.js'
-import { validateConfig, type HarnessConfig } from '../src/core/config.js'
+import { validateConfig } from '../src/core/config.js'
+import { harness } from './helpers.js'
 
-// Do not import validConfig from config.test.ts: importing a test file re-registers its tests here.
-const validConfig: HarnessConfig = {
-  name: 'test',
-  backend: { kind: 'openai', baseUrl: 'http://localhost:8080/v1', model: 'm', temperature: 0 },
-  systemPrompt: 'You are a coding agent.',
-  tools: { enabled: ['read_file', 'bash'], approveBash: true },
-  toolCalls: { mode: 'native', enforceSchema: false, promptedTemplate: 'Tools:\n{{tools}}', parseErrorHint: 'Reply with valid JSON.' },
-  context: { maxToolOutputChars: 4000, budgetTokens: 0 },
-  loop: { maxTurns: 10 },
-}
+const validConfig = harness()
 
 test('renderTools lists name, description and parameters', () => {
   const s = renderTools([{ name: 'read_file', description: 'Read a file', parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } }])

@@ -1,43 +1,29 @@
 import { test, expect } from 'vitest'
-import { mkdtemp, writeFile, access } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { writeFile, access } from 'node:fs/promises'
 import { join } from 'node:path'
 import { runAgent } from '../src/core/run.js'
-import type { Backend, ChatRequest, NormalizedResponse } from '../src/core/backends/types.js'
 import type { HarnessConfig, RunParams } from '../src/core/config.js'
 import type { HarnessEvent } from '../src/core/events.js'
+import { fakeBackend, harness, tmp, type FakeResponse } from './helpers.js'
 
-class Fake implements Backend {
-  requests: ChatRequest[] = []
-  constructor(private queue: Partial<NormalizedResponse>[]) {}
-  async listModels() { return ['m'] }
-  buildPayload(req: ChatRequest) { this.requests.push(structuredClone(req)); return { messages: req.messages } }
-  async send(): Promise<NormalizedResponse> {
-    const r = this.queue.shift(); if (!r) throw new Error('fake: no more responses')
-    return { content: '', toolCalls: [], raw: {}, ...r }
-  }
-}
-
-const base = (over: Partial<HarnessConfig> = {}): HarnessConfig => ({
-  name: 't', backend: { kind: 'openai', baseUrl: 'http://x/v1', model: 'm', temperature: 0 },
-  systemPrompt: 'sys', tools: { enabled: ['read_file', 'bash'], approveBash: false },
-  toolCalls: { mode: 'native', enforceSchema: false, promptedTemplate: 'T:{{tools}}', parseErrorHint: 'HINT' },
-  context: { maxToolOutputChars: 50, budgetTokens: 0 }, loop: { maxTurns: 5 }, ...over,
-})
-async function wd() { const d = await mkdtemp(join(tmpdir(), 'lhb-run-')); await writeFile(join(d, 'a.txt'), 'A'.repeat(120)); return d }
+// The truncation assertions below depend on the 50-char cap; everything else is the shared default.
+const base = (over: Partial<HarnessConfig> = {}): HarnessConfig =>
+  harness({ context: { maxToolOutputChars: 50, budgetTokens: 0 }, ...over })
+const Fake = (queue: FakeResponse[]) => fakeBackend(queue)
+async function wd() { const d = await tmp('lhb-run-'); await writeFile(join(d, 'a.txt'), 'A'.repeat(120)); return d }
 async function collect(params: RunParams, opts = {}) { const ev: HarnessEvent[] = []; for await (const e of runAgent(params, opts)) ev.push(e); return ev }
 const types = (ev: HarnessEvent[]) => ev.map(e => e.type)
 const last = (ev: HarnessEvent[]) => ev[ev.length - 1] as Extract<HarnessEvent, { type: 'done' }>
 
 test('native: final text with no tool calls ends the run', async () => {
-  const be = new Fake([{ content: 'done!' }])
+  const be = Fake([{ content: 'done!' }])
   const ev = await collect({ config: base(), task: 'do', workdir: await wd() }, { backend: be })
   expect(types(ev)).toEqual(['context_stats', 'llm_request', 'llm_response', 'done'])
   expect(last(ev)).toMatchObject({ reason: 'final', text: 'done!', turns: 1, toolCallCount: 0 })
 })
 
 test('native: tool call, truncated result goes back as tool message, then final', async () => {
-  const be = new Fake([{ toolCalls: [{ backendId: 'id1', name: 'read_file', args: { path: 'a.txt' } }] }, { content: 'ok' }])
+  const be = Fake([{ toolCalls: [{ backendId: 'id1', name: 'read_file', args: { path: 'a.txt' } }] }, { content: 'ok' }])
   const ev = await collect({ config: base(), task: 'do', workdir: await wd() }, { backend: be })
   const tr = ev.find(e => e.type === 'tool_result') as any
   expect(tr.truncated).toBe(true); expect(tr.output.startsWith('A'.repeat(50))).toBe(true)
@@ -48,7 +34,7 @@ test('native: tool call, truncated result goes back as tool message, then final'
 })
 
 test('native: empty content without tool calls is a parse error; two in a row = parse_failed', async () => {
-  const be = new Fake([{ content: '' }, { content: '  ' }])
+  const be = Fake([{ content: '' }, { content: '  ' }])
   const ev = await collect({ config: base(), task: 'do', workdir: await wd() }, { backend: be })
   expect(types(ev).filter(t => t === 'parse_error')).toHaveLength(2)
   expect(last(ev).reason).toBe('parse_failed')
@@ -56,14 +42,14 @@ test('native: empty content without tool calls is a parse error; two in a row = 
 })
 
 test('parse error counter resets after a good turn', async () => {
-  const be = new Fake([{ content: '' }, { toolCalls: [{ name: 'read_file', args: { path: 'a.txt' } }] }, { content: '' }, { content: 'fin' }])
+  const be = Fake([{ content: '' }, { toolCalls: [{ name: 'read_file', args: { path: 'a.txt' } }] }, { content: '' }, { content: 'fin' }])
   const ev = await collect({ config: base(), task: 'do', workdir: await wd() }, { backend: be })
   expect(last(ev).reason).toBe('final')
 })
 
 test('prompted: template injected, json parsed, results wrapped in <tool_result>, prose-only is parse error', async () => {
   const cfg = base({ toolCalls: { mode: 'prompted', enforceSchema: true, promptedTemplate: 'T:{{tools}}', parseErrorHint: 'HINT' } })
-  const be = new Fake([
+  const be = Fake([
     { content: 'Sure, let me look.' },
     { content: '{"calls":[{"name":"read_file","args":{"path":"a.txt"}}],"final":null}' },
     { content: '{"calls":[],"final":"All good."}' },
@@ -81,7 +67,7 @@ test('prompted: template injected, json parsed, results wrapped in <tool_result>
 
 test('prompted: no calls and no final is a parse error; two in a row = parse_failed', async () => {
   const cfg = base({ toolCalls: { mode: 'prompted', enforceSchema: true, promptedTemplate: 'T:{{tools}}', parseErrorHint: 'HINT' } })
-  const be = new Fake([{ content: '{"calls":[],"final":null}' }, { content: '{"calls":[],"final":null}' }])
+  const be = Fake([{ content: '{"calls":[],"final":null}' }, { content: '{"calls":[],"final":null}' }])
   const ev = await collect({ config: cfg, task: 'do', workdir: await wd() }, { backend: be })
   expect(types(ev).filter(t => t === 'parse_error')).toHaveLength(2)
   expect(last(ev).reason).toBe('parse_failed')
@@ -89,7 +75,7 @@ test('prompted: no calls and no final is a parse error; two in a row = parse_fai
 
 test('prompted: empty-string final is a parse error, then a real final ends the run', async () => {
   const cfg = base({ toolCalls: { mode: 'prompted', enforceSchema: true, promptedTemplate: 'T:{{tools}}', parseErrorHint: 'HINT' } })
-  const be = new Fake([{ content: '{"calls":[],"final":""}' }, { content: '{"calls":[],"final":"All good."}' }])
+  const be = Fake([{ content: '{"calls":[],"final":""}' }, { content: '{"calls":[],"final":"All good."}' }])
   const ev = await collect({ config: cfg, task: 'do', workdir: await wd() }, { backend: be })
   expect(types(ev).filter(t => t === 'parse_error')).toHaveLength(1)
   expect(last(ev)).toMatchObject({ reason: 'final', text: 'All good.' })
@@ -97,14 +83,14 @@ test('prompted: empty-string final is a parse error, then a real final ends the 
 
 test('prompted: {{tools}} placeholder is substituted at every occurrence', async () => {
   const cfg = base({ toolCalls: { mode: 'prompted', enforceSchema: true, promptedTemplate: 'A {{tools}} B {{tools}}', parseErrorHint: 'HINT' } })
-  const be = new Fake([{ content: '{"calls":[],"final":"done"}' }])
+  const be = Fake([{ content: '{"calls":[],"final":"done"}' }])
   await collect({ config: cfg, task: 'do', workdir: await wd() }, { backend: be })
   const sys = be.requests[0].messages[0].content as string
   expect(sys.match(/- read_file/g)).toHaveLength(2)
 })
 
 test('unknown tool and bad args are tool errors, not parse errors', async () => {
-  const be = new Fake([{ toolCalls: [{ name: 'grep', args: {} }, { name: 'read_file', args: {}, argsError: 'bad json' }] }, { content: 'x' }])
+  const be = Fake([{ toolCalls: [{ name: 'grep', args: {} }, { name: 'read_file', args: {}, argsError: 'bad json' }] }, { content: 'x' }])
   const ev = await collect({ config: base(), task: 'do', workdir: await wd() }, { backend: be })
   const results = ev.filter(e => e.type === 'tool_result') as any[]
   expect(results).toHaveLength(2)
@@ -115,7 +101,7 @@ test('unknown tool and bad args are tool errors, not parse errors', async () => 
 
 test('approval: denied bash returns denied text; approval_required emitted', async () => {
   const cfg = base({ tools: { enabled: ['bash'], approveBash: true } })
-  const be = new Fake([{ toolCalls: [{ name: 'bash', args: { command: 'echo hi' } }] }, { content: 'x' }])
+  const be = Fake([{ toolCalls: [{ name: 'bash', args: { command: 'echo hi' } }] }, { content: 'x' }])
   const ev = await collect({ config: cfg, task: 'do', workdir: await wd() }, { backend: be, approve: async () => false })
   expect(types(ev)).toContain('approval_required')
   expect((ev.find(e => e.type === 'tool_result') as any).output).toBe('denied by user')
@@ -124,7 +110,7 @@ test('approval: denied bash returns denied text; approval_required emitted', asy
 test('approval: no approve callback provided denies bash and it never runs', async () => {
   const dir = await wd()
   const cfg = base({ tools: { enabled: ['bash'], approveBash: true } })
-  const be = new Fake([{ toolCalls: [{ name: 'bash', args: { command: 'touch SHOULD_NOT_EXIST' } }] }, { content: 'x' }])
+  const be = Fake([{ toolCalls: [{ name: 'bash', args: { command: 'touch SHOULD_NOT_EXIST' } }] }, { content: 'x' }])
   const ev = await collect({ config: cfg, task: 'do', workdir: dir }, { backend: be })
   expect(types(ev)).toContain('approval_required')
   expect((ev.find(e => e.type === 'tool_result') as any).output).toBe('denied by user')
@@ -133,7 +119,7 @@ test('approval: no approve callback provided denies bash and it never runs', asy
 
 test('bash call with argsError skips the approval gate entirely', async () => {
   const cfg = base({ tools: { enabled: ['bash'], approveBash: true } })
-  const be = new Fake([{ toolCalls: [{ name: 'bash', args: {}, argsError: 'bad json' }] }, { content: 'x' }])
+  const be = Fake([{ toolCalls: [{ name: 'bash', args: {}, argsError: 'bad json' }] }, { content: 'x' }])
   const ev = await collect({ config: cfg, task: 'do', workdir: await wd() }, { backend: be, approve: async () => true })
   expect(types(ev)).not.toContain('approval_required')
   expect((ev.find(e => e.type === 'tool_result') as any).output).toMatch(/invalid arguments/)
@@ -153,7 +139,7 @@ test('backend error message includes the fetch failure cause', async () => {
 
 test('budget: oldest tool result dropped, context_stats reports it', async () => {
   const cfg = base({ context: { maxToolOutputChars: 1000, budgetTokens: 60 } })
-  const be = new Fake([{ toolCalls: [{ name: 'read_file', args: { path: 'a.txt' } }] }, { toolCalls: [{ name: 'read_file', args: { path: 'a.txt' } }] }, { content: 'x' }])
+  const be = Fake([{ toolCalls: [{ name: 'read_file', args: { path: 'a.txt' } }] }, { toolCalls: [{ name: 'read_file', args: { path: 'a.txt' } }] }, { content: 'x' }])
   const ev = await collect({ config: cfg, task: 'do', workdir: await wd() }, { backend: be })
   const stats = ev.filter(e => e.type === 'context_stats') as any[]
   expect(stats.some(s => s.droppedChars > 0)).toBe(true)
@@ -161,17 +147,17 @@ test('budget: oldest tool result dropped, context_stats reports it', async () =>
 })
 
 test('max_turns, backend_error, aborted', async () => {
-  const many = new Fake(Array(9).fill({ toolCalls: [{ name: 'read_file', args: { path: 'a.txt' } }] }))
+  const many = Fake(Array(9).fill({ toolCalls: [{ name: 'read_file', args: { path: 'a.txt' } }] }))
   expect(last(await collect({ config: base({ loop: { maxTurns: 2 } }), task: 'do', workdir: await wd() }, { backend: many })).reason).toBe('max_turns')
-  const broken = new Fake([])
+  const broken = Fake([])
   const ev = await collect({ config: base(), task: 'do', workdir: await wd() }, { backend: broken })
   expect(types(ev)).toContain('error'); expect(last(ev).reason).toBe('backend_error')
   const ac = new AbortController(); ac.abort()
-  expect(last(await collect({ config: base(), task: 'do', workdir: await wd() }, { backend: new Fake([{ content: 'x' }]), signal: ac.signal })).reason).toBe('aborted')
+  expect(last(await collect({ config: base(), task: 'do', workdir: await wd() }, { backend: Fake([{ content: 'x' }]), signal: ac.signal })).reason).toBe('aborted')
 })
 
 test('truncated response is a parse error in any format, then the loop continues', async () => {
-  const be = new Fake([{ content: '<think>endless', truncated: true }, { content: 'fin' }])
+  const be = Fake([{ content: '<think>endless', truncated: true }, { content: 'fin' }])
   const ev = await collect({ config: base(), task: 'do', workdir: await wd() }, { backend: be })
   const pe = ev.find(e => e.type === 'parse_error') as any
   expect(pe.message).toMatch(/truncated/)
@@ -184,7 +170,7 @@ const hermesCfg = (over: Partial<HarnessConfig['toolCalls']> = {}) => base({
 const block = (name: string, args: unknown) => `<tool_call>\n${JSON.stringify({ name, arguments: args })}\n</tool_call>`
 
 test('hermes: tool call, <tool_response> wrapping without attributes, plain text ends the run', async () => {
-  const be = new Fake([{ content: 'Reading.\n' + block('read_file', { path: 'a.txt' }) }, { content: 'Done.' }])
+  const be = Fake([{ content: 'Reading.\n' + block('read_file', { path: 'a.txt' }) }, { content: 'Done.' }])
   const ev = await collect({ config: hermesCfg(), task: 'do', workdir: await wd() }, { backend: be })
   expect(types(ev)).toContain('tool_call')
   const sys = be.requests[0].messages[0].content
@@ -198,13 +184,13 @@ test('hermes: tool call, <tool_response> wrapping without attributes, plain text
 })
 
 test('hermes: plain text on the first turn is final with 0 tool calls', async () => {
-  const be = new Fake([{ content: 'Sure, let me read the file first.' }])
+  const be = Fake([{ content: 'Sure, let me read the file first.' }])
   const ev = await collect({ config: hermesCfg(), task: 'do', workdir: await wd() }, { backend: be })
   expect(last(ev)).toMatchObject({ reason: 'final', toolCallCount: 0 })
 })
 
 test('hermes: server-parsed tool_calls with empty content are used and re-serialised into history', async () => {
-  const be = new Fake([{ content: '', toolCalls: [{ name: 'read_file', args: { path: 'a.txt' } }] }, { content: 'ok' }])
+  const be = Fake([{ content: '', toolCalls: [{ name: 'read_file', args: { path: 'a.txt' } }] }, { content: 'ok' }])
   const ev = await collect({ config: hermesCfg(), task: 'do', workdir: await wd() }, { backend: be })
   expect(ev.find(e => e.type === 'tool_result')).toBeTruthy()
   const asst = be.requests[1].messages.at(-2) as any
@@ -215,13 +201,13 @@ test('hermes: server-parsed tool_calls with empty content are used and re-serial
 })
 
 test('hermes: enforceSchema is ignored (no responseSchema in the request)', async () => {
-  const be = new Fake([{ content: 'x' }])
+  const be = Fake([{ content: 'x' }])
   await collect({ config: hermesCfg({ enforceSchema: true }), task: 'do', workdir: await wd() }, { backend: be })
   expect(be.requests[0].responseSchema).toBeUndefined()
 })
 
 test('hermes: a malformed block in content is a parse error even if the server also returned tool_calls', async () => {
-  const be = new Fake([
+  const be = Fake([
     { content: '<tool_call>{oops</tool_call>', toolCalls: [{ name: 'read_file', args: { path: 'a.txt' } }] },
     { content: 'Done.' },
   ])
@@ -233,14 +219,14 @@ test('hermes: a malformed block in content is a parse error even if the server a
 })
 
 test('hermes: broken block -> parse_error with hint, second in a row -> parse_failed', async () => {
-  const be = new Fake([{ content: '<tool_call>{oops</tool_call>' }, { content: '<tool_call>' }])
+  const be = Fake([{ content: '<tool_call>{oops</tool_call>' }, { content: '<tool_call>' }])
   const ev = await collect({ config: hermesCfg(), task: 'do', workdir: await wd() }, { backend: be })
   expect(be.requests[1].messages.at(-1)).toMatchObject({ role: 'user', content: 'HINT' })
   expect(last(ev).reason).toBe('parse_failed')
 })
 
 test('context_stats carries exactTokens when the backend can count, from the same payload that is sent', async () => {
-  const be = new Fake([{ content: 'done!' }])
+  const be = Fake([{ content: 'done!' }])
   const seen: unknown[] = []
   ;(be as any).countTokens = async (payload: unknown) => { seen.push(payload); return 4242 }
   const ev = await collect({ config: base(), task: 'do', workdir: await wd() }, { backend: be })
@@ -250,7 +236,7 @@ test('context_stats carries exactTokens when the backend can count, from the sam
 })
 
 test('context_stats has no exactTokens when the backend cannot count', async () => {
-  const ev = await collect({ config: base(), task: 'do', workdir: await wd() }, { backend: new Fake([{ content: 'x' }]) })
+  const ev = await collect({ config: base(), task: 'do', workdir: await wd() }, { backend: Fake([{ content: 'x' }]) })
   expect((ev[0] as any).exactTokens).toBeUndefined()
   expect(JSON.parse(JSON.stringify(ev[0]))).not.toHaveProperty('exactTokens')
 })
@@ -267,7 +253,7 @@ const withMcp = (over: Partial<HarnessConfig> = {}) =>
   base({ mcpServers: { fs: { command: 'npx', args: ['.'] } }, ...over })
 
 test('mcp: approval, start event and the tool schema reaches the request', async () => {
-  const be = new Fake([{ toolCalls: [{ name: 'echo', args: {} }] }, { content: 'fin' }])
+  const be = Fake([{ toolCalls: [{ name: 'echo', args: {} }] }, { content: 'fin' }])
   const asked: string[] = []
   const config = withMcp()
   const workdir = await wd()
@@ -290,14 +276,14 @@ test('mcp: approval, start event and the tool schema reaches the request', async
 })
 
 test('mcp: prompted mode renders the mcp tool into the system message the backend receives', async () => {
-  const be = new Fake([{ content: '{"calls":[],"final":"fin"}' }])
+  const be = Fake([{ content: '{"calls":[],"final":"fin"}' }])
   const config = withMcp({ toolCalls: { mode: 'prompted', enforceSchema: false, promptedTemplate: 'T:{{tools}}', parseErrorHint: 'HINT' } })
   await collect({ config, task: 'do', workdir: await wd() }, { backend: be, mcp: async () => fakeMcp(), approve: async () => true })
   expect((be.requests[0].messages.find(m => m.role === 'system') as any).content).toContain('echo')
 })
 
 test('mcp: refusing the server ends the run before any llm_request', async () => {
-  const be = new Fake([])
+  const be = Fake([])
   const ev = await collect({ config: withMcp(), task: 'do', workdir: await wd() }, {
     backend: be, mcp: async () => fakeMcp(), approve: async () => false,
   })
@@ -307,7 +293,7 @@ test('mcp: refusing the server ends the run before any llm_request', async () =>
 })
 
 test('mcp: a server that will not start ends the run with its message', async () => {
-  const be = new Fake([])
+  const be = Fake([])
   const ev = await collect({ config: withMcp(), task: 'do', workdir: await wd() }, {
     backend: be, approve: async () => true,
     mcp: async () => { throw new Error('mcp server "fs" failed to start: boom') },
@@ -321,7 +307,7 @@ test('mcp: a server that will not start ends the run with its message', async ()
 test('mcp: aborting while the approval is pending is aborted, not mcp_error', async () => {
   const ac = new AbortController()
   const ev = await collect({ config: withMcp(), task: 'do', workdir: await wd() }, {
-    backend: new Fake([]), mcp: async () => fakeMcp(),
+    backend: Fake([]), mcp: async () => fakeMcp(),
     // Real callers (src/server/runs.ts) resolve a pending approval with `false` on abort — the
     // refusal and the abort land together. Aborted must still win over mcp_error, and no server
     // must have been started (no mcp_server_start event), or a cancelled run misreports as refused.
@@ -333,7 +319,7 @@ test('mcp: aborting while the approval is pending is aborted, not mcp_error', as
 
 test('mcp: no approve callback is a stated refusal, not a silent one', async () => {
   const ev = await collect({ config: withMcp(), task: 'do', workdir: await wd() }, {
-    backend: new Fake([]), mcp: async () => fakeMcp(),
+    backend: Fake([]), mcp: async () => fakeMcp(),
   })
   expect(types(ev)).toEqual(['approval_required', 'error', 'done'])
   expect((ev[1] as any).message).toMatch(/no approval handler/)

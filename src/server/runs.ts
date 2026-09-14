@@ -1,4 +1,5 @@
-import { appendFile, readFile, readdir, writeFile, mkdir, realpath, open } from 'node:fs/promises'
+import { appendFile, readFile, readdir, writeFile, mkdir, realpath, open, rename } from 'node:fs/promises'
+import { renameSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import { runAgent } from '../core/run.js'
@@ -23,6 +24,46 @@ const CHUNK = 64 * 1024
 
 /** Safe single path segment: no separators, so path.join can never leave the directory. */
 export const safeName = (n: string) => /^[\w.-]{1,64}$/.test(n)
+
+/**
+ * Writes one run's trace file: the meta line, then one JSON event per line. The only place that
+ * knows the on-disk format RunStore.read/list/benchOpen read back, so `serve` and the CLI cannot
+ * drift apart.
+ *
+ * `part: true` writes to `<id>.jsonl.part` and renames on close, which keeps a live or killed run
+ * out of every listing; `serve` writes the final name from the start, because its Runs list is
+ * meant to show a run while it is still going.
+ */
+export class TraceWriter {
+  readonly id = randomUUID().slice(0, 8)
+  /** Final path, the one that exists once the run has ended. */
+  readonly file: string
+  private path: string
+
+  constructor(private dir: string, private part = false) {
+    this.file = path.join(dir, `${this.id}.jsonl`)
+    this.path = part ? `${this.file}.part` : this.file
+  }
+
+  /** Creates the runs directory and writes the meta line; everything after this is append-only. */
+  async open(meta: Omit<Meta['meta'], 'id'>): Promise<void> {
+    await mkdir(this.dir, { recursive: true })
+    await writeFile(this.path, JSON.stringify({ meta: { id: this.id, ...meta } } satisfies Meta) + '\n')
+  }
+
+  append(...events: HarnessEvent[]): Promise<void> {
+    return appendFile(this.path, events.map(e => JSON.stringify(e) + '\n').join(''))
+  }
+
+  close(): Promise<void> {
+    return this.part ? rename(this.path, this.file) : Promise.resolve()
+  }
+
+  /** Same as close(), for a signal handler that must finish before process.exit. Never throws. */
+  closeSync(): void {
+    if (this.part) try { renameSync(this.path, this.file) } catch {}
+  }
+}
 
 /** First and last line of a run file without reading it whole: run files grow to hundreds of KB and are listed on every page load. */
 async function firstAndLastLine(file: string): Promise<[string, string]> {
@@ -62,14 +103,13 @@ export class RunStore {
     // Check-and-reserve with no `await` between them: nothing else can run on this thread
     // in between, so two concurrent starts for the same workdir cannot both pass the check.
     if (this.isActiveIn(workdir)) throw new WorkdirBusyError(workdir)
-    const id = randomUUID().slice(0, 8)
+    const trace = new TraceWriter(this.dir)
+    const id = trace.id
     const a: Active = { abort: new AbortController(), approvals: new Map(), workdir, listeners: new Set() }
     this.active.set(id, a)
 
     try {
-      await mkdir(this.dir, { recursive: true })
-      const meta: Meta = { meta: { id, harness: params.config.name, task: params.task, workdir, started: Date.now() } }
-      await writeFile(this.file(id), JSON.stringify(meta) + '\n')
+      await trace.open({ harness: params.config.name, task: params.task, workdir, started: Date.now() })
     } catch (e) {
       this.active.delete(id)
       throw e
@@ -86,7 +126,7 @@ export class RunStore {
         const onDelta = (d: Delta) => { for (const fn of a.listeners) fn({ type: 'delta', ...d }) }
         for await (const e of runAgent(params, { signal: a.abort.signal, approve, backend, onDelta })) {
           seq = e.seq + 1
-          await appendFile(this.file(id), JSON.stringify(e) + '\n')
+          await trace.append(e)
           for (const fn of a.listeners) fn(e)
         }
       } catch (e) {
@@ -96,7 +136,7 @@ export class RunStore {
         try {
           const errEvent: HarnessEvent = { seq: seq++, turn: 0, ts: Date.now(), type: 'error', message: (e as Error).message }
           const doneEvent: HarnessEvent = { seq: seq++, turn: 0, ts: Date.now(), type: 'done', reason: 'backend_error', turns: 0, toolCallCount: 0 }
-          await appendFile(this.file(id), JSON.stringify(errEvent) + '\n' + JSON.stringify(doneEvent) + '\n')
+          await trace.append(errEvent, doneEvent)
           for (const fn of a.listeners) { fn(errEvent); fn(doneEvent) }
         } catch { /* nothing more we can do */ }
       } finally {
