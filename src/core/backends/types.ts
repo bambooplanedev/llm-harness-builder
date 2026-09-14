@@ -33,6 +33,10 @@ export type ChatMessage =
   | { role: 'assistant'; content: string; toolCalls?: NormalizedToolCall[] }
   | { role: 'tool'; content: string; toolCallId: string; name: string; isToolResult: true }
 
+/** The `tools` field of a request body, empty when the harness sends no tools. Both adapters send the same OpenAI-style shape. */
+export const toolsField = (tools?: ToolSchema[]) =>
+  tools ? { tools: tools.map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } })) } : {}
+
 export type ChatRequest = {
   model: string
   messages: ChatMessage[]

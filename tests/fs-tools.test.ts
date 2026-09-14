@@ -1,12 +1,12 @@
 import { test, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtemp, rm, writeFile, readFile as rf, mkdir } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { rm, writeFile, readFile as rf, mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
+import { tmp } from './helpers.js'
 import { listDir, readFile, writeFile as wf, editFile, type ToolCtx } from '../src/core/tools/fs.js'
 
 let ctx: ToolCtx
 beforeEach(async () => {
-  const workdir = await mkdtemp(join(tmpdir(), 'lhb-fs-'))
+  const workdir = await tmp('lhb-fs-')
   ctx = { workdir, maxToolOutputChars: 100 }
   await mkdir(join(workdir, 'src'))
   await writeFile(join(workdir, '.hidden'), '')

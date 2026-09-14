@@ -1,5 +1,5 @@
 import type { RunParams } from './config.js'
-import type { HarnessEvent, ToolCall, DoneReason } from './events.js'
+import { mcpApprovalName, type HarnessEvent, type ToolCall, type DoneReason } from './events.js'
 import { createBackend, type Backend, type ChatMessage, type ChatRequest, type Delta, type NormalizedResponse, type Usage } from './backends/index.js'
 import { TOOL_SCHEMAS, runTool } from './tools/index.js'
 import { renderTools, PROMPTED_SCHEMA } from './prompts.js'
@@ -39,7 +39,7 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
     for (const name of mcpNames) {
       const s = config.mcpServers![name]
       const call: ToolCall = {
-        callId: `mcp${++i}`, name: `mcp:${name}`,
+        callId: `mcp${++i}`, name: mcpApprovalName(name),
         args: { command: [s.command, ...(s.args ?? [])].join(' ') },
       }
       if (opts.signal?.aborted) { yield done('aborted'); return }
@@ -71,7 +71,7 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
 
     const schemas = [...config.tools.enabled.map(n => TOOL_SCHEMAS[n]), ...(mcp?.tools ?? [])]
     const system = prompted
-      ? config.systemPrompt + '\n\n' + config.toolCalls.promptedTemplate.split('{{tools}}').join(renderTools(schemas, hermes ? 'hermes' : 'json'))
+      ? config.systemPrompt + '\n\n' + config.toolCalls.promptedTemplate.split('{{tools}}').join(renderTools(schemas, config.toolCalls.format))
       : config.systemPrompt
     const messages: ChatMessage[] = [{ role: 'system', content: system }, { role: 'user', content: task }]
     const ctx = { workdir, maxToolOutputChars: config.context.maxToolOutputChars }

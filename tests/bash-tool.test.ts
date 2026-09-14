@@ -1,12 +1,12 @@
 import { test, expect } from 'vitest'
-import { mkdtemp } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+
 import { join } from 'node:path'
+import { tmp } from './helpers.js'
 import { execSync, spawn } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
 import { bash } from '../src/core/tools/bash.js'
 
-const ctx = async () => ({ workdir: await mkdtemp(join(tmpdir(), 'lhb-sh-')), maxToolOutputChars: 4000 })
+const ctx = async () => ({ workdir: await tmp('lhb-sh-'), maxToolOutputChars: 4000 })
 
 test('runs in workdir, returns output and exit code', async () => {
   const c = await ctx()

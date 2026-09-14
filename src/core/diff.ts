@@ -1,5 +1,5 @@
 // src/core/diff.ts — pure helpers that compare two runs. No fs, no process, no Vue.
-import type { HarnessEvent } from './events.js'
+import { quitWithoutWork, type HarnessEvent } from './events.js'
 import type { HarnessConfig } from './config.js'
 import type { BenchRun } from './bench.js'
 
@@ -53,9 +53,7 @@ export function skeleton(events: HarnessEvent[]): Turn[] {
           if (chip) { chip.bad ||= e.error; chip.truncated ||= e.truncated }
           break
         }
-        // `final` after zero tool calls is the failure Trace.vue already paints red:
-        // the model answered without doing anything.
-        case 'done': chips.push({ label: `done: ${e.reason}`, bad: e.reason !== 'final' || e.toolCallCount === 0, truncated: false }); break
+        case 'done': chips.push({ label: `done: ${e.reason}`, bad: e.reason !== 'final' || quitWithoutWork(e), truncated: false }); break
       }
     }
     return { chips, ms, tokens, sig: chips.map(c => `${c.label}${c.bad ? '!' : ''}`).join(' ') }

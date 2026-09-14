@@ -15,7 +15,6 @@ const text = (v: string) => (v === 'undefined' ? '' : String(JSON.parse(v)))
 const onlyIn = (r: { a: string; b: string }) => lineDiff(text(r.a), text(r.b))
 const head = (s: DiffSide) => `${s.name} #${s.run.round} · ${s.run.verdict} · ${s.run.reason} · ${mmss(s.run.ms)}`
 
-const EMPTY = {} // a stable object: a fresh literal per render would churn Trace's prop
 const sa = computed(() => skeleton(props.a.events))
 const sb = computed(() => skeleton(props.b.events))
 const rowsN = computed(() => Math.max(sa.value.length, sb.value.length))
@@ -77,8 +76,8 @@ const hasEvents = computed(() => props.a.events.length > 0 && props.b.events.len
         <div v-if="i === diverged" class="hint split-label">diverged here</div>
       </div>
       <div v-if="open >= 0" class="layout">
-        <div><Trace v-if="groups[0][open]" :events="groups[0][open]" :live="EMPTY" :approvable="false" /></div>
-        <div><Trace v-if="groups[1][open]" :events="groups[1][open]" :live="EMPTY" :approvable="false" /></div>
+        <div><Trace v-if="groups[0][open]" :events="groups[0][open]" :approvable="false" /></div>
+        <div><Trace v-if="groups[1][open]" :events="groups[1][open]" :approvable="false" /></div>
       </div>
     </template>
     <div v-else class="hint">one side's events have not loaded — nothing to draw the path from</div>

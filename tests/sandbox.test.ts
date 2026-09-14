@@ -1,13 +1,14 @@
 import { test, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtemp, mkdir, symlink, rm, writeFile } from 'node:fs/promises'
-import { tmpdir, homedir } from 'node:os'
+import { mkdir, symlink, rm, writeFile } from 'node:fs/promises'
+import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { tmp } from './helpers.js'
 import { resolveInside, validateWorkdir } from '../src/core/tools/sandbox.js'
 
 let root: string, outside: string
 beforeEach(async () => {
-  root = await mkdtemp(join(tmpdir(), 'lhb-wd-'))
-  outside = await mkdtemp(join(tmpdir(), 'lhb-out-'))
+  root = await tmp('lhb-wd-')
+  outside = await tmp('lhb-out-')
   await mkdir(join(root, 'sub'))
   await writeFile(join(root, 'sub', 'f.txt'), 'x')
   await symlink(outside, join(root, 'escape'))
