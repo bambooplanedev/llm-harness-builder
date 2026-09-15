@@ -2,7 +2,7 @@ import { test, expect, beforeEach, afterEach } from 'vitest'
 import { rm, writeFile, readFile as rf, mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmp } from './helpers.js'
-import { listDir, readFile, writeFile as wf, editFile, type ToolCtx } from '../src/core/tools/fs.js'
+import { listDir, readFile, writeFile as wf, editFile, GUARD_BLOCKED, EDIT_MISS, type ToolCtx } from '../src/core/tools/fs.js'
 
 let ctx: ToolCtx
 beforeEach(async () => {
@@ -67,4 +67,51 @@ test('edit_file writes $ patterns literally', async () => {
 test('all tools reject escaping paths', async () => {
   await expect(readFile({ path: '../../etc/passwd' }, ctx)).rejects.toThrow(/escapes/)
   await expect(wf({ path: '/tmp/x', content: '' }, ctx)).rejects.toThrow(/escapes/)
+})
+
+test('without the guard (no ctx.reads) editing an unread file still works', async () => {
+  await editFile({ path: 'a.txt', old: 'world', new: 'there' }, ctx)
+  expect(await rf(join(ctx.workdir, 'a.txt'), 'utf8')).toBe('hello\nthere\n')
+})
+
+test('guard: edit_file refuses an unread file, allows it after read_file', async () => {
+  const g: ToolCtx = { ...ctx, reads: new Set() }
+  await expect(editFile({ path: 'a.txt', old: 'world', new: 'there' }, g))
+    .rejects.toThrow(/a\.txt has not been read in this run/)
+  await readFile({ path: 'a.txt' }, g)
+  await editFile({ path: 'a.txt', old: 'world', new: 'there' }, g)
+  expect(await rf(join(g.workdir, 'a.txt'), 'utf8')).toBe('hello\nthere\n')
+})
+
+test('guard: two edits in a row are allowed after one read', async () => {
+  const g: ToolCtx = { ...ctx, reads: new Set() }
+  await readFile({ path: 'a.txt' }, g)
+  await editFile({ path: 'a.txt', old: 'hello', new: 'HELLO' }, g)
+  await editFile({ path: 'a.txt', old: 'world', new: 'WORLD' }, g)
+  expect(await rf(join(g.workdir, 'a.txt'), 'utf8')).toBe('HELLO\nWORLD\n')
+})
+
+test('guard: the registry keys on the resolved path, not the argument', async () => {
+  const g: ToolCtx = { ...ctx, reads: new Set() }
+  await readFile({ path: './a.txt' }, g)
+  await editFile({ path: 'src/../a.txt', old: 'world', new: 'there' }, g)
+  expect(await rf(join(g.workdir, 'a.txt'), 'utf8')).toBe('hello\nthere\n')
+})
+
+test('guard: write_file refuses to overwrite an unread file but creates a new one', async () => {
+  const g: ToolCtx = { ...ctx, reads: new Set() }
+  await expect(wf({ path: 'a.txt', content: 'x' }, g))
+    .rejects.toThrow(/a\.txt has not been read in this run/)
+  await wf({ path: 'new.txt', content: 'x' }, g)
+  expect(await rf(join(g.workdir, 'new.txt'), 'utf8')).toBe('x')
+  // a file this run created counts as known: a second write must not be refused
+  await wf({ path: 'new.txt', content: 'y' }, g)
+  expect(await rf(join(g.workdir, 'new.txt'), 'utf8')).toBe('y')
+})
+
+test('the two strings bench counts by are the ones the tools write', async () => {
+  const g: ToolCtx = { ...ctx, reads: new Set() }
+  await expect(editFile({ path: 'a.txt', old: 'x', new: 'y' }, g)).rejects.toThrow(GUARD_BLOCKED)
+  await writeFile(join(ctx.workdir, 'dup.txt'), 'x\nx\n')
+  await expect(editFile({ path: 'dup.txt', old: 'x', new: 'y' }, ctx)).rejects.toThrow(EDIT_MISS)
 })

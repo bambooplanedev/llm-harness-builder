@@ -84,3 +84,13 @@ test('mcpServers is optional and validated per server', () => {
   serverArray.mcpServers = { fs: [] }
   expect(validateConfig(serverArray)).toContain('mcpServers.fs must be an object')
 })
+
+test('requireReadBeforeEdit is optional and must be a boolean', () => {
+  expect(validateConfig(validConfig)).toEqual([])
+  const on = structuredClone(validConfig) as any
+  on.tools.requireReadBeforeEdit = true
+  expect(validateConfig(on)).toEqual([])
+  const bad = structuredClone(validConfig) as any
+  bad.tools.requireReadBeforeEdit = 'yes'
+  expect(validateConfig(bad).some(e => e.includes('requireReadBeforeEdit'))).toBe(true)
+})

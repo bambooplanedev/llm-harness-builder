@@ -34,6 +34,16 @@ test('a harness without mcpServers shows an empty box, not "{}" or "undefined"',
   expect(mcpBox(html)).toBe('')
 })
 
+test('the guard checkbox reflects the flag and the label is English', async () => {
+  const box = (html: string) => {
+    const m = /<input type="checkbox"([^>]*)>\s*refuse to edit a file that has not been read/.exec(html)
+    if (!m) throw new Error('no read-before-edit checkbox in the rendered form')
+    return m[1]
+  }
+  expect(box(await render(base))).not.toContain('checked')
+  expect(box(await render({ ...base, tools: { ...base.tools, requireReadBeforeEdit: true } }))).toContain('checked')
+})
+
 /**
  * The UI, the CLI and the README are English. Two components were written in Ukrainian and shipped
  * that way for three iterations before anyone looked; catch the next one at the commit, not the demo.

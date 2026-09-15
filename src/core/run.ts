@@ -74,7 +74,12 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
       ? config.systemPrompt + '\n\n' + config.toolCalls.promptedTemplate.split('{{tools}}').join(renderTools(schemas, config.toolCalls.format))
       : config.systemPrompt
     const messages: ChatMessage[] = [{ role: 'system', content: system }, { role: 'user', content: task }]
-    const ctx = { workdir, maxToolOutputChars: config.context.maxToolOutputChars }
+    const ctx = {
+      workdir,
+      maxToolOutputChars: config.context.maxToolOutputChars,
+      // Present only when the harness asked for it; the tools treat "absent" as "guard off".
+      reads: config.tools.requireReadBeforeEdit ? new Set<string>() : undefined,
+    }
 
     while (true) {
       if (opts.signal?.aborted) { yield done('aborted'); return }
