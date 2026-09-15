@@ -335,3 +335,28 @@ test('mcp: the session is closed even when the loop throws', async () => {
   for await (const _ of gen) { /* backend_error ends it */ }
   expect(closed).toBe(true)
 })
+
+test('the guard reaches the tools: an unread edit comes back as a tool error', async () => {
+  const cfg = base({ context: { maxToolOutputChars: 200 }, tools: { enabled: ['read_file', 'edit_file'], approveBash: false, requireReadBeforeEdit: true } })
+  const be = Fake([
+    { toolCalls: [{ backendId: 'id1', name: 'edit_file', args: { path: 'a.txt', old: 'A', new: 'B' } }] },
+    { content: 'giving up' },
+  ])
+  const ev = await collect({ config: cfg, task: 'do', workdir: await wd() }, { backend: be })
+  const tr = ev.find(e => e.type === 'tool_result') as any
+  expect(tr.error).toBe(true)
+  expect(tr.output).toContain('has not been read in this run')
+})
+
+test('without the flag the same edit goes through', async () => {
+  const cfg = base({ tools: { enabled: ['read_file', 'edit_file'], approveBash: false } })
+  const be = Fake([
+    // 'A'.repeat(120) is the whole file the wd() fixture writes, so this is a clean single match:
+    // a bare 'A' would occur 120 times and fail the exact-match check for an unrelated reason.
+    { toolCalls: [{ backendId: 'id1', name: 'edit_file', args: { path: 'a.txt', old: 'A'.repeat(120), new: 'B' } }] },
+    { content: 'done' },
+  ])
+  const ev = await collect({ config: cfg, task: 'do', workdir: await wd() }, { backend: be })
+  const tr = ev.find(e => e.type === 'tool_result') as any
+  expect(tr.error).toBe(false)
+})
