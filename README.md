@@ -173,6 +173,49 @@ handing tools to a model", not "the cost of tool descriptions". And **an MCP ser
 the `workdir` sandbox**: the built-in file tools are locked in by `resolveInside`, while a server
 merely receives the directory as `cwd` and respects it out of goodwill.
 
+## Read before edit
+
+`tuned` already asks the model to read a file before it changes it:
+
+    Never guess file contents. Read a file before you change it; …
+
+It seems to work: `toolErrors` is 0 in every bench run that recorded the field. `bare`, whose
+prompt says nothing of the kind, guessed twice in the run described below — a function body that
+is nowhere in the project, then a semicolon the file does not have — and both edits came back
+`found 0 occurrences`.
+
+So the open question is not whether the rule is needed. It is whether a rule stated in the prompt
+and the same rule enforced in code do the same thing. Claude Code does not ask the model to read
+first; it refuses to edit a file the model has not read. `tools.requireReadBeforeEdit` is that
+refusal:
+
+    "tools": { "enabled": ["read_file", "edit_file"], "requireReadBeforeEdit": true }
+
+`read_file` registers the file's resolved path for the rest of the run. `edit_file` refuses a path
+that is not registered, and so does `write_file` when the file already exists — creating a new one
+is always allowed. The model sees `src/x.js has not been read in this run; call read_file first`
+and can recover from it like any other tool error. Nothing about the guard appears in the tool
+descriptions, so the arms below cost the same number of context tokens.
+
+The four arms are one 2×2 grid over "rule in the prompt" × "guard in the code". `rule-none`,
+`guard-only` and `rule-and-guard` are `tuned` byte-for-byte except for the name, one sentence of
+the system prompt, and the flag:
+
+    llm-harness-builder bench harnesses/tuned.json harnesses/rule-none.json \
+      harnesses/guard-only.json harnesses/rule-and-guard.json --n 5
+
+| harness | rule | guard | PASS | how the runs ended | median turns | `guard` | `editMiss` |
+|---|---|---|---|---|---|---|---|
+| `tuned` | yes | — | | | | | |
+| `rule-none` | — | — | | | | | |
+| `guard-only` | — | yes | | | | | |
+| `rule-and-guard` | yes | yes | | | | | |
+
+`guard` counts the edits the guard refused and `editMiss` the edits whose `old` did not occur
+exactly once. Both are sums over the five runs, not medians: a median of five small integers is 0.
+`guard` is blank for an arm that had the guard off — those arms cannot produce the error by
+construction, which is also why this experiment does not read `med errs`.
+
 ## Bench results
 
 Measured with llama.cpp `llama-server` (`--jinja`), model `unsloth/Qwen3-8B-GGUF:Q4_K_M`,
@@ -301,3 +344,14 @@ both harnesses failed on the very first run of this demo.
 - Aborting a run (`--timeout`) closes our side of the connection; llama-server keeps generating
   until it notices, so the next run can start against a busy server and fail with
   `backend_error`. The bench above has one such row.
+- The guard covers `edit_file` and `write_file`, not the filesystem. `bash` can rewrite a file
+  behind its back (`sed -i`, `>`, a formatter, `npm`), and the next edit will be checked against a
+  registration that is still there.
+- MCP tools bypass the guard completely: `runTool` hands an unknown name to the server before any
+  check, so in a harness whose file tools come from an MCP server the flag does nothing. Same
+  boundary as the sandbox: a server merely receives the workdir as `cwd`.
+- The registry holds paths, not versions. A file that changed after it was read is not caught by
+  the guard — `edit_file`'s exact match catches it instead, as `found 0 occurrences`.
+- `serve` copies `harnesses/` into the working directory only when it is not already there, so an
+  existing working directory does not grow the new arms by itself. Copy them by hand, as with
+  `mcp-*.json`.
