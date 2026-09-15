@@ -310,6 +310,8 @@ test('bench with an mcp server records toolChars/toolErrors and prints the tool 
   const [run] = JSON.parse(await readFile(out, 'utf8')).harnesses[0].runs
   expect(run.toolChars).toBeGreaterThan(0)
   expect(run.toolErrors).toBe(1)
-  expect(r.stdout).toMatch(/^harness\s+PASS\s+reasons\s+med turns\s+med s\s+toolChars\s+med errs$/m)
-  expect(r.stdout).toMatch(new RegExp(`^mcp-bench\\s+0/1\\s+final×1\\s+\\d+\\s+\\d+\\s+${run.toolChars}\\s+1$`, 'm'))
+  // benchOnce always records editMiss (unlike guardBlocks, which is only set when the guard is on),
+  // so its column prints here too even though this harness never turns the guard on.
+  expect(r.stdout).toMatch(/^harness\s+PASS\s+reasons\s+med turns\s+med s\s+toolChars\s+med errs\s+editMiss$/m)
+  expect(r.stdout).toMatch(new RegExp(`^mcp-bench\\s+0/1\\s+final×1\\s+\\d+\\s+\\d+\\s+${run.toolChars}\\s+1\\s+0$`, 'm'))
 }, 60_000)

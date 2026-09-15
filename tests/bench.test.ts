@@ -67,3 +67,16 @@ test('formatTable: an arm that had the guard off shows "-", not a misleading 0',
   expect(lines[1]).toMatch(/\s-\s+2\s*$/)
   expect(lines[2]).toMatch(/\s1\s+0\s*$/)
 })
+
+test('formatTable: editMiss gets its own column, independent of guard — e.g. rule-none vs tuned, both guard-off', () => {
+  const h = (name: string, runs: Partial<BenchRun>[]): BenchHarness =>
+    ({ name, config: {} as BenchHarness['config'], pass: 0, reasons: {}, median: { turns: 0, toolCalls: 0, ms: 0 }, runs: runs as BenchRun[] })
+  const lines = formatTable([
+    h('rule-none', [{ editMiss: 3 }, { editMiss: 1 }]),
+    h('tuned', [{ editMiss: 1 }, { editMiss: 0 }]),
+  ]).split('\n')
+  expect(lines[0]).toMatch(/^harness\s+PASS\s+reasons\s+med turns\s+med s\s+editMiss$/)
+  expect(lines[0]).not.toContain('guard')
+  expect(lines[1]).toMatch(/\s4\s*$/)
+  expect(lines[2]).toMatch(/\s1\s*$/)
+})

@@ -195,7 +195,7 @@ refusal:
 that is not registered, and so does `write_file` when the file already exists — creating a new one
 is always allowed. The model sees `src/x.js has not been read in this run; call read_file first`
 and can recover from it like any other tool error. Nothing about the guard appears in the tool
-descriptions, so the arms below cost the same number of context tokens.
+descriptions, so the guard itself costs no context tokens.
 
 The four arms are one 2×2 grid over "rule in the prompt" × "guard in the code". `rule-none`,
 `guard-only` and `rule-and-guard` are `tuned` byte-for-byte except for the name, one sentence of
@@ -203,6 +203,12 @@ the system prompt, and the flag:
 
     llm-harness-builder bench harnesses/tuned.json harnesses/rule-none.json \
       harnesses/guard-only.json harnesses/rule-and-guard.json --n 5
+
+Not measured yet — the numbers land once this bench actually runs, and it must run on the same
+setup as **Bench results** below (the command above prints without `--kind`/`--base-url`/`--model`,
+house style matching the MCP section, which is exactly why this reminder is here), or the `tuned`
+row here will not be comparable to the `tuned` row already published there — the entire reason
+`tuned` is the fourth arm.
 
 | harness | rule | guard | PASS | how the runs ended | median turns | `guard` | `editMiss` |
 |---|---|---|---|---|---|---|---|
@@ -352,6 +358,10 @@ both harnesses failed on the very first run of this demo.
   boundary as the sandbox: a server merely receives the workdir as `cwd`.
 - The registry holds paths, not versions. A file that changed after it was read is not caught by
   the guard — `edit_file`'s exact match catches it instead, as `found 0 occurrences`.
+- The registry records that the call happened, not what the model saw. A `read_file` whose output
+  the run loop cuts at `maxToolOutputChars` (4000 in all four arms) still registers the path and
+  unlocks the whole file for `edit_file`, truncated part included. This is a limit of what the guard
+  checks, not a bug: it verifies the call was made, not the length of what came back.
 - `serve` copies `harnesses/` into the working directory only when it is not already there, so an
   existing working directory does not grow the new arms by itself. Copy them by hand, as with
   `mcp-*.json`.

@@ -337,7 +337,7 @@ test('mcp: the session is closed even when the loop throws', async () => {
 })
 
 test('the guard reaches the tools: an unread edit comes back as a tool error', async () => {
-  const cfg = base({ context: { maxToolOutputChars: 200 }, tools: { enabled: ['read_file', 'edit_file'], approveBash: false, requireReadBeforeEdit: true } })
+  const cfg = base({ context: { maxToolOutputChars: 200, budgetTokens: 0 }, tools: { enabled: ['read_file', 'edit_file'], approveBash: false, requireReadBeforeEdit: true } })
   const be = Fake([
     { toolCalls: [{ backendId: 'id1', name: 'edit_file', args: { path: 'a.txt', old: 'A', new: 'B' } }] },
     { content: 'giving up' },
