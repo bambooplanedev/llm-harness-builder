@@ -2,7 +2,7 @@ import { readdir, open, mkdir, writeFile as fsWrite, readFile as fsRead } from '
 import path from 'node:path'
 import { resolveInside } from './sandbox.js'
 
-export type ToolCtx = { workdir: string; maxToolOutputChars: number }
+export type ToolCtx = { workdir: string; maxToolOutputChars: number; reads?: Set<string> }
 type Args = Record<string, unknown>
 
 const str = (args: Args, key: string): string => {
