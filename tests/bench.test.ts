@@ -43,3 +43,27 @@ test('formatTable: tool columns only when a run measured them', () => {
   expect(lines[1]).toMatch(/^mcp-off\s+0\/2\s+-\s+0\s+0\s+-\s+1$/)
   expect(lines[2]).toMatch(/^mcp-on\s+0\/2\s+-\s+0\s+0\s+7167\s+4$/)
 })
+
+test('formatTable: guard columns appear only when a run measured them, and are sums', () => {
+  const h = (name: string, runs: Partial<BenchRun>[]): BenchHarness =>
+    ({ name, config: {} as BenchHarness['config'], pass: 0, reasons: {}, median: { turns: 0, toolCalls: 0, ms: 0 }, runs: runs as BenchRun[] })
+  expect(formatTable([h('tuned', [{ toolErrors: 2 }, {}])]).split('\n')[0]).not.toContain('guard')
+  const lines = formatTable([
+    h('tuned', [{ guardBlocks: 0, editMiss: 2 }, { guardBlocks: 0, editMiss: 1 }]),
+    h('guard-only', [{ guardBlocks: 3, editMiss: 0 }, { guardBlocks: 1, editMiss: 0 }]),
+  ]).split('\n')
+  expect(lines[0]).toMatch(/guard\s+editMiss\s*$/)
+  expect(lines[1]).toMatch(/\s0\s+3\s*$/)   // tuned: 0 guard blocks, 3 edit misses
+  expect(lines[2]).toMatch(/\s4\s+0\s*$/)   // guard-only: 4 guard blocks, 0 edit misses
+})
+
+test('formatTable: an arm that had the guard off shows "-", not a misleading 0', () => {
+  const h = (name: string, runs: Partial<BenchRun>[]): BenchHarness =>
+    ({ name, config: {} as BenchHarness['config'], pass: 0, reasons: {}, median: { turns: 0, toolCalls: 0, ms: 0 }, runs: runs as BenchRun[] })
+  const lines = formatTable([
+    h('rule-none', [{ editMiss: 2 }, { editMiss: 0 }]),          // guard off: field absent
+    h('guard-only', [{ guardBlocks: 1, editMiss: 0 }]),
+  ]).split('\n')
+  expect(lines[1]).toMatch(/\s-\s+2\s*$/)
+  expect(lines[2]).toMatch(/\s1\s+0\s*$/)
+})
