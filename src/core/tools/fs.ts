@@ -1,4 +1,4 @@
-import { readdir, open, mkdir, writeFile as fsWrite, readFile as fsRead } from 'node:fs/promises'
+import { readdir, open, mkdir, writeFile as fsWrite, readFile as fsRead, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { resolveInside } from './sandbox.js'
 
@@ -9,6 +9,20 @@ const str = (args: Args, key: string): string => {
   const v = args[key]
   if (typeof v !== 'string') throw new Error(`argument "${key}" must be a string`)
   return v
+}
+
+/**
+ * Substrings of the two errors bench counts. Exported so the counter keys off the text the tool
+ * writes rather than a copy of it: change the wording here and both move together.
+ */
+export const GUARD_BLOCKED = 'has not been read in this run'
+export const EDIT_MISS = 'must occur exactly once'
+
+const exists = async (p: string): Promise<boolean> => { try { await stat(p); return true } catch { return false } }
+
+/** No-op unless the harness asked for the guard: ctx.reads is present only then. */
+function ensureRead(ctx: ToolCtx, file: string, shown: string): void {
+  if (ctx.reads && !ctx.reads.has(file)) throw new Error(`${shown} ${GUARD_BLOCKED}; call read_file first`)
 }
 
 export async function listDir(args: Args, ctx: ToolCtx): Promise<string> {
@@ -31,6 +45,7 @@ export async function readFile(args: Args, ctx: ToolCtx): Promise<string> {
     const n = Math.min((await fh.stat()).size, MAX_READ_BYTES)
     const buf = Buffer.alloc(n)
     const { bytesRead } = await fh.read(buf, 0, n, 0)
+    ctx.reads?.add(file)
     return buf.subarray(0, bytesRead).toString('utf8')
   } finally { await fh.close() }
 }
@@ -38,13 +53,18 @@ export async function readFile(args: Args, ctx: ToolCtx): Promise<string> {
 export async function writeFile(args: Args, ctx: ToolCtx): Promise<string> {
   const file = await resolveInside(ctx.workdir, str(args, 'path'))
   const content = str(args, 'content')
+  // An existing file must have been read; a new one may be created freely. The stat only runs
+  // when the guard is on, so a harness without it writes exactly as before.
+  if (ctx.reads && await exists(file)) ensureRead(ctx, file, str(args, 'path'))
   await mkdir(path.dirname(file), { recursive: true })
   await fsWrite(file, content, 'utf8')
+  ctx.reads?.add(file)
   return `wrote ${content.length} chars to ${str(args, 'path')}`
 }
 
 export async function editFile(args: Args, ctx: ToolCtx): Promise<string> {
   const file = await resolveInside(ctx.workdir, str(args, 'path'))
+  ensureRead(ctx, file, str(args, 'path'))
   const oldS = str(args, 'old'), newS = str(args, 'new')
   const raw = await fsRead(file)
   if (raw.includes(0)) throw new Error('refusing to edit a binary file')
@@ -53,10 +73,11 @@ export async function editFile(args: Args, ctx: ToolCtx): Promise<string> {
   const lf = text.replace(/\r\n/g, '\n')
   const needle = oldS.replace(/\r\n/g, '\n')
   const count = lf.split(needle).length - 1
-  if (count !== 1) throw new Error(`"old" must occur exactly once; found ${count} occurrences`)
+  if (count !== 1) throw new Error(`"old" ${EDIT_MISS}; found ${count} occurrences`)
   const replacement = newS.replace(/\r\n/g, '\n')
   let out = lf.replace(needle, () => replacement)
   if (crlf) out = out.replace(/\n/g, '\r\n')
   await fsWrite(file, out, 'utf8')
+  ctx.reads?.add(file)
   return `edited ${str(args, 'path')}`
 }
