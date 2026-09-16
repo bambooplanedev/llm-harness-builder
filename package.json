@@ -1,6 +1,6 @@
 {
   "name": "llm-harness-builder",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "See what your agent harness really sends to a local LLM, and why it fails",
   "license": "MIT",
   "type": "module",
