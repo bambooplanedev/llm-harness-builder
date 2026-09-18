@@ -204,23 +204,50 @@ the system prompt, and the flag:
     llm-harness-builder bench harnesses/tuned.json harnesses/rule-none.json \
       harnesses/guard-only.json harnesses/rule-and-guard.json --n 5
 
-Not measured yet — the numbers land once this bench actually runs, and it must run on the same
-setup as **Bench results** below (the command above prints without `--kind`/`--base-url`/`--model`,
-house style matching the MCP section, which is exactly why this reminder is here), or the `tuned`
-row here will not be comparable to the `tuned` row already published there — the entire reason
-`tuned` is the fourth arm.
+Measured on 2026-09-18 on the same setup as **Bench results** below (the command above prints
+without `--kind`/`--base-url`/`--model`, house style matching the MCP section; the run used the
+flags from that section plus `--timeout 600`), five runs per arm. `tuned` came back at 5 turns and
+34 s, the row already published there, so the two tables are comparable:
 
 | harness | rule | guard | PASS | how the runs ended | median turns | `guard` | `editMiss` |
 |---|---|---|---|---|---|---|---|
-| `tuned` | yes | — | | | | | |
-| `rule-none` | — | — | | | | | |
-| `guard-only` | — | yes | | | | | |
-| `rule-and-guard` | yes | yes | | | | | |
+| `tuned` | yes | — | **5/5** | `final×5` | 5 | | 0 |
+| `rule-none` | — | — | **4/5** | `final×4 backend_error×1` | 11 | | 16 |
+| `guard-only` | — | yes | **0/5** | `max_turns×5` | 15 | 5 | 53 |
+| `rule-and-guard` | yes | yes | **5/5** | `final×5` | 5 | 0 | 0 |
 
 `guard` counts the edits the guard refused and `editMiss` the edits whose `old` did not occur
 exactly once. Both are sums over the five runs, not medians: a median of five small integers is 0.
 `guard` is blank for an arm that had the guard off — those arms cannot produce the error by
 construction, which is also why this experiment does not read `med errs`.
+
+What was decided before the run: the estimand is `guard`, a zero would be published, and PASS is
+an argument only at 5-against-1 or 4-against-0. `guard-only` 0/5 against `tuned` 5/5 is p = 0.008
+and against `rule-none` 4/5 is p = 0.048, so this time PASS is one. Three things the traces show,
+identical in every run of an arm:
+
+- **The sentence in the prompt does all the work.** Without it the model's first edit was blind in
+  10 runs out of 10 — `edit_file` on `src/slugify.js` with an `old` it had invented, the file never
+  opened. With it, 0 out of 10, and the guard in `rule-and-guard` never fired. The `editMiss` of 16
+  in `rule-none` against 0 in `tuned` is the same fact counted from the other side, and it is the
+  floor this experiment needed.
+- **The guard does what it says.** Five blind edits, five refusals, and in all five the very next
+  call was `read_file src/slugify.js`.
+- **And then `guard-only` lost every run anyway**, not to the guard but to the next error. Having
+  read the file, the model sent an `old` ending in a semicolon the file does not have — the guess
+  `bare` makes in the run described below — got `found 0 occurrences`, and sent the identical call
+  again, ten or eleven times, until `max_turns`. `rule-none` makes the same miss and gets out of
+  it in four runs of five: there the model answers a miss by reading the file, or by giving up on
+  `edit_file` and rewriting the three-line file with `write_file`. In `guard-only` the file is
+  already read, and the model has no second idea.
+
+So on this model a rule in the prompt and the same rule in code are not equivalent, and code is
+the weaker of the two: the refusal repairs the one call it refuses, the sentence changes how the
+model edits at all. What these five runs cannot separate is the guard from the path it forces —
+the honest reading is "a recovered refusal left the model in a state it did not recover from
+twice", not "guards are harmful". The cheap next knobs are on the other error: `found 0
+occurrences` says nothing about what *is* in the file, and nothing in the loop notices the same
+failing call arriving ten times in a row.
 
 ## Bench results
 
