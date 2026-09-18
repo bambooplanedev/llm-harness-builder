@@ -261,6 +261,15 @@ The task: find a bug report on the single `ERROR` line near the end of a 3002-li
 `data/app.log`, fix `src/slugify.js`, and make `node --test` pass. Verdicts come from
 `examples/check.sh`, which just runs `node --test`.
 
+Every number in this README, the read-before-edit grid of 2026-09-18 included, was measured
+against a test file that never produced a leading dash: the bug report asks for leading *and*
+trailing dashes to be stripped, and the test of that name only checked the trailing one. Checked
+by hand on the grid's 14 PASS runs, 11 fixed only the trailing dash — `slugify("!Hello")` still
+returned `"-hello"` — and all 10 PASSes of the two arms with the rule were among them; the three
+full fixes were all `rule-none`. The test asserts the leading case since 2026-09-18. Nothing was
+re-measured: runs from that date on face a stricter oracle and do not belong in one table with
+the numbers here.
+
 | harness | PASS | how the runs ended | median turns | median s |
 |---|---|---|---|---|
 | `bare` — native tool calls, minimal prompt, no truncation | **1/5** | `final×3 aborted×1 parse_failed×1` | 8 | 1159 |
@@ -371,7 +380,8 @@ both harnesses failed on the very first run of this demo.
 - `demo --kind openai` needs `--base-url` (the default URL is Ollama's port).
 - The UI has no built-in workdir: run `demo` once and point the UI's workdir at the temp directory it prints (or at any `workdir` from a bench JSON), or at any scratch project.
 - `bench` PASS means `node --test` came back green, not that the bug was fixed the right way: the
-  model has `write_file` and could edit the test instead. Open the run's trace (`runs[].trace` in
+  model has `write_file` and could edit the test instead, and a fix can satisfy the tests while
+  missing the report (see the note under **Bench results**: 11 of 14 did). Open the run's trace (`runs[].trace` in
   the JSON, or the run list in the UI) to see what it changed.
 - `demo` runs `check.sh` without a timeout; `bench` gives it 60 s.
 - Aborting a run (`--timeout`) closes our side of the connection; llama-server keeps generating
