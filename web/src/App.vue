@@ -33,7 +33,14 @@ async function refreshModels() {
 async function refreshLists() { harnessNames.value = (await api.harnesses()).map(h => h.name); runs.value = await api.runs() }
 /** Normalises a config from either door (saved harness, bench JSON) before it lands in the form. */
 function setConfig(c: HarnessConfig) { c.toolCalls.format ??= 'json'; config.value = c }
-async function load(name: string) { if (!name) return; setConfig(await api.harness(name)) }
+/** A harness describes how the agent thinks; the backend is what it runs on. Switching the first
+ *  leaves the second alone — unless no model is picked yet (models never listed), when the
+ *  harness's own backend is the only usable one. */
+async function load(name: string) {
+  if (!name) return
+  const c = await api.harness(name)
+  setConfig({ ...c, backend: config.value.backend.model ? config.value.backend : c.backend })
+}
 async function saveAs(name: string) { error.value = ''; try { config.value.name = name; await api.saveHarness(name, outbound(config.value)); await refreshLists() } catch (e) { error.value = (e as Error).message } }
 function open(id: string) {
   unsub?.(); events.value = []; live.value = {}; runId.value = id
