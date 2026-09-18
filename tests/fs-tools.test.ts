@@ -115,3 +115,18 @@ test('the two strings bench counts by are the ones the tools write', async () =>
   await writeFile(join(ctx.workdir, 'dup.txt'), 'x\nx\n')
   await expect(editFile({ path: 'dup.txt', old: 'x', new: 'y' }, ctx)).rejects.toThrow(EDIT_MISS)
 })
+
+test('explainEditMiss: a one-line miss that differs only in punctuation names the file line', async () => {
+  await writeFile(join(ctx.workdir, 'src/s.js'), "export function f(s) {\n  return s.trim().replace(/x+/g, '-')\n}\n")
+  const call = (old: string, c: ToolCtx) =>
+    editFile({ path: 'src/s.js', old, new: 'X' }, c).then(() => 'edited', e => (e as Error).message)
+  const plain = `"old" ${EDIT_MISS}; found 0 occurrences`
+  const on: ToolCtx = { ...ctx, explainEditMiss: true }
+  const semi = "return s.trim().replace(/x+/g, '-');"
+  expect(await call(semi, on)).toBe(
+    `${plain}. Line 2 of src/s.js matches your "old" except for punctuation or whitespace; the file has exactly:\n  return s.trim().replace(/x+/g, '-')`)
+  expect(await call(semi, ctx)).toBe(plain)                                   // flag off: the old message, byte for byte
+  expect(await call('return cleanedString;', on)).toBe(plain)                // nothing like it in the file
+  expect(await call(';;', on)).toBe(plain)                                   // normalises to nothing: must not match the "}" line
+  expect(await call("export function f(s) {;\n  return s.trim();", on)).toBe(plain)   // multi-line "old": out of scope
+})
