@@ -95,3 +95,11 @@ test('mcp-off and mcp-on differ from tuned only in where the file tools come fro
   expect(on.tools.enabled).toEqual(['bash'])   // bash stays: the demo task needs node --test, which the fs server cannot run
   expect(on.mcpServers).toEqual({ fs: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-filesystem', '.'] } })
 })
+
+// One flag apart, or the bench measures something else.
+test('guard-hint is guard-only plus explainEditMiss and nothing else', async () => {
+  const load = async (n: string) => JSON.parse(await readFile(new URL(`../harnesses/${n}.json`, import.meta.url), 'utf8'))
+  const only = await load('guard-only'), hint = await load('guard-hint')
+  expect(validateConfig(hint)).toEqual([])
+  expect(hint).toEqual({ ...only, name: 'guard-hint', tools: { ...only.tools, explainEditMiss: true } })
+})
