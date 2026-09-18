@@ -360,3 +360,16 @@ test('without the flag the same edit goes through', async () => {
   const tr = ev.find(e => e.type === 'tool_result') as any
   expect(tr.error).toBe(false)
 })
+
+// Without this a forgotten line in run.ts gives green unit tests, two identical bench arms and a false null.
+test('explainEditMiss reaches the tools: a punctuation miss comes back with the file line', async () => {
+  const cfg = base({ context: { maxToolOutputChars: 1000, budgetTokens: 0 }, tools: { enabled: ['read_file', 'edit_file'], approveBash: false, explainEditMiss: true } })
+  const be = Fake([
+    { toolCalls: [{ backendId: 'id1', name: 'edit_file', args: { path: 'a.txt', old: 'A'.repeat(120) + ';', new: 'B' } }] },
+    { content: 'giving up' },
+  ])
+  const ev = await collect({ config: cfg, task: 'do', workdir: await wd() }, { backend: be })
+  const tr = ev.find(e => e.type === 'tool_result') as any
+  expect(tr.error).toBe(true)
+  expect(tr.output).toContain('Line 1 of a.txt matches your "old"')
+})

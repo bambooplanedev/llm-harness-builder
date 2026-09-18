@@ -85,12 +85,14 @@ test('mcpServers is optional and validated per server', () => {
   expect(validateConfig(serverArray)).toContain('mcpServers.fs must be an object')
 })
 
-test('requireReadBeforeEdit is optional and must be a boolean', () => {
+test('requireReadBeforeEdit and explainEditMiss are optional and must be booleans', () => {
   expect(validateConfig(validConfig)).toEqual([])
-  const on = structuredClone(validConfig) as any
-  on.tools.requireReadBeforeEdit = true
-  expect(validateConfig(on)).toEqual([])
-  const bad = structuredClone(validConfig) as any
-  bad.tools.requireReadBeforeEdit = 'yes'
-  expect(validateConfig(bad).some(e => e.includes('requireReadBeforeEdit'))).toBe(true)
+  for (const key of ['requireReadBeforeEdit', 'explainEditMiss']) {
+    const on = structuredClone(validConfig) as any
+    on.tools[key] = true
+    expect(validateConfig(on)).toEqual([])
+    const bad = structuredClone(validConfig) as any
+    bad.tools[key] = 'yes'
+    expect(validateConfig(bad).some(e => e.includes(key))).toBe(true)
+  }
 })
