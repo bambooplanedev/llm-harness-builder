@@ -75,6 +75,9 @@ per-run parameters. The `prompted` mode expects the model to answer with
 `{"calls":[{"name":...,"args":{...}}],"final":null|"text"}`; `enforceSchema` passes that shape
 as `response_format` / `format`.
 
+`backend.maxTokens` caps the tokens of one response, thinking included; without it a generation
+runs until the window is full. `numCtx` is sent to Ollama only.
+
 `toolCalls.format` picks how a `prompted` run talks: `json` (the shape above) or `hermes`
 (`<tool_call>{"name":…,"arguments":…}</tool_call>` blocks, results in `<tool_response>`, and a
 plain-text reply means "done"). `enforceSchema` only applies to `json`.
@@ -189,6 +192,14 @@ so read it as one sample. Keeping the first 396 or 500 characters parsed five of
 the model then wrote `\"\"` again; given the marker alone it wrote `''`. This is an existence check
 on one recorded history, not a PASS rate. No run was repeated and the table above stands as
 measured; its `backend_error×2` would not happen the same way today.
+
+The other half is the 295 s. `mcp-on`, like every shipped harness but `bare`, now sends
+`"maxTokens": 1024`. The recorded turn-4 request that ran away, sent again with that cap — six times
+through the shipped adapter, three as plain non-streaming requests: nine tries, eight of them the healthy 162-token answer, and one ran away again —
+the same `` `** `` — and was cut at 1024 tokens after 55 s. With the cap the retry fits even
+without the marker (3130 + 1024 + 37), for as long as the prompt leaves that much room. One in
+nine here against two in five in the table is not a rate either; it says the runaway is sampling,
+not something in those two prompts.
 
 Two caveats, both honest. **The arms differ in more than the size of the descriptions**: tool names
 and argument shapes differ too, and MCP's `read_file` takes `head`/`tail`, which the built-in one
@@ -504,9 +515,14 @@ did it would need the placebo arm this README keeps not having.
   **Explaining an edit miss**: no truncation there, the history simply outgrew the window with
   `budgetTokens` at 0. All of this is llama-server behaviour; Ollama shifts the context instead of
   answering 400, and nothing here was measured on it.
-- Generation is not capped. A runaway costs about 295 s before anything can react, and after the
-  clipped retry nothing stops a second one: such a run takes about ten minutes and ends as
-  `parse_failed`, or as `aborted` if the bench timeout comes first.
+- `backend.maxTokens` caps what one response may generate (`max_tokens` / `num_predict`), thinking
+  included. Every shipped harness except `bare` carries 1024 since 2026-09-19: across the recorded
+  runs the `/no_think` harnesses never needed more than 162 tokens for a response. `bare` has no cap
+  because it thinks — 592 tokens at the median and 1317 at most in its two recorded runs — so there a runaway still costs about
+  295 s before anything can react, and a second one after the clipped retry makes a ten-minute run
+  that ends as `parse_failed`, or as `aborted` if the bench timeout comes first. A cap set below
+  what a model needs to think turns every response into a parse error; the run then ends as
+  `parse_failed` after two.
 - Abort cannot interrupt a tool that is already running; `bash` returns within its 30 s
   timeout, then the run ends.
 - `demo --kind openai` needs `--base-url` (the default URL is Ollama's port).

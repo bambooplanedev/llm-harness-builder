@@ -21,6 +21,7 @@ export class OpenAIBackend implements Backend {
     })
     return {
       model: req.model, messages, temperature: req.temperature, stream: true, stream_options: { include_usage: true },
+      ...(req.maxTokens ? { max_tokens: req.maxTokens } : {}),
       ...toolsField(req.tools),
       ...(req.responseSchema ? { response_format: { type: 'json_schema', json_schema: { name: 'harness', schema: req.responseSchema } } } : {}),
     }

@@ -63,3 +63,8 @@ test('no non-English text ships in the source', async () => {
   }
   expect(offenders).toEqual([])
 })
+
+test('max_tokens shows the harness value, and an empty box when the harness has no cap', async () => {
+  expect(await render({ ...base, backend: { ...base.backend, maxTokens: 1024 } })).toMatch(/max_tokens<\/span><input[^>]*value="1024"/)
+  expect(await render(base)).toMatch(/max_tokens<\/span><input[^>]*value=""/)
+})

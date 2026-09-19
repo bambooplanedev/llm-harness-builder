@@ -170,3 +170,11 @@ test('data: without a space is still a chunk', async () => {
 test('not-an-event-stream error carries the body as sent, not duplicated across chunks', async () => {
   await expect(new OpenAIBackend('http://x/v1', chunked(['<html>abc', 'def</html>'])).send({})).rejects.toSatisfy((e: unknown) => (e as BackendError).body === '<html>abcdef</html>')
 })
+
+test('maxTokens becomes max_tokens / num_predict, and is absent from the payload when not set', () => {
+  const capped = { ...req, maxTokens: 512 }
+  expect((new OpenAIBackend('http://x/v1').buildPayload(capped) as any).max_tokens).toBe(512)
+  expect((new OllamaBackend('http://x').buildPayload(capped) as any).options).toEqual({ temperature: 0.1, num_ctx: 8192, num_predict: 512 })
+  expect(new OpenAIBackend('http://x/v1').buildPayload(req)).not.toHaveProperty('max_tokens')
+  expect((new OllamaBackend('http://x').buildPayload(req) as any).options).not.toHaveProperty('num_predict')
+})

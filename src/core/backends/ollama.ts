@@ -21,7 +21,7 @@ export class OllamaBackend implements Backend {
     })
     return {
       model: req.model, messages, stream: true,
-      options: { temperature: req.temperature, ...(req.numCtx ? { num_ctx: req.numCtx } : {}) },
+      options: { temperature: req.temperature, ...(req.numCtx ? { num_ctx: req.numCtx } : {}), ...(req.maxTokens ? { num_predict: req.maxTokens } : {}) },
       ...toolsField(req.tools),
       ...(req.responseSchema ? { format: req.responseSchema } : {}),
     }

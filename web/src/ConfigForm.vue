@@ -29,6 +29,12 @@ function toggleGuard(on: boolean) {
   if (on) config.value.tools.requireReadBeforeEdit = true
   else delete config.value.tools.requireReadBeforeEdit
 }
+/** Same rule: an empty or useless box removes the key instead of saving a value the validator refuses. */
+function setMaxTokens(text: string) {
+  const n = Number(text)
+  if (Number.isInteger(n) && n > 0) config.value.backend.maxTokens = n
+  else delete config.value.backend.maxTokens
+}
 
 const fmtMcp = (m: HarnessConfig['mcpServers']) => (m && Object.keys(m).length ? JSON.stringify(m, null, 2) : '')
 const mcpText = ref(fmtMcp(config.value.mcpServers))
@@ -77,6 +83,7 @@ function editMcp(text: string) {
     <div class="row">
       <span>temp</span><input type="number" step="0.1" v-model.number="config.backend.temperature">
       <span>num_ctx</span><input type="number" v-model.number="config.backend.numCtx" :disabled="config.backend.kind !== 'ollama'">
+      <span title="cap on generated tokens, thinking included; empty = no cap">max_tokens</span><input type="number" min="1" :value="config.backend.maxTokens ?? ''" @change="setMaxTokens(($event.target as HTMLInputElement).value)">
     </div>
 
     <label>System prompt <span v-for="(_, k) in PRESETS" :key="k"><button @click="applyPreset(k)">{{ k }}</button> </span></label>

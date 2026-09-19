@@ -5,6 +5,7 @@
     "baseUrl": "http://localhost:11434",
     "model": "qwen3:8b",
     "numCtx": 8192,
+    "maxTokens": 1024,
     "temperature": 0.2
   },
   "systemPrompt": "You are a coding agent working inside a project directory.\nWork in small steps: inspect before you change, verify after you change.\nRead a file before you change it; never guess its contents.\nNever read a large file whole - search it or read only the part you need.\nBefore you answer with final, run `node --test` and read its output; if a test still fails, keep working instead of answering.\nWhen the task is complete, answer with a short summary and no further tool calls.\n/no_think",
