@@ -92,6 +92,7 @@ export async function editFile(args: Args, ctx: ToolCtx): Promise<string> {
   if (count !== 1) throw new Error(`"old" ${EDIT_MISS}; found ${count} occurrences`
     + (count === 0 && ctx.explainEditMiss ? explainMiss(lf, needle, str(args, 'path')) : ''))
   const replacement = newS.replace(/\r\n/g, '\n')
+  if (needle === replacement) throw new Error('"old" and "new" are identical: nothing to change')
   let out = lf.replace(needle, () => replacement)
   if (crlf) out = out.replace(/\n/g, '\r\n')
   await fsWrite(file, out, 'utf8')

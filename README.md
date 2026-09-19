@@ -443,10 +443,12 @@ one that notices the repetition.
 ## Noticing a repeated call
 
 `loop.maxRepeats` is that knob. The run loop counts how many times each call — same name, same
-arguments — has been made since the files last changed through `edit_file` or `write_file`. A
+arguments — has been made since the files last changed through `edit_file` or `write_file`; an
+edit that has itself succeeded is counted over the whole run (why: the end of this section). A
 repeat is never refused: it runs, and its result gets one more line,
 
     note: identical call #3 since the last file change
+    note: identical call #3 in this run
 
 and when one call has been repeated more than `maxRepeats` times the run ends with
 `repeat_loop` instead of burning turns up to `max_turns` or context up to a 400. Absent means off,
@@ -469,6 +471,43 @@ times without drawing a note. What it only hints at: both runs that entered the 
 left it for `write_file` right after note `#3`. Two runs cannot carry that — `guard-hint` has one
 run above that made the same exit with no such note — and whether the note or the longer result
 did it would need the placebo arm this README keeps not having.
+
+**Two fixes, 2026-09-19, after the pool calibration below.** The first is unconditional; the
+second changes `loop.maxRepeats`, which is still absent — and so off — in every shipped harness
+but `guard-repeat` and `tuned-repeat`.
+
+- `edit_file` with `old` equal to `new` used to write the file back and answer `edited`. It is an
+  error now — `"old" and "new" are identical: nothing to change` — and an error clears no counts.
+  Before, that false success counted as a file change and reset the count of every other call.
+  Eight of the 95 traces recorded before this change contain such an edit, all of them FAIL: the
+  two `backend_error` runs of `tuned` in "Explaining an edit miss" (seven each — the "same `new`
+  eight times" there is one real edit and seven of these), two FAIL runs of `guard-hint` in the
+  same table (one each), and four `tuned` runs of the pool calibration — `bench-pool7-unbound-n2`
+  #1 (3), `bench-pool7-bound-n1` (2) and two of the void runs before the rewrite (4 each). Those
+  rows were measured with the old tool and would not replay turn for turn with the new one. None
+  of the 43 bench runs recorded as PASS contains one.
+- With `maxRepeats` set, a successful edit now clears the counts of every call except the edits
+  that have succeeded: such an `edit_file` or `write_file` is counted over the whole run, and its
+  note reads `note: identical call #2 in this run`. The same edit can succeed twice only if
+  something undid it in between, and until now two edits that undo each other cleared each
+  other's counts. An edit that has only ever failed is still new again after a file change, as
+  before. The four `guard-repeat` runs above replay to the same notes under the new counter — at
+  the same calls, with the same numbers — and none of the 43 PASS runs repeats a successful edit.
+
+What was checked, and what it showed. `tuned-repeat` is `tuned` plus `"maxRepeats": 3`. A smoke
+run of it on the pool task — `--size 7 --max-turns 12 --n 2`, 32768 window, as in the calibration
+— was 2/2 PASS in 5 and 7 turns, 112 s and 129 s. Each run had one runaway cut
+at the cap and went on; neither entered a loop. One note was written in the two runs, on a second
+`node --test` that followed a `read_file`, and that run then fixed `paginate` and passed. So the
+smoke run shows no harm and says nothing about the flip-flop. For that, the recorded flip-flop of
+`bench-pool6-unbound-cal-r2` was replayed against the model at its turn 6 — 11.6k tokens of
+history, the point where `return out` → `return out.length > 0 ? out : []` has just succeeded for
+the second time — once with the notes the old counter would have written into that history and
+once with the new ones, five requests each. All ten replies are the same 155 tokens: undo it
+again, flip `paginate` back, run the tests twice. The note changes nothing here. What the fix adds
+is the breaker: counted this way that run ends as `repeat_loop` at turn 11, on the fifth identical
+edit, where as recorded it flipped until the bench timeout at 420 s. One recorded history, by
+substitution; it has not been seen to fire in a live run.
 
 ## The pool task
 
@@ -550,7 +589,9 @@ What the calibration measured:
   and running the tests, and for its last five turns stopped editing altogether.
   `loop.maxRepeats` as built would not see the flip-flop: a successful edit clears the counts of
   every other call, so two edits that undo each other never accumulate. That is the fourth place
-  this model repeats what just failed, and the first with a period.
+  this model repeats what just failed, and the first with a period. (Later the same day the
+  counter was changed to see it — the end of "Noticing a repeated call". These runs were made
+  without `maxRepeats`.)
 - **Four runaways, none fatal.** After a batch of edits — seven in the two read closely — the model
   kept appending `{"name":"bash","args":{"command":"node --test"}}` to the same response — 37 and 42
   call objects in the two read closely; a healthy batch is 486 tokens. Each was cut at the
@@ -642,11 +683,14 @@ assistant message alone.
   calls `a = b + c` and `a = b - c` a match "except for punctuation"; it shows the first such line,
   says nothing for a multi-line `old` or a line over 300 characters, and edits made through MCP
   tools never reach it.
-- `loop.maxRepeats` sees file changes only through `edit_file` and `write_file`. After `bash sed -i`
-  or an MCP tool changed a file, re-running the same test command counts as a repeat: it still
-  runs, but it draws the note and moves the run towards `repeat_loop`. An `edit_file` whose `old`
-  equals its `new` reports `edited` and resets the counts of every other call; its own count
-  survives, so that loop is still caught.
+- `loop.maxRepeats` sees file changes only through a tool named `edit_file` or `write_file` —
+  the built-in ones, or an MCP server's tool of the same name, as in `mcp-on`. After `bash sed -i`
+  or a differently named MCP tool changed a file, re-running the same test command counts as a
+  repeat: it still runs, but it draws the note and moves the run towards `repeat_loop`. An edit
+  that has succeeded is counted over the whole run, so a model that legitimately makes the same
+  successful edit a fifth time — after four undos — is ended at `maxRepeats: 3`; no recorded run
+  does that outside a loop. The note itself did not move the model out of a flip-flop in the one
+  replay that tried it.
 - In `pool`, "N = 7" means "these seven units", not seven equal ones: the order is fixed and the
   units differ in difficulty. The size at which a healthy run fills the window belongs to this
   machine and this Node: about 200 of each failure's 900 characters are the absolute tmp path, and
