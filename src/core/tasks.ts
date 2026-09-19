@@ -1,5 +1,6 @@
 // src/core/tasks.ts — what `bench` and `demo` can run: the text, the workdir and the verdict of each task, in one place.
 import { mkdtemp, cp, writeFile, mkdir } from 'node:fs/promises'
+import { rmSync, mkdirSync, copyFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -35,4 +36,38 @@ const slug: Task = {
   check: dir => spawnSync('sh', [path.join(dir, 'check.sh')], { timeout: 60_000 }).status === 0,
 }
 
-export const TASKS = { slug }
+/** The order IS the task: size N means the first N of these. titleCase imports words and paginate imports chunk, on purpose. */
+export const POOL = ['clamp', 'words', 'titleCase', 'chunk', 'paginate', 'parseDuration', 'dedupe', 'range', 'formatBytes', 'median'] as const
+const POOL_ROOT = path.join(PKG_ROOT, 'examples-pool')
+const copyUnits = async (dir: string, size: number, kinds: ('src' | 'test')[]) => {
+  for (const kind of kinds) {
+    await mkdir(path.join(dir, kind), { recursive: true })
+    for (const name of POOL.slice(0, size)) {
+      const file = kind === 'src' ? `${name}.js` : `${name}.test.js`
+      await cp(path.join(POOL_ROOT, kind, file), path.join(dir, kind, file))
+    }
+  }
+}
+
+/** Grows with --size until a healthy run fills the window. The text names no technique; `node --test` is the success criterion. */
+const pool: Task = {
+  prompt: 'The test suite of this project fails. Find and fix the bugs in the files under src/ until `node --test` passes. Do not edit the tests. Finally answer with a one-line summary.',
+  max: POOL.length,
+  async prepare(size = POOL.length) {
+    const dir = await mkdtemp(path.join(tmpdir(), 'lhb-pool-'))
+    await cp(path.join(POOL_ROOT, 'package.json'), path.join(dir, 'package.json'))
+    await copyUnits(dir, size, ['src', 'test'])
+    return dir
+  },
+  // The model can reach test/: the verdict is taken on pristine tests, and only on them — a file it
+  // added cannot fail a correct fix, a test it rewrote cannot pass a wrong one.
+  check(dir, size = POOL.length) {
+    const files = POOL.slice(0, size).map(name => path.join('test', `${name}.test.js`))
+    rmSync(path.join(dir, 'test'), { recursive: true, force: true })
+    mkdirSync(path.join(dir, 'test'))
+    for (const f of files) copyFileSync(path.join(POOL_ROOT, f), path.join(dir, f))
+    return spawnSync(process.execPath, ['--test', ...files], { cwd: dir, timeout: 60_000 }).status === 0
+  },
+}
+
+export const TASKS = { slug, pool }
