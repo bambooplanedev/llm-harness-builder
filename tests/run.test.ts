@@ -414,13 +414,30 @@ test('maxRepeats: an edit the guard refused, then read_file, then the same edit 
   expect(last(ev).reason).toBe('final')
 })
 
-// The third loop in the README: old === new "succeeds", which clears every count but its own.
-test('maxRepeats: a no-op edit repeated is still caught', async () => {
+// The third loop in the README: old === new. It is an error now, so it changes no file and clears no count.
+test('maxRepeats: a no-op edit is an error, and the calls around it keep their counts', async () => {
   const noop = { toolCalls: [{ name: 'edit_file', args: { path: 'a.txt', old: 'A'.repeat(120), new: 'A'.repeat(120) } }] }
-  const be = Fake([noop, readA, noop, readA, noop, { content: 'never reached' }])
+  const be = Fake([readA, noop, readA, { content: 'never reached' }])
+  const cfg = base({ tools: { enabled: ['read_file', 'edit_file'], approveBash: false }, loop: { maxTurns: 10, maxRepeats: 0 } })
+  const ev = await collect({ config: cfg, task: 'do', workdir: await wd() }, { backend: be })
+  expect(results(ev).map(r => r.error)).toEqual([false, true, false])
+  expect(last(ev)).toMatchObject({ reason: 'repeat_loop', turns: 3 })
+})
+
+// Two edits that undo each other: each one used to clear the other's count, so neither reached 2.
+test('maxRepeats: an edit and its undo, repeated, are counted across each other', async () => {
+  const a = 'A'.repeat(120)
+  const there = { toolCalls: [{ name: 'edit_file', args: { path: 'a.txt', old: a, new: 'B' } }] }
+  const back = { toolCalls: [{ name: 'edit_file', args: { path: 'a.txt', old: 'B', new: a } }] }
+  const be = Fake([there, back, there, back, there, { content: 'never reached' }])
   const cfg = base({ tools: { enabled: ['read_file', 'edit_file'], approveBash: false }, loop: { maxTurns: 10, maxRepeats: 1 } })
   const ev = await collect({ config: cfg, task: 'do', workdir: await wd() }, { backend: be })
-  expect(results(ev).every(r => !r.error)).toBe(true)
+  const out = results(ev)
+  expect(out.every(r => !r.error)).toBe(true) // every one of them really edited the file
+  expect(out.map(r => r.output.split('\n').at(-1))).toEqual([
+    'edited a.txt', 'edited a.txt',
+    'note: identical call #2 in this run', 'note: identical call #2 in this run', 'note: identical call #3 in this run',
+  ])
   expect(last(ev)).toMatchObject({ reason: 'repeat_loop', turns: 5 })
 })
 

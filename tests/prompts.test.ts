@@ -111,6 +111,13 @@ test('guard-repeat is guard-only plus loop.maxRepeats and nothing else', async (
   expect(rep).toEqual({ ...only, name: 'guard-repeat', loop: { ...only.loop, maxRepeats: 3 } })
 })
 
+test('tuned-repeat is tuned plus loop.maxRepeats and nothing else', async () => {
+  const load = async (n: string) => JSON.parse(await readFile(new URL(`../harnesses/${n}.json`, import.meta.url), 'utf8'))
+  const tuned = await load('tuned'), rep = await load('tuned-repeat')
+  expect(validateConfig(rep)).toEqual([])
+  expect(rep).toEqual({ ...tuned, name: 'tuned-repeat', loop: { ...tuned.loop, maxRepeats: 3 } })
+})
+
 // Every /no_think harness answers in under 200 tokens; bare thinks, and <think> counts against the cap.
 test('every shipped harness caps generation at 1024 tokens, except bare', async () => {
   const { readdir } = await import('node:fs/promises')

@@ -83,6 +83,7 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
       explainEditMiss: config.tools.explainEditMiss,
     }
     // loop.maxRepeats: how many times each call was made since the files last changed through a tool.
+    // The edits themselves are counted over the whole run: the same edit succeeds twice only when it was undone in between.
     const seen = new Map<string, number>()
 
     while (true) {
@@ -191,10 +192,11 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
           const key = c.name + JSON.stringify(c.args)
           const n = (seen.get(key) ?? 0) + 1
           repeats = n - 1
-          if (!result.error && (c.name === 'edit_file' || c.name === 'write_file')) seen.clear()
+          const isEdit = (k: string) => k.startsWith('edit_file{') || k.startsWith('write_file{')
+          if (!result.error && isEdit(key)) for (const k of [...seen.keys()]) if (!isEdit(k)) seen.delete(k)
           // A refusal by the guard is not recorded: read_file and then the same edit is the recovery we want.
           if (!(result.error && result.output.includes(GUARD_BLOCKED))) seen.set(key, n)
-          if (repeats) output += `\nnote: identical call #${n} since the last file change`
+          if (repeats) output += `\nnote: identical call #${n} ${isEdit(key) ? 'in this run' : 'since the last file change'}`
         }
         yield ev({ type: 'tool_result', callId: call.callId, name: call.name, output, truncated, error: result.error })
         if (repeats > (config.loop.maxRepeats ?? Infinity)) { yield done('repeat_loop'); return }
