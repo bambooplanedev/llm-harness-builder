@@ -739,7 +739,40 @@ results only, a `chars / 4` estimate — on a friendly task, one model, one wind
 data. What it shows is that the knob holds a run inside a window that otherwise kills it, and that
 the first things it throws away included the thing the model needed next. The weak point it found
 is not the threshold: it is that a stub takes a whole turn's results at once and does not say what
-they were.
+they were. (Corrected 2026-09-19, next paragraph: that was then built and measured, and it is not
+the weak point either.)
+
+**The stub that says what it was, 2026-09-19 — built, measured, not merged.** The change: every
+result of a turn is stubbed on its own, oldest first, a result whose stub would not be shorter is
+left alone, and the stub names the call — `[dropped: read_file {"path":"src/formatBytes.js"}, 309
+chars]`. A replay over the three unbound traces said beforehand that on this task the granularity
+could not matter: what `applyBudget` may not touch is about as large as the mark, so at turn 5
+every result goes either way, all seven files with it. That left one variable, what the stub says,
+and one expectation written down before the run: the model reads `formatBytes.js` again at turn 5.
+Same commands, `tuned-budget` with the mark, three runs:
+
+| file in `runs/` | window | result | turns | s | peak tokens | prompt eval, ms/turn |
+|---|---|---|---|---|---|---|
+| `bench-v210-pool2-budget5120-label-n3` #1 | 5120 | FAIL, `repeat_loop` | 9 | 173 | 3667 | 5553 |
+| #2 | 5120 | FAIL, `repeat_loop` | 9 | 164 | 3662 | 4657 |
+| #3 | 5120 | FAIL, `repeat_loop` | 9 | 164 | 3667 | 4655 |
+
+It does not. Re-reads: 0, 0, 0. From turn 5 to the end all three send the same calls with the same
+arguments as the three runs with the mark — six runs, one sequence. At turn 5 the history says in
+so many words which file was dropped, and the model edits the `return` line from the `old` string
+of its own earlier call, which is an assistant message and stays. (#1 was the first run on a fresh
+server and evaluated more prompt; it is reported, not read.)
+
+And it cost something. One stub for a whole message leaves about twenty characters; a stub per result
+leaves every `<tool_result …>` wrapper, every label, and every result too short to stub — `edited
+src/clamp.js`. At turn 9 the history is 2798 in `chars / 4` units against a budget of 2670, with
+nothing left to stub — 592 above what `applyBudget` may not touch, where the arm with the mark
+ends at 2238, 32 above it. In real tokens that is 3662–3667 against 2952–2953, growing by about 220 a turn
+against about 145. Nothing died of it here; the breaker ended the runs first. But the knob's one
+job is to hold the history down, and it did that worse, for no change in what the model did. So
+the change is not in the repo, these three rows reproduce on no commit of it, and `applyBudget`
+is as the paragraphs above describe. What the measurement leaves standing: on this task, with
+this model, the loop on `formatBytes` is not caused by what the stub hides.
 
 ## Honest notes
 
@@ -823,7 +856,9 @@ they were.
   the old task 0.55–0.72; where a budget of 4691 would fire it is 0.74–0.79, so 4691 means about
   5900–6300 real tokens. `applyBudget` stubs the oldest tool results first and whole messages only
   — in a prompted harness one message is all the results of a turn — leaves `[dropped: N chars]`
-  with no word of what it was, and cannot touch the system prompt, the task, the assistant's own
+  with no word of what it was (naming the call in the stub was built and measured, changed nothing
+  in what the model did and held the history down worse: "The stub that says what it was"), and
+  cannot touch the system prompt, the task, the assistant's own
   messages or the newest results. Since 2026-09-19 it stubs down to three quarters of the budget
   once over it. Measured once: "The measurement, on `pool2`".
 - In `pool2`, "N = 7" means those seven units; `formatBytes` was new to the model when it was
