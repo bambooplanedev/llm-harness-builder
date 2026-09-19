@@ -79,6 +79,7 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
       maxToolOutputChars: config.context.maxToolOutputChars,
       // Present only when the harness asked for it; the tools treat "absent" as "guard off".
       reads: config.tools.requireReadBeforeEdit ? new Set<string>() : undefined,
+      explainEditMiss: config.tools.explainEditMiss,
     }
 
     while (true) {

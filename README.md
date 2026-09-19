@@ -249,6 +249,9 @@ twice", not "guards are harmful". The cheap next knobs are on the other error: `
 occurrences` says nothing about what *is* in the file, and nothing in the loop notices the same
 failing call arriving ten times in a row.
 
+The first of those knobs was tried next, and its premise turned out to be wrong — see
+**Explaining an edit miss** below.
+
 ## Bench results
 
 Measured with llama.cpp `llama-server` (`--jinja`), model `unsloth/Qwen3-8B-GGUF:Q4_K_M`,
@@ -337,6 +340,71 @@ The knobs that come next in the trace — "run `node --test` before you answer" 
 per response — are what keep the model from declaring victory on a red test suite, which is how
 both harnesses failed on the very first run of this demo.
 
+## Explaining an edit miss
+
+`guard-only` lost every run above to one error repeated ten times: an `old` that is line 2 of the
+file plus a semicolon, answered with `found 0 occurrences`. The obvious repair is a better error.
+Before writing it, the traces corrected the premise: the error does not hide what is in the file.
+The whole 91-character file had been read one turn earlier and was still in the context, and in
+`rule-none` the model twice re-read it between two identical misses and missed again. What the
+context never contains is the *difference*. `tools.explainEditMiss` says it:
+
+    "old" must occur exactly once; found 0 occurrences. Line 2 of src/slugify.js matches your
+    "old" except for punctuation or whitespace; the file has exactly:
+      return s.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-')
+
+It fires only for a one-line `old` that equals some line of the file once everything but letters,
+digits and `_` is dropped; otherwise the message is what it always was. The edit is still refused:
+finding the line and declining to use it is the point, the question being whether the model can use
+an explanation. Off by default, nothing in the tool descriptions, so no tokens until a miss.
+
+`guard-hint` is `guard-only` plus the flag; `tuned` rides along as a reference. Five runs each,
+same setup as **Bench results**, against the test file as of commit `7b66d05` — the one that also
+asserts the leading dash, so these numbers do not share a table with anything above:
+
+| harness | PASS | how the runs ended | `editMiss` | explained | recovered after a miss | most repeats of one failing call, per run |
+|---|---|---|---|---|---|---|
+| `guard-only` | 1/5 | `max_turns×4 final×1` | 43 | | 0 of 5 | 11, 11, 10, 11, 1 |
+| `guard-hint` | 1/5 | `max_turns×3 final×2` | 17 | 16 | 2 of 5 | 7, 1, 7, 2, 2 |
+| `tuned` | 3/5 | `final×3 backend_error×2` | 0 | | | |
+
+Decided before the run: the estimand is "recovered after a miss" — runs with a successful
+`edit_file` or `write_file` on `src/slugify.js` after the first miss — read as "gets the model out
+of the loop" at 4 of 5 or more against 0, as a null at 0, and as "partly" in between, to be
+published without the word for success. The repeats column counts failing calls with identical
+name and arguments, consecutive or not. PASS is not an argument here, and there is no significance
+test: runs of one arm are close to one trajectory, so this is an existence proof on one string,
+one three-line file and one model.
+
+It is "partly", and the traces make it less than that:
+
+- The explanation was shown 16 times and was **used zero times**. Not once did the next
+  `edit_file` drop the semicolon. Seven times the model sent the identical call again; eight times
+  it ran `node --test` on the file it had not changed, watched it fail, and in six of those went
+  straight back to the same `old`; once it gave up on `edit_file` and rewrote the file with
+  `write_file`.
+- So of the two recoveries, one is that `write_file` — the same exit `rule-none` finds with no
+  explanation at all — and the other never saw an explanation: its only miss was an invented
+  `return cleanedString;`, which matches no line.
+- What the explanation did change is the shape of the loop: eleven identical calls in a row became
+  seven, interleaved with test runs. Shorter, not broken. `editMiss` fell from 43 to 17 mostly
+  because those turns went to `node --test` instead.
+- The control did not stay a clone of itself either: one `guard-only` run matched on its first
+  edit after the refusal and went on to PASS. The floor held in four runs of five.
+
+What this does not show: there was no placebo arm, so "the model reacts to a longer error" and
+"the model reacts to this error" are not separated — and since it never acted on the content, the
+first reading is the likelier one. The matcher was exercised by exactly one string. On `tuned` the
+knob is inert: `editMiss` is 0 there.
+
+`tuned` is the more useful row. Against the stricter test its first edit is a half fix in
+all five runs — the trailing dash only — and the test goes red. Three runs fix it on the second
+edit; two send the same `new` eight times, red each time, until the context runs out
+(`backend_error`). Every PASS in this table is a full fix, and the price was 5/5 → 3/5. With the
+`;` loop and the `node --test` loop in `guard-hint`, that is the third place this model repeats a
+call that has just failed, and telling it why did not help. The knob these runs argue for is the
+one that notices the repetition.
+
 ## Honest notes
 
 - Five runs per harness is a small sample. By Fisher's exact test only 5-against-1 or 4-against-0
@@ -383,6 +451,10 @@ both harnesses failed on the very first run of this demo.
   model has `write_file` and could edit the test instead, and a fix can satisfy the tests while
   missing the report (see the note under **Bench results**: 11 of 14 did). Open the run's trace (`runs[].trace` in
   the JSON, or the run list in the UI) to see what it changed.
+- `explainEditMiss` compares lines with everything but letters, digits and `_` removed, so it also
+  calls `a = b + c` and `a = b - c` a match "except for punctuation"; it shows the first such line,
+  says nothing for a multi-line `old` or a line over 300 characters, and edits made through MCP
+  tools never reach it.
 - `demo` runs `check.sh` without a timeout; `bench` gives it 60 s.
 - Aborting a run (`--timeout`) closes our side of the connection; llama-server keeps generating
   until it notices, so the next run can start against a busy server and fail with
