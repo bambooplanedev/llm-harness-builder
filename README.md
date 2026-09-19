@@ -771,8 +771,58 @@ ends at 2238, 32 above it. In real tokens that is 3662–3667 against 2952–295
 against about 145. Nothing died of it here; the breaker ended the runs first. But the knob's one
 job is to hold the history down, and it did that worse, for no change in what the model did. So
 the change is not in the repo, these three rows reproduce on no commit of it, and `applyBudget`
-is as the paragraphs above describe. What the measurement leaves standing: on this task, with
-this model, the loop on `formatBytes` is not caused by what the stub hides.
+is as the paragraphs above describe. What that leaves standing is narrower than it looks: telling
+the model what it lost does not help once the file is lost. Whether losing the file is the harm is
+the next paragraph.
+
+**A budget with room in it, 2026-09-19.** At 2670 the question of what to stub never comes up:
+what `applyBudget` may not touch is about as large as three quarters of the budget, so everything
+it may touch goes at once. A replay of both unbound PASS traces over a range of budgets picked
+3300 before any run: it fires at turn 5 (3427 against 3300) and one stub — the results of turn 1,
+4213 characters — lands at about 2380, under the mark of 2475, so the seven files stay in the
+history.
+3300 is not a budget for a 5120 window (unseen results on top of it could pass the edge), so the
+window was 32768 and did not bind: this measures what is stubbed, not the window. Written down
+first: the first stub is turn 5 and 4213 characters (it was, three of three); if the model reads
+`formatBytes.js` again at turn 5 the cost above was in what was stubbed, if it loops blind again
+it was not; three runs are one observation; one attempt. `tuned-budget.json` with `budgetTokens`
+3300, the commands above:
+
+| file in `runs/` | window | result | turns | s | peak tokens | prompt eval, ms/turn |
+|---|---|---|---|---|---|---|
+| `bench-v210-pool2-budget3300-current-n3` #1 | 32768 | **PASS** | 7 | 146 | 3837 | 5964 |
+| #2 | 32768 | **PASS** | 7 | 134 | 3835 | 4069 |
+| #3 | 32768 | FAIL, `repeat_loop` | 11 | 193 | 4218 | 5251 |
+
+(#1 ran first on a fresh server and evaluated more prompt, as in the table before.) Neither outcome as written. No run reads the file again — and the two that pass do not need to:
+at turn 6 they fix the `while` line, which is still in the history, and their applied edits are
+those of the audited unbound PASS runs, call for call. The third had written its `words` fix
+another way at turn 4 (`.filter(w => w.length > 0)`, as good a fix), repeats the no-op once more
+at turn 6, then rewrites the `return` line and loops until the breaker. So these three are not
+clones, and a difference in wording two turns earlier is all that separates the FAIL from the two
+PASS. Two of three with the files kept, against none of three at 2670 with the
+mark and one of three without it, points the way the first outcome would have; it is a direction,
+not a rate. What does hold across every run made: at turn 5 all four runs with nothing stubbed
+read `formatBytes.js` again, and none of the fifteen with a stub in the history does — not even
+these, where the stub is only the directory listing and a test output the model has a newer copy
+of. It repeats the no-op edit instead (nine runs) or rewrites the `return` line (six). On this
+model a stub anywhere changes the next move; keeping the files in is what lets two of three
+recover from it.
+
+(An accident, reported and not read: the first three runs at 3300 —
+`bench-v210-pool2-budget3300-unbound-n3` — were made by mistake on a stale build of the unmerged
+change above, labelled stubs and all. Same budget, same two results stubbed at turn 5, all seven
+files in the history: FAIL, `repeat_loop`, 10 turns, three of three, one sequence, the same calls
+as #1 and #2 above through turn 5. Set beside the table above that is two arms that until turn 6
+differ only in the text of two stubs; with three clones against
+a split three it does not say the labelled stub is worse, only that it was not better here
+either.)
+
+What follows for the knob is arithmetic, not policy. A budget works when three quarters of it
+clears what cannot be stubbed by a margin worth having. On this task that floor is 1800–2350 in
+`chars / 4` units, and the budget that is safe for a 5120 window is 2670: there is no room, and
+no order of stubbing would make any. The candidate this leaves — stub test output before files
+read — cannot be measured on this task at this window for the same reason.
 
 ## Honest notes
 
