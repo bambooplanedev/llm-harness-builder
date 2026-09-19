@@ -441,6 +441,26 @@ test('maxRepeats: an edit and its undo, repeated, are counted across each other'
   expect(last(ev)).toMatchObject({ reason: 'repeat_loop', turns: 5 })
 })
 
+test('maxRepeats: write_file is counted over the run like an edit', async () => {
+  const w = (content: string) => ({ toolCalls: [{ name: 'write_file', args: { path: 'a.txt', content } }] })
+  const be = Fake([w('one'), w('two'), w('one'), { content: 'never reached' }])
+  const cfg = base({ tools: { enabled: ['write_file'], approveBash: false }, loop: { maxTurns: 10, maxRepeats: 0 } })
+  const ev = await collect({ config: cfg, task: 'do', workdir: await wd() }, { backend: be })
+  expect(results(ev)[2].output.endsWith('note: identical call #2 in this run')).toBe(true)
+  expect(last(ev)).toMatchObject({ reason: 'repeat_loop', turns: 3 })
+})
+
+// Only an edit that has succeeded keeps its count: a miss, a write that repairs the file, the same edit again is a recovery.
+test('maxRepeats: an edit that only ever missed is new again after the file changed', async () => {
+  const edit = { toolCalls: [{ name: 'edit_file', args: { path: 'a.txt', old: 'ZZ', new: 'Y' } }] }
+  const write = { toolCalls: [{ name: 'write_file', args: { path: 'a.txt', content: 'ZZ' } }] }
+  const be = Fake([edit, write, edit, { content: 'fin' }])
+  const cfg = base({ tools: { enabled: ['edit_file', 'write_file'], approveBash: false }, loop: { maxTurns: 10, maxRepeats: 0 } })
+  const ev = await collect({ config: cfg, task: 'do', workdir: await wd() }, { backend: be })
+  expect(results(ev).map(r => r.error)).toEqual([true, false, false])
+  expect(last(ev).reason).toBe('final')
+})
+
 // A response cut off at the token limit filled the window; sent back whole, the retry cannot fit (README, MCP).
 test('truncated: a long cut-off response goes back as a marker, the event keeps the whole text', async () => {
   const runaway = '{"calls": [' + '`**'.repeat(2500)
