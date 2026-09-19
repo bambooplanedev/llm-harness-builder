@@ -507,7 +507,8 @@ once with the new ones, five requests each. All ten replies are the same 155 tok
 again, flip `paginate` back, run the tests twice. The note changes nothing here. What the fix adds
 is the breaker: counted this way that run ends as `repeat_loop` at turn 11, on the fifth identical
 edit, where as recorded it flipped until the bench timeout at 420 s. One recorded history, by
-substitution; it has not been seen to fire in a live run.
+substitution. (It fired in a live run the same evening, twice: the end of "The measurement that
+was not run".)
 
 ## The pool task
 
@@ -616,6 +617,36 @@ about a loop. So there is no `tuned-budget.json` and no result. What is in the r
 instrument, its calibration, and one fix the preparation turned up: `applyBudget` used to be able
 to stub a tool result before the model had seen it; it now leaves everything after the last
 assistant message alone.
+
+**A second attempt, the same evening, stopped one gate earlier.** Its rules were changed after the
+data above was seen, and this is what changed. The window became the parameter instead of N: the
+PASS runs above show that N hardly moves the peak — reading all seven files costs about 800 tokens,
+one `node --test` output 1000 to 1900 — so what fills the window is the number of test cycles, and
+a lucky two-cycle run fits 8192 at any N up to 10. The plan: N = 7, the server at `-c 5120`,
+`tuned-repeat` as the base arm so that a loop ends as `repeat_loop` and a 400 means the window,
+`budgetTokens` 2670 by the same rule, `--max-turns 18`, and the first gate unchanged — at least two
+of three unbound runs PASS. They were not:
+
+| `bench-v29-unbound-n3` | result | turns | s | peak tokens |
+|---|---|---|---|---|
+| #1 | FAIL, `repeat_loop` | 14 | 343 | 19379 |
+| #2 | FAIL, `repeat_loop` | 10 | 266 | 13767 |
+| #3 | **PASS** | 8 | 143 | 6546 |
+
+So again there is no control run, no budget run and no `tuned-budget.json`. Both failures are the
+`chunk` flip-flop, and both were ended by the breaker of "Noticing a repeated call" on the fifth
+identical successful edit — its first firing in a live run, twice. The notes before it, seven in
+the first run and eight in the second, moved nothing. In neither run did the model ever edit the
+line that holds the bug, `arr.slice(i, size)`; it rewrote `return out` and put it back. Both runs
+had fixed `paginate` at turn 4, and its test stayed red because `paginate` imports the broken
+`chunk`: the first run then sent a `paginate` edit with `old` equal to `new` on nine turns in a
+row, each now an error, and the second flipped `??` and `||`. Replayed against 5120, all three
+trajectories cross it — the two failures at turn 5, where 5016 and 5013 tokens of prompt leave no
+room for the 178 and 235 of the reply, the PASS run at turn 6 with a prompt of 5207. And in both
+loops what `applyBudget` may not touch — the system prompt, the task, the assistant's own messages
+and the newest results — alone outgrew 2670 by turns 9 and 8: a budget could not have held those
+runs in any window. Two attempts have now stopped at a gate for the same reason. What this task
+measures in this model, before anything about context, is whether it finds the bug in `chunk`.
 
 ## Honest notes
 
