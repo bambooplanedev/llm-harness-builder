@@ -7,4 +7,5 @@ test('chunk: an exact multiple gives full pieces', () => {
 })
 test('chunk: the last piece may be shorter', () => {
   assert.deepEqual(chunk([1, 2, 3, 4, 5], 2), [[1, 2], [3, 4], [5]])
+  assert.deepEqual(chunk([1, 2, 3, 4, 5, 6, 7], 3), [[1, 2, 3], [4, 5, 6], [7]])
 })

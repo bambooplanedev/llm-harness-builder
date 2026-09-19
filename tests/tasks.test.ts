@@ -81,4 +81,5 @@ test('pool: a size that is not an integer from 1 to 10 is refused, by prepare an
     expect(() => TASKS.pool.check(dir, bad)).toThrow(RangeError)
   }
   expect(readdirSync(join(dir, 'test'))).toEqual(['clamp.test.js']) // a refused check has not touched the workdir
+  for (const bad of ['', 'relative/dir']) expect(() => TASKS.pool.check(bad, 1)).toThrow(RangeError)
 })

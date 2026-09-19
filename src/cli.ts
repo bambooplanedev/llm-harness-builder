@@ -14,7 +14,6 @@ import type { Backend, NormalizedResponse } from './core/backends/types.js'
 import { mcpApprovalServer, mcpCounts, quitWithoutWork, type HarnessEvent, type ToolCall } from './core/events.js'
 import { startServer } from './server/index.js'
 import { TraceWriter, type Meta } from './server/runs.js'
-import { DEMO_TASK } from './core/prompts.js'
 import { TASKS, type Task } from './core/tasks.js'
 import { median, formatTable, type BenchRun, type BenchHarness, type BenchResult } from './core/bench.js'
 import { GUARD_BLOCKED, EDIT_MISS } from './core/tools/fs.js'
@@ -138,7 +137,7 @@ async function cmdDemo(argv: string[]) {
     const config = await loadHarness(path.join(PKG_ROOT, 'harnesses', `${name}.json`), { model: values.model, baseUrl: values['base-url'], kind: values.kind })
     const workdir = await TASKS.slug.prepare()
     console.error(`\n=== ${name} (${config.backend.model}) in ${workdir}`)
-    const { id, last } = await execRun(config, DEMO_TASK, workdir, { yes: true, json: values.json })
+    const { id, last } = await execRun(config, TASKS.slug.prompt, workdir, { yes: true, json: values.json })
     const check = spawnSync('sh', [path.join(workdir, 'check.sh')])
     const verdict = check.status === 0 ? 'PASS' : 'FAIL'
     const d = last.type === 'done' ? last : undefined

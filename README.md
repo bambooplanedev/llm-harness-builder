@@ -506,7 +506,8 @@ recorded in the JSON — because 15 turns are too few here.
 
 llama-server, Qwen3-8B Q4_K_M, `tuned` as shipped, Node v24.18.0, one run per row. "Unbound" is the
 server started with `-c 32768`, so the window is not what ends a run; `numCtx` is not sent on
-`--kind openai`, so the JSON cannot say which window a file was measured in — the file name does.
+`--kind openai`, so the JSON cannot say which window a file was measured in — the file name and the
+table below do.
 
 | file in `runs/` | N | window | result | turns | s | peak tokens |
 |---|---|---|---|---|---|---|
@@ -519,46 +520,55 @@ server started with `-c 32768`, so the window is not what ends a run; `numCtx` i
 Two PASS, two full fixes: one is the reference fix in all seven units, the other differs by an
 ignored third argument in `paginate`.
 
-Five more runs came before these and are void as calibration: they are why two units were
-rewritten. In both runs where `chunk` went wrong the model's first edit was byte for byte the same
-wrong one — it rewrote `return out` and left the loop condition alone — and in two of the three
-runs that contained `parseDuration` it never touched the lookup table that held the bug, cycling
-`toLowerCase()`, `/ 1000` and `* 1000` on the line below it until the run ended. The plan allowed
-one repair of a unit the model loops on, said in advance: both bugs kept their kind and moved into
-the line the failure points at (commit `a1579a0`). `parseDuration` has been fixed first try since.
-`chunk` has not: the model goes for `return out` wherever the bug is.
+Five more runs came before these and are void as calibration: they are why two units were rewritten.
+In both runs where `chunk` went wrong the model's first edit was byte for byte the same wrong one —
+it rewrote `return out` and left the loop condition alone — and in two of the three runs that
+contained `parseDuration` it never touched the lookup table that held the bug, cycling
+`toLowerCase()` — and in one of them `/ 1000` and `* 1000` — on the line below it until the run
+ended. The plan allowed one repair of a unit the model loops on, said in advance: both bugs kept
+their kind and moved into the line the failure points at (commit `a1579a0`). `parseDuration` has
+been fixed first try since. `chunk` has not: the model goes for `return out` wherever the bug is.
+Every run on this page was measured on the units as of that commit; the final review then found that
+a fix hardcoding the tests' piece size passed `chunk`, and a second size was added to its test
+afterwards — a correct fix is unaffected.
 
 What the calibration measured:
 
 - **The pressure is real, and it is not where the design put it.** The model does not work unit by
-  unit. It reads all N files in one turn and edits all N in the next, so a healthy run is six
-  turns at N = 7 as at N = 5, and what fills the window is `node --test` output, cut at 4000
+  unit. It reads all N files in one turn and edits all N in the next, so a healthy run is seven
+  turns at N = 5 and six at N = 7, and what fills the window is `node --test` output, cut at 4000
   characters a run. Healthy peaks: 4943 tokens at N = 5 (measured before the rewrite), 7594 and
-  7602 at N = 7. The estimate the budget trims by is 0.69–0.78 of the exact count here (0.55–0.72
-  on the old task): it depends on what the history is made of.
-- **Six of the ten runs were lost to a loop, and the window caused none of them** (it ended one: the
-  last row). Three are the same period-2 flip-flop on `chunk` — `return out` ⇄
-  `return out.length > 0 ? out : []`, with `??` ⇄ `||` in `paginate`, a test run after each, for up
-  to ten turns. Two cycled a suffix on one line of the old `parseDuration`; one alternated reading
-  `chunk.js` and running the tests without an edit. `loop.maxRepeats` as built would not see the
-  flip-flop: a successful edit clears the counts of every other call, so two edits that undo each
-  other never accumulate. That is the fourth place this model repeats what just failed, and the
-  first with a period.
-- **Four runaways, none fatal.** After a batch of seven edits the model kept appending
-  `{"name":"bash","args":{"command":"node --test"}}` to the same response — 37 and 42 call objects
-  in the two read closely; a healthy batch is 486 tokens. Each was cut at the 1024-token cap, the
-  marker went back instead of it, and the run went on: two of those runs are PASS. A fifth
-  truncation is the other kind: 8149 tokens of prompt, 43 of completion, the window and not the
-  cap — and the retry, 8210 tokens, is the `backend_error` of the last row.
+  7602 at N = 7. The estimate the budget trims by is 0.69–0.83 of the exact count here, median 0.76,
+  over the 100 turns after the first of all ten runs (0.55–0.72, median 0.58, over 161 on the old
+  task): it depends on what the history is made of.
+- **Six of the ten runs were lost to a loop, and the window caused none of them.** It ended two:
+  the last row, and one of the void runs, which grew into the 32768 window at turn 21. Two are the
+  same period-2 flip-flop on `chunk` — `return out` ⇄ `return out.length > 0 ? out : []`, with
+  `??` ⇄ `||` in `paginate`, a test run after each, for up to ten turns; a third flips
+  `return out` against a longer expression while its `paginate` edits change nothing. Two cycled
+  a suffix on one line of the old `parseDuration`; one alternated reading `chunk.js`, editing it
+  and running the tests, and for its last five turns stopped editing altogether.
+  `loop.maxRepeats` as built would not see the flip-flop: a successful edit clears the counts of
+  every other call, so two edits that undo each other never accumulate. That is the fourth place
+  this model repeats what just failed, and the first with a period.
+- **Four runaways, none fatal.** After a batch of edits — seven in the two read closely — the model
+  kept appending `{"name":"bash","args":{"command":"node --test"}}` to the same response — 37 and 42
+  call objects in the two read closely; a healthy batch is 486 tokens. Each was cut at the
+  1024-token cap, the marker went back instead of it, and the run went on: two of those runs are
+  PASS. A fifth truncation is the other kind: 8149 tokens of prompt, 43 of completion, the window
+  and not the cap — and the retry, 8210 tokens, is the `backend_error` of the last row.
 
 ### The measurement that was not run
 
 The plan was `tuned` with `budgetTokens` fixed by rule from calibration — 4691, i.e.
 0.9 × 0.731 × (8192 − 1024 − 37) — three runs inside 8192 against the unbound runs above, with the
-reading written down in advance. One gate stood before it: the bound control has to die of the
-window and not of a loop. It died of `exceed_context_size_error`, and its trace is the `chunk`
-flip-flop starting — turn 4 rewrites `return out`, turn 5 puts it back, turn 6 rewrites it again.
-A healthy run at N = 7 peaks at 7594 and fits. The rule that chose N = 7, "a healthy peak above
+reading written down in advance. Three gates stood before it. Two held: at N = 7 two of three
+unbound runs are PASS, both full fixes, and the turn limit for the measurement was fixed at 12. The
+third did not: the bound control has to die of the window and not of a loop. It died of
+`exceed_context_size_error`, and its trace is the `chunk` flip-flop starting — turn 4 rewrites
+`return out`, turn 5 puts it back, turn 6 rewrites it again. A healthy run at N = 7 peaks at 7594
+and fits. The repair of the two units is part of why: with the old units the one healthy run at
+N = 7 peaked at 8903 and would not have fitted. The rule that chose N = 7, "a healthy peak above
 8192 − 1024", was too lenient for a gate that asks for a healthy run the window kills; with no
 such run there is nothing for a budget to rescue, and a number measured anyway would be a number
 about a loop. So there is no `tuned-budget.json` and no result. What is in the repo is the
@@ -641,10 +651,11 @@ assistant message alone.
   units differ in difficulty. The size at which a healthy run fills the window belongs to this
   machine and this Node: about 200 of each failure's 900 characters are the absolute tmp path, and
   the default test reporter differs between Node majors. The JSON records `node`.
-- `context.budgetTokens` is in `chars / 4` units. On `pool` that is 0.69–0.78 of the real count, on
-  the old task 0.55–0.72, so a budget of 4691 means roughly 6000–6800 real tokens. `applyBudget`
-  has no hysteresis: once over budget it rewrites an old message on every turn, and llama-server
-  re-evaluates the prompt from that point. Neither has been measured yet.
+- `context.budgetTokens` is in `chars / 4` units. On `pool` that is 0.69–0.83 of the real count, on
+  the old task 0.55–0.72; where a budget of 4691 would fire it is 0.74–0.79, so 4691 means about
+  5900–6300 real tokens. `applyBudget` has no hysteresis: once over budget it rewrites an old
+  message on every turn, and llama-server re-evaluates the prompt from that point. Neither has been
+  measured yet.
 - `bench --max-turns` overrides the harness the way `--model` does and is recorded in
   `harnesses[].config`; `demo` runs the old task only.
 - `demo` runs `check.sh` without a timeout; `bench` gives it 60 s.

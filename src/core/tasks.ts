@@ -68,6 +68,8 @@ const pool: Task = {
   // The model can reach test/: the verdict is taken on pristine tests, and only on them — a file it
   // added cannot fail a correct fix, a test it rewrote cannot pass a wrong one.
   check(dir, size = POOL.length) {
+    // This function deletes <dir>/test: a relative or empty dir would resolve against the cwd.
+    if (!path.isAbsolute(dir)) throw new RangeError(`pool check needs an absolute workdir, got ${JSON.stringify(dir)}`)
     const files = firstUnits(size).map(name => path.join('test', `${name}.test.js`))
     rmSync(path.join(dir, 'test'), { recursive: true, force: true })
     mkdirSync(path.join(dir, 'test'))
