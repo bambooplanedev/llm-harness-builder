@@ -687,6 +687,9 @@ sooner — so "the knob fired" below is not evidence that a fitted budget would 
 | #2 | 5120 | FAIL, `repeat_loop` | 9 | 168 | 3364 | 4646 |
 | #3 | 5120 | FAIL, `repeat_loop` | 9 | 168 | 3364 | 4651 |
 
+Prompt eval is `timings.prompt_ms` summed over the requests that got an answer, divided by their
+number; the control's turn 6 got none, so its cell is over five requests, not six.
+
 The gates held. Two of three unbound runs are PASS and both are full fixes: six units carry the
 reference fix to the letter, `range` the reference condition inside a pair of parentheses.
 Replayed against 5120 all three unbound trajectories cross it at turn 6, with prompts of 5352,
@@ -696,8 +699,8 @@ available context size`. The control is reported, not read; it is how the window
 What the budget did. It fired at turn 5 in all six budgeted runs and on every turn after it (on
 all but turn 6 with the mark); none of the six ever held more than 3364 tokens, where the control
 died at 5344 and the two unbound PASS runs needed 5855 and 5859. No result was stubbed before the
-model had seen it, and what `applyBudget` may not touch never outgrew the budget (2278 at most, in
-`chars / 4` units). One budgeted run ended `final` and PASS inside 5120, a full fix by the same
+model had seen it, and what `applyBudget` may not touch never outgrew the budget — 2278 at most in
+these six, in `chars / 4` units. One budgeted run ended `final` and PASS inside 5120, a full fix by the same
 audit. That is the existence proof, and it is one run.
 
 What it cost. Every run of every arm sends, in its batch of edits at turn 4, a `formatBytes` edit
@@ -724,7 +727,7 @@ What it cost in time, and the mark. Rewriting an old message makes llama-server 
 prompt again from that message on. Summed `timings.prompt_ms` per turn: 4199 and 4198 ms in the two
 unbound PASS runs, 6585, 6147 and 6522 ms with the budget — 12615, 11668 and 11181 prompt tokens
 evaluated in a run against 5244 and 5248. The threshold written down for building a low-water
-mark was 1.5 times the unbound median; 6522 against 6297 crossed it, narrowly. So `applyBudget`
+mark was 1.5 times the unbound median; 6522 against 6298 crossed it, narrowly. So `applyBudget`
 now stubs down to three quarters of the budget once it is over it, and the third arm measured
 that: 4554, 4646 and 4651 ms per turn, 7788, 7778 and 7795 tokens. The mark does what it is for,
 and its arm has no PASS where the other has one; with three near-clones an arm that says nothing
