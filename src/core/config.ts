@@ -15,7 +15,7 @@ export type HarnessConfig = {
   tools: { enabled: ToolName[]; approveBash: boolean; requireReadBeforeEdit?: boolean; explainEditMiss?: boolean }
   toolCalls: { mode: 'native' | 'prompted'; format?: ToolCallFormat; enforceSchema: boolean; promptedTemplate: string; parseErrorHint: string }
   context: { maxToolOutputChars: number; budgetTokens: number }
-  loop: { maxTurns: number }
+  loop: { maxTurns: number; maxRepeats?: number }
   mcpServers?: Record<string, McpServerConfig>
 }
 
@@ -59,6 +59,7 @@ export function validateConfig(c: unknown): string[] {
   const cx = c.context
   if (!isObj(cx) || !(cx.maxToolOutputChars > 0) || !(cx.budgetTokens >= 0)) e.push('context.maxToolOutputChars > 0 and budgetTokens >= 0 required')
   if (!isObj(c.loop) || !(Number.isInteger(c.loop.maxTurns) && c.loop.maxTurns > 0)) e.push('loop.maxTurns must be a positive integer')
+  else if (c.loop.maxRepeats !== undefined && !(Number.isInteger(c.loop.maxRepeats) && c.loop.maxRepeats >= 0)) e.push('loop.maxRepeats must be a non-negative integer')
   const ms = c.mcpServers
   if (ms !== undefined) {
     if (!isObj(ms) || Array.isArray(ms)) e.push('mcpServers must be an object')
