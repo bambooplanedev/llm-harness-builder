@@ -12,7 +12,7 @@ export type HarnessConfig = {
   name: string
   backend: { kind: BackendKind; baseUrl: string; model: string; numCtx?: number; temperature: number }
   systemPrompt: string
-  tools: { enabled: ToolName[]; approveBash: boolean }
+  tools: { enabled: ToolName[]; approveBash: boolean; requireReadBeforeEdit?: boolean }
   toolCalls: { mode: 'native' | 'prompted'; format?: ToolCallFormat; enforceSchema: boolean; promptedTemplate: string; parseErrorHint: string }
   context: { maxToolOutputChars: number; budgetTokens: number }
   loop: { maxTurns: number }
@@ -43,6 +43,7 @@ export function validateConfig(c: unknown): string[] {
   else {
     for (const n of t.enabled) if (!TOOL_NAMES.includes(n)) e.push(`unknown tool: ${n}`)
     if (typeof t.approveBash !== 'boolean') e.push('tools.approveBash must be boolean')
+    if (t.requireReadBeforeEdit !== undefined && typeof t.requireReadBeforeEdit !== 'boolean') e.push('tools.requireReadBeforeEdit must be boolean')
   }
   const tc = c.toolCalls
   if (!isObj(tc)) e.push('toolCalls is required')

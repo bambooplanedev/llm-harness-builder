@@ -23,6 +23,12 @@ function toggleTool(n: HarnessConfig['tools']['enabled'][number]) {
   set.has(n) ? set.delete(n) : set.add(n)
   config.value.tools.enabled = TOOL_NAMES.filter(t => set.has(t))
 }
+/** Absent, not false, when off: v-model would stamp `false` into every harness saved from the UI
+ *  and make configDiff show `undefined vs false` against older runs. Same reason mcpServers is deleted. */
+function toggleGuard(on: boolean) {
+  if (on) config.value.tools.requireReadBeforeEdit = true
+  else delete config.value.tools.requireReadBeforeEdit
+}
 
 const fmtMcp = (m: HarnessConfig['mcpServers']) => (m && Object.keys(m).length ? JSON.stringify(m, null, 2) : '')
 const mcpText = ref(fmtMcp(config.value.mcpServers))
@@ -82,6 +88,7 @@ function editMcp(text: string) {
       <span v-for="n in TOOL_NAMES" :key="n"><input type="checkbox" :checked="config.tools.enabled.includes(n)" @change="toggleTool(n)"> {{ n }}</span>
     </div>
     <div><input type="checkbox" v-model="config.tools.approveBash"> ask before running bash</div>
+    <div><input type="checkbox" :checked="!!config.tools.requireReadBeforeEdit" @change="toggleGuard(($event.target as HTMLInputElement).checked)"> refuse to edit a file that has not been read</div>
     <details><summary>MCP servers ({{ mcpCount() }})</summary>
       <textarea :value="mcpText" @input="editMcp(($event.target as HTMLTextAreaElement).value)" style="min-height:80px"
         placeholder='{"fs": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "."], "tools": ["read_text_file"]}}'></textarea>

@@ -173,6 +173,82 @@ handing tools to a model", not "the cost of tool descriptions". And **an MCP ser
 the `workdir` sandbox**: the built-in file tools are locked in by `resolveInside`, while a server
 merely receives the directory as `cwd` and respects it out of goodwill.
 
+## Read before edit
+
+`tuned` already asks the model to read a file before it changes it:
+
+    Never guess file contents. Read a file before you change it; …
+
+It seems to work: `toolErrors` is 0 in every bench run that recorded the field. `bare`, whose
+prompt says nothing of the kind, guessed twice in the run described below — a function body that
+is nowhere in the project, then a semicolon the file does not have — and both edits came back
+`found 0 occurrences`.
+
+So the open question is not whether the rule is needed. It is whether a rule stated in the prompt
+and the same rule enforced in code do the same thing. Claude Code does not ask the model to read
+first; it refuses to edit a file the model has not read. `tools.requireReadBeforeEdit` is that
+refusal:
+
+    "tools": { "enabled": ["read_file", "edit_file"], "requireReadBeforeEdit": true }
+
+`read_file` registers the file's resolved path for the rest of the run. `edit_file` refuses a path
+that is not registered, and so does `write_file` when the file already exists — creating a new one
+is always allowed. The model sees `src/x.js has not been read in this run; call read_file first`
+and can recover from it like any other tool error. Nothing about the guard appears in the tool
+descriptions, so the guard itself costs no context tokens.
+
+The four arms are one 2×2 grid over "rule in the prompt" × "guard in the code". `rule-none`,
+`guard-only` and `rule-and-guard` are `tuned` byte-for-byte except for the name, one sentence of
+the system prompt, and the flag:
+
+    llm-harness-builder bench harnesses/tuned.json harnesses/rule-none.json \
+      harnesses/guard-only.json harnesses/rule-and-guard.json --n 5
+
+Measured on 2026-09-18 on the same setup as **Bench results** below (the command above prints
+without `--kind`/`--base-url`/`--model`, house style matching the MCP section; the run used the
+flags from that section plus `--timeout 600`), five runs per arm. `tuned` came back at 5 turns and
+34 s, the row already published there, so the two tables are comparable:
+
+| harness | rule | guard | PASS | how the runs ended | median turns | `guard` | `editMiss` |
+|---|---|---|---|---|---|---|---|
+| `tuned` | yes | — | **5/5** | `final×5` | 5 | | 0 |
+| `rule-none` | — | — | **4/5** | `final×4 backend_error×1` | 11 | | 16 |
+| `guard-only` | — | yes | **0/5** | `max_turns×5` | 15 | 5 | 53 |
+| `rule-and-guard` | yes | yes | **5/5** | `final×5` | 5 | 0 | 0 |
+
+`guard` counts the edits the guard refused and `editMiss` the edits whose `old` did not occur
+exactly once. Both are sums over the five runs, not medians: a median of five small integers is 0.
+`guard` is blank for an arm that had the guard off — those arms cannot produce the error by
+construction, which is also why this experiment does not read `med errs`.
+
+What was decided before the run: the estimand is `guard`, a zero would be published, and PASS is
+an argument only at 5-against-1 or 4-against-0. `guard-only` 0/5 against `tuned` 5/5 is p = 0.008
+and against `rule-none` 4/5 is p = 0.048, so this time PASS is one. Three things the traces show,
+identical in every run of an arm:
+
+- **The sentence in the prompt does all the work.** Without it the model's first edit was blind in
+  10 runs out of 10 — `edit_file` on `src/slugify.js` with an `old` it had invented, the file never
+  opened. With it, 0 out of 10, and the guard in `rule-and-guard` never fired. The `editMiss` of 16
+  in `rule-none` against 0 in `tuned` is the same fact counted from the other side, and it is the
+  floor this experiment needed.
+- **The guard does what it says.** Five blind edits, five refusals, and in all five the very next
+  call was `read_file src/slugify.js`.
+- **And then `guard-only` lost every run anyway**, not to the guard but to the next error. Having
+  read the file, the model sent an `old` ending in a semicolon the file does not have — the guess
+  `bare` makes in the run described below — got `found 0 occurrences`, and sent the identical call
+  again, ten or eleven times, until `max_turns`. `rule-none` makes the same miss and gets out of
+  it in four runs of five: there the model answers a miss by reading the file, or by giving up on
+  `edit_file` and rewriting the three-line file with `write_file`. In `guard-only` the file is
+  already read, and the model has no second idea.
+
+So on this model a rule in the prompt and the same rule in code are not equivalent, and code is
+the weaker of the two: the refusal repairs the one call it refuses, the sentence changes how the
+model edits at all. What these five runs cannot separate is the guard from the path it forces —
+the honest reading is "a recovered refusal left the model in a state it did not recover from
+twice", not "guards are harmful". The cheap next knobs are on the other error: `found 0
+occurrences` says nothing about what *is* in the file, and nothing in the loop notices the same
+failing call arriving ten times in a row.
+
 ## Bench results
 
 Measured with llama.cpp `llama-server` (`--jinja`), model `unsloth/Qwen3-8B-GGUF:Q4_K_M`,
@@ -184,6 +260,15 @@ Measured with llama.cpp `llama-server` (`--jinja`), model `unsloth/Qwen3-8B-GGUF
 The task: find a bug report on the single `ERROR` line near the end of a 3002-line
 `data/app.log`, fix `src/slugify.js`, and make `node --test` pass. Verdicts come from
 `examples/check.sh`, which just runs `node --test`.
+
+Every number in this README, the read-before-edit grid of 2026-09-18 included, was measured
+against a test file that never produced a leading dash: the bug report asks for leading *and*
+trailing dashes to be stripped, and the test of that name only checked the trailing one. Checked
+by hand on the grid's 14 PASS runs, 11 fixed only the trailing dash — `slugify("!Hello")` still
+returned `"-hello"` — and all 10 PASSes of the two arms with the rule were among them; the three
+full fixes were all `rule-none`. The test asserts the leading case since 2026-09-18. Nothing was
+re-measured: runs from that date on face a stricter oracle and do not belong in one table with
+the numbers here.
 
 | harness | PASS | how the runs ended | median turns | median s |
 |---|---|---|---|---|
@@ -295,9 +380,25 @@ both harnesses failed on the very first run of this demo.
 - `demo --kind openai` needs `--base-url` (the default URL is Ollama's port).
 - The UI has no built-in workdir: run `demo` once and point the UI's workdir at the temp directory it prints (or at any `workdir` from a bench JSON), or at any scratch project.
 - `bench` PASS means `node --test` came back green, not that the bug was fixed the right way: the
-  model has `write_file` and could edit the test instead. Open the run's trace (`runs[].trace` in
+  model has `write_file` and could edit the test instead, and a fix can satisfy the tests while
+  missing the report (see the note under **Bench results**: 11 of 14 did). Open the run's trace (`runs[].trace` in
   the JSON, or the run list in the UI) to see what it changed.
 - `demo` runs `check.sh` without a timeout; `bench` gives it 60 s.
 - Aborting a run (`--timeout`) closes our side of the connection; llama-server keeps generating
   until it notices, so the next run can start against a busy server and fail with
   `backend_error`. The bench above has one such row.
+- The guard covers `edit_file` and `write_file`, not the filesystem. `bash` can rewrite a file
+  behind its back (`sed -i`, `>`, a formatter, `npm`), and the next edit will be checked against a
+  registration that is still there.
+- MCP tools bypass the guard completely: `runTool` hands an unknown name to the server before any
+  check, so in a harness whose file tools come from an MCP server the flag does nothing. Same
+  boundary as the sandbox: a server merely receives the workdir as `cwd`.
+- The registry holds paths, not versions. A file that changed after it was read is not caught by
+  the guard — `edit_file`'s exact match catches it instead, as `found 0 occurrences`.
+- The registry records that the call happened, not what the model saw. A `read_file` whose output
+  the run loop cuts at `maxToolOutputChars` (4000 in all four arms) still registers the path and
+  unlocks the whole file for `edit_file`, truncated part included. This is a limit of what the guard
+  checks, not a bug: it verifies the call was made, not the length of what came back.
+- `serve` copies `harnesses/` into the working directory only when it is not already there, so an
+  existing working directory does not grow the new arms by itself. Copy them by hand, as with
+  `mcp-*.json`.

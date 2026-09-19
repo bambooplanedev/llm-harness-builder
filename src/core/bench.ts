@@ -11,6 +11,10 @@ export type BenchRun = {
   toolChars?: number
   /** Tool results that came back as errors — mcp or built-in. */
   toolErrors?: number
+  /** Edits the read-before-edit guard refused. Absent when the harness had the guard off. */
+  guardBlocks?: number
+  /** Edits whose "old" did not occur exactly once. Absent in JSON written before v2.2. */
+  editMiss?: number
 }
 export type BenchHarness = {
   name: string; config: HarnessConfig; pass: number; reasons: Record<string, number>
@@ -36,13 +40,20 @@ export function formatTable(harnesses: BenchHarness[]): string {
   // The tool columns only earn their width when a run measured them: a bench of built-in harnesses
   // prints exactly the table it printed before mcp existed.
   const tools = harnesses.some(h => h.runs.some(r => r.toolChars))
-  const head = ['harness', 'PASS', 'reasons', 'med turns', 'med s', ...tools ? ['toolChars', 'med errs'] : []]
+  const guard = harnesses.some(h => h.runs.some(r => r.guardBlocks !== undefined))
+  const miss = harnesses.some(h => h.runs.some(r => r.editMiss !== undefined))
+  const sum = (xs: (number | undefined)[]) => xs.reduce<number>((a, x) => a + (x ?? 0), 0)
+  const head = ['harness', 'PASS', 'reasons', 'med turns', 'med s', ...tools ? ['toolChars', 'med errs'] : [], ...guard ? ['guard'] : [], ...miss ? ['editMiss'] : []]
   const rows = harnesses.map(h => [
     h.name, `${h.pass}/${h.runs.length}`,
     Object.entries(h.reasons).map(([k, v]) => `${k}×${v}`).join(' ') || '-',
     String(h.median.turns), String(Math.round(h.median.ms / 1000)),
     // toolChars is the same in every run of a harness, so it is taken, not averaged.
     ...tools ? [String(h.runs.find(r => r.toolChars)?.toolChars ?? '-'), String(median(h.runs.map(r => r.toolErrors ?? 0)))] : [],
+    // Sums, not medians: a median of five small integers is 0 and hides the signal. An arm whose
+    // runs never defined guardBlocks had the guard off and could not produce one — "-", not 0.
+    ...guard ? [h.runs.some(r => r.guardBlocks !== undefined) ? String(sum(h.runs.map(r => r.guardBlocks))) : '-'] : [],
+    ...miss ? [String(sum(h.runs.map(r => r.editMiss)))] : [],
   ])
   const w = head.map((c, i) => Math.max(c.length, ...rows.map(r => r[i].length)) + 2)
   const line = (r: string[]) => r.map((c, i) => c.padEnd(w[i])).join('').trimEnd()

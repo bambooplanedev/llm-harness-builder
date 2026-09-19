@@ -7,4 +7,5 @@ test('collapses non-alphanumerics into single dashes', () => {
 })
 test('strips leading and trailing dashes', () => {
   assert.equal(slugify('  Hello, World!  '), 'hello-world')
+  assert.equal(slugify('!Hello'), 'hello')
 })
