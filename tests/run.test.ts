@@ -453,3 +453,12 @@ test('a parse error that is not a truncation is never clipped', async () => {
   await collect({ config: cfg, task: 'do', workdir: await wd() }, { backend: be })
   expect((be.requests[1].messages.at(-2) as any).content).toBe(prose)
 })
+
+test('backend.maxTokens reaches the request, and only when the harness sets it', async () => {
+  const capped = Fake([{ content: 'fin' }]), plain = Fake([{ content: 'fin' }])
+  const cfg = base(); cfg.backend = { ...cfg.backend, maxTokens: 1024 }
+  await collect({ config: cfg, task: 'do', workdir: await wd() }, { backend: capped })
+  await collect({ config: base(), task: 'do', workdir: await wd() }, { backend: plain })
+  expect(capped.requests[0].maxTokens).toBe(1024)
+  expect(plain.requests[0].maxTokens).toBeUndefined()
+})

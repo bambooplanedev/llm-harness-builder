@@ -109,3 +109,14 @@ test('loop.maxRepeats is optional and must be a non-negative integer', () => {
     expect(validateConfig(c).some(e => e.includes('maxRepeats'))).toBe(true)
   }
 })
+
+test('backend.maxTokens is optional and must be a positive integer', () => {
+  const ok = structuredClone(validConfig) as any
+  ok.backend.maxTokens = 1024
+  expect(validateConfig(ok)).toEqual([])
+  for (const bad of [0, -1, 1.5, '1024']) {
+    const c = structuredClone(validConfig) as any
+    c.backend.maxTokens = bad
+    expect(validateConfig(c).some(e => e.includes('maxTokens'))).toBe(true)
+  }
+})

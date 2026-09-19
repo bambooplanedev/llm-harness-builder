@@ -92,7 +92,7 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
 
       const droppedChars = applyBudget(messages, config.context.budgetTokens)
       const req: ChatRequest = {
-        model: config.backend.model, messages, temperature: config.backend.temperature, numCtx: config.backend.numCtx,
+        model: config.backend.model, messages, temperature: config.backend.temperature, numCtx: config.backend.numCtx, maxTokens: config.backend.maxTokens,
         tools: prompted ? undefined : schemas,
         responseSchema: prompted && !hermes && config.toolCalls.enforceSchema ? PROMPTED_SCHEMA : undefined,
       }
