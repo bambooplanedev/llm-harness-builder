@@ -1,11 +1,10 @@
 #!/usr/bin/env node
 // src/cli.ts
 import { parseArgs } from 'node:util'
-import { readFile, mkdtemp, cp, writeFile, rename, access, mkdir } from 'node:fs/promises'
+import { readFile, cp, writeFile, rename, access, mkdir } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { spawn, spawnSync } from 'node:child_process'
 import { createInterface } from 'node:readline/promises'
-import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { runAgent, type RunOpts } from './core/run.js'
@@ -16,6 +15,7 @@ import { mcpApprovalServer, mcpCounts, quitWithoutWork, type HarnessEvent, type 
 import { startServer } from './server/index.js'
 import { TraceWriter, type Meta } from './server/runs.js'
 import { DEMO_TASK } from './core/prompts.js'
+import { TASKS } from './core/tasks.js'
 import { median, formatTable, type BenchRun, type BenchHarness, type BenchResult } from './core/bench.js'
 import { GUARD_BLOCKED, EDIT_MISS } from './core/tools/fs.js'
 
@@ -129,24 +129,12 @@ async function cmdRun(argv: string[]) {
   process.exitCode = last.type === 'done' && last.reason === 'final' ? 0 : 1
 }
 
-async function makeDemoWorkdir(): Promise<string> {
-  const dir = await mkdtemp(path.join(tmpdir(), 'lhb-demo-'))
-  await cp(path.join(PKG_ROOT, 'examples'), dir, { recursive: true })
-  const lines: string[] = []
-  for (let i = 0; i < 3000; i++) lines.push(`2026-09-11T10:${String(i % 60).padStart(2, '0')}:00Z INFO request id=${i} path=/api/slug status=200 ms=${(i * 7) % 90}`)
-  lines.push('2026-09-11T11:00:00Z ERROR bug report: slugify("  Hello, World!  ") returned "hello-world-" but expected "hello-world" (leading and trailing dashes must be stripped)')
-  lines.push('2026-09-11T11:00:01Z INFO request id=3001 path=/api/slug status=200 ms=12')
-  await mkdir(path.join(dir, 'data'), { recursive: true })
-  await writeFile(path.join(dir, 'data', 'app.log'), lines.join('\n') + '\n')
-  return dir
-}
-
 async function cmdDemo(argv: string[]) {
   const { values } = parseArgs({ args: argv, options: { model: { type: 'string' }, 'base-url': { type: 'string' }, kind: { type: 'string' }, json: { type: 'boolean', default: false } } })
   const rows: string[] = []
   for (const name of DEMO_HARNESSES) {
     const config = await loadHarness(path.join(PKG_ROOT, 'harnesses', `${name}.json`), { model: values.model, baseUrl: values['base-url'], kind: values.kind })
-    const workdir = await makeDemoWorkdir()
+    const workdir = await TASKS.slug.prepare()
     console.error(`\n=== ${name} (${config.backend.model}) in ${workdir}`)
     const { id, last } = await execRun(config, DEMO_TASK, workdir, { yes: true, json: values.json })
     const check = spawnSync('sh', [path.join(workdir, 'check.sh')])
@@ -167,7 +155,7 @@ async function benchOnce(config: HarnessConfig, round: number, timeoutS: number,
   let workdir = '', parseErrors = 0, toolChars = 0, toolErrors = 0, guardBlocks = 0, editMiss = 0, lastError: string | undefined, t0 = Date.now(), run: BenchRun
   process.stderr.write(`${config.name} #${round} `)
   try {
-    workdir = await makeDemoWorkdir()
+    workdir = await TASKS.slug.prepare()
     process.stderr.write(`${workdir} ... `)
     t0 = Date.now()
     const { id, last } = await execRun(config, DEMO_TASK, workdir, {
@@ -184,7 +172,7 @@ async function benchOnce(config: HarnessConfig, round: number, timeoutS: number,
       },
     })
     const ms = Date.now() - t0
-    const verdict = spawnSync('sh', [path.join(workdir, 'check.sh')], { timeout: 60_000 }).status === 0 ? 'PASS' : 'FAIL'
+    const verdict = TASKS.slug.check(workdir) ? 'PASS' : 'FAIL'
     const d = last.type === 'done' ? last : undefined
     run = { round, verdict, reason: d?.reason ?? 'error', turns: d?.turns ?? 0, toolCalls: d?.toolCallCount ?? 0, parseErrors, lastError, ms, workdir, trace: id, toolChars: toolChars || undefined, toolErrors, guardBlocks: config.tools.requireReadBeforeEdit ? guardBlocks : undefined, editMiss }
   } catch (e) {
