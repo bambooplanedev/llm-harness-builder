@@ -40,6 +40,21 @@ test('applyBudget never stubs a result the model has not seen, however far over 
   expect(m[3].content).toBe('b'.repeat(4000))
 })
 
+// Without a low-water mark the history is rewritten a little on every turn once it is over budget,
+// and every rewrite costs the server its prefix cache from that message on.
+test('applyBudget: once over budget it stubs down to three quarters of it, and under budget it does nothing', () => {
+  const res = (c: string, id: string): ChatMessage => ({ role: 'tool', content: c.repeat(400), toolCallId: id, name: 'read_file', isToolResult: true })
+  const m: ChatMessage[] = [{ role: 'system', content: 'sys' }, res('a', '1'), res('b', '2'), res('c', '3'), res('d', '4'), { role: 'assistant', content: '' }, res('e', '5')]
+  expect(estimateTokens(m)).toBe(501)
+  expect(applyBudget(m, 450)).toBe(800)          // one stub would do for 450 (407); the mark is 337, so two
+  expect(m.map(x => x.content.startsWith('[dropped: '))).toEqual([false, true, true, false, false, false, false])
+  expect(estimateTokens(m)).toBeLessThanOrEqual(337)
+  expect(applyBudget(m, 450)).toBe(0)
+  const between: ChatMessage[] = [{ role: 'system', content: 'sys' }, res('a', '1'), res('b', '2'), res('c', '3'), res('d', '4'), { role: 'assistant', content: '' }]
+  expect(estimateTokens(between)).toBe(401)      // over the mark, under the budget: left alone
+  expect(applyBudget(between, 450)).toBe(0)
+})
+
 test('budget 0 means disabled', () => {
   const m: ChatMessage[] = [{ role: 'tool', content: 'a'.repeat(4000), toolCallId: '1', name: 'x', isToolResult: true }]
   expect(applyBudget(m, 0)).toBe(0)
