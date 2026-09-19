@@ -15,7 +15,7 @@ import { mcpApprovalServer, mcpCounts, quitWithoutWork, type HarnessEvent, type 
 import { startServer } from './server/index.js'
 import { TraceWriter, type Meta } from './server/runs.js'
 import { DEMO_TASK } from './core/prompts.js'
-import { TASKS } from './core/tasks.js'
+import { TASKS, type Task } from './core/tasks.js'
 import { median, formatTable, type BenchRun, type BenchHarness, type BenchResult } from './core/bench.js'
 import { GUARD_BLOCKED, EDIT_MISS } from './core/tools/fs.js'
 
@@ -35,7 +35,7 @@ function fakeBackendFromEnv(): Promise<Backend | undefined> {
   })())
 }
 
-async function loadHarness(file: string, over: { model?: string; baseUrl?: string; kind?: string }): Promise<HarnessConfig> {
+async function loadHarness(file: string, over: { model?: string; baseUrl?: string; kind?: string; maxTurns?: number }): Promise<HarnessConfig> {
   // One catch for the whole read: a missing file, a directory and malformed JSON all used to reach
   // the top-level handler and print a stack at someone who mistyped a path.
   let cfg: any
@@ -45,6 +45,8 @@ async function loadHarness(file: string, over: { model?: string; baseUrl?: strin
   if (over.model) cfg.backend.model = over.model
   if (over.baseUrl) cfg.backend.baseUrl = over.baseUrl
   if (over.kind) cfg.backend.kind = over.kind
+  // Only onto a loop object that is there: a harness without one is validateConfig's to report.
+  if (over.maxTurns && cfg.loop && typeof cfg.loop === 'object') cfg.loop.maxTurns = over.maxTurns
   const errs = validateConfig(cfg)
   if (errs.length) die(`invalid harness ${file}:\n  ${errs.join('\n  ')}`)
   return cfg
@@ -150,15 +152,15 @@ async function cmdDemo(argv: string[]) {
 const INT = /^[1-9]\d*$/
 const stamp = (d: Date) => { const p = (n: number) => String(n).padStart(2, '0'); return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}` }
 
-/** One bench run: fresh demo workdir → execRun (timed) → check.sh. Never throws; an exception becomes a FAIL row with reason 'error'. */
-async function benchOnce(config: HarnessConfig, round: number, timeoutS: number, out: string): Promise<BenchRun> {
+/** One bench run: fresh task workdir → execRun (timed) → the task's check. Never throws; an exception becomes a FAIL row with reason 'error'. */
+async function benchOnce(config: HarnessConfig, round: number, timeoutS: number, out: string, task: Task, size?: number): Promise<BenchRun> {
   let workdir = '', parseErrors = 0, toolChars = 0, toolErrors = 0, guardBlocks = 0, editMiss = 0, lastError: string | undefined, t0 = Date.now(), run: BenchRun
   process.stderr.write(`${config.name} #${round} `)
   try {
-    workdir = await TASKS.slug.prepare()
+    workdir = await task.prepare(size)
     process.stderr.write(`${workdir} ... `)
     t0 = Date.now()
-    const { id, last } = await execRun(config, DEMO_TASK, workdir, {
+    const { id, last } = await execRun(config, task.prompt, workdir, {
       yes: true, json: false, quiet: true, signal: AbortSignal.timeout(timeoutS * 1000), bench: { file: path.basename(out), round },
       onEvent: e => {
         if (e.type === 'parse_error') parseErrors++
@@ -172,7 +174,7 @@ async function benchOnce(config: HarnessConfig, round: number, timeoutS: number,
       },
     })
     const ms = Date.now() - t0
-    const verdict = TASKS.slug.check(workdir) ? 'PASS' : 'FAIL'
+    const verdict = task.check(workdir, size) ? 'PASS' : 'FAIL'
     const d = last.type === 'done' ? last : undefined
     run = { round, verdict, reason: d?.reason ?? 'error', turns: d?.turns ?? 0, toolCalls: d?.toolCallCount ?? 0, parseErrors, lastError, ms, workdir, trace: id, toolChars: toolChars || undefined, toolErrors, guardBlocks: config.tools.requireReadBeforeEdit ? guardBlocks : undefined, editMiss }
   } catch (e) {
@@ -191,25 +193,31 @@ function rollup(h: BenchHarness) {
 }
 
 async function cmdBench(argv: string[]) {
-  const usage = 'usage: llm-harness-builder bench [harness.json ...] [--n 3] [--timeout 1800] [--out runs/bench-<ts>.json] [--model m] [--base-url u] [--kind openai|ollama]'
+  const usage = 'usage: llm-harness-builder bench [harness.json ...] [--n 3] [--timeout 1800] [--out runs/bench-<ts>.json] [--task slug|pool] [--size N] [--max-turns N] [--model m] [--base-url u] [--kind openai|ollama]'
   const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: {
     n: { type: 'string', default: '3' }, timeout: { type: 'string', default: '1800' }, out: { type: 'string' },
+    task: { type: 'string', default: 'slug' }, size: { type: 'string' }, 'max-turns': { type: 'string' },
     model: { type: 'string' }, 'base-url': { type: 'string' }, kind: { type: 'string' },
   } })
   if (!INT.test(values.n) || !INT.test(values.timeout)) die(usage)
+  const task: Task | undefined = Object.hasOwn(TASKS, values.task) ? TASKS[values.task as keyof typeof TASKS] : undefined
+  const size = values.size === undefined ? undefined : Number(values.size)
+  // A task with sizes needs one in range; a task without sizes takes none.
+  const sizeOk = task?.max === undefined ? size === undefined : values.size !== undefined && INT.test(values.size) && size! <= task.max
+  if (!task || !sizeOk || (values['max-turns'] !== undefined && !INT.test(values['max-turns']))) die(usage)
   const n = Number(values.n), timeoutS = Number(values.timeout)
   const started = new Date()
   const out = values.out ?? path.join('runs', `bench-${stamp(started)}.json`)
   const localDir = path.join(process.cwd(), 'harnesses')
   const files = positionals.length ? positionals : DEMO_HARNESSES.map(h => path.join(existsSync(localDir) ? localDir : path.join(PKG_ROOT, 'harnesses'), `${h}.json`))
-  const over = { model: values.model, baseUrl: values['base-url'], kind: values.kind }
+  const over = { model: values.model, baseUrl: values['base-url'], kind: values.kind, maxTurns: values['max-turns'] === undefined ? undefined : Number(values['max-turns']) }
   const harnesses: BenchHarness[] = []
   for (const f of files) {
     const config = await loadHarness(f, over)
     harnesses.push({ name: config.name, config, pass: 0, reasons: {}, median: { turns: 0, toolCalls: 0, ms: 0 }, runs: [] })
   }
   await mkdir(path.dirname(out), { recursive: true })
-  const result: BenchResult = { version: 1, date: started.toISOString(), task: DEMO_TASK, n, timeoutS, complete: false, harnesses }
+  const result: BenchResult = { version: 1, date: started.toISOString(), task: task!.prompt, taskName: values.task, size, node: process.version, n, timeoutS, complete: false, harnesses }
   // tmp + rename in the same directory: the SIGINT handler exits immediately, and a half-written
   // JSON would be the only thing left of a 90-minute run. `.tmp`, not `.json`, so /api/bench skips it.
   const tmpOut = `${out}.${process.pid}.tmp`
@@ -229,7 +237,7 @@ async function cmdBench(argv: string[]) {
   for (let round = 1; round <= n; round++) {
     console.error(`--- round ${round}/${n}`)
     for (const h of harnesses) {
-      h.runs.push(await benchOnce(h.config, round, timeoutS, out))
+      h.runs.push(await benchOnce(h.config, round, timeoutS, out, task!, size))
       rollup(h)
       await save()
     }
