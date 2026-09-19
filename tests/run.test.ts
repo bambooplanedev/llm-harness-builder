@@ -373,3 +373,53 @@ test('explainEditMiss reaches the tools: a punctuation miss comes back with the 
   expect(tr.error).toBe(true)
   expect(tr.output).toContain('Line 1 of a.txt matches your "old"')
 })
+
+// ---- loop.maxRepeats -----------------------------------------------------------
+const readA = { toolCalls: [{ name: 'read_file', args: { path: 'a.txt' } }] }
+const results = (ev: HarnessEvent[]) => ev.filter(e => e.type === 'tool_result') as Extract<HarnessEvent, { type: 'tool_result' }>[]
+
+test('maxRepeats: a repeated call still runs, carries a note, and one repeat too many ends the run', async () => {
+  const be = Fake([readA, readA, readA, { content: 'never reached' }])
+  const ev = await collect({ config: base({ loop: { maxTurns: 10, maxRepeats: 1 } }), task: 'do', workdir: await wd() }, { backend: be })
+  const out = results(ev).map(r => r.output)
+  expect(out).toHaveLength(3)
+  expect(out[0]).not.toContain('identical call')
+  expect(out[1].startsWith('A'.repeat(50))).toBe(true) // executed, not refused
+  expect(out[1].endsWith('note: identical call #2 since the last file change')).toBe(true) // after the truncation marker, not cut by it
+  expect(last(ev)).toMatchObject({ reason: 'repeat_loop', turns: 3 })
+})
+
+test('maxRepeats absent: the same three calls change nothing', async () => {
+  const be = Fake([readA, readA, readA, { content: 'fin' }])
+  const ev = await collect({ config: base(), task: 'do', workdir: await wd() }, { backend: be })
+  expect(results(ev).some(r => r.output.includes('identical call'))).toBe(false)
+  expect(last(ev).reason).toBe('final')
+})
+
+// maxRepeats: 0 makes a single false positive fatal, so these two are sharp.
+test('maxRepeats: a successful edit in between makes the same call new again', async () => {
+  const edit = { toolCalls: [{ name: 'edit_file', args: { path: 'a.txt', old: 'A'.repeat(120), new: 'B' } }] }
+  const be = Fake([readA, edit, readA, { content: 'fin' }])
+  const cfg = base({ tools: { enabled: ['read_file', 'edit_file'], approveBash: false }, loop: { maxTurns: 10, maxRepeats: 0 } })
+  const ev = await collect({ config: cfg, task: 'do', workdir: await wd() }, { backend: be })
+  expect(last(ev).reason).toBe('final')
+})
+
+test('maxRepeats: an edit the guard refused, then read_file, then the same edit is the recovery, not a repeat', async () => {
+  const edit = { toolCalls: [{ name: 'edit_file', args: { path: 'a.txt', old: 'A'.repeat(120), new: 'B' } }] }
+  const be = Fake([edit, readA, edit, { content: 'fin' }])
+  const cfg = base({ tools: { enabled: ['read_file', 'edit_file'], approveBash: false, requireReadBeforeEdit: true }, loop: { maxTurns: 10, maxRepeats: 0 } })
+  const ev = await collect({ config: cfg, task: 'do', workdir: await wd() }, { backend: be })
+  expect(results(ev).map(r => r.error)).toEqual([true, false, false])
+  expect(last(ev).reason).toBe('final')
+})
+
+// The third loop in the README: old === new "succeeds", which clears every count but its own.
+test('maxRepeats: a no-op edit repeated is still caught', async () => {
+  const noop = { toolCalls: [{ name: 'edit_file', args: { path: 'a.txt', old: 'A'.repeat(120), new: 'A'.repeat(120) } }] }
+  const be = Fake([noop, readA, noop, readA, noop, { content: 'never reached' }])
+  const cfg = base({ tools: { enabled: ['read_file', 'edit_file'], approveBash: false }, loop: { maxTurns: 10, maxRepeats: 1 } })
+  const ev = await collect({ config: cfg, task: 'do', workdir: await wd() }, { backend: be })
+  expect(results(ev).every(r => !r.error)).toBe(true)
+  expect(last(ev)).toMatchObject({ reason: 'repeat_loop', turns: 5 })
+})

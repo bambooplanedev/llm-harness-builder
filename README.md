@@ -405,6 +405,36 @@ edit; two send the same `new` eight times, red each time, until the context runs
 call that has just failed, and telling it why did not help. The knob these runs argue for is the
 one that notices the repetition.
 
+## Noticing a repeated call
+
+`loop.maxRepeats` is that knob. The run loop counts how many times each call — same name, same
+arguments — has been made since the files last changed through `edit_file` or `write_file`. A
+repeat is never refused: it runs, and its result gets one more line,
+
+    note: identical call #3 since the last file change
+
+and when one call has been repeated more than `maxRepeats` times the run ends with
+`repeat_loop` instead of burning turns up to `max_turns` or context up to a 400. Absent means off,
+so nothing above is affected. An edit the guard refused is not counted, because `read_file` followed
+by the same edit is exactly the recovery the guard asks for.
+
+`guard-repeat` is `guard-only` plus `"maxRepeats": 3`. This is a smoke test, not a bench — four
+runs of it and one of `guard-only`, same setup as above, on 2026-09-19. `e4!` is the fourth distinct
+call, an `edit_file`, and it failed; `(#2)` is the note:
+
+    guard-only    max_turns    r0 b1 e2! r3 e4! e4! e4! e4! e4! e4! e4! e4! e4! e4! e4!
+    guard-repeat  final  PASS  r0 b1 e2! r3 e4 b5 e6 b5 e7 b5
+    guard-repeat  max_turns    r0 b1 e2! r3 e4! e4!(#2) e4!(#3) w5 b6 e7 b6 e8 b6 e9 b6 e10
+    guard-repeat  repeat_loop  b0 e1! r2 e3! r2(#2) e3!(#2) b4 e3!(#3) b4(#2) e3!(#4) b4(#3) e3!(#5)
+    guard-repeat  final  PASS  r0 b1 e2! r3 e4! e4!(#2) e4!(#3) w5 b6 e7 b6 e8 b6 e9 b6
+
+What it shows: the breaker works — the fourth run stopped at turn 12 and 57 s where `guard-only`
+spends 15 turns and about 90 s; and the second run, which never looped, ran `node --test` three
+times without drawing a note. What it only hints at: both runs that entered the eleven-call loop
+left it for `write_file` right after note `#3`. Two runs cannot carry that — `guard-hint` has one
+run above that made the same exit with no such note — and whether the note or the longer result
+did it would need the placebo arm this README keeps not having.
+
 ## Honest notes
 
 - Five runs per harness is a small sample. By Fisher's exact test only 5-against-1 or 4-against-0
@@ -455,6 +485,11 @@ one that notices the repetition.
   calls `a = b + c` and `a = b - c` a match "except for punctuation"; it shows the first such line,
   says nothing for a multi-line `old` or a line over 300 characters, and edits made through MCP
   tools never reach it.
+- `loop.maxRepeats` sees file changes only through `edit_file` and `write_file`. After `bash sed -i`
+  or an MCP tool changed a file, re-running the same test command counts as a repeat: it still
+  runs, but it draws the note and moves the run towards `repeat_loop`. An `edit_file` whose `old`
+  equals its `new` reports `edited` and resets the counts of every other call; its own count
+  survives, so that loop is still caught.
 - `demo` runs `check.sh` without a timeout; `bench` gives it 60 s.
 - Aborting a run (`--timeout`) closes our side of the connection; llama-server keeps generating
   until it notices, so the next run can start against a busy server and fail with

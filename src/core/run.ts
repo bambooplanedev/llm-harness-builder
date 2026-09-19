@@ -2,6 +2,7 @@ import type { RunParams } from './config.js'
 import { mcpApprovalName, type HarnessEvent, type ToolCall, type DoneReason } from './events.js'
 import { createBackend, type Backend, type ChatMessage, type ChatRequest, type Delta, type NormalizedResponse, type Usage } from './backends/index.js'
 import { TOOL_SCHEMAS, runTool } from './tools/index.js'
+import { GUARD_BLOCKED } from './tools/fs.js'
 import { renderTools, PROMPTED_SCHEMA } from './prompts.js'
 import { parsePrompted, parseHermes } from './parse.js'
 import { estimateTokens, applyBudget } from './tokens.js'
@@ -81,6 +82,8 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
       reads: config.tools.requireReadBeforeEdit ? new Set<string>() : undefined,
       explainEditMiss: config.tools.explainEditMiss,
     }
+    // loop.maxRepeats: how many times each call was made since the files last changed through a tool.
+    const seen = new Map<string, number>()
 
     while (true) {
       if (opts.signal?.aborted) { yield done('aborted'); return }
@@ -178,8 +181,19 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
         }
         const max = config.context.maxToolOutputChars
         const truncated = result.output.length > max
-        const output = truncated ? result.output.slice(0, max) + `\n[truncated: ${result.output.length - max} more chars]` : result.output
+        let output = truncated ? result.output.slice(0, max) + `\n[truncated: ${result.output.length - max} more chars]` : result.output
+        let repeats = 0
+        if (config.loop.maxRepeats !== undefined) {
+          const key = c.name + JSON.stringify(c.args)
+          const n = (seen.get(key) ?? 0) + 1
+          repeats = n - 1
+          if (!result.error && (c.name === 'edit_file' || c.name === 'write_file')) seen.clear()
+          // A refusal by the guard is not recorded: read_file and then the same edit is the recovery we want.
+          if (!(result.error && result.output.includes(GUARD_BLOCKED))) seen.set(key, n)
+          if (repeats) output += `\nnote: identical call #${n} since the last file change`
+        }
         yield ev({ type: 'tool_result', callId: call.callId, name: call.name, output, truncated, error: result.error })
+        if (repeats > (config.loop.maxRepeats ?? Infinity)) { yield done('repeat_loop'); return }
 
         if (hermes) wrapped.push(`<tool_response>\n${output}\n</tool_response>`)
         else if (prompted) wrapped.push(`<tool_result id="${call.callId}" name="${call.name}">\n${output}\n</tool_result>`)

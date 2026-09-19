@@ -103,3 +103,10 @@ test('guard-hint is guard-only plus explainEditMiss and nothing else', async () 
   expect(validateConfig(hint)).toEqual([])
   expect(hint).toEqual({ ...only, name: 'guard-hint', tools: { ...only.tools, explainEditMiss: true } })
 })
+
+test('guard-repeat is guard-only plus loop.maxRepeats and nothing else', async () => {
+  const load = async (n: string) => JSON.parse(await readFile(new URL(`../harnesses/${n}.json`, import.meta.url), 'utf8'))
+  const only = await load('guard-only'), rep = await load('guard-repeat')
+  expect(validateConfig(rep)).toEqual([])
+  expect(rep).toEqual({ ...only, name: 'guard-repeat', loop: { ...only.loop, maxRepeats: 3 } })
+})

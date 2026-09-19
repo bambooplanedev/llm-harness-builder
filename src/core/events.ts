@@ -1,7 +1,7 @@
 import type { Usage } from './backends/types.js'
 
 export type ToolCall = { callId: string; name: string; args: Record<string, unknown>; backendId?: string }
-export type DoneReason = 'final' | 'max_turns' | 'parse_failed' | 'aborted' | 'backend_error' | 'mcp_error'
+export type DoneReason = 'final' | 'max_turns' | 'parse_failed' | 'aborted' | 'backend_error' | 'mcp_error' | 'repeat_loop'
 
 type Base = { seq: number; turn: number; ts: number }
 

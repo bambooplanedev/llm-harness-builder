@@ -96,3 +96,16 @@ test('requireReadBeforeEdit and explainEditMiss are optional and must be boolean
     expect(validateConfig(bad).some(e => e.includes(key))).toBe(true)
   }
 })
+
+test('loop.maxRepeats is optional and must be a non-negative integer', () => {
+  for (const ok of [0, 3]) {
+    const c = structuredClone(validConfig) as any
+    c.loop.maxRepeats = ok
+    expect(validateConfig(c)).toEqual([])
+  }
+  for (const bad of [-1, 1.5, '3', true]) {
+    const c = structuredClone(validConfig) as any
+    c.loop.maxRepeats = bad
+    expect(validateConfig(c).some(e => e.includes('maxRepeats'))).toBe(true)
+  }
+})
