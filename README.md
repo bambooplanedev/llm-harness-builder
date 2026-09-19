@@ -55,7 +55,7 @@ Run `demo` first: it takes a few minutes and shows you the trace and that the ba
     llm-harness-builder serve [--port 7331] [--no-open]
     llm-harness-builder run <harness.json> --workdir <dir> "task" [--yes] [--json] [--model m] [--base-url u] [--kind k]
     llm-harness-builder demo [--model m] [--base-url u] [--kind k]
-    llm-harness-builder bench [harness.json ...] [--n 3] [--timeout 1800] [--out runs/bench-<ts>.json] [--model m] [--base-url u] [--kind k]
+    llm-harness-builder bench [harness.json ...] [--n 3] [--timeout 1800] [--out runs/bench-<ts>.json] [--task slug|pool|pool2] [--size N] [--max-turns N] [--model m] [--base-url u] [--kind k]
 
 `run` exits 0 only when the model finished with a final answer. `--json` writes the event
 stream as JSONL to stdout; human-readable progress goes to stderr.
