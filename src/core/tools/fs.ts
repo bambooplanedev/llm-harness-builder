@@ -2,7 +2,7 @@ import { readdir, open, mkdir, writeFile as fsWrite, readFile as fsRead, stat } 
 import path from 'node:path'
 import { resolveInside } from './sandbox.js'
 
-export type ToolCtx = { workdir: string; maxToolOutputChars: number; reads?: Set<string> }
+export type ToolCtx = { workdir: string; maxToolOutputChars: number; reads?: Set<string>; explainEditMiss?: boolean }
 type Args = Record<string, unknown>
 
 const str = (args: Args, key: string): string => {
@@ -62,6 +62,22 @@ export async function writeFile(args: Args, ctx: ToolCtx): Promise<string> {
   return `wrote ${content.length} chars to ${str(args, 'path')}`
 }
 
+/** Letters, digits and "_" only: two lines equal under this differ in punctuation or whitespace alone. */
+const bare = (s: string): string => s.replace(/[^\p{L}\p{N}_]+/gu, '')
+
+/**
+ * For a one-line "old" that was not found: the file line equal to it once punctuation and whitespace
+ * are ignored, shown verbatim. '' when there is none — the caller's message then stays as it was.
+ */
+function explainMiss(lf: string, needle: string, shown: string): string {
+  const probe = needle.trim()
+  if (probe.includes('\n') || !bare(probe)) return ''
+  const lines = lf.split('\n')
+  const i = lines.findIndex(l => bare(l) === bare(probe))
+  if (i < 0 || lines[i].length > 300) return ''
+  return `. Line ${i + 1} of ${shown} matches your "old" except for punctuation or whitespace; the file has exactly:\n${lines[i]}`
+}
+
 export async function editFile(args: Args, ctx: ToolCtx): Promise<string> {
   const file = await resolveInside(ctx.workdir, str(args, 'path'))
   ensureRead(ctx, file, str(args, 'path'))
@@ -73,7 +89,8 @@ export async function editFile(args: Args, ctx: ToolCtx): Promise<string> {
   const lf = text.replace(/\r\n/g, '\n')
   const needle = oldS.replace(/\r\n/g, '\n')
   const count = lf.split(needle).length - 1
-  if (count !== 1) throw new Error(`"old" ${EDIT_MISS}; found ${count} occurrences`)
+  if (count !== 1) throw new Error(`"old" ${EDIT_MISS}; found ${count} occurrences`
+    + (count === 0 && ctx.explainEditMiss ? explainMiss(lf, needle, str(args, 'path')) : ''))
   const replacement = newS.replace(/\r\n/g, '\n')
   let out = lf.replace(needle, () => replacement)
   if (crlf) out = out.replace(/\n/g, '\r\n')
