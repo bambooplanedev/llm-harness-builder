@@ -633,7 +633,7 @@ of three unbound runs PASS. They were not:
 | #2 | FAIL, `repeat_loop` | 10 | 266 | 13767 |
 | #3 | **PASS** | 8 | 143 | 6546 |
 
-So again there is no control run, no budget run and no `tuned-budget.json`. Both failures are the
+So again there was no control run, no budget run and, at that point, no `tuned-budget.json`. Both failures are the
 `chunk` flip-flop, and both were ended by the breaker of "Noticing a repeated call" on the fifth
 identical successful edit — its first firing in a live run, twice. The notes before it, seven in
 the first run and eight in the second, moved nothing. In neither run did the model ever edit the
@@ -647,6 +647,96 @@ loops what `applyBudget` may not touch — the system prompt, the task, the assi
 and the newest results — alone outgrew 2670 by turns 9 and 8: a budget could not have held those
 runs in any window. Two attempts have now stopped at a gate for the same reason. What this task
 measures in this model, before anything about context, is whether it finds the bug in `chunk`.
+
+### The measurement, on `pool2`
+
+`pool2` is the same ten units in another order — `clamp`, `words`, `titleCase`, `parseDuration`,
+`dedupe`, `range`, `formatBytes`, `median`, `chunk`, `paginate` — so sizes 1 to 8 hold neither
+`chunk` nor the `paginate` that imports it. It exists because this model does not find the bug in
+`chunk`, and a task lost to that two times in three measures nothing else. The order was changed
+after the data above was seen. That selects for PASS, for shorter histories, for fewer loops and
+fewer re-reads, so no `pool2` number is comparable with a `pool` number and the two never share a
+table. `pool` did not move: a test pins a hash of its first eight units, the largest size ever
+run. One oracle was repaired first — `formatBytes` fixed with `n >= 1000` instead of `n >= 1024`
+used to pass — and `formatBytes` is the one unit of these seven the model had never met. Sizes 9
+and 10 put `chunk` and `paginate` back; no `pool2` run was made at those sizes.
+
+The rules are those of the second attempt, fixed before any `pool2` run: N = 7; the server at
+`-c 5120`; `tuned-repeat` as the base arm; `tuned-budget` one key apart, `budgetTokens` 2670 =
+floor(0.9 × 0.731 × (5120 − 1024 − 37)); `--max-turns 18`; one attempt, the budget not re-tuned;
+no significance test, because runs of one arm are near-clones (temperature 0.2, no seed). 0.731 is
+the lowest estimate-to-exact ratio of the first calibration, kept although it was taken from a
+loop: the ten runs below have minima of 0.716 to 0.758, the lowest again in the one unbound loop,
+the rest 0.748 and up. A smaller budget is safe for the window and lenient to the knob — it fires
+sooner — so "the knob fired" below is not evidence that a fitted budget would have.
+
+    llama serve -hf unsloth/Qwen3-8B-GGUF:Q4_K_M -c <32768|5120> --port 8080 --jinja
+    llm-harness-builder bench harnesses/<tuned-repeat|tuned-budget>.json --n <3|1|3|3> --task pool2 --size 7 \
+      --max-turns 18 --timeout 420 --kind openai --base-url http://127.0.0.1:8080/v1 --model unsloth/Qwen3-8B-GGUF:Q4_K_M
+
+| arm, file in `runs/` | window | result | turns | s | peak tokens | prompt eval, ms/turn |
+|---|---|---|---|---|---|---|
+| `tuned-repeat`, `bench-v29-pool2-unbound-n3` #1 | 32768 | FAIL, `repeat_loop` | 14 | 248 | 14509 | 6785 |
+| #2 | 32768 | **PASS** | 7 | 132 | 5855 | 4199 |
+| #3 | 32768 | **PASS** | 7 | 133 | 5859 | 4198 |
+| `tuned-repeat`, `bench-v29-pool2-control5120-n1` | 5120 | FAIL, `backend_error` | 6 | 115 | 5344 | 4533 |
+| `tuned-budget`, `bench-v29-pool2-budget5120-n3` #1 | 5120 | FAIL, `repeat_loop` | 10 | 194 | 3358 | 6585 |
+| #2 | 5120 | FAIL, `repeat_loop` | 10 | 189 | 3357 | 6147 |
+| #3 | 5120 | **PASS** | 9 | 173 | 3338 | 6522 |
+| `tuned-budget` with the low-water mark, `bench-v29-pool2-budget5120-mark-n3` #1 | 5120 | FAIL, `repeat_loop` | 9 | 168 | 3361 | 4554 |
+| #2 | 5120 | FAIL, `repeat_loop` | 9 | 168 | 3364 | 4646 |
+| #3 | 5120 | FAIL, `repeat_loop` | 9 | 168 | 3364 | 4651 |
+
+The gates held. Two of three unbound runs are PASS and both are full fixes: six units carry the
+reference fix to the letter, `range` the reference condition inside a pair of parentheses.
+Replayed against 5120 all three unbound trajectories cross it at turn 6, with prompts of 5352,
+5326 and 5332 tokens, and the live control died exactly there: `request (5344 tokens) exceeds the
+available context size`. The control is reported, not read; it is how the window was chosen.
+
+What the budget did. It fired at turn 5 in all six budgeted runs and on every turn after it (on
+all but turn 6 with the mark); none of the six ever held more than 3364 tokens, where the control
+died at 5344 and the two unbound PASS runs needed 5855 and 5859. No result was stubbed before the
+model had seen it, and what `applyBudget` may not touch never outgrew the budget (2278 at most, in
+`chars / 4` units). One budgeted run ended `final` and PASS inside 5120, a full fix by the same
+audit. That is the existence proof, and it is one run.
+
+What it cost. Every run of every arm sends, in its batch of edits at turn 4, a `formatBytes` edit
+whose `old` equals its `new`, and gets the error for it. All four unbudgeted runs answer at turn 5
+by reading `formatBytes.js` again, and the two that pass then fix the `while` line. None of the six
+budgeted runs does that at turn 5, and turn 5 is the first request with a stub in it. Without the
+mark the stub is the results of turn 1 — the directory listing and the first test output, 4213
+characters in one message — and all three runs send the same no-op edit again. At turn 6 the next oldest message goes — 2244 characters, the seven files the model
+read at turn 2, which in a prompted harness are one message, all the results of a turn, replaced by
+`[dropped: 2244 chars]` with no word of what it was. One run reads `formatBytes.js` again at that
+point and fixes the `while` line at turn 8; two rewrite the `return` line instead and repeat no-op
+edits until the breaker ends them at turn 10, on the fifth `node --test` with no file change in
+between. With the mark both messages go at once at turn 5 (6457 characters), all three runs
+rewrite the `return` line blind, none reads the file again, and the breaker ends all three at
+turn 9. Re-reads after the first stub: 0, 0, 1 without the mark and 0, 0, 0 with it, against one at
+turn 5 in every unbudgeted run — and a zero here means the model was not told what it had lost,
+not that it did not need it. `repeat_loop` after the first stub was written down in advance as
+belonging to neither the knob nor the task, and the unbound arm lost one run of three to the same
+`formatBytes` loop with nothing stubbed. But the change at turn 5 is six runs of six against none
+of four, and the runs of an arm are near-clones — the three with the mark are the same run to the
+call — so read it as two observations against one, not six against four.
+
+What it cost in time, and the mark. Rewriting an old message makes llama-server evaluate the
+prompt again from that message on. Summed `timings.prompt_ms` per turn: 4199 and 4198 ms in the two
+unbound PASS runs, 6585, 6147 and 6522 ms with the budget — 12615, 11668 and 11181 prompt tokens
+evaluated in a run against 5244 and 5248. The threshold written down for building a low-water
+mark was 1.5 times the unbound median; 6522 against 6297 crossed it, narrowly. So `applyBudget`
+now stubs down to three quarters of the budget once it is over it, and the third arm measured
+that: 4554, 4646 and 4651 ms per turn, 7788, 7778 and 7795 tokens. The mark does what it is for,
+and its arm has no PASS where the other has one; with three near-clones an arm that says nothing
+in either direction. Rows 5 to 7 were measured on the commit before the mark and do not reproduce
+on the one after it.
+
+What this is a measurement of: `applyBudget` as implemented — oldest first, whole messages, tool
+results only, a `chars / 4` estimate — on a friendly task, one model, one window chosen from the
+data. What it shows is that the knob holds a run inside a window that otherwise kills it, and that
+the first things it throws away included the thing the model needed next. The weak point it found
+is not the threshold: it is that a stub takes a whole turn's results at once and does not say what
+they were.
 
 ## Honest notes
 
@@ -728,9 +818,15 @@ measures in this model, before anything about context, is whether it finds the b
   the default test reporter differs between Node majors. The JSON records `node`.
 - `context.budgetTokens` is in `chars / 4` units. On `pool` that is 0.69–0.83 of the real count, on
   the old task 0.55–0.72; where a budget of 4691 would fire it is 0.74–0.79, so 4691 means about
-  5900–6300 real tokens. `applyBudget` has no hysteresis: once over budget it rewrites an old
-  message on every turn, and llama-server re-evaluates the prompt from that point. Neither has been
-  measured yet.
+  5900–6300 real tokens. `applyBudget` stubs the oldest tool results first and whole messages only
+  — in a prompted harness one message is all the results of a turn — leaves `[dropped: N chars]`
+  with no word of what it was, and cannot touch the system prompt, the task, the assistant's own
+  messages or the newest results. Since 2026-09-19 it stubs down to three quarters of the budget
+  once over it. Measured once: "The measurement, on `pool2`".
+- In `pool2`, "N = 7" means those seven units; `formatBytes` was new to the model when it was
+  measured. Two oracles have holes that were left alone: `parseDuration` passes a fix that
+  special-cases the test's literal (it is in published rows), and `median` passes a sort in place
+  (it is outside size 7).
 - `bench --max-turns` overrides the harness the way `--model` does and is recorded in
   `harnesses[].config`; `demo` runs the old task only.
 - `demo` runs `check.sh` without a timeout; `bench` gives it 60 s.
