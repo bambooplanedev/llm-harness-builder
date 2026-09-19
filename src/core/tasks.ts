@@ -38,12 +38,10 @@ const slug: Task = {
 
 /** The order IS the task: size N means the first N of these. titleCase imports words and paginate imports chunk, on purpose. */
 export const POOL = ['clamp', 'words', 'titleCase', 'chunk', 'paginate', 'parseDuration', 'dedupe', 'range', 'formatBytes', 'median'] as const
+/** The same ten units with `chunk` and `paginate`, which imports it, at the back: sizes 1 to 8 hold neither. */
+export const POOL2 = ['clamp', 'words', 'titleCase', 'parseDuration', 'dedupe', 'range', 'formatBytes', 'median', 'chunk', 'paginate'] as const
 const POOL_ROOT = path.join(PKG_ROOT, 'examples-pool')
-/** The first `size` units. A size outside 1..POOL.length is a caller's bug: an empty list would turn `node --test` into recursive discovery. */
-const firstUnits = (size: number): string[] => {
-  if (!Number.isInteger(size) || size < 1 || size > POOL.length) throw new RangeError(`pool size must be an integer from 1 to ${POOL.length}, got ${size}`)
-  return POOL.slice(0, size)
-}
+const POOL_PROMPT = 'The test suite of this project fails. Find and fix the bugs in the files under src/ until `node --test` passes. Do not edit the tests. Finally answer with a one-line summary.'
 const copyUnits = async (dir: string, units: string[], kinds: ('src' | 'test')[]) => {
   for (const kind of kinds) {
     await mkdir(path.join(dir, kind), { recursive: true })
@@ -55,27 +53,34 @@ const copyUnits = async (dir: string, units: string[], kinds: ('src' | 'test')[]
 }
 
 /** Grows with --size until a healthy run fills the window. The text names no technique; `node --test` is the success criterion. */
-const pool: Task = {
-  prompt: 'The test suite of this project fails. Find and fix the bugs in the files under src/ until `node --test` passes. Do not edit the tests. Finally answer with a one-line summary.',
-  max: POOL.length,
-  async prepare(size = POOL.length) {
-    const units = firstUnits(size)
-    const dir = await mkdtemp(path.join(tmpdir(), 'lhb-pool-'))
-    await cp(path.join(POOL_ROOT, 'package.json'), path.join(dir, 'package.json'))
-    await copyUnits(dir, units, ['src', 'test'])
-    return dir
-  },
-  // The model can reach test/: the verdict is taken on pristine tests, and only on them — a file it
-  // added cannot fail a correct fix, a test it rewrote cannot pass a wrong one.
-  check(dir, size = POOL.length) {
-    // This function deletes <dir>/test: a relative or empty dir would resolve against the cwd.
-    if (!path.isAbsolute(dir)) throw new RangeError(`pool check needs an absolute workdir, got ${JSON.stringify(dir)}`)
-    const files = firstUnits(size).map(name => path.join('test', `${name}.test.js`))
-    rmSync(path.join(dir, 'test'), { recursive: true, force: true })
-    mkdirSync(path.join(dir, 'test'))
-    for (const f of files) copyFileSync(path.join(POOL_ROOT, f), path.join(dir, f))
-    return spawnSync(process.execPath, ['--test', ...files], { cwd: dir, timeout: 60_000 }).status === 0
-  },
+const poolTask = (name: string, order: readonly string[]): Task => {
+  /** The first `size` units. A size outside 1..order.length is a caller's bug: an empty list would turn `node --test` into recursive discovery. */
+  const firstUnits = (size: number): string[] => {
+    if (!Number.isInteger(size) || size < 1 || size > order.length) throw new RangeError(`${name} size must be an integer from 1 to ${order.length}, got ${size}`)
+    return order.slice(0, size)
+  }
+  return {
+    prompt: POOL_PROMPT,
+    max: order.length,
+    async prepare(size = order.length) {
+      const units = firstUnits(size)
+      const dir = await mkdtemp(path.join(tmpdir(), `lhb-${name}-`))
+      await cp(path.join(POOL_ROOT, 'package.json'), path.join(dir, 'package.json'))
+      await copyUnits(dir, units, ['src', 'test'])
+      return dir
+    },
+    // The model can reach test/: the verdict is taken on pristine tests, and only on them — a file it
+    // added cannot fail a correct fix, a test it rewrote cannot pass a wrong one.
+    check(dir, size = order.length) {
+      // This function deletes <dir>/test: a relative or empty dir would resolve against the cwd.
+      if (!path.isAbsolute(dir)) throw new RangeError(`${name} check needs an absolute workdir, got ${JSON.stringify(dir)}`)
+      const files = firstUnits(size).map(u => path.join('test', `${u}.test.js`))
+      rmSync(path.join(dir, 'test'), { recursive: true, force: true })
+      mkdirSync(path.join(dir, 'test'))
+      for (const f of files) copyFileSync(path.join(POOL_ROOT, f), path.join(dir, f))
+      return spawnSync(process.execPath, ['--test', ...files], { cwd: dir, timeout: 60_000 }).status === 0
+    },
+  }
 }
 
-export const TASKS = { slug, pool }
+export const TASKS = { slug, pool: poolTask('pool', POOL), pool2: poolTask('pool2', POOL2) }
