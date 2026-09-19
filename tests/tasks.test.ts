@@ -73,3 +73,12 @@ test('pool: the verdict does not depend on what the model did to test/', async (
   writeFileSync(join(red, 'test', 'words.test.js'), "import { test } from 'node:test'\ntest('words: rewritten to pass', () => {})\n")
   expect(TASKS.pool.check(red, 2)).toBe(false)   // rewriting the tests does not make the bugs go away
 })
+
+test('pool: a size that is not an integer from 1 to 10 is refused, by prepare and by check', async () => {
+  const dir = await TASKS.pool.prepare(1)
+  for (const bad of [0, -1, 11, 2.5]) {
+    await expect(TASKS.pool.prepare(bad)).rejects.toThrow(RangeError)
+    expect(() => TASKS.pool.check(dir, bad)).toThrow(RangeError)
+  }
+  expect(readdirSync(join(dir, 'test'))).toEqual(['clamp.test.js']) // a refused check has not touched the workdir
+})
