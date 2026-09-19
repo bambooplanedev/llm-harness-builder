@@ -35,3 +35,10 @@ test('omitting live renders an open turn instead of throwing', async () => {
   const html = await renderToString(createSSRApp(Trace, { events: openTurn, task: 'x', approvable: false }))
   expect(html).toContain('thinking')
 })
+
+// README promises the trace shows exactly what went to the model; a clipped retry has to say so.
+test('a parse error whose text was kept out of the history says how much', async () => {
+  const pe = (droppedChars?: number): HarnessEvent[] => [{ seq: 0, turn: 1, ts: 0, type: 'parse_error', message: 'truncated', content: 'x', droppedChars }]
+  expect(await render({ events: pe(7765) })).toContain('7765 chars kept out of the history')
+  expect(await render({ events: pe() })).not.toContain('kept out of the history')
+})

@@ -44,7 +44,7 @@ const liveTok = computed(() => Math.ceil(liveText.value.length / 4))
         <div v-if="e.reasoning" style="color:#888">thinking: {{ e.reasoning }}</div>{{ e.content || '(empty content)' }}
         <small style="color:#888"> · {{ e.latencyMs }}ms</small>
       </div>
-      <div v-else-if="e.type === 'parse_error'" class="ev parse_error">parse error: {{ e.message }}</div>
+      <div v-else-if="e.type === 'parse_error'" class="ev parse_error">parse error: {{ e.message }}<span v-if="e.droppedChars"> · {{ e.droppedChars }} chars kept out of the history, a marker went back instead</span></div>
       <div v-else-if="e.type === 'tool_call'" class="ev tool_call">{{ e.call.name }} {{ pretty(e.call.args) }}</div>
       <div v-else-if="e.type === 'approval_required' && !answered.has(e.call.callId)" class="ev approval">
         <template v-if="props.approvable !== false">

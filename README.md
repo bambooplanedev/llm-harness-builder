@@ -159,12 +159,36 @@ runs turn 4 ran away to 5062 completion tokens and came back `finish_reason=leng
 `parse_error`, which normally costs one retry and nothing else. The retry request carried 8229
 tokens against a `numCtx` of 8192, and llama-server answered 400.
 
-So the window cost does not surface as "the model got confused". It surfaces one step later: the
-runaway generation that `mcp-off` absorbs with room to spare leaves `mcp-on` no room to retry, and
-a recoverable parse error becomes an unrecoverable 400. This is the same wall `bare` hits in
-**Isolating the knobs** below, reached from the other direction — there by a tool result nothing
-truncated, here by tool descriptions nothing pruned. `med errs` is 0 on both sides: the model
-handled either set of tools without a single tool error.
+**Correction, 2026-09-19.** This paragraph used to conclude that the window cost surfaces one step
+late: that `mcp-off` absorbs the same runaway with room to spare while `mcp-on` has no room left to
+retry, so "a recoverable parse error becomes an unrecoverable 400". Both halves were wrong, and the
+traces that were already on disk say so. No `mcp-off` run ran away — its largest completion in five
+runs is 110 tokens — so there was nothing it absorbed. And the 1137-token gap plays no part in the
+400. No output cap is sent, so a response that comes back `finish_reason=length` has filled the
+window exactly (3130 + 5062 = 8192), and the retry — that history, that response and the hint — is
+8192 + 37 tokens in any arm, however small its tool text. With the runaway in `content`, the retry
+this harness offered could never fit on llama-server. (A runaway inside `<think>` comes back as
+`reasoning`, which is never sent again, and there the retry works: that is `bare`, below.)
+
+What ran away was one string. The request carried the `enforceSchema` grammar; both failing runs
+wrote the replacement as `\"\"`, lost the escaping around character 396 and closed their JSON while
+the grammar still held them inside an open string, where the output is not allowed to end. They
+produced `` `** `` for 295 s, until the window was full. The three passing runs wrote `''` from the
+same prefix and were done in about 160 tokens. Code inside a nested JSON string — MCP's
+`edits[].newText` — is a likelier trigger than the size of the descriptions; that is the first
+caveat below, and it is still not shown. What stays measured: 22% of the window, 1742 against 605
+tokens, and `med errs` 0 on both sides — the model handled either set of tools without a single
+tool error.
+
+Since that date a cut-off response no longer goes back whole. The history gets
+`[response cut off at the token limit: kept 0 of 7765 chars]`; the trace keeps the full text and says
+how much was left out. Checked by replaying the recorded turn-5 request of one failing run against
+the same server with that one message replaced (`max_tokens: 400` in the replay script only): 3192
+tokens instead of 8229, and the reply parses, five times of five — five clones at this temperature,
+so read it as one sample. Keeping the first 396 or 500 characters parsed five of five as well, but
+the model then wrote `\"\"` again; given the marker alone it wrote `''`. This is an existence check
+on one recorded history, not a PASS rate. No run was repeated and the table above stands as
+measured; its `backend_error×2` would not happen the same way today.
 
 Two caveats, both honest. **The arms differ in more than the size of the descriptions**: tool names
 and argument shapes differ too, and MCP's `read_file` takes `head`/`tail`, which the built-in one
@@ -472,7 +496,17 @@ did it would need the placebo arm this README keeps not having.
   that text) cuts the block short → `parse_error` → hint → retry.
 - A response cut off at max tokens (`finish_reason: length`) is treated as a parse error in every
   format, so a model that spent its whole window inside `<think>` gets the hint and a retry rather
-  than having its thoughts accepted as the answer.
+  than having its thoughts accepted as the answer. If the cut-off text is in `content` and longer
+  than the marker, the marker goes back instead of it (see the correction under **MCP**).
+- That does not make a truncation recoverable in general. When the window was already full before
+  the response — the `backend_error×1` of `rule-none` is one: a 207-character reply to an
+  8123-token prompt — the retry is still a 400. So are the two `backend_error` of `tuned` under
+  **Explaining an edit miss**: no truncation there, the history simply outgrew the window with
+  `budgetTokens` at 0. All of this is llama-server behaviour; Ollama shifts the context instead of
+  answering 400, and nothing here was measured on it.
+- Generation is not capped. A runaway costs about 295 s before anything can react, and after the
+  clipped retry nothing stops a second one: such a run takes about ten minutes and ends as
+  `parse_failed`, or as `aborted` if the bench timeout comes first.
 - Abort cannot interrupt a tool that is already running; `bash` returns within its 30 s
   timeout, then the run ends.
 - `demo --kind openai` needs `--base-url` (the default URL is Ollama's port).

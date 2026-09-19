@@ -423,3 +423,33 @@ test('maxRepeats: a no-op edit repeated is still caught', async () => {
   expect(results(ev).every(r => !r.error)).toBe(true)
   expect(last(ev)).toMatchObject({ reason: 'repeat_loop', turns: 5 })
 })
+
+// A response cut off at the token limit filled the window; sent back whole, the retry cannot fit (README, MCP).
+test('truncated: a long cut-off response goes back as a marker, the event keeps the whole text', async () => {
+  const runaway = '{"calls": [' + '`**'.repeat(2500)
+  const be = Fake([{ content: runaway, truncated: true }, { content: 'fin' }])
+  const ev = await collect({ config: base(), task: 'do', workdir: await wd() }, { backend: be })
+  const back = be.requests[1].messages.at(-2) as any
+  expect(back).toMatchObject({ role: 'assistant', content: `[response cut off at the token limit: kept 0 of ${runaway.length} chars]` })
+  const pe = ev.find(e => e.type === 'parse_error') as any
+  expect(pe.content).toBe(runaway)
+  expect(pe.droppedChars).toBe(runaway.length)
+  expect(last(ev).reason).toBe('final')
+})
+
+test('truncated: content shorter than the marker goes back as it is, and an empty one stays empty', async () => {
+  for (const content of ['<think>endless', '']) {
+    const be = Fake([{ content, truncated: true }, { content: 'fin' }])
+    const ev = await collect({ config: base(), task: 'do', workdir: await wd() }, { backend: be })
+    expect((be.requests[1].messages.at(-2) as any).content).toBe(content)
+    expect((ev.find(e => e.type === 'parse_error') as any).droppedChars).toBeUndefined()
+  }
+})
+
+test('a parse error that is not a truncation is never clipped', async () => {
+  const prose = 'Sure, let me think about this. '.repeat(20)
+  const cfg = base({ toolCalls: { mode: 'prompted', enforceSchema: true, promptedTemplate: 'T:{{tools}}', parseErrorHint: 'HINT' } })
+  const be = Fake([{ content: prose }, { content: '{"calls":[],"final":"ok"}' }])
+  await collect({ config: cfg, task: 'do', workdir: await wd() }, { backend: be })
+  expect((be.requests[1].messages.at(-2) as any).content).toBe(prose)
+})
