@@ -8,7 +8,7 @@ type Base = { seq: number; turn: number; ts: number }
 export type HarnessEvent = Base & (
   | { type: 'llm_request'; payload: unknown }
   | { type: 'llm_response'; raw: unknown; content: string; reasoning?: string; usage?: Usage; latencyMs: number }
-  | { type: 'parse_error'; message: string; content: string }
+  | { type: 'parse_error'; message: string; content: string; droppedChars?: number }
   | { type: 'tool_call'; call: ToolCall }
   | { type: 'approval_required'; call: ToolCall }
   | { type: 'tool_result'; callId: string; name: string; output: string; truncated: boolean; error: boolean }

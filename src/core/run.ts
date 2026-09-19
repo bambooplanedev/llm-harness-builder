@@ -144,9 +144,13 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
 
       if (parseError) {
         parseFails++
-        messages.push({ role: 'assistant', content: res.content })
+        // A response cut off at the token limit has filled the window, so sent back whole the retry cannot fit.
+        // Only the marker goes back: a kept head made the model repeat the form that had just run away.
+        const marker = `[response cut off at the token limit: kept 0 of ${res.content.length} chars]`
+        const clip = res.truncated && marker.length < res.content.length
+        messages.push({ role: 'assistant', content: clip ? marker : res.content })
         messages.push({ role: 'user', content: config.toolCalls.parseErrorHint })
-        yield ev({ type: 'parse_error', message: parseError, content: res.content })
+        yield ev({ type: 'parse_error', message: parseError, content: res.content, droppedChars: clip ? res.content.length : undefined })
         if (parseFails >= 2) { yield done('parse_failed'); return }
         continue
       }
