@@ -315,3 +315,39 @@ test('bench with an mcp server records toolChars/toolErrors and prints the tool 
   expect(r.stdout).toMatch(/^harness\s+PASS\s+reasons\s+med turns\s+med s\s+toolChars\s+med errs\s+editMiss$/m)
   expect(r.stdout).toMatch(new RegExp(`^mcp-bench\\s+0/1\\s+final×1\\s+\\d+\\s+\\d+\\s+${run.toolChars}\\s+1\\s+0$`, 'm'))
 }, 60_000)
+
+test('bench --task pool --size 2 --max-turns 7: a pool workdir, the verdict on it, and all three in the JSON', async () => {
+  const wd = await tmp('lhb-cli-')
+  const fake = join(wd, 'fake.json'); const out = join(wd, 'p.json')
+  await writeFile(fake, JSON.stringify([{ content: '{"calls":[],"final":"nothing fixed"}' }]))
+  const r = cli(['bench', '--n', '1', '--task', 'pool', '--size', '2', '--max-turns', '7', '--out', out, harness('tuned')], { LHB_FAKE_BACKEND: fake })
+  expect(r.status).toBe(0)
+  const j = JSON.parse(await readFile(out, 'utf8'))
+  expect(j).toMatchObject({ taskName: 'pool', size: 2, node: process.version })
+  expect(j.task).toContain('Do not edit the tests')
+  expect(j.harnesses[0].config.loop.maxTurns).toBe(7) // the override is recorded, like --model
+  const run = j.harnesses[0].runs[0]
+  expect([run.verdict, run.reason]).toEqual(['FAIL', 'final']) // nothing was fixed
+  expect((await readdir(join(run.workdir, 'src'))).sort()).toEqual(['clamp.js', 'words.js'])
+}, 60_000)
+
+test('bench without --task is the slug task, and says so', async () => {
+  const wd = await tmp('lhb-cli-')
+  const fake = join(wd, 'fake.json'); const out = join(wd, 's.json')
+  await writeFile(fake, JSON.stringify([{ content: '{"calls":[],"final":"nothing fixed"}' }]))
+  const r = cli(['bench', '--n', '1', '--out', out, harness('tuned')], { LHB_FAKE_BACKEND: fake })
+  expect(r.status).toBe(0)
+  const j = JSON.parse(await readFile(out, 'utf8'))
+  expect(j.taskName).toBe('slug'); expect('size' in j).toBe(false)
+  expect(j.harnesses[0].config.loop.maxTurns).toBe(15)
+  expect(await readdir(join(j.harnesses[0].runs[0].workdir, 'data'))).toEqual(['app.log'])
+}, 60_000)
+
+test('bench rejects a task/size/max-turns combination that means nothing, with usage', () => {
+  for (const extra of [['--task', 'nope'], ['--size', '3'], ['--task', 'slug', '--size', '3'], ['--task', 'pool'],
+    ['--task', 'pool', '--size', '0'], ['--task', 'pool', '--size', '11'], ['--task', 'pool', '--size', '2.5'], ['--max-turns', '0']]) {
+    const r = cli(['bench', '--n', '1', ...extra])
+    expect([extra.join(' '), r.status]).toEqual([extra.join(' '), 2])
+    expect(r.stderr).toMatch(/usage/)
+  }
+}, 60_000)
