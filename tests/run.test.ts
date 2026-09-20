@@ -499,3 +499,33 @@ test('backend.maxTokens reaches the request, and only when the harness sets it',
   expect(capped.requests[0].maxTokens).toBe(1024)
   expect(plain.requests[0].maxTokens).toBeUndefined()
 })
+
+const temps = (be: { requests: { temperature?: number }[] }) => be.requests.map(r => r.temperature)
+
+test('repeatTemperature: the turn after a repeat is sampled at it, and a turn without a repeat goes back', async () => {
+  const be = Fake([readA, readA, { toolCalls: [{ name: 'read_file', args: { path: 'b.txt' } }] }, { content: 'fin' }])
+  const ev = await collect({ config: base({ loop: { maxTurns: 10, maxRepeats: 3, repeatTemperature: 0.9 } }), task: 'do', workdir: await wd() }, { backend: be })
+  expect(temps(be)).toEqual([0, 0, 0.9, 0])
+  expect(last(ev).reason).toBe('final')
+})
+
+// tuned-repeat and guard-repeat have maxRepeats and no repeatTemperature: their requests must not change by a byte.
+test('repeatTemperature absent: a repeat under maxRepeats leaves the base temperature in the next request', async () => {
+  const be = Fake([readA, readA, { content: 'fin' }])
+  await collect({ config: base({ loop: { maxTurns: 10, maxRepeats: 3 } }), task: 'do', workdir: await wd() }, { backend: be })
+  expect(temps(be)).toEqual([0, 0, 0])
+  expect(be.requests.every(r => 'temperature' in r && r.temperature === 0)).toBe(true)
+})
+
+test('repeatTemperature: 0 is a temperature, not "off"', async () => {
+  const cfg = base({ loop: { maxTurns: 10, maxRepeats: 3, repeatTemperature: 0 } }); cfg.backend = { ...cfg.backend, temperature: 0.2 }
+  const be = Fake([readA, readA, { content: 'fin' }])
+  await collect({ config: cfg, task: 'do', workdir: await wd() }, { backend: be })
+  expect(temps(be)).toEqual([0.2, 0.2, 0])
+})
+
+test('repeatTemperature: the retry after a parse error goes out at the base temperature', async () => {
+  const be = Fake([readA, readA, { content: '' }, { content: 'fin' }])
+  await collect({ config: base({ loop: { maxTurns: 10, maxRepeats: 3, repeatTemperature: 0.9 } }), task: 'do', workdir: await wd() }, { backend: be })
+  expect(temps(be)).toEqual([0, 0, 0.9, 0])
+})

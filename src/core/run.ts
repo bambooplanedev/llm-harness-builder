@@ -86,6 +86,9 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
     // An edit that has succeeded is counted over the whole run: it succeeds twice only when it was undone in between.
     const seen = new Map<string, number>()
     const applied = new Set<string>()
+    // loop.repeatTemperature: true while the previous turn carried a repeat. Never true without the knob:
+    // a harness with maxRepeats alone must send the requests it always sent.
+    let hot = false
 
     while (true) {
       if (opts.signal?.aborted) { yield done('aborted'); return }
@@ -94,7 +97,7 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
 
       const droppedChars = applyBudget(messages, config.context.budgetTokens)
       const req: ChatRequest = {
-        model: config.backend.model, messages, temperature: config.backend.temperature, numCtx: config.backend.numCtx, maxTokens: config.backend.maxTokens,
+        model: config.backend.model, messages, temperature: hot ? config.loop.repeatTemperature! : config.backend.temperature, numCtx: config.backend.numCtx, maxTokens: config.backend.maxTokens,
         tools: prompted ? undefined : schemas,
         responseSchema: prompted && !hermes && config.toolCalls.enforceSchema ? PROMPTED_SCHEMA : undefined,
       }
@@ -146,6 +149,7 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
 
       if (parseError) {
         parseFails++
+        hot = false // the retry of a reply that did not parse is not the place for more noise
         // A response cut off at the token limit has filled the window, so sent back whole the retry cannot fit.
         // Only the marker goes back: a kept head made the model repeat the form that had just run away.
         const marker = `[response cut off at the token limit: kept 0 of ${res.content.length} chars]`
@@ -167,6 +171,7 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
 
       // ---- tools -------------------------------------------------------------
       const wrapped: string[] = []
+      hot = false
       for (const c of calls) {
         if (opts.signal?.aborted) { yield done('aborted'); return }
         const call: ToolCall = { callId: `c${++callSeq}`, name: c.name, args: c.args, backendId: c.backendId ?? `c${callSeq}` }
@@ -199,6 +204,7 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
           }
           // A refusal by the guard is not recorded: read_file and then the same edit is the recovery we want.
           if (!(result.error && result.output.includes(GUARD_BLOCKED))) seen.set(key, n)
+          if (repeats && config.loop.repeatTemperature !== undefined) hot = true
           if (repeats) output += `\nnote: identical call #${n} ${applied.has(key) ? 'in this run' : 'since the last file change'}`
         }
         yield ev({ type: 'tool_result', callId: call.callId, name: call.name, output, truncated, error: result.error })

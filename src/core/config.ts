@@ -15,12 +15,13 @@ export type HarnessConfig = {
   tools: { enabled: ToolName[]; approveBash: boolean; requireReadBeforeEdit?: boolean; explainEditMiss?: boolean }
   toolCalls: { mode: 'native' | 'prompted'; format?: ToolCallFormat; enforceSchema: boolean; promptedTemplate: string; parseErrorHint: string }
   context: { maxToolOutputChars: number; budgetTokens: number }
-  loop: { maxTurns: number; maxRepeats?: number }
+  loop: { maxTurns: number; maxRepeats?: number; repeatTemperature?: number }
   mcpServers?: Record<string, McpServerConfig>
 }
 
 export type RunParams = { config: HarnessConfig; task: string; workdir: string }
 
+const LOOP_KEYS = ['maxTurns', 'maxRepeats', 'repeatTemperature']
 const isObj = (v: unknown): v is Record<string, any> => typeof v === 'object' && v !== null
 
 /** Returns a list of human-readable errors; empty list means valid. */
@@ -60,7 +61,16 @@ export function validateConfig(c: unknown): string[] {
   const cx = c.context
   if (!isObj(cx) || !(cx.maxToolOutputChars > 0) || !(cx.budgetTokens >= 0)) e.push('context.maxToolOutputChars > 0 and budgetTokens >= 0 required')
   if (!isObj(c.loop) || !(Number.isInteger(c.loop.maxTurns) && c.loop.maxTurns > 0)) e.push('loop.maxTurns must be a positive integer')
-  else if (c.loop.maxRepeats !== undefined && !(Number.isInteger(c.loop.maxRepeats) && c.loop.maxRepeats >= 0)) e.push('loop.maxRepeats must be a non-negative integer')
+  else {
+    const l = c.loop
+    // A misspelt knob here would be silently off, and every one of them is off when absent.
+    for (const k of Object.keys(l)) if (!LOOP_KEYS.includes(k)) e.push(`loop.${k} is not a known key`)
+    if (l.maxRepeats !== undefined && !(Number.isInteger(l.maxRepeats) && l.maxRepeats >= 0)) e.push('loop.maxRepeats must be a non-negative integer')
+    if (l.repeatTemperature !== undefined) {
+      if (!(typeof l.repeatTemperature === 'number' && l.repeatTemperature >= 0 && l.repeatTemperature <= 2)) e.push('loop.repeatTemperature must be a number from 0 to 2')
+      if (l.maxRepeats === undefined) e.push('loop.repeatTemperature needs loop.maxRepeats: a repeat is what that detector counts')
+    }
+  }
   const ms = c.mcpServers
   if (ms !== undefined) {
     if (!isObj(ms) || Array.isArray(ms)) e.push('mcpServers must be an object')

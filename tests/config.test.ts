@@ -120,3 +120,25 @@ test('backend.maxTokens is optional and must be a positive integer', () => {
     expect(validateConfig(c).some(e => e.includes('maxTokens'))).toBe(true)
   }
 })
+
+test('loop rejects a key it does not know: a misspelt knob would otherwise be silently off', () => {
+  const c = structuredClone(validConfig) as any
+  c.loop.freshcontext = 2
+  expect(validateConfig(c).some(e => e.includes('loop.freshcontext'))).toBe(true)
+})
+
+test('loop.repeatTemperature is a number in [0, 2] and needs loop.maxRepeats', () => {
+  for (const ok of [0, 0.7, 2]) {
+    const c = structuredClone(validConfig) as any
+    c.loop.maxRepeats = 3; c.loop.repeatTemperature = ok
+    expect(validateConfig(c)).toEqual([])
+  }
+  for (const bad of [-0.1, 2.1, NaN, '1', true]) {
+    const c = structuredClone(validConfig) as any
+    c.loop.maxRepeats = 3; c.loop.repeatTemperature = bad
+    expect(validateConfig(c).some(e => e.includes('repeatTemperature'))).toBe(true)
+  }
+  const alone = structuredClone(validConfig) as any
+  alone.loop.repeatTemperature = 1
+  expect(validateConfig(alone).some(e => e.includes('repeatTemperature') && e.includes('maxRepeats'))).toBe(true)
+})
