@@ -15,7 +15,7 @@ export type HarnessConfig = {
   tools: { enabled: ToolName[]; approveBash: boolean; requireReadBeforeEdit?: boolean; explainEditMiss?: boolean }
   toolCalls: { mode: 'native' | 'prompted'; format?: ToolCallFormat; enforceSchema: boolean; promptedTemplate: string; parseErrorHint: string }
   context: { maxToolOutputChars: number; budgetTokens: number }
-  loop: { maxTurns: number; maxRepeats?: number; repeatTemperature?: number; freshContext?: number; untilBash?: string }
+  loop: { maxTurns: number; maxRepeats?: number; repeatTemperature?: number; repeatThinkTokens?: number; freshContext?: number; untilBash?: string }
   mcpServers?: Record<string, McpServerConfig>
 }
 
@@ -28,9 +28,11 @@ const KEYS: Record<string, string[]> = {
   tools: ['enabled', 'approveBash', 'requireReadBeforeEdit', 'explainEditMiss'],
   toolCalls: ['mode', 'format', 'enforceSchema', 'promptedTemplate', 'parseErrorHint'],
   context: ['maxToolOutputChars', 'budgetTokens'],
-  loop: ['maxTurns', 'maxRepeats', 'repeatTemperature', 'freshContext', 'untilBash'],
+  loop: ['maxTurns', 'maxRepeats', 'repeatTemperature', 'repeatThinkTokens', 'freshContext', 'untilBash'],
 }
 const MCP_SERVER_KEYS = ['command', 'args', 'tools']
+/** The thinking switch `loop.repeatThinkTokens` flips: a line of its own, which is how the qwen3 family writes it. */
+export const NO_THINK_LINE = /^\/no_think$/m
 const isObj = (v: unknown): v is Record<string, any> => typeof v === 'object' && v !== null
 
 /** Returns a list of human-readable errors; empty list means valid. */
@@ -78,6 +80,12 @@ export function validateConfig(c: unknown): string[] {
     if (l.repeatTemperature !== undefined) {
       if (!(typeof l.repeatTemperature === 'number' && l.repeatTemperature >= 0 && l.repeatTemperature <= 2)) e.push('loop.repeatTemperature must be a number from 0 to 2')
       if (l.maxRepeats === undefined) e.push('loop.repeatTemperature needs loop.maxRepeats: a repeat is what that detector counts')
+    }
+    if (l.repeatThinkTokens !== undefined) {
+      if (!(Number.isInteger(l.repeatThinkTokens) && l.repeatThinkTokens > 0)) e.push('loop.repeatThinkTokens must be a positive integer')
+      if (l.maxRepeats === undefined) e.push('loop.repeatThinkTokens needs loop.maxRepeats: a repeat is what that detector counts')
+      // Without the line there is nothing to flip, and the knob would be silently off.
+      if (typeof c.systemPrompt === 'string' && !NO_THINK_LINE.test(c.systemPrompt)) e.push('loop.repeatThinkTokens needs a line "/no_think" in systemPrompt: that line is what it turns into "/think"')
     }
     // Blank is not harmless: `sh -c "  "` exits 0, so the check would pass the first time the model says it is done.
     if (l.untilBash !== undefined && !(typeof l.untilBash === 'string' && l.untilBash.trim())) e.push('loop.untilBash must be a non-blank shell command')

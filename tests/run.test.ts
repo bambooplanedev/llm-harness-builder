@@ -530,6 +530,43 @@ test('repeatTemperature: the retry after a parse error goes out at the base temp
   expect(temps(be)).toEqual([0, 0, 0.9, 0])
 })
 
+const THINK_SYS = 'sys\n/no_think'
+const sysOf = (be: { requests: { messages: { content: string }[] }[] }) => be.requests.map(r => r.messages[0].content)
+const caps = (be: { requests: { maxTokens?: number }[] }) => be.requests.map(r => r.maxTokens)
+
+test('repeatThinkTokens: the turn after a repeat goes out with /think and its own token cap, and the next one goes back', async () => {
+  const be = Fake([readA, readA, { toolCalls: [{ name: 'read_file', args: { path: 'b.txt' } }] }, { content: 'fin' }])
+  const cfg = base({ systemPrompt: THINK_SYS, loop: { maxTurns: 10, maxRepeats: 3, repeatThinkTokens: 2048 } }); cfg.backend = { ...cfg.backend, maxTokens: 1024 }
+  await collect({ config: cfg, task: 'do', workdir: await wd() }, { backend: be })
+  expect(sysOf(be)).toEqual([THINK_SYS, THINK_SYS, 'sys\n/think', THINK_SYS])
+  expect(caps(be)).toEqual([1024, 1024, 2048, 1024])
+  expect(temps(be)).toEqual([0, 0, 0, 0]) // thinking on its own leaves the temperature alone
+  // only the system message differs: the history the thinking turn sees is the history
+  expect(be.requests[2].messages.slice(1)).toEqual(be.requests[3].messages.slice(1, be.requests[2].messages.length))
+})
+
+test('repeatThinkTokens: in a prompted run the switch is flipped inside the system message, the tool template stays', async () => {
+  const be = Fake([{ content: '{"calls":[{"name":"read_file","args":{"path":"a.txt"}}],"final":null}' }, { content: '{"calls":[{"name":"read_file","args":{"path":"a.txt"}}],"final":null}' }, { content: '{"calls":[],"final":"fin"}' }])
+  const cfg = base({ systemPrompt: THINK_SYS, loop: { maxTurns: 10, maxRepeats: 3, repeatThinkTokens: 2048 } })
+  cfg.toolCalls = { ...cfg.toolCalls, mode: 'prompted' }
+  await collect({ config: cfg, task: 'do', workdir: await wd() }, { backend: be })
+  const [a, , c] = sysOf(be)
+  expect(c).toBe(a.replace('/no_think', '/think')); expect(c).not.toBe(a); expect(c).toContain('read_file')
+})
+
+test('repeatThinkTokens absent: a repeat leaves the system message and the token cap as they were', async () => {
+  const be = Fake([readA, readA, { content: 'fin' }])
+  const cfg = base({ systemPrompt: THINK_SYS, loop: { maxTurns: 10, maxRepeats: 3 } }); cfg.backend = { ...cfg.backend, maxTokens: 1024 }
+  await collect({ config: cfg, task: 'do', workdir: await wd() }, { backend: be })
+  expect(sysOf(be)).toEqual([THINK_SYS, THINK_SYS, THINK_SYS]); expect(caps(be)).toEqual([1024, 1024, 1024])
+})
+
+test('repeatThinkTokens: a thinking reply cut off by the cap is retried without thinking', async () => {
+  const be = Fake([readA, readA, { content: '', truncated: true }, { content: 'fin' }])
+  await collect({ config: base({ systemPrompt: THINK_SYS, loop: { maxTurns: 10, maxRepeats: 3, repeatThinkTokens: 2048 } }), task: 'do', workdir: await wd() }, { backend: be })
+  expect(sysOf(be).map(s => s.includes('/think'))).toEqual([false, false, true, false])
+})
+
 const resets = (ev: HarnessEvent[]) => ev.filter(e => e.type === 'context_reset') as Extract<HarnessEvent, { type: 'context_reset' }>[]
 
 test('freshContext: after N repeats the history is the task again, once; the second loop is for maxRepeats', async () => {

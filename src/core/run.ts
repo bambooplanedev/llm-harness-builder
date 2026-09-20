@@ -1,4 +1,4 @@
-import type { RunParams } from './config.js'
+import { NO_THINK_LINE, type RunParams } from './config.js'
 import { mcpApprovalName, UNTIL_BASH, type HarnessEvent, type ToolCall, type DoneReason } from './events.js'
 import { createBackend, type Backend, type ChatMessage, type ChatRequest, type Delta, type NormalizedResponse, type Usage } from './backends/index.js'
 import { TOOL_SCHEMAS, runTool } from './tools/index.js'
@@ -98,6 +98,9 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
       ? config.systemPrompt + '\n\n' + config.toolCalls.promptedTemplate.split('{{tools}}').join(renderTools(schemas, config.toolCalls.format))
       : config.systemPrompt
     const messages: ChatMessage[] = [{ role: 'system', content: system }, { role: 'user', content: task }]
+    // loop.repeatThinkTokens: the system message of a thinking turn. It is sent for that turn only and never enters the history.
+    const thinkTokens = config.loop.repeatThinkTokens
+    const systemThinking = system.replace(NO_THINK_LINE, '/think')
     const max = config.context.maxToolOutputChars
     const cut = (s: string) => s.length > max ? s.slice(0, max) + `\n[truncated: ${s.length - max} more chars]` : s
     const ctx = {
@@ -111,7 +114,7 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
     // An edit that has succeeded is counted over the whole run: it succeeds twice only when it was undone in between.
     const seen = new Map<string, number>()
     const applied = new Set<string>()
-    // loop.repeatTemperature: true while the previous turn carried a repeat. Never true without the knob:
+    // loop.repeatTemperature, loop.repeatThinkTokens: true while the previous turn carried a repeat. Never true without one of them:
     // a harness with maxRepeats alone must send the requests it always sent.
     let hot = false
     let wasReset = false // loop.freshContext fires once; a second loop is for maxRepeats to end
@@ -122,8 +125,10 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
       turn++
 
       const droppedChars = applyBudget(messages, config.context.budgetTokens)
+      const think = hot && thinkTokens !== undefined
       const req: ChatRequest = {
-        model: config.backend.model, messages, temperature: hot ? config.loop.repeatTemperature! : config.backend.temperature, numCtx: config.backend.numCtx, maxTokens: config.backend.maxTokens,
+        model: config.backend.model, messages: think ? [{ role: 'system', content: systemThinking }, ...messages.slice(1)] : messages,
+        temperature: hot && config.loop.repeatTemperature !== undefined ? config.loop.repeatTemperature : config.backend.temperature, numCtx: config.backend.numCtx, maxTokens: think ? thinkTokens : config.backend.maxTokens,
         tools: prompted ? undefined : schemas,
         responseSchema: prompted && !hermes && config.toolCalls.enforceSchema ? PROMPTED_SCHEMA : undefined,
       }
@@ -175,7 +180,7 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
 
       if (parseError) {
         parseFails++
-        hot = false // the retry of a reply that did not parse is not the place for more noise
+        hot = false // the retry of a reply that did not parse is not the place for more noise, or for the thinking that may have cut it off
         // A response cut off at the token limit has filled the window, so sent back whole the retry cannot fit.
         // Only the marker goes back: a kept head made the model repeat the form that had just run away.
         const marker = `[response cut off at the token limit: kept 0 of ${res.content.length} chars]`
@@ -243,7 +248,7 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
           }
           // A refusal by the guard is not recorded: read_file and then the same edit is the recovery we want.
           if (!(result.error && result.output.includes(GUARD_BLOCKED))) seen.set(key, n)
-          if (repeats && config.loop.repeatTemperature !== undefined) hot = true
+          if (repeats && (config.loop.repeatTemperature !== undefined || thinkTokens !== undefined)) hot = true
           if (repeats) output += `\nnote: identical call #${n} ${applied.has(key) ? 'in this run' : 'since the last file change'}`
         }
         yield ev({ type: 'tool_result', callId: call.callId, name: call.name, output, truncated, error: result.error })

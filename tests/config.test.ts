@@ -181,3 +181,13 @@ test('loop.untilBash is a non-blank string: sh -c "  " exits 0 and would pass on
     expect(validateConfig(c).some(e => e.includes('untilBash'))).toBe(true)
   }
 })
+
+test('loop.repeatThinkTokens is a positive integer, needs loop.maxRepeats and a /no_think line to flip', () => {
+  const make = (v: unknown, sys = 'sys\n/no_think', detector = true) => { const c = structuredClone(validConfig) as any; c.systemPrompt = sys; c.loop = { maxTurns: 5, ...(detector ? { maxRepeats: 3 } : {}), repeatThinkTokens: v }; return validateConfig(c) }
+  expect(make(2048)).toEqual([])
+  for (const bad of [0, -1, 1.5, '2048', null]) expect(make(bad).some(e => e.includes('repeatThinkTokens'))).toBe(true)
+  expect(make(2048, 'sys\n/no_think', false)).toEqual(['loop.repeatThinkTokens needs loop.maxRepeats: a repeat is what that detector counts'])
+  // without the line there is nothing to flip, and the knob would be silently off
+  expect(make(2048, 'sys')).toEqual(['loop.repeatThinkTokens needs a line "/no_think" in systemPrompt: that line is what it turns into "/think"'])
+  expect(make(2048, 'never write /no_think in prose')).toHaveLength(1)
+})
