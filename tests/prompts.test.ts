@@ -137,3 +137,13 @@ test('every shipped harness caps generation at 1024 tokens, except bare', async 
     expect([f, h.backend.maxTokens]).toEqual([f, f === 'bare.json' ? undefined : 1024])
   }
 })
+
+// Each line here came from a recorded run of 2026-09-20: the coder's prompt made the model retype lines, the enforced JSON shape was where
+// every cut-off reply happened, and /no_think is a Qwen3 line that Gemma did not read.
+test('curator: native calls, thinking off through the template, nothing about code in the prompt, no edit_file', async () => {
+  const h = JSON.parse(await readFile(new URL('../harnesses/curator.json', import.meta.url), 'utf8'))
+  expect(validateConfig(h)).toEqual([])
+  expect([h.toolCalls.mode, h.backend.think, h.backend.temperature]).toEqual(['native', false, 0])
+  expect(h.systemPrompt).not.toMatch(/no_think|node --test|coding agent|edit_file/)
+  expect(h.tools.enabled).toEqual(['list_dir', 'read_file', 'write_file', 'bash'])
+})
