@@ -868,7 +868,9 @@ without it is refused. The second and third ideas are taken from
 [Archon](https://github.com/coleam00/Archon)'s `fresh_context` and `until_bash`, which do this
 between the steps of a workflow; here they act inside one agent run. **They were built first and
 checked after**, so read "The check" below before relying on any of them: one of the three did
-nothing on this model, on the two loop turns it was tried on.
+nothing on this model, on the two loop turns it was tried on. A fourth knob,
+`loop.repeatThinkTokens`, came later and was checked before it was built; it has its own part at
+the end of this section.
 
 `loop.repeatTemperature` (0 to 2). The turn after a turn in which some call drew an `identical
 call` note is sampled at this temperature instead of `backend.temperature`; a turn without a
@@ -1004,6 +1006,71 @@ gave the model something of its own to undo. Two passes of three against one of 
 direction, not a rate, and two of the three are one observation. `budgetTokens` stubbed again
 after the reset (turn 11 in #1 and #2, turn 12 in #3), so the confound named beforehand is
 there. Nothing was written under `test/`.
+
+### A fourth: thinking on the turn after a repeat, 2026-09-20
+
+`loop.repeatThinkTokens: N` — the turn after a turn that drew an `identical call` note is sent
+with the `/no_think` line of the system prompt turned into `/think`, and with N as its token cap
+instead of `backend.maxTokens`. That request only: the history keeps `/no_think`, and thinking text
+never enters it. A reply the cap cuts off is retried without thinking. It needs `loop.maxRepeats`
+and a `/no_think` line to flip, so it is a knob for a model with that switch (the `qwen3` family
+here); a harness without the line is refused rather than left silently unchanged. Off in every
+shipped harness. The idea of spending more on one step comes from Archon's per-node `effort`;
+tying it to a repeat is this tool's. This one was checked before it was built, then live.
+
+**The replay, written down beforehand.** Three recorded turns of the `freshContext` runs above,
+five samples each at the recorded 0.2, window 5120: turn 9 of `6e55ad44` (the no-op edit of the
+correct `return` line, after the reset — a loop turn), turn 10 of `9694eb86` (the correct repair of
+a broken `return` line — a turn with no loop in it), and turn 7 of `6e55ad44`. On this server
+thinking and the `json_schema` grammar coexist: the thinking arrives as `reasoning_content`, the
+content still parses.
+
+| recorded turn | `/no_think`, as recorded | `/think`, cap 1024 | `/think`, cap 2048 |
+|---|---|---|---|
+| loop turn | the no-op edit 5 / 5 | edits the `while` line 5 / 5 | edits the `while` line 5 / 5 |
+| no-loop turn | the recorded repair 5 / 5 | cut off inside the thinking 4 / 5 | the recorded repair 3 / 5, another edit 2 / 5 |
+| first turn after the reset | `list_dir` + `node --test` 5 / 5 | `node --test` 5 / 5 | `node --test` 2 / 5, `list_dir` first 3 / 5 |
+| tokens per reply | 49–115 | 240–1024 | 199–1316 |
+
+The hypothesis — on the loop turn at least four of five thinking replies are not the no-op edit —
+held, and in the stricter reading too: all ten edit the line the bug is on. It is the first of
+four things tried against this loop that changed this model's reply on a loop turn. Temperature
+and other sampler settings did not, above; nor did one harness-written line about the rejected
+call, carried across the reset — a replay of these same three turns, not written up here, in
+which 45 replies of 45 were the recorded ones. The no-harm hypothesis
+failed at 1024 and held at 2048 by the rule written down (an edit whose `old` is in the file and
+whose `new` differs). Looked at afterwards, so not pre-registered: the two "another edit" replies
+replace the broken line with `${n} ${units[i]}`, which drops `toFixed(1)` and would fail the
+`'1.0 KB'` test, and their thinking checks that case and gets it wrong. Without thinking the
+repair on that turn was right five times of five.
+
+**Live, three runs**, the `freshContext` stand without `freshContext`: `pool2:7`, 5120 window,
+`budgetTokens` 2670, `maxRepeats` 3, `repeatThinkTokens: 1536`. The cap was chosen by arithmetic
+before the runs — prompts on this stand reach 3364 tokens, and the longest thinking reply in the
+replay was 1316 — and that arithmetic did not survive:
+
+| run | verdict | thinking turns | of them cut off at 1536 | first thinking turn | s |
+|---|---|---|---|---|---|
+| `d8878248` | FAIL, bench timeout at 600 s | 4 | 3 | differs: repairs the `return` line it had broken | 600 |
+| `a6c0d7a4` | PASS | 1 | 0 | differs: edits the `while` line, 414 tokens | 161 |
+| `48672626` | FAIL `repeat_loop` | 3 | 3 | cut off | 487 |
+
+Written down beforehand: a thinking turn in three runs of three (held); in at least two the first
+thinking turn's first call is not the repeated one (held, two of three); at least two passes (did
+not hold: one). Eight thinking turns in all: two produced a call, both a different and a correct
+one, and six ran to the cap with 5160–5516 characters of thinking and no call. A cut-off turn is
+retried without thinking, the retry repeats, the next turn thinks again and is cut again: that
+cycle took the timeout in the first run (largest prompt plus reply 5080 of 5120) and ended the
+third as `repeat_loop`. Five of the eight were drawn by a repeated `node --test` alone, the other
+three by the no-op edit and the test run sent with it. In the first run the turn after the
+repair, sent without thinking, was again the no-op edit of the line as it had been. The three
+`freshContext` runs on this stand took 171–194 s each.
+
+Read that as: on these turns of this model a thinking turn either fit and made the right edit or
+did not fit at all, and live it mostly did not fit in what a 5120 window leaves. One pass of three
+against one of nine without the knob and two of three with `freshContext` is three small numbers,
+not a ranking. A larger window, a cap that large, or a model that thinks shorter is a different
+measurement, and the knob is there for it.
 
 ## Honest notes
 
