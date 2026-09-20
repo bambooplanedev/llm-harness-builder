@@ -68,3 +68,12 @@ test('max_tokens shows the harness value, and an empty box when the harness has 
   expect(await render({ ...base, backend: { ...base.backend, maxTokens: 1024 } })).toMatch(/max_tokens<\/span><input[^>]*value="1024"/)
   expect(await render(base)).toMatch(/max_tokens<\/span><input[^>]*value=""/)
 })
+
+test('the optional loop knobs show the harness values, 0 included, and empty boxes when the harness has none', async () => {
+  const on = await render({ ...base, loop: { maxTurns: 20, maxRepeats: 0, repeatTemperature: 0.7, repeatThinkTokens: 2048, freshContext: 2, untilBash: 'node --test' } })
+  for (const [label, value] of [['max repeats', '0'], ['repeat temperature', '0.7'], ['repeat think tokens', '2048'], ['fresh context', '2'], ['until bash', 'node --test']])
+    expect(on).toMatch(new RegExp(`${label}</span><input[^>]*value="${value}"`))
+  const off = await render(base)
+  for (const label of ['max repeats', 'repeat temperature', 'repeat think tokens', 'fresh context', 'until bash'])
+    expect(off).toMatch(new RegExp(`${label}</span><input[^>]*value=""`))
+})
