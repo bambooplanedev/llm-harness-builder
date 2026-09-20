@@ -21,13 +21,24 @@ export type HarnessConfig = {
 
 export type RunParams = { config: HarnessConfig; task: string; workdir: string }
 
-const LOOP_KEYS = ['maxTurns', 'maxRepeats', 'repeatTemperature', 'freshContext', 'untilBash']
+// A misspelt key would be silently off, and every optional knob is off when absent. '' is the top level.
+const KEYS: Record<string, string[]> = {
+  '': ['name', 'backend', 'systemPrompt', 'tools', 'toolCalls', 'context', 'loop', 'mcpServers'],
+  backend: ['kind', 'baseUrl', 'model', 'numCtx', 'maxTokens', 'temperature'],
+  tools: ['enabled', 'approveBash', 'requireReadBeforeEdit', 'explainEditMiss'],
+  toolCalls: ['mode', 'format', 'enforceSchema', 'promptedTemplate', 'parseErrorHint'],
+  context: ['maxToolOutputChars', 'budgetTokens'],
+  loop: ['maxTurns', 'maxRepeats', 'repeatTemperature', 'freshContext', 'untilBash'],
+}
+const MCP_SERVER_KEYS = ['command', 'args', 'tools']
 const isObj = (v: unknown): v is Record<string, any> => typeof v === 'object' && v !== null
 
 /** Returns a list of human-readable errors; empty list means valid. */
 export function validateConfig(c: unknown): string[] {
   if (!isObj(c)) return ['config must be an object']
   const e: string[] = []
+  const unknown = (o: unknown, known: string[], at: string) => { if (isObj(o) && !Array.isArray(o)) for (const k of Object.keys(o)) if (!known.includes(k)) e.push(`${at}${k} is not a known key`) }
+  for (const [s, known] of Object.entries(KEYS)) unknown(s ? c[s] : c, known, s && s + '.')
   if (typeof c.name !== 'string' || !c.name) e.push('name is required')
   const b = c.backend
   if (!isObj(b)) e.push('backend is required')
@@ -63,8 +74,6 @@ export function validateConfig(c: unknown): string[] {
   if (!isObj(c.loop) || !(Number.isInteger(c.loop.maxTurns) && c.loop.maxTurns > 0)) e.push('loop.maxTurns must be a positive integer')
   else {
     const l = c.loop
-    // A misspelt knob here would be silently off, and every one of them is off when absent.
-    for (const k of Object.keys(l)) if (!LOOP_KEYS.includes(k)) e.push(`loop.${k} is not a known key`)
     if (l.maxRepeats !== undefined && !(Number.isInteger(l.maxRepeats) && l.maxRepeats >= 0)) e.push('loop.maxRepeats must be a non-negative integer')
     if (l.repeatTemperature !== undefined) {
       if (!(typeof l.repeatTemperature === 'number' && l.repeatTemperature >= 0 && l.repeatTemperature <= 2)) e.push('loop.repeatTemperature must be a number from 0 to 2')
@@ -84,6 +93,7 @@ export function validateConfig(c: unknown): string[] {
     else for (const [k, v] of Object.entries(ms)) {
       if (!k) { e.push('mcpServers key must be a non-empty string'); continue }
       if (!isObj(v) || Array.isArray(v)) { e.push(`mcpServers.${k} must be an object`); continue }
+      unknown(v, MCP_SERVER_KEYS, `mcpServers.${k}.`)
       if (typeof v.command !== 'string' || !v.command) e.push(`mcpServers.${k}.command must be a non-empty string`)
       const strs = (x: unknown) => Array.isArray(x) && x.every(s => typeof s === 'string')
       if (v.args !== undefined && !strs(v.args)) e.push(`mcpServers.${k}.args must be an array of strings`)

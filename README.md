@@ -86,6 +86,10 @@ per-run parameters. The `prompted` mode expects the model to answer with
 `{"calls":[{"name":...,"args":{...}}],"final":null|"text"}`; `enforceSchema` passes that shape
 as `response_format` / `format`.
 
+A key the harness file format does not have is an error that names it, at the top level, in every
+section and in each `mcpServers` entry: every optional knob is off when absent, so a misspelt
+one would otherwise be silently off.
+
 `backend.maxTokens` caps the tokens of one response, thinking included; without it a generation
 runs until the window is full. `numCtx` is sent to Ollama only.
 
@@ -845,8 +849,7 @@ text added to a history that already holds the loop: the `identical call` note, 
 edit miss, the stub that names the call. None moved this model on these tasks. Three knobs in `loop` change
 something else. All three are absent, and so off, in every shipped harness; the first two need
 `loop.maxRepeats`, because a repeat is what that detector counts, and a harness that sets one
-without it is refused. `loop` now refuses a key it does not know: a misspelt knob would
-otherwise be silently off. The second and third ideas are taken from
+without it is refused. The second and third ideas are taken from
 [Archon](https://github.com/coleam00/Archon)'s `fresh_context` and `until_bash`, which do this
 between the steps of a workflow; here they act inside one agent run. **They were built first and
 checked after**, so read "The check" below before relying on any of them: one of the three did

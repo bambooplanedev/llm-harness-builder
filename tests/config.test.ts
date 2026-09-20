@@ -121,10 +121,21 @@ test('backend.maxTokens is optional and must be a positive integer', () => {
   }
 })
 
-test('loop rejects a key it does not know: a misspelt knob would otherwise be silently off', () => {
+test('every section rejects a key it does not know: a misspelt knob would otherwise be silently off', () => {
+  const withKey = (put: (c: any) => void) => { const c = structuredClone(validConfig) as any; put(c); return validateConfig(c) }
+  expect(withKey(c => { c.loop.freshcontext = 2 })).toEqual(['loop.freshcontext is not a known key'])
+  expect(withKey(c => { c.tools.requireReadBeforEdit = true })).toEqual(['tools.requireReadBeforEdit is not a known key'])
+  expect(withKey(c => { c.backend.maxToken = 512 })).toEqual(['backend.maxToken is not a known key'])
+  expect(withKey(c => { c.context.budgetToken = 3000 })).toEqual(['context.budgetToken is not a known key'])
+  expect(withKey(c => { c.toolCalls.formt = 'hermes' })).toEqual(['toolCalls.formt is not a known key'])
+  expect(withKey(c => { c.mcpServer = {} })).toEqual(['mcpServer is not a known key'])
+  expect(withKey(c => { c.mcpServers = { fs: { command: 'npx', tool: ['read_file'] } } })).toEqual(['mcpServers.fs.tool is not a known key'])
+})
+
+test('a known key set to undefined is not an unknown key: the UI sends numCtx that way', () => {
   const c = structuredClone(validConfig) as any
-  c.loop.freshcontext = 2
-  expect(validateConfig(c).some(e => e.includes('loop.freshcontext'))).toBe(true)
+  c.backend.numCtx = undefined
+  expect(validateConfig(c)).toEqual([])
 })
 
 test('loop.repeatTemperature is a number in [0, 2] and needs loop.maxRepeats', () => {
