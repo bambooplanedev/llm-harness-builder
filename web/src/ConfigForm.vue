@@ -116,7 +116,7 @@ function editMcp(text: string) {
     <label>Tool calls</label>
     <div class="row">
       <select v-model="config.toolCalls.mode"><option value="native">native (tools[] in API)</option><option value="prompted">prompted (in text)</option></select>
-      <select v-if="config.toolCalls.mode === 'prompted'" v-model="config.toolCalls.format"><option value="json">json {calls, final}</option><option value="hermes">hermes &lt;tool_call&gt;</option></select>
+      <select v-if="config.toolCalls.mode === 'prompted'" :value="config.toolCalls.format ?? 'json'" @change="config.toolCalls.format = ($event.target as HTMLSelectElement).value as 'json' | 'hermes'"><option value="json">json {calls, final}</option><option value="hermes">hermes &lt;tool_call&gt;</option></select>
       <span v-if="config.toolCalls.mode === 'prompted' && !hermes()"><input type="checkbox" v-model="config.toolCalls.enforceSchema"> enforce schema</span>
     </div>
     <details v-if="config.toolCalls.mode === 'prompted'"><summary>prompted template / parse-error hint</summary>
