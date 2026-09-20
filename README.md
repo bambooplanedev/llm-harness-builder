@@ -913,6 +913,37 @@ server `repeatTemperature` cannot move a loop turn at any value it accepts. One 
 trajectory, and live the knob would already have been hot a turn or two earlier; neither
 changes that arithmetic.
 
+**Would other sampler settings do it? One more request per turn, arithmetic, and no.** The same
+three turns once more at temperature 0 with `top_logprobs: 40`: the reply's path and the 40 raw
+candidates at each position. (Checked that they are raw: with `post_sampling_probs` the server
+reports one candidate, p = 1, at each of the 123 positions of the `pool2` reply — the chain
+leaves nothing to sample.) From those, D, the probability that a sampled reply leaves that path
+anywhere, for temperature 1 / 1.5 / 2 × `min_p` 0.05 / 0 × `top_p` 0.95 / 1, with the chain in
+the server's order or with temperature moved to the front; `top_k` 40 kept throughout.
+
+| D at temperature 1 / 1.5 / 2 | `pool` loop | `pool2` loop | harmless |
+|---|---|---|---|
+| server defaults | 0 / 0 / 0 | 0 / 0 / 0 | 0.07 / 0.15 / 0.22 |
+| `top_p` 1, `min_p` 0 | 0.03 / 0.13 / 0.32 | 0.002 / 0.03 / 0.17 | 0.07 / 0.16 / 0.26 |
+| temperature first, the rest default | 0 / 0.05 / 0.23 | 0 / 0 / 0 | 0.07 / 0.15 / 0.22 |
+
+Written down beforehand: no cell reaches 0.30 on both loop turns at temperature 1.5 or below.
+None does at 2 either, so the live step that was to follow was not run. And where a reply
+would leave the path on a loop turn is `toFixed` → `toLocale` inside the `new` text, an `old`
+cut short at `"return out"`, an empty `calls`: the tool, the file and the line being edited sit
+at p ≈ 1, and the alternative is the same edit, damaged. The one position in the three turns
+with a real second candidate is on the harmless turn — the first token of `old`, `while` 0.93
+against `return` 0.07 — and the server's defaults leave it open. That is the different reply in
+the table above (0.07 at temperature 1, 0.02 at 0.7, against 1 of 10 seen at each): the
+`return` rewrite was not noise. Temperature moves the turn on which the model hesitates, and
+there the other candidate is the wrong edit. So the harness got no `top_p` / `min_p` knobs, and
+`repeatTemperature` stays as it is, off unless asked for, for a model less sure than this one.
+One rule was added after seeing the data: a chosen token that is not the raw argmax was forced
+by the `json_schema` grammar and counts as fixed — one position, on the harmless turn, where
+the model wanted `],` at 0.965 and the grammar allowed `},`. The loop turns have none, and a
+grammar can only take candidates away, so D there is an upper bound. Two loop turns, one model;
+D says where a reply leaves the path, not where it goes after.
+
 **`freshContext: 2`: three live runs.** `tuned-budget` plus `"freshContext": 2`, `pool2` at
 size 7, `-c 5120`, `--max-turns 20`, `--timeout 600` (the timeout was not in the pre-registration;
 the earlier arms used 420 s with 18 turns). `bench-v211-pool2-budget5120-fresh2-n3`. On this
