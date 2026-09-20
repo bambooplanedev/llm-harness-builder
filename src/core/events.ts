@@ -13,6 +13,7 @@ export type HarnessEvent = Base & (
   | { type: 'approval_required'; call: ToolCall }
   | { type: 'tool_result'; callId: string; name: string; output: string; truncated: boolean; error: boolean }
   | { type: 'context_stats'; estimatedTokens: number; exactTokens?: number; budgetTokens: number; droppedChars: number; usage?: Usage }
+  | { type: 'context_reset'; chars: number }
   | { type: 'mcp_server_start'; server: string; command: string; args: string[]
       offered: number; tools: string[]; descriptionChars: number; schemaChars: number }
   | { type: 'error'; message: string; body?: string }

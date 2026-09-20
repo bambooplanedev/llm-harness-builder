@@ -22,6 +22,10 @@ export type RunOpts = {
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never
 type Ev = DistributiveOmit<HarnessEvent, 'seq' | 'turn' | 'ts'>
 
+// loop.freshContext. Appended to the task, not sent as a second user message: no chat template sees two user turns in a row.
+// It does not name the call that looped: that would put the loop back into the new history.
+const FRESH_NOTE = 'Note: an earlier attempt at this task was cleared from this conversation. Files in the project may already have been changed. Look at their current state before editing.'
+
 export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGenerator<HarnessEvent> {
   const { config, task, workdir } = params
   const backend = opts.backend ?? createBackend(config.backend)
@@ -89,6 +93,7 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
     // loop.repeatTemperature: true while the previous turn carried a repeat. Never true without the knob:
     // a harness with maxRepeats alone must send the requests it always sent.
     let hot = false
+    let wasReset = false // loop.freshContext fires once; a second loop is for maxRepeats to end
 
     while (true) {
       if (opts.signal?.aborted) { yield done('aborted'); return }
@@ -172,6 +177,7 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
       // ---- tools -------------------------------------------------------------
       const wrapped: string[] = []
       hot = false
+      let reset = false
       for (const c of calls) {
         if (opts.signal?.aborted) { yield done('aborted'); return }
         const call: ToolCall = { callId: `c${++callSeq}`, name: c.name, args: c.args, backendId: c.backendId ?? `c${callSeq}` }
@@ -209,10 +215,20 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
         }
         yield ev({ type: 'tool_result', callId: call.callId, name: call.name, output, truncated, error: result.error })
         if (repeats > (config.loop.maxRepeats ?? Infinity)) { yield done('repeat_loop'); return }
+        // The rest of this response's calls do not run: no context would ever hold their results.
+        if (!wasReset && repeats >= (config.loop.freshContext ?? Infinity)) { reset = true; break }
 
         if (hermes) wrapped.push(`<tool_response>\n${output}\n</tool_response>`)
         else if (prompted) wrapped.push(`<tool_result id="${call.callId}" name="${call.name}">\n${output}\n</tool_result>`)
         else messages.push({ role: 'tool', content: output, toolCallId: call.backendId!, name: call.name, isToolResult: true })
+      }
+      if (reset) {
+        wasReset = true
+        const chars = messages.slice(2).reduce((n, m) => n + m.content.length, 0)
+        messages.splice(0, messages.length, { role: 'system', content: system }, { role: 'user', content: task + '\n\n' + FRESH_NOTE })
+        seen.clear(); applied.clear(); ctx.reads?.clear(); hot = false
+        yield ev({ type: 'context_reset', chars })
+        continue
       }
       if (prompted) messages.push({ role: 'user', content: wrapped.join('\n'), isToolResult: true })
     }

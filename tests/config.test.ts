@@ -142,3 +142,20 @@ test('loop.repeatTemperature is a number in [0, 2] and needs loop.maxRepeats', (
   alone.loop.repeatTemperature = 1
   expect(validateConfig(alone).some(e => e.includes('repeatTemperature') && e.includes('maxRepeats'))).toBe(true)
 })
+
+test('loop.freshContext is an integer from 1 to maxRepeats and needs loop.maxRepeats', () => {
+  for (const ok of [1, 3]) {
+    const c = structuredClone(validConfig) as any
+    c.loop.maxRepeats = 3; c.loop.freshContext = ok
+    expect(validateConfig(c)).toEqual([])
+  }
+  // above maxRepeats the run has ended before the reset could fire; with maxRepeats 0 nothing fits
+  for (const [bad, max] of [[0, 3], [4, 3], [1.5, 3], ['2', 3], [1, 0]] as const) {
+    const c = structuredClone(validConfig) as any
+    c.loop.maxRepeats = max; c.loop.freshContext = bad
+    expect(validateConfig(c).some(e => e.includes('freshContext'))).toBe(true)
+  }
+  const alone = structuredClone(validConfig) as any
+  alone.loop.freshContext = 1
+  expect(validateConfig(alone).some(e => e.includes('freshContext') && e.includes('maxRepeats'))).toBe(true)
+})

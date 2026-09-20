@@ -54,6 +54,7 @@ const liveTok = computed(() => Math.ceil(liveText.value.length / 4))
         </template>
         <template v-else>approval_required: <code>{{ e.call.args.command }}</code> (bench: auto-approved)</template>
       </div>
+      <div v-else-if="e.type === 'context_reset'" class="ev parse_error">context reset: {{ e.chars }} chars of history cleared, the next request is the task again</div>
       <div v-else-if="e.type === 'mcp_server_start'" class="ev tool_call">
         mcp <code>{{ e.server }}</code>: {{ mcpCounts(e) }}
       </div>

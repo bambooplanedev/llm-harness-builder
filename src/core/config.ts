@@ -15,13 +15,13 @@ export type HarnessConfig = {
   tools: { enabled: ToolName[]; approveBash: boolean; requireReadBeforeEdit?: boolean; explainEditMiss?: boolean }
   toolCalls: { mode: 'native' | 'prompted'; format?: ToolCallFormat; enforceSchema: boolean; promptedTemplate: string; parseErrorHint: string }
   context: { maxToolOutputChars: number; budgetTokens: number }
-  loop: { maxTurns: number; maxRepeats?: number; repeatTemperature?: number }
+  loop: { maxTurns: number; maxRepeats?: number; repeatTemperature?: number; freshContext?: number }
   mcpServers?: Record<string, McpServerConfig>
 }
 
 export type RunParams = { config: HarnessConfig; task: string; workdir: string }
 
-const LOOP_KEYS = ['maxTurns', 'maxRepeats', 'repeatTemperature']
+const LOOP_KEYS = ['maxTurns', 'maxRepeats', 'repeatTemperature', 'freshContext']
 const isObj = (v: unknown): v is Record<string, any> => typeof v === 'object' && v !== null
 
 /** Returns a list of human-readable errors; empty list means valid. */
@@ -69,6 +69,11 @@ export function validateConfig(c: unknown): string[] {
     if (l.repeatTemperature !== undefined) {
       if (!(typeof l.repeatTemperature === 'number' && l.repeatTemperature >= 0 && l.repeatTemperature <= 2)) e.push('loop.repeatTemperature must be a number from 0 to 2')
       if (l.maxRepeats === undefined) e.push('loop.repeatTemperature needs loop.maxRepeats: a repeat is what that detector counts')
+    }
+    if (l.freshContext !== undefined) {
+      if (l.maxRepeats === undefined) e.push('loop.freshContext needs loop.maxRepeats: a repeat is what that detector counts')
+      // Above maxRepeats the run has already ended repeat_loop; with maxRepeats 0 no value fits.
+      else if (!(Number.isInteger(l.freshContext) && l.freshContext >= 1 && l.freshContext <= l.maxRepeats)) e.push('loop.freshContext must be an integer from 1 to loop.maxRepeats')
     }
   }
   const ms = c.mcpServers

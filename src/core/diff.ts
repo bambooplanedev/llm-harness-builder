@@ -42,6 +42,7 @@ export function skeleton(events: HarnessEvent[]): Turn[] {
         case 'context_stats': tokens = e.exactTokens ?? e.estimatedTokens; break
         case 'parse_error': chips.push({ label: 'parse error', bad: true, truncated: false }); break
         case 'error': chips.push({ label: 'error', bad: true, truncated: false }); break
+        case 'context_reset': chips.push({ label: 'context reset', bad: false, truncated: false }); break
         case 'tool_call': {
           const chip: Chip = { label: e.call.name, bad: false, truncated: false }
           byCall.set(e.call.callId, chip)

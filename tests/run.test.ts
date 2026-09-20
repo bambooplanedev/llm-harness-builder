@@ -529,3 +529,55 @@ test('repeatTemperature: the retry after a parse error goes out at the base temp
   await collect({ config: base({ loop: { maxTurns: 10, maxRepeats: 3, repeatTemperature: 0.9 } }), task: 'do', workdir: await wd() }, { backend: be })
   expect(temps(be)).toEqual([0, 0, 0.9, 0])
 })
+
+const resets = (ev: HarnessEvent[]) => ev.filter(e => e.type === 'context_reset') as Extract<HarnessEvent, { type: 'context_reset' }>[]
+
+test('freshContext: after N repeats the history is the task again, once; the second loop is for maxRepeats', async () => {
+  const be = Fake([readA, readA, readA, readA, readA, { content: 'never reached' }])
+  const ev = await collect({ config: base({ loop: { maxTurns: 10, maxRepeats: 1, freshContext: 1 } }), task: 'do', workdir: await wd() }, { backend: be })
+  const before = be.requests[1].messages, after = be.requests[2].messages
+  expect(after.map(m => m.role)).toEqual(['system', 'user'])
+  expect(after[0].content).toBe('sys')
+  expect(after[1].content.startsWith('do\n\nNote: an earlier attempt')).toBe(true)
+  // what went: the assistant turns and tool results of turns 1 and 2 (the second result never entered the history)
+  expect(resets(ev)).toHaveLength(1)
+  expect(resets(ev)[0]).toMatchObject({ turn: 2, chars: before.slice(2).reduce((n, m) => n + m.content.length, 0) })
+  const out = results(ev).map(r => r.output)
+  expect(out[1]).toContain('identical call #2')
+  expect(out[2]).not.toContain('identical call') // the counts went with the history
+  expect(out[3]).toContain('identical call #2')
+  expect(last(ev)).toMatchObject({ reason: 'repeat_loop', turns: 5, toolCallCount: 5 })
+})
+
+test('freshContext: the looping call twice in one response resets, and the second copy never runs', async () => {
+  const cfg = base({ loop: { maxTurns: 10, maxRepeats: 1, freshContext: 1 }, toolCalls: { mode: 'prompted', enforceSchema: false, promptedTemplate: 'T:{{tools}}', parseErrorHint: 'HINT' } })
+  const call = '{"name":"read_file","args":{"path":"a.txt"}}'
+  const be = Fake([{ content: `{"calls":[${call}],"final":null}` }, { content: `{"calls":[${call},${call}],"final":null}` }, { content: '{"calls":[],"final":"fin"}' }])
+  const ev = await collect({ config: cfg, task: 'do', workdir: await wd() }, { backend: be })
+  expect(resets(ev)).toHaveLength(1)
+  expect(results(ev)).toHaveLength(2)
+  expect(be.requests[2].messages.map(m => m.role)).toEqual(['system', 'user'])
+  expect(last(ev)).toMatchObject({ reason: 'final', toolCallCount: 2 })
+})
+
+test('freshContext: the new context has read nothing, so the guard asks for a read again', async () => {
+  const cfg = base({ context: { maxToolOutputChars: 200, budgetTokens: 0 }, loop: { maxTurns: 10, maxRepeats: 1, freshContext: 1 },
+    tools: { enabled: ['read_file', 'edit_file'], approveBash: false, requireReadBeforeEdit: true } })
+  const be = Fake([readA, readA, { toolCalls: [{ name: 'edit_file', args: { path: 'a.txt', old: 'A'.repeat(120), new: 'B' } }] }, { content: 'fin' }])
+  const ev = await collect({ config: cfg, task: 'do', workdir: await wd() }, { backend: be })
+  expect(results(ev)[2]).toMatchObject({ error: true })
+  expect(results(ev)[2].output).toContain('has not been read in this run')
+})
+
+test('freshContext: the turn after the reset is not a hot one', async () => {
+  const be = Fake([readA, readA, { content: 'fin' }])
+  await collect({ config: base({ loop: { maxTurns: 10, maxRepeats: 1, freshContext: 1, repeatTemperature: 0.9 } }), task: 'do', workdir: await wd() }, { backend: be })
+  expect(temps(be)).toEqual([0, 0, 0])
+})
+
+test('freshContext absent: nothing is reset', async () => {
+  const be = Fake([readA, readA, { content: 'fin' }])
+  const ev = await collect({ config: base({ loop: { maxTurns: 10, maxRepeats: 3 } }), task: 'do', workdir: await wd() }, { backend: be })
+  expect(resets(ev)).toHaveLength(0)
+  expect(be.requests[2].messages).toHaveLength(6)
+})
