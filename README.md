@@ -824,6 +824,122 @@ clears what cannot be stubbed by a margin worth having. On this task that floor 
 no order of stubbing would make any. The candidate this leaves — stub test output before files
 read — cannot be measured on this task at this window for the same reason.
 
+## Three ways out of a loop
+
+Every measurement above loses runs to `repeat_loop`, and everything tried against it so far was
+text added to a history that already holds the loop: the `identical call` note, the explained
+edit miss, the stub that names the call. None moved the model. Three knobs in `loop` change
+something else. All three are absent, and so off, in every shipped harness; the first two need
+`loop.maxRepeats`, because a repeat is what that detector counts, and a harness that sets one
+without it is refused. `loop` now refuses a key it does not know: a misspelt knob would
+otherwise be silently off. The second and third ideas are taken from
+[Archon](https://github.com/coleam00/Archon)'s `fresh_context` and `until_bash`, which do this
+between the steps of a workflow; here they act inside one agent run. **They were built first and
+checked after**, so read "The check" below before relying on any of them: one of the three does
+nothing on this model.
+
+`loop.repeatTemperature` (0 to 2). The turn after a turn in which some call drew an `identical
+call` note is sampled at this temperature instead of `backend.temperature`; a turn without a
+note goes back. That is looser than "after a loop": the first note in a run is usually a second
+`node --test` with no edit in between, in runs that pass as well (counted below). A reply that
+does not parse is retried at the base temperature. The risk is the obvious one: in `hermes` and
+`native` modes nothing constrains the shape of a reply, an `edit_file` needs its `old`
+verbatim, and a hot turn can turn a `repeat_loop` row into a `parse_failed` or an edit-miss row.
+
+`loop.freshContext: N` (1 to `maxRepeats`). When one call has been repeated N times, the
+history is cleared back to the system prompt and the task, with one sentence appended to the
+task: an earlier attempt was cleared, the files may already be changed, look before editing. It
+does not name the call that looped. The rest of that response's calls do not run, the repeat
+counts and the read-before-edit record go with the history, and the trace gets a
+`context_reset` event. Once per run: a second loop is for `maxRepeats` to end — which needs
+`maxRepeats` + 2 more identical calls, so after a late reset the same pathology often ends as
+`max_turns` instead, and such a row is not "no loop".
+
+`loop.untilBash: "<command>"`. When the model gives its final answer, the harness runs the
+command in the workdir (the `bash` tool's runner: 30 s, no more) and the run ends `final` only
+on exit 0. Otherwise the output goes back to the model as `not finished: …` and the run goes
+on, to `max_turns` if it must; each check is a `final_check` event. The exit code is read
+before the output is cut to `maxToolOutputChars`. The command comes from the harness file,
+like an MCP server's, so it is asked about the same way — once, before any model time and
+before any server is started; refused, the run ends `aborted` with an `error` that says why.
+And because the check executes files the model has written, under `tools.approveBash` every
+execution asks again: otherwise "write a file, say done" would be a way around that flag. It
+runs whether or not `bash` is among the enabled tools. One thing it invites and nothing here
+prevents: a model told "not finished" by tests it can reach may edit the tests.
+
+### The check, 2026-09-20
+
+Written down before any model time: what is counted, what would refute what, which words are
+allowed. Same model as above (Qwen3-8B Q4_K_M); llama-server build `b10826`.
+
+**Counted over recorded runs, no model time.** 28 runs in the bench files come from a harness
+with `maxRepeats` (10 PASS, 18 FAIL; six of the FAIL are the runs of the unmerged labelled
+stub). A turn that `repeatTemperature` would have made hot: 11 of 82 turns in the PASS runs
+(8 of the 10 runs have one), 69 of 186 in the FAIL runs. `freshContext: 1` would have fired in
+8 of 10 PASS runs and 18 of 18 FAIL; `2` in 2 of 10 and 17 of 18; `3` in 1 of 10 and 16 of 18.
+So 2 is the value that tells the two apart on these tasks, and 1 resets nearly every run.
+For `untilBash`: 5 of the 45 FAIL verdicts (96 runs) ended `done=final` — two on `slug`
+(`guard-hint`, `bare`), three on `pool` at sizes 6, 7, 8 with `tuned`; none on `pool2`, none
+from a harness with `maxRepeats`. That is a ceiling on claims it could have caught, not on
+passes gained: what this model does with red tests in front of it is the loop. It was not run
+live: nothing on the stand used below ends that way. On `slug` the natural command is the
+grader itself, which would be a different experiment.
+
+**`repeatTemperature`: a replay, and it does nothing here.** One recorded request, replayed ten
+times at each temperature. Two loop turns: turn 6 of `2e9da379` (`pool`, the `chunk` flip-flop,
+with the `identical call` notes written in as the detector would have — the run itself had none)
+and turn 8 of `153d3718` (`pool2`, the first request after the no-op edit of `formatBytes.js`
+drew its `#2`). One harmless turn: turn 6 of `411812a4`, a run that passed, right after a
+second `node --test`.
+
+| recorded turn | temperature | distinct replies of 10 | parse | first call is the recorded one |
+|---|---|---|---|---|
+| `pool` loop | 0.2 / 0.7 / 1.0 | 1 / 1 / 1 | 10 / 10 / 10 | 10 / 10 / 10 |
+| `pool2` loop | 0.2 / 0.7 / 1.0 | 1 / 1 / 1 | 10 / 10 / 10 | 10 / 10 / 10 |
+| harmless | 0.2 / 0.7 / 1.0 | 1 / 2 / 2 | 10 / 10 / 10 | 10 / 9 / 9 |
+
+The hypothesis was: at 0.2 at least nine of ten repeat the looping call, at 1.0 fewer than nine.
+Refuted on both loop turns: at 1.0 all ten are the same reply to the character, the looping call
+first. No reply was cut off and every `old` matched the file, so no harm showed on the harmless
+turn either (the one different reply there, at 0.7 and at 1.0, rewrites the `return` line of
+`formatBytes.js` instead of fixing `while`). Why, looked at afterwards and so not pre-registered:
+a free prompt at 1.0 gives three different sentences out of three, so the temperature reaches
+the sampler; but on the `pool2` loop turn every one of the 123 reply tokens has p ≥ 0.999, and
+2.0 gives the same reply five times out of five. llama-server applies `top_p` 0.95 and `min_p`
+0.05 *before* temperature (`/props`: `… top_k, typ_p, top_p, min_p, xtc, temperature`), none of
+which the harness sets: when one token holds 0.999, one candidate is left by the time
+temperature is applied. **The loop is not sampling noise; the model is sure.** On this model and
+server `repeatTemperature` cannot move a loop turn at any value it accepts. One reply is not a
+trajectory, and live the knob would already have been hot a turn or two earlier; neither
+changes that arithmetic.
+
+**`freshContext: 2`: three live runs.** `tuned-budget` plus `"freshContext": 2`, `pool2` at
+size 7, `-c 5120`, `--max-turns 20`, `--timeout 600` (the timeout was not in the pre-registration;
+the earlier arms used 420 s with 18 turns). `bench-v211-pool2-budget5120-fresh2-n3`. On this
+stand 8 of the 9 recorded runs without the knob end `repeat_loop` at turn 9 or 10.
+
+| # | verdict | turns | s | reset at turn | peak exact tokens |
+|---|---|---|---|---|---|
+| 1 | PASS | 13 | 194 | 7 | 3360 |
+| 2 | PASS | 13 | 185 | 7 | 3367 |
+| 3 | FAIL `repeat_loop` | 12 | 171 | 6 | 3333 |
+
+The reset fired in three of three, and in all three on the third `node --test` without a file
+change between — not on the looping edit, which is a no-op, an error, and so clears no count.
+The hypothesis was that after the reset the model reads `src/formatBytes.js` before it edits
+it, in at least two runs: it did in three of three (after 0 of 15 runs that had a stub in the
+history, above). What it did with what it read differs. #1 and #2 are one run twice — the same
+calls turn for turn: before the reset they had put a wrong `(n / 1024)` into the `return` line;
+after it they read the file, took that back, read again, fixed `while`, and passed. In #3 the
+`return` line was still the original one when the history was cleared; the model read the
+file, sent the same no-op edit of that line four times, to `repeat_loop` at turn
+12: the loop re-formed from a clean history in three turns. So the loop lives in the model's
+reading of this file, not only in its history; a clean history got out of it where the files
+gave the model something of its own to undo. Two passes of three against one of nine is a
+direction, not a rate, and two of the three are one observation. `budgetTokens` stubbed again
+after the reset (turn 11 in #1 and #2, turn 12 in #3), so the confound named beforehand is
+there. Nothing was written under `test/`.
+
 ## Honest notes
 
 - Five runs per harness is a small sample. By Fisher's exact test only 5-against-1 or 4-against-0
