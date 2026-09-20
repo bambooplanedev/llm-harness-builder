@@ -15,13 +15,13 @@ export type HarnessConfig = {
   tools: { enabled: ToolName[]; approveBash: boolean; requireReadBeforeEdit?: boolean; explainEditMiss?: boolean }
   toolCalls: { mode: 'native' | 'prompted'; format?: ToolCallFormat; enforceSchema: boolean; promptedTemplate: string; parseErrorHint: string }
   context: { maxToolOutputChars: number; budgetTokens: number }
-  loop: { maxTurns: number; maxRepeats?: number; repeatTemperature?: number; freshContext?: number }
+  loop: { maxTurns: number; maxRepeats?: number; repeatTemperature?: number; freshContext?: number; untilBash?: string }
   mcpServers?: Record<string, McpServerConfig>
 }
 
 export type RunParams = { config: HarnessConfig; task: string; workdir: string }
 
-const LOOP_KEYS = ['maxTurns', 'maxRepeats', 'repeatTemperature', 'freshContext']
+const LOOP_KEYS = ['maxTurns', 'maxRepeats', 'repeatTemperature', 'freshContext', 'untilBash']
 const isObj = (v: unknown): v is Record<string, any> => typeof v === 'object' && v !== null
 
 /** Returns a list of human-readable errors; empty list means valid. */
@@ -70,6 +70,8 @@ export function validateConfig(c: unknown): string[] {
       if (!(typeof l.repeatTemperature === 'number' && l.repeatTemperature >= 0 && l.repeatTemperature <= 2)) e.push('loop.repeatTemperature must be a number from 0 to 2')
       if (l.maxRepeats === undefined) e.push('loop.repeatTemperature needs loop.maxRepeats: a repeat is what that detector counts')
     }
+    // Blank is not harmless: `sh -c "  "` exits 0, so the check would pass the first time the model says it is done.
+    if (l.untilBash !== undefined && !(typeof l.untilBash === 'string' && l.untilBash.trim())) e.push('loop.untilBash must be a non-blank shell command')
     if (l.freshContext !== undefined) {
       if (l.maxRepeats === undefined) e.push('loop.freshContext needs loop.maxRepeats: a repeat is what that detector counts')
       // Above maxRepeats the run has already ended repeat_loop; with maxRepeats 0 no value fits.

@@ -1,8 +1,9 @@
 import type { RunParams } from './config.js'
-import { mcpApprovalName, type HarnessEvent, type ToolCall, type DoneReason } from './events.js'
+import { mcpApprovalName, UNTIL_BASH, type HarnessEvent, type ToolCall, type DoneReason } from './events.js'
 import { createBackend, type Backend, type ChatMessage, type ChatRequest, type Delta, type NormalizedResponse, type Usage } from './backends/index.js'
 import { TOOL_SCHEMAS, runTool } from './tools/index.js'
 import { GUARD_BLOCKED } from './tools/fs.js'
+import { bash } from './tools/bash.js'
 import { renderTools, PROMPTED_SCHEMA } from './prompts.js'
 import { parsePrompted, parseHermes } from './parse.js'
 import { estimateTokens, applyBudget } from './tokens.js'
@@ -57,6 +58,24 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
       if (opts.signal?.aborted) { yield done('aborted'); return }
       if (!ok) { yield done('mcp_error'); return }
     }
+  }
+  // loop.untilBash comes from the harness file like an mcp command does, so it is asked about the same way: before any
+  // model time, and before a server is started, so that a refusal leaves no child behind.
+  let untilSeq = 0
+  async function* approveUntil(): AsyncGenerator<HarnessEvent, boolean> {
+    if (opts.signal?.aborted) { yield done('aborted'); return false }
+    const call: ToolCall = { callId: `until${untilSeq++}`, name: UNTIL_BASH, args: { command: config.loop.untilBash } }
+    yield ev({ type: 'approval_required', call })
+    const ok = opts.approve ? await opts.approve(call) : false
+    if (opts.signal?.aborted) { yield done('aborted'); return false }
+    if (!ok) {
+      yield ev({ type: 'error', message: opts.approve ? 'loop.untilBash was not approved' : 'loop.untilBash needs approval but no approval handler is available' })
+      yield done('aborted')
+    }
+    return ok
+  }
+  if (config.loop.untilBash !== undefined && !(yield* approveUntil())) return
+  if (mcpNames.length) {
     try {
       mcp = await (opts.mcp ?? startServers)(config.mcpServers!, workdir, {
         signal: opts.signal, taken: new Set(config.tools.enabled),
@@ -79,9 +98,11 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
       ? config.systemPrompt + '\n\n' + config.toolCalls.promptedTemplate.split('{{tools}}').join(renderTools(schemas, config.toolCalls.format))
       : config.systemPrompt
     const messages: ChatMessage[] = [{ role: 'system', content: system }, { role: 'user', content: task }]
+    const max = config.context.maxToolOutputChars
+    const cut = (s: string) => s.length > max ? s.slice(0, max) + `\n[truncated: ${s.length - max} more chars]` : s
     const ctx = {
       workdir,
-      maxToolOutputChars: config.context.maxToolOutputChars,
+      maxToolOutputChars: max,
       // Present only when the harness asked for it; the tools treat "absent" as "guard off".
       reads: config.tools.requireReadBeforeEdit ? new Set<string>() : undefined,
       explainEditMiss: config.tools.explainEditMiss,
@@ -172,7 +193,20 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
         : res.content
       messages.push({ role: 'assistant', content: assistantText, toolCalls: prompted ? undefined : res.toolCalls })
 
-      if (calls.length === 0) { yield done('final', final ?? res.content); return }
+      if (calls.length === 0) {
+        const command = config.loop.untilBash
+        if (command === undefined) { yield done('final', final ?? res.content); return }
+        // The check runs files the model wrote. Under approveBash nothing of the model's runs unasked, so this does not either.
+        if (config.tools.approveBash && !(yield* approveUntil())) return
+        const raw = await bash({ command }, ctx)
+        if (opts.signal?.aborted) { yield done('aborted'); return }
+        // bash() writes the exit tail last, so output cannot forge it; read it before the cut, which takes the tail away.
+        const passed = raw.endsWith('\n[exit 0]')
+        yield ev({ type: 'final_check', command, passed, output: cut(raw) })
+        if (passed) { yield done('final', final ?? res.content); return }
+        messages.push({ role: 'user', content: `not finished: \`${command}\` did not exit 0\n${cut(raw)}`, isToolResult: true })
+        continue
+      }
 
       // ---- tools -------------------------------------------------------------
       const wrapped: string[] = []
@@ -196,9 +230,8 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
         if (!result) {
           result = await runTool(c.name, c.args, ctx, config.tools.enabled, mcp)
         }
-        const max = config.context.maxToolOutputChars
         const truncated = result.output.length > max
-        let output = truncated ? result.output.slice(0, max) + `\n[truncated: ${result.output.length - max} more chars]` : result.output
+        let output = cut(result.output)
         let repeats = 0
         if (config.loop.maxRepeats !== undefined) {
           const key = c.name + JSON.stringify(c.args)

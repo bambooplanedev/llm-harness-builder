@@ -129,3 +129,12 @@ test('lineDiff: a set difference, so reordering or duplicating lines shows no di
   expect(lineDiff('a\nb', 'b\na')).toEqual({ onlyA: [], onlyB: [] })
   expect(lineDiff('a\na', 'a')).toEqual({ onlyA: [], onlyB: [] })
 })
+
+test('skeleton: a context reset and a final check are chips, and a failed check is a bad one', () => {
+  const t = skeleton([
+    ev(1, { type: 'context_reset', chars: 10 }),
+    ev(2, { type: 'final_check', command: 'c', passed: false, output: '' }),
+    ev(3, { type: 'final_check', command: 'c', passed: true, output: '' }),
+  ])
+  expect(t.map(x => x.sig)).toEqual(['context reset', 'check failed!', 'check passed'])
+})

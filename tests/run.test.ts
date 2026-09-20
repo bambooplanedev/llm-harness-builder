@@ -581,3 +581,86 @@ test('freshContext absent: nothing is reset', async () => {
   expect(resets(ev)).toHaveLength(0)
   expect(be.requests[2].messages).toHaveLength(6)
 })
+
+const until = (cmd: string, over: Partial<HarnessConfig> = {}) => base({ loop: { maxTurns: 4, untilBash: cmd }, ...over })
+const checks = (ev: HarnessEvent[]) => ev.filter(e => e.type === 'final_check') as Extract<HarnessEvent, { type: 'final_check' }>[]
+const asked = (ev: HarnessEvent[]) => (ev.filter(e => e.type === 'approval_required') as Extract<HarnessEvent, { type: 'approval_required' }>[]).map(e => e.call)
+const yes = { approve: async () => true }
+
+test('untilBash: approved once before any model time; a final with the command green is final', async () => {
+  const be = Fake([{ content: 'fin' }])
+  const ev = await collect({ config: until('true'), task: 'do', workdir: await wd() }, { backend: be, ...yes })
+  expect(types(ev).slice(0, 2)).toEqual(['approval_required', 'context_stats'])
+  expect(asked(ev)).toEqual([{ callId: 'until0', name: 'until_bash', args: { command: 'true' } }])
+  expect(checks(ev)).toMatchObject([{ command: 'true', passed: true }])
+  expect(last(ev)).toMatchObject({ reason: 'final', text: 'fin' })
+})
+
+test('untilBash: a final with the command red goes back to the model with the output, and the run goes on', async () => {
+  const be = Fake([{ content: 'done!' }, { toolCalls: [{ name: 'bash', args: { command: 'touch ok.txt' } }] }, { content: 'now done' }])
+  const ev = await collect({ config: until('echo looking; test -f ok.txt'), task: 'do', workdir: await wd() }, { backend: be, ...yes })
+  expect(checks(ev).map(c => c.passed)).toEqual([false, true])
+  const m = be.requests[1].messages
+  expect(m.slice(-2).map(x => x.role)).toEqual(['assistant', 'user'])
+  expect(m[m.length - 1].content).toBe('not finished: `echo looking; test -f ok.txt` did not exit 0\nlooking\n\n[exit 1]')
+  expect(last(ev)).toMatchObject({ reason: 'final', text: 'now done', turns: 3, toolCallCount: 1 })
+})
+
+test('untilBash: a model that only ever says it is done ends max_turns', async () => {
+  const be = Fake([{ content: 'a' }, { content: 'b' }, { content: 'c' }, { content: 'd' }])
+  const ev = await collect({ config: until('false'), task: 'do', workdir: await wd() }, { backend: be, ...yes })
+  expect(checks(ev)).toHaveLength(4)
+  expect(last(ev).reason).toBe('max_turns')
+})
+
+test('untilBash: exit 0 is read before the output is cut, and the event carries the cut text', async () => {
+  const be = Fake([{ content: 'fin' }])
+  const ev = await collect({ config: until('cat a.txt'), task: 'do', workdir: await wd() }, { backend: be, ...yes })
+  expect(checks(ev)[0].passed).toBe(true)
+  expect(checks(ev)[0].output).toBe('A'.repeat(50) + '\n[truncated: 79 more chars]')
+  expect(last(ev).reason).toBe('final')
+})
+
+test('untilBash: refused, or nobody to ask, is a stated error and no model time', async () => {
+  for (const opts of [{ approve: async () => false }, {}]) {
+    const be = Fake([])
+    const ev = await collect({ config: until('true'), task: 'do', workdir: await wd() }, { backend: be, ...opts })
+    expect(types(ev)).toEqual(['approval_required', 'error', 'done'])
+    expect((ev[1] as any).message).toContain('untilBash')
+    expect(last(ev).reason).toBe('aborted')
+    expect(be.requests).toHaveLength(0)
+  }
+})
+
+test('untilBash: refused after the mcp servers were approved, no server is ever started', async () => {
+  let started = 0
+  const ev = await collect({ config: withMcp({ loop: { maxTurns: 4, untilBash: 'true' } }), task: 'do', workdir: await wd() }, {
+    backend: Fake([]), mcp: async () => { started++; return fakeMcp() }, approve: async (c: any) => c.name !== 'until_bash',
+  })
+  expect(asked(ev).map(c => c.callId)).toEqual(['mcp1', 'until0'])
+  expect(started).toBe(0)
+  expect(last(ev).reason).toBe('aborted')
+})
+
+test('untilBash under approveBash: every execution asks, because it runs what the model wrote', async () => {
+  const cfg = until('false', { tools: { enabled: ['read_file', 'bash'], approveBash: true } })
+  const be = Fake([{ content: 'a' }, { content: 'b' }])
+  const answers = [true, true, false]
+  const ev = await collect({ config: cfg, task: 'do', workdir: await wd() }, { backend: be, approve: async () => answers.shift()! })
+  expect(asked(ev).map(c => c.callId)).toEqual(['until0', 'until1', 'until2'])
+  expect(checks(ev)).toHaveLength(1) // the refused one never ran
+  expect(ev.some(e => e.type === 'error' && e.message.includes('untilBash'))).toBe(true)
+  expect(last(ev).reason).toBe('aborted')
+})
+
+test('untilBash: a stop that arrives while the check runs is aborted, even if the check came back green', async () => {
+  const ac = new AbortController()
+  setTimeout(() => ac.abort(), 60)
+  const ev = await collect({ config: until('sleep 0.4'), task: 'do', workdir: await wd() }, { backend: Fake([{ content: 'fin' }]), signal: ac.signal, ...yes })
+  expect(last(ev).reason).toBe('aborted')
+})
+
+test('untilBash absent: a final is final, nothing is asked and nothing is run', async () => {
+  const ev = await collect({ config: base(), task: 'do', workdir: await wd() }, { backend: Fake([{ content: 'fin' }]) })
+  expect(types(ev)).toEqual(['context_stats', 'llm_request', 'llm_response', 'done'])
+})

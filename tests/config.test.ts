@@ -159,3 +159,14 @@ test('loop.freshContext is an integer from 1 to maxRepeats and needs loop.maxRep
   alone.loop.freshContext = 1
   expect(validateConfig(alone).some(e => e.includes('freshContext') && e.includes('maxRepeats'))).toBe(true)
 })
+
+test('loop.untilBash is a non-blank string: sh -c "  " exits 0 and would pass on the first claim', () => {
+  const ok = structuredClone(validConfig) as any
+  ok.loop.untilBash = 'node --test'
+  expect(validateConfig(ok)).toEqual([])
+  for (const bad of ['', '   ', 1, true]) {
+    const c = structuredClone(validConfig) as any
+    c.loop.untilBash = bad
+    expect(validateConfig(c).some(e => e.includes('untilBash'))).toBe(true)
+  }
+})

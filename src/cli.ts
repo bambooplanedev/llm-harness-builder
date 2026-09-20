@@ -11,7 +11,7 @@ import { runAgent, type RunOpts } from './core/run.js'
 import { validateConfig, type HarnessConfig } from './core/config.js'
 import { validateWorkdir } from './core/tools/sandbox.js'
 import type { Backend, NormalizedResponse } from './core/backends/types.js'
-import { mcpApprovalServer, mcpCounts, quitWithoutWork, type HarnessEvent, type ToolCall } from './core/events.js'
+import { mcpApprovalServer, mcpCounts, UNTIL_BASH, quitWithoutWork, type HarnessEvent, type ToolCall } from './core/events.js'
 import { startServer } from './server/index.js'
 import { TraceWriter, type Meta } from './server/runs.js'
 import { TASKS, type Task } from './core/tasks.js'
@@ -60,6 +60,7 @@ function describe(e: HarnessEvent, streamed = false): string {
     case 'parse_error': return `[t${e.turn}] parse_error: ${e.message}${e.droppedChars ? ` (${e.droppedChars} chars kept out of the history)` : ''}`
     case 'tool_call': return `[t${e.turn}] tool_call ${e.call.name} ${JSON.stringify(e.call.args).slice(0, 200)}`
     case 'mcp_server_start': return `mcp ${e.server}: ${mcpCounts(e)}`
+    case 'final_check': return `[t${e.turn}] final_check ${e.passed ? 'passed' : 'failed'}: ${e.command}${e.passed ? '' : `\n    ${e.output.slice(0, 200).replace(/\n/g, ' ')}`}`
     case 'context_reset': return `[t${e.turn}] context_reset: ${e.chars} chars of history cleared, the next request is the task again`
     case 'approval_required': return `[t${e.turn}] approval_required ${e.call.name}`
     case 'tool_result': return `[t${e.turn}] tool_result ${e.name}${e.error ? ' (error)' : ''}${e.truncated ? ' (truncated)' : ''}: ${e.output.slice(0, 200).replace(/\n/g, ' ')}`
@@ -85,7 +86,9 @@ async function execRun(config: HarnessConfig, task: string, workdir: string, o: 
     const server = mcpApprovalServer(call.name)
     const what = server
       ? `start mcp server "${server}": ${call.args.command}`
-      : `run bash: ${call.args.command}`
+      : call.name === UNTIL_BASH
+        ? `run each time the model says it is done, on files the model has written: ${call.args.command}`
+        : `run bash: ${call.args.command}`
     const a = await rl!.question(`${what}\n[y/N] `)
     return /^y(es)?$/i.test(a.trim())
   }
