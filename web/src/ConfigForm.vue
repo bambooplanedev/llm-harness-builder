@@ -36,6 +36,17 @@ function setMaxTokens(text: string) {
   else delete config.value.backend.maxTokens
 }
 
+/** Same rule for the optional loop knobs: an empty box removes the key, so a harness without them saves as before.
+ *  What a value may be is validateConfig's to say: its message names the knob and what it needs. */
+function setLoop(k: 'maxRepeats' | 'repeatTemperature' | 'repeatThinkTokens' | 'freshContext', text: string) {
+  if (text.trim() && Number.isFinite(Number(text))) config.value.loop[k] = Number(text)
+  else delete config.value.loop[k]
+}
+function setUntilBash(text: string) {
+  if (text.trim()) config.value.loop.untilBash = text
+  else delete config.value.loop.untilBash
+}
+
 const fmtMcp = (m: HarnessConfig['mcpServers']) => (m && Object.keys(m).length ? JSON.stringify(m, null, 2) : '')
 const mcpText = ref(fmtMcp(config.value.mcpServers))
 /** Lifted to App: it disables Run as well as Save as, so the two never disagree. */
@@ -120,5 +131,14 @@ function editMcp(text: string) {
     </div>
     <label>Loop</label>
     <div class="row"><span>max turns</span><input type="number" v-model.number="config.loop.maxTurns"></div>
+    <div class="row">
+      <span title="a call repeated more than this many times ends the run as repeat_loop; empty = no detector, 0 = the first repeat ends it">max repeats</span><input type="number" min="0" :value="config.loop.maxRepeats ?? ''" @change="setLoop('maxRepeats', ($event.target as HTMLInputElement).value)">
+      <span title="after this many repeats of one call the history is cleared back to the task, once per run; 1 to max repeats">fresh context</span><input type="number" min="1" :value="config.loop.freshContext ?? ''" @change="setLoop('freshContext', ($event.target as HTMLInputElement).value)">
+    </div>
+    <div class="row">
+      <span title="the turn after a repeat is sampled at this temperature, 0 to 2; needs max repeats">repeat temperature</span><input type="number" min="0" max="2" step="0.1" :value="config.loop.repeatTemperature ?? ''" @change="setLoop('repeatTemperature', ($event.target as HTMLInputElement).value)">
+      <span title="the turn after a repeat is sent with /think in place of the /no_think line, with this token cap; needs max repeats and a /no_think line in the system prompt">repeat think tokens</span><input type="number" min="1" :value="config.loop.repeatThinkTokens ?? ''" @change="setLoop('repeatThinkTokens', ($event.target as HTMLInputElement).value)">
+    </div>
+    <div class="row"><span title="a final answer ends the run only when this command exits 0; it runs on files the model wrote, and is approved before the run">until bash</span><input type="text" :value="config.loop.untilBash ?? ''" @change="setUntilBash(($event.target as HTMLInputElement).value)"></div>
   </div>
 </template>
