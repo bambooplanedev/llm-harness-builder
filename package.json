@@ -12,7 +12,8 @@
     "web/dist",
     "harnesses",
     "examples",
-    "examples-pool"
+    "examples-pool",
+    "examples-sift"
   ],
   "scripts": {
     "test": "vitest run",

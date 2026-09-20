@@ -1,6 +1,6 @@
 // src/core/tasks.ts — what `bench` and `demo` can run: the text, the workdir and the verdict of each task, in one place.
 import { mkdtemp, cp, writeFile, mkdir } from 'node:fs/promises'
-import { rmSync, mkdirSync, copyFileSync } from 'node:fs'
+import { rmSync, mkdirSync, copyFileSync, readFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -83,4 +83,39 @@ const poolTask = (name: string, order: readonly string[]): Task => {
   }
 }
 
-export const TASKS = { slug, pool: poolTask('pool', POOL), pool2: poolTask('pool2', POOL2) }
+/** Step 3b of a news curator: split the screener's verdicts into what goes on and what is only reported. The fixture is
+ *  synthetic, in the bytes the screener prints (Python's json.dumps, ensure_ascii off); size N means its first N lines. */
+const SIFT_FIXTURE = path.join(PKG_ROOT, 'examples-sift', 'screen.jsonl')
+const sift: Task = (() => {
+  type Row = { id: number; verdict: 'PASS' | 'DROP'; reason: string; quotes: string[] }
+  const all = () => readFileSync(SIFT_FIXTURE, 'utf8').split('\n').filter(Boolean)
+  const max = 12
+  const first = (size: number): string[] => {
+    if (!Number.isInteger(size) || size < 1 || size > max) throw new RangeError(`sift size must be an integer from 1 to ${max}, got ${size}`)
+    return all().slice(0, size)
+  }
+  /** The lines of a file the model wrote, blank ones dropped; a file that is not there has none. */
+  const linesOf = (file: string): string[] => { try { return readFileSync(file, 'utf8').split('\n').map(l => l.trimEnd()).filter(Boolean) } catch { return [] } }
+  /** One PASS line as a value: key order and spacing are the writer's, every character of the content is not. */
+  const canon = (line: string): string => { try { const o = JSON.parse(line) as Row; return JSON.stringify([o.id, o.verdict, o.reason, o.quotes]) } catch { return `not JSON: ${line}` } }
+  const same = (a: string[], b: string[]) => JSON.stringify([...a].sort()) === JSON.stringify([...b].sort())
+  return {
+    prompt: '`screen.jsonl` holds one JSON object per line: the verdict of a screener on one post. Write `pass.jsonl` with the lines whose verdict is PASS, each exactly as it is in `screen.jsonl`. Write `drops.txt` with one line per DROP verdict, in the form `<id>: <reason>`, the reason exactly as given. Do not edit `screen.jsonl`. Finally answer with the two counts, as `N PASS, M DROP`.',
+    max,
+    async prepare(size = max) {
+      const lines = first(size)
+      const dir = await mkdtemp(path.join(tmpdir(), 'lhb-sift-'))
+      await writeFile(path.join(dir, 'screen.jsonl'), lines.join('\n') + '\n')
+      return dir
+    },
+    // The expected answer comes from the package's fixture, not from the workdir's copy: editing screen.jsonl changes nothing.
+    check(dir, size = max) {
+      const rows = first(size).map(l => [l, JSON.parse(l) as Row] as const)
+      const pass = rows.filter(([, o]) => o.verdict === 'PASS').map(([l]) => canon(l))
+      const drops = rows.filter(([, o]) => o.verdict === 'DROP').map(([, o]) => `${o.id}: ${o.reason}`)
+      return same(linesOf(path.join(dir, 'pass.jsonl')).map(canon), pass) && same(linesOf(path.join(dir, 'drops.txt')), drops)
+    },
+  }
+})()
+
+export const TASKS = { slug, pool: poolTask('pool', POOL), pool2: poolTask('pool2', POOL2), sift }

@@ -117,3 +117,53 @@ test.each(POOLS)('%s: a size that is not an integer from 1 to 10 is refused, by 
   expect(readdirSync(join(dir, 'test'))).toEqual(['clamp.test.js']) // a refused check has not touched the workdir
   for (const bad of ['', 'relative/dir']) expect(() => TASKS[name].check(bad, 1)).toThrow(RangeError)
 })
+
+// sift: step 3b of a news curator. The reference answer is what `grep` would write; the fixture is synthetic.
+const SIFT = readFileSync(new URL('../examples-sift/screen.jsonl', import.meta.url), 'utf8').split('\n').filter(Boolean)
+const siftAnswer = (dir: string, size: number) => {
+  const rows = SIFT.slice(0, size).map(l => [l, JSON.parse(l)] as const)
+  writeFileSync(join(dir, 'pass.jsonl'), rows.filter(([, o]) => o.verdict === 'PASS').map(([l]) => l + '\n').join(''))
+  writeFileSync(join(dir, 'drops.txt'), rows.filter(([, o]) => o.verdict === 'DROP').map(([, o]) => `${o.id}: ${o.reason}\n`).join(''))
+}
+
+test('sift: the fixture is byte for byte what it was, and a workdir holds the first N lines and nothing else', async () => {
+  expect(createHash('sha256').update(SIFT.join('\n') + '\n').digest('hex')).toBe('352ba7ea80f49e3f52c90617534c812c04b26e2ab2a262038f6670003a8076a2')
+  expect(TASKS.sift.max).toBe(12)
+  const dir = await TASKS.sift.prepare(8)
+  expect(readdirSync(dir)).toEqual(['screen.jsonl'])
+  expect(readFileSync(join(dir, 'screen.jsonl'), 'utf8')).toBe(SIFT.slice(0, 8).join('\n') + '\n')
+  expect(TASKS.sift.check(dir, 8)).toBe(false) // nothing written yet
+  await expect(TASKS.sift.prepare(0)).rejects.toThrow(RangeError)
+  await expect(TASKS.sift.prepare(13)).rejects.toThrow(RangeError)
+})
+
+test('sift: the reference answer is PASS at every size, in any line order, and with the keys of a line in any order', async () => {
+  for (const size of [1, 2, 8, 12]) {
+    const dir = await TASKS.sift.prepare(size)
+    siftAnswer(dir, size)
+    expect([size, TASKS.sift.check(dir, size)]).toEqual([size, true])
+  }
+  const dir = await TASKS.sift.prepare(8)
+  siftAnswer(dir, 8)
+  const lines = readFileSync(join(dir, 'pass.jsonl'), 'utf8').split('\n').filter(Boolean).reverse()
+  writeFileSync(join(dir, 'pass.jsonl'), lines.map(l => { const o = JSON.parse(l); return JSON.stringify({ quotes: o.quotes, reason: o.reason, verdict: o.verdict, id: o.id }) }).join('\n'))
+  expect(TASKS.sift.check(dir, 8)).toBe(true)
+})
+
+test('sift: one changed character in a quote, a missing DROP, a PASS among the drops, a line that is not JSON — each is FAIL', async () => {
+  const broken = async (file: string, edit: (text: string) => string) => {
+    const dir = await TASKS.sift.prepare(8)
+    siftAnswer(dir, 8)
+    const before = readFileSync(join(dir, file), 'utf8'), after = edit(before)
+    expect(after).not.toBe(before)
+    writeFileSync(join(dir, file), after)
+    return TASKS.sift.check(dir, 8)
+  }
+  expect(await broken('pass.jsonl', t => t.replace('from 41% to 6%', 'from 41% to 6 %'))).toBe(false)
+  expect(await broken('pass.jsonl', t => t.replace(' — the agent', ' - the agent'))).toBe(false) // the retyped dash
+  expect(await broken('pass.jsonl', t => t + SIFT[1] + '\n')).toBe(false)                          // a DROP line among the passes
+  expect(await broken('pass.jsonl', t => t + 'done\n')).toBe(false)
+  expect(await broken('drops.txt', t => t.split('\n').slice(1).join('\n'))).toBe(false)
+  expect(await broken('drops.txt', t => t + '7001: Claims that a read-before-edit guard removes most failed edits of a small local model.\n')).toBe(false)
+  expect(await broken('drops.txt', t => t.replace('7004: would PASS on topic', '7004: on topic'))).toBe(false)
+})
