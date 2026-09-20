@@ -869,8 +869,9 @@ without it is refused. The second and third ideas are taken from
 between the steps of a workflow; here they act inside one agent run. **They were built first and
 checked after**, so read "The check" below before relying on any of them: one of the three did
 nothing on this model, on the two loop turns it was tried on. A fourth knob,
-`loop.repeatThinkTokens`, came later and was checked before it was built; it has its own part at
-the end of this section.
+`loop.repeatThinkTokens`, came later and was checked before it was built; it has its own part
+below, and the section ends with two later live checks: `untilBash`, and that knob with a
+larger cap.
 
 `loop.repeatTemperature` (0 to 2). The turn after a turn in which some call drew an `identical
 call` note is sampled at this temperature instead of `backend.temperature`; a turn without a
@@ -916,7 +917,8 @@ For `untilBash`: 5 of the 45 FAIL verdicts (96 runs) ended `done=final` — two 
 (`guard-hint`, `bare`), three on `pool` at sizes 6, 7, 8 with `tuned`; none on `pool2`, none
 from a harness with `maxRepeats`. That is a ceiling on claims it could have caught, not on
 passes gained: what this model does with red tests in front of it is the loop. It was not run
-live: nothing on the stand used below ends that way. On `slug` the natural command is the
+live in this check: nothing on the stand used below ends that way. It was later, on the `pool`
+stand — see "Two more live checks" at the end of this section. On `slug` the natural command is the
 grader itself, which would be a different experiment.
 
 **`repeatTemperature`: a replay, and it did nothing on these turns.** One recorded request, replayed ten
@@ -1070,7 +1072,55 @@ Read that as: on these turns of this model a thinking turn either fit and made t
 did not fit at all, and live it mostly did not fit in what a 5120 window leaves. One pass of three
 against one of nine without the knob and two of three with `freshContext` is three small numbers,
 not a ranking. A larger window, a cap that large, or a model that thinks shorter is a different
-measurement, and the knob is there for it.
+measurement, and the knob is there for it. One such measurement follows.
+
+### Two more live checks, 2026-09-20
+
+Both written down before any model time; three runs each, same model, same server build.
+
+**`untilBash: "node --test"`, live.** The stand is the one where recorded runs claimed on a red
+suite: `pool --size 8`, `tuned` (which has no `maxRepeats`), `--max-turns 40`, server `-c 32768`
+as in the pool calibration. `numCtx` is not sent on this backend, and a first attempt on an 8192
+server overflowed the window at turn 8 before any claim was made; it was dropped, not counted.
+
+| run | verdict | done | turns | s | `final_check` failed / all |
+|---|---|---|---|---|---|
+| `472f8fa8` | PASS | `final` | 8 | 139 | 0 / 1 |
+| `60551a89` | PASS | `final` | 5 | 119 | 0 / 1 |
+| `0333dab0` | FAIL | `backend_error` | 17 | 440 | 8 / 8 |
+
+Written down beforehand: no run ends `final` with its last check failed (held, three of three).
+What the model does after a refusal had no threshold, only classes — repair, loop of calls, edit
+of the tests — and the one run that was refused fitted none of them. In turns 3–8 it had flipped
+the last line of `chunk.js` back and forth six times; at turn 9 it claimed "Fixed all failing
+tests." with five tests red, was refused, and sent the byte-identical claim on each of the next
+seven turns, with no tool call in between. Every refusal put the cut test output, about 1450
+tokens, into the history: the prompt went from 22626 to 34190 tokens and the run ended on the
+32768 window, not on `max_turns`. `maxRepeats` would not have ended it either: it counts calls,
+and a claim has none. That is one run of this model on this task in which a refusal did not move
+it; it is not a reading of what the knob does anywhere else.
+
+**`repeatThinkTokens: 3072` in an 8192 window.** The harness of the live check above with two
+coupled changes: server `-c 8192` (was 5120) and the cap at 3072 (was 1536). `pool2:7`,
+`budgetTokens` 2670, `maxRepeats` 3, `--max-turns 20`, `--timeout 900`.
+
+| run | verdict | thinking turns | of them cut off at 3072 | s |
+|---|---|---|---|---|
+| `e263e451` | PASS | 1 | 0 | 158 |
+| `7d7f5a8b` | FAIL `repeat_loop` | 3 | 1 | 618 |
+| `3e80e6ce` | FAIL, bench timeout at 900 s | 5, and a sixth the timeout cut mid-reply | 1 | 900 |
+
+Written down beforehand: the cut-off share counts as lower only below 6 of 8 and with at least
+four thinking turns. Two of the nine completed thinking turns ran to the cap, so by that rule it
+was lower; the largest prompt plus reply was 6640 of 8192. All seven turns that fit made a first
+call different from the repeat the note named. Seven of the nine were drawn by a repeated
+`node --test` alone. Looked at afterwards, so not pre-registered: different was not repaired. One
+of the seven calls made the suite green — `>` to `>=` in the `while` line, the pass. Two, in the
+second run, were the same edit with an `old` that is not in the file (`n /= 1000;`), and the
+second of them drew the `identical call` note and ended the run. Four, in the third run, rewrote
+`formatBytes` one after another, the failing tests going 1, 2, 1, 2, until the timeout. Thinking
+replies took 364–3072 tokens. One pass of three is reported and compared to nothing: no run of
+this stand in an 8192 window exists without the knob.
 
 ## Honest notes
 
