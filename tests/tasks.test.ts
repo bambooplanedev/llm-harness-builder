@@ -167,3 +167,60 @@ test('sift: one changed character in a quote, a missing DROP, a PASS among the d
   expect(await broken('drops.txt', t => t + '7001: Claims that a read-before-edit guard removes most failed edits of a small local model.\n')).toBe(false)
   expect(await broken('drops.txt', t => t.replace('7004: would PASS on topic', '7004: on topic'))).toBe(false)
 })
+
+// triage: step 2 of the curator. The key travels with the fixture and never reaches a workdir.
+const TRIAGE = readFileSync(new URL('../examples-triage/posts.jsonl', import.meta.url), 'utf8').split('\n').filter(Boolean).slice(1).map(l => JSON.parse(l))
+/** An answer that follows the key: the first post of a duplicate pair is kept, a post the key leaves open gets `open`. */
+const triageAnswer = (dir: string, size: number, open: 'KEEP' | 'DROP' = 'DROP', edit: (rows: any[]) => any[] = r => r) => {
+  const seen = new Set<string>()
+  const rows = TRIAGE.slice(0, size).map(p => {
+    const first = p.dup !== undefined && !seen.has(p.dup)
+    if (p.dup !== undefined) seen.add(p.dup)
+    return { id: p.message_id, verdict: p.key === 'DUP' ? (first ? 'KEEP' : 'DROP') : p.key === 'EITHER' ? open : p.key, reason: 'x' }
+  })
+  writeFileSync(join(dir, 'triage.jsonl'), edit(rows).map(r => (typeof r === 'string' ? r : JSON.stringify(r)) + '\n').join(''))
+}
+
+test('triage: the fixture is byte for byte what it was, and the workdir holds posts.txt in the form the curator prints, without the key', async () => {
+  expect(createHash('sha256').update(readFileSync(new URL('../examples-triage/posts.jsonl', import.meta.url))).digest('hex')).toBe('72866607993b59834150b6c69c50d9b3541e460e10b1b8663d99e145a7a7e25a')
+  expect(TASKS.triage.max).toBe(16)
+  const dir = await TASKS.triage.prepare(3)
+  expect(readdirSync(dir)).toEqual(['posts.txt'])
+  const text = readFileSync(join(dir, 'posts.txt'), 'utf8')
+  expect(text).toContain('--- 8002 · 2026-09-18 · Agent Weekly\nFoxglove Agent 2.0 is now available\nWe are excited')
+  expect(text).toContain('--- 8003 · 2026-09-18 · manual\n\n\nhttps://infranotes.example/posts/')
+  expect(text).not.toMatch(/8004|"key"|KEEP|DROP|EITHER|no claim|off topic/)
+  expect(text.trimEnd().split('\n').at(-1)).toMatch(/: 3$/)
+  expect(TASKS.triage.check(dir, 3)).toBe(false) // nothing written yet
+  await expect(TASKS.triage.prepare(0)).rejects.toThrow(RangeError)
+  await expect(TASKS.triage.prepare(17)).rejects.toThrow(RangeError)
+})
+
+test('triage: an answer that follows the key is PASS at every size; an open post and the choice within a duplicate pair do not matter', async () => {
+  for (const size of [1, 4, 12, 16]) for (const open of ['KEEP', 'DROP'] as const) {
+    const dir = await TASKS.triage.prepare(size)
+    triageAnswer(dir, size, open)
+    expect([size, open, TASKS.triage.check(dir, size)]).toEqual([size, open, true])
+  }
+  const dir = await TASKS.triage.prepare(12)
+  const flip = (rows: any[]) => rows.map(r => r.id === 8001 ? { ...r, verdict: 'DROP' } : r.id === 8005 ? { ...r, verdict: 'KEEP', extra: 1 } : r)
+  triageAnswer(dir, 12, 'DROP', flip)
+  expect(TASKS.triage.check(dir, 12)).toBe(true)
+  // At size 4 the pair of 8001 is not in the list: 8001 is then a plain KEEP.
+  const alone = await TASKS.triage.prepare(4)
+  triageAnswer(alone, 4, 'DROP', rows => rows.map(r => r.id === 8001 ? { ...r, verdict: 'DROP' } : r))
+  expect(TASKS.triage.check(alone, 4)).toBe(false)
+})
+
+test('triage: a wrong verdict, both or neither of a duplicate pair, a missing or repeated id, a verdict outside KEEP/DROP, a line that is not JSON — each is FAIL', async () => {
+  const broken = async (edit: (rows: any[]) => any[]) => { const dir = await TASKS.triage.prepare(12); triageAnswer(dir, 12, 'DROP', edit); return TASKS.triage.check(dir, 12) }
+  const set = (id: number, verdict: string) => (rows: any[]) => rows.map(r => r.id === id ? { ...r, verdict } : r)
+  expect(await broken(set(8011, 'DROP'))).toBe(false)   // a post worth reading thrown away
+  expect(await broken(set(8004, 'KEEP'))).toBe(false)   // the car review let through
+  expect(await broken(set(8005, 'KEEP'))).toBe(false)   // both of a pair kept
+  expect(await broken(set(8006, 'DROP'))).toBe(false)   // neither of a pair kept
+  expect(await broken(rows => rows.slice(1))).toBe(false)
+  expect(await broken(rows => [...rows, rows[0]])).toBe(false)
+  expect(await broken(set(8002, 'drop'))).toBe(false)
+  expect(await broken(rows => [...rows, 'done'])).toBe(false)
+})

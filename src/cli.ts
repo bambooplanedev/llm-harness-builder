@@ -198,7 +198,7 @@ function rollup(h: BenchHarness) {
 }
 
 async function cmdBench(argv: string[]) {
-  const usage = 'usage: llm-harness-builder bench [harness.json ...] [--n 3] [--timeout 1800] [--out runs/bench-<ts>.json] [--task slug|pool|pool2|sift] [--size N] [--max-turns N] [--model m] [--base-url u] [--kind openai|ollama]'
+  const usage = 'usage: llm-harness-builder bench [harness.json ...] [--n 3] [--timeout 1800] [--out runs/bench-<ts>.json] [--task slug|pool|pool2|sift|triage] [--size N] [--max-turns N] [--model m] [--base-url u] [--kind openai|ollama]'
   const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: {
     n: { type: 'string', default: '3' }, timeout: { type: 'string', default: '1800' }, out: { type: 'string' },
     task: { type: 'string', default: 'slug' }, size: { type: 'string' }, 'max-turns': { type: 'string' },

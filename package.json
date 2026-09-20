@@ -13,7 +13,8 @@
     "harnesses",
     "examples",
     "examples-pool",
-    "examples-sift"
+    "examples-sift",
+    "examples-triage"
   ],
   "scripts": {
     "test": "vitest run",

@@ -118,4 +118,46 @@ const sift: Task = (() => {
   }
 })()
 
-export const TASKS = { slug, pool: poolTask('pool', POOL), pool2: poolTask('pool2', POOL2), sift }
+/** Step 2 of the curator: which new posts are worth fetching. A judgement, so the fixture carries its key: KEEP, DROP, EITHER (left open,
+ *  not part of the verdict) or DUP (of the posts of one `dup` group that are in the list, exactly one is kept). Synthetic; the key never reaches a workdir. */
+const TRIAGE_FIXTURE = path.join(PKG_ROOT, 'examples-triage', 'posts.jsonl')
+const triage: Task = (() => {
+  type Post = { message_id: number; published: string; source: string; title: string; summary: string; url: string; key: 'KEEP' | 'DROP' | 'EITHER' | 'DUP'; dup?: string }
+  const max = 16
+  const load = (size: number) => {
+    if (!Number.isInteger(size) || size < 1 || size > max) throw new RangeError(`triage size must be an integer from 1 to ${max}, got ${size}`)
+    const [head, ...posts] = readFileSync(TRIAGE_FIXTURE, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l))
+    return { head: head as { head: string[]; foot: string }, posts: (posts as Post[]).slice(0, size) }
+  }
+  return {
+    prompt: '`posts.txt` lists the new posts of a feed: a line `--- <id> · <date> · <source>`, then the title, a summary of up to 400 characters, and the URL. A post added by hand has the URL only: judge it by what the URL says. The channel these posts are screened for is about AI agents, Claude Code, local LLMs and agent harnesses. Triage them. DROP a post that claims nothing (an announcement, an empty release note, a bare link), a post that duplicates another one in this list by URL or by substance (keep one of the two), and a post that is off-topic (nothing about LLM tools, agents, models, prompting, evals or infra). KEEP the rest. If you cannot tell, DROP. Write `triage.jsonl`: one line per post, `{"id": <id>, "verdict": "KEEP" or "DROP", "reason": "<a few words>"}`, every post exactly once. Do not edit `posts.txt`. Finally answer with the two counts, as `N KEEP, M DROP`.',
+    max,
+    async prepare(size = max) {
+      const { head, posts } = load(size)
+      const dir = await mkdtemp(path.join(tmpdir(), 'lhb-triage-'))
+      // The form is the curator's own: `select` prints a post as these three lines under its `---` line, with a blank line after.
+      const body = posts.map(p => `--- ${p.message_id} · ${p.published} · ${p.source}\n${p.title}\n${p.summary}\n${p.url}\n`)
+      await writeFile(path.join(dir, 'posts.txt'), [...head.head, ...body, head.foot.replace('{n}', String(posts.length))].join('\n') + '\n')
+      return dir
+    },
+    check(dir, size = max) {
+      const { posts } = load(size)
+      const got = new Map<number, string>()
+      let lines: string[]
+      try { lines = readFileSync(path.join(dir, 'triage.jsonl'), 'utf8').split('\n').filter(l => l.trim()) } catch { return false }
+      for (const l of lines) {
+        let o: { id?: unknown; verdict?: unknown }
+        try { o = JSON.parse(l) } catch { return false }
+        if (typeof o?.id !== 'number' || got.has(o.id) || (o.verdict !== 'KEEP' && o.verdict !== 'DROP')) return false
+        got.set(o.id, o.verdict)
+      }
+      if (got.size !== posts.length || posts.some(p => !got.has(p.message_id))) return false
+      const groups = new Map<string, Post[]>()
+      for (const p of posts) if (p.key === 'DUP') groups.set(p.dup!, [...(groups.get(p.dup!) ?? []), p])
+      return posts.every(p => p.key === 'EITHER' || p.key === 'DUP' || got.get(p.message_id) === p.key)
+        && [...groups.values()].every(g => g.filter(p => got.get(p.message_id) === 'KEEP').length === 1)
+    },
+  }
+})()
+
+export const TASKS = { slug, pool: poolTask('pool', POOL), pool2: poolTask('pool2', POOL2), sift, triage }
