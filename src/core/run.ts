@@ -129,6 +129,8 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
       const req: ChatRequest = {
         model: config.backend.model, messages: think ? [{ role: 'system', content: systemThinking }, ...messages.slice(1)] : messages,
         temperature: hot && config.loop.repeatTemperature !== undefined ? config.loop.repeatTemperature : config.backend.temperature, numCtx: config.backend.numCtx, maxTokens: think ? thinkTokens : config.backend.maxTokens,
+        // A thinking turn needs the template's switch on as well: with it off, the /think line would be overruled.
+        think: config.backend.think === undefined ? undefined : think || config.backend.think,
         tools: prompted ? undefined : schemas,
         responseSchema: prompted && !hermes && config.toolCalls.enforceSchema ? PROMPTED_SCHEMA : undefined,
       }

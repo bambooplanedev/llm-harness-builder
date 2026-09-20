@@ -171,6 +171,15 @@ test('not-an-event-stream error carries the body as sent, not duplicated across 
   await expect(new OpenAIBackend('http://x/v1', chunked(['<html>abc', 'def</html>'])).send({})).rejects.toSatisfy((e: unknown) => (e as BackendError).body === '<html>abcdef</html>')
 })
 
+test('think becomes chat_template_kwargs.enable_thinking / think, either value, and is absent from the payload when not set', () => {
+  for (const think of [false, true]) {
+    expect((new OpenAIBackend('http://x/v1').buildPayload({ ...req, think }) as any).chat_template_kwargs).toEqual({ enable_thinking: think })
+    expect((new OllamaBackend('http://x').buildPayload({ ...req, think }) as any).think).toBe(think)
+  }
+  expect(new OpenAIBackend('http://x/v1').buildPayload(req)).not.toHaveProperty('chat_template_kwargs')
+  expect(new OllamaBackend('http://x').buildPayload(req)).not.toHaveProperty('think')
+})
+
 test('maxTokens becomes max_tokens / num_predict, and is absent from the payload when not set', () => {
   const capped = { ...req, maxTokens: 512 }
   expect((new OpenAIBackend('http://x/v1').buildPayload(capped) as any).max_tokens).toBe(512)

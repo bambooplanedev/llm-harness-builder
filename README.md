@@ -108,6 +108,13 @@ one would otherwise be silently off.
 `backend.maxTokens` caps the tokens of one response, thinking included; without it a generation
 runs until the window is full. `numCtx` is sent to Ollama only.
 
+`backend.think` sets the chat template's thinking switch: `chat_template_kwargs.enable_thinking` on
+an OpenAI-compatible server (llama-server reads it), `think` on Ollama. Absent, nothing is sent and
+the model's own default holds, so a harness without the key sends the request it always sent. It is
+for a model that thinks unless told otherwise through the template; the `/no_think` line of the
+shipped harnesses is a Qwen3 convention and another family does not read it. With
+`loop.repeatThinkTokens` the thinking turn goes out with the switch on, whatever `think` says.
+
 `toolCalls.format` picks how a `prompted` run talks: `json` (the shape above) or `hermes`
 (`<tool_call>{"name":…,"arguments":…}</tool_call>` blocks, results in `<tool_response>`, and a
 plain-text reply means "done"). `enforceSchema` only applies to `json`.

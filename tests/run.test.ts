@@ -491,6 +491,15 @@ test('a parse error that is not a truncation is never clipped', async () => {
   expect((be.requests[1].messages.at(-2) as any).content).toBe(prose)
 })
 
+test('backend.think reaches the request, and only when the harness sets it', async () => {
+  const off = Fake([{ content: 'fin' }]), plain = Fake([{ content: 'fin' }])
+  const cfg = base(); cfg.backend = { ...cfg.backend, think: false }
+  await collect({ config: cfg, task: 'do', workdir: await wd() }, { backend: off })
+  await collect({ config: base(), task: 'do', workdir: await wd() }, { backend: plain })
+  expect(off.requests[0].think).toBe(false)
+  expect('think' in plain.requests[0] && plain.requests[0].think !== undefined).toBe(false)
+})
+
 test('backend.maxTokens reaches the request, and only when the harness sets it', async () => {
   const capped = Fake([{ content: 'fin' }]), plain = Fake([{ content: 'fin' }])
   const cfg = base(); cfg.backend = { ...cfg.backend, maxTokens: 1024 }
@@ -543,6 +552,13 @@ test('repeatThinkTokens: the turn after a repeat goes out with /think and its ow
   expect(temps(be)).toEqual([0, 0, 0, 0]) // thinking on its own leaves the temperature alone
   // only the system message differs: the history the thinking turn sees is the history
   expect(be.requests[2].messages.slice(1)).toEqual(be.requests[3].messages.slice(1, be.requests[2].messages.length))
+})
+
+test('repeatThinkTokens with backend.think off: the thinking turn alone goes out with think on', async () => {
+  const be = Fake([readA, readA, { toolCalls: [{ name: 'read_file', args: { path: 'b.txt' } }] }, { content: 'fin' }])
+  const cfg = base({ systemPrompt: THINK_SYS, loop: { maxTurns: 10, maxRepeats: 3, repeatThinkTokens: 2048 } }); cfg.backend = { ...cfg.backend, think: false }
+  await collect({ config: cfg, task: 'do', workdir: await wd() }, { backend: be })
+  expect(be.requests.map(r => r.think)).toEqual([false, false, true, false])
 })
 
 test('repeatThinkTokens: in a prompted run the switch is flipped inside the system message, the tool template stays', async () => {

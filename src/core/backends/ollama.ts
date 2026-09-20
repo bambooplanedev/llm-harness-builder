@@ -20,7 +20,7 @@ export class OllamaBackend implements Backend {
       return { role: m.role, content: m.content }
     })
     return {
-      model: req.model, messages, stream: true,
+      model: req.model, messages, stream: true, ...(req.think !== undefined ? { think: req.think } : {}),
       options: { temperature: req.temperature, ...(req.numCtx ? { num_ctx: req.numCtx } : {}), ...(req.maxTokens ? { num_predict: req.maxTokens } : {}) },
       ...toolsField(req.tools),
       ...(req.responseSchema ? { format: req.responseSchema } : {}),
