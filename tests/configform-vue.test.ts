@@ -77,3 +77,14 @@ test('the optional loop knobs show the harness values, 0 included, and empty box
   for (const label of ['max repeats', 'repeat temperature', 'repeat think tokens', 'fresh context', 'until bash'])
     expect(off).toMatch(new RegExp(`${label}</span><input[^>]*value=""`))
 })
+
+// SSR writes the bound value on the select itself; in a browser Vue sets it as the DOM property once the options exist.
+const formatSelect = (html: string) => /<select value="(\w+)"><option value="json">/.exec(html)?.[1]
+
+test('a prompted harness without toolCalls.format shows json, and rendering it does not write the key', async () => {
+  const { format: _, ...toolCalls } = base.toolCalls
+  const c = { ...base, toolCalls } as HarnessConfig
+  expect(formatSelect(await render(c))).toBe('json')
+  expect('format' in c.toolCalls).toBe(false)
+  expect(formatSelect(await render({ ...base, toolCalls: { ...base.toolCalls, format: 'hermes' } }))).toBe('hermes')
+})

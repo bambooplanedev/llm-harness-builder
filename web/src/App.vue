@@ -32,7 +32,8 @@ async function refreshModels() {
 }
 async function refreshLists() { harnessNames.value = (await api.harnesses()).map(h => h.name); runs.value = await api.runs() }
 /** Normalises a config from either door (saved harness, bench JSON) before it lands in the form. */
-function setConfig(c: HarnessConfig) { c.toolCalls.format ??= 'json'; config.value = c }
+/** A harness without toolCalls.format stays without it: the form shows json for a missing key, and only a choice made there writes one. */
+function setConfig(c: HarnessConfig) { config.value = c }
 /** A harness describes how the agent thinks; the backend is what it runs on. Switching the first
  *  leaves the second alone — unless no model is picked yet (models never listed), when the
  *  harness's own backend is the only usable one. */
