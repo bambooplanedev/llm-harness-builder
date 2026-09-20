@@ -10,7 +10,7 @@ export type McpServerConfig = { command: string; args?: string[]; tools?: string
 
 export type HarnessConfig = {
   name: string
-  backend: { kind: BackendKind; baseUrl: string; model: string; numCtx?: number; temperature: number }
+  backend: { kind: BackendKind; baseUrl: string; model: string; numCtx?: number; maxTokens?: number; temperature: number }
   systemPrompt: string
   tools: { enabled: ToolName[]; approveBash: boolean; requireReadBeforeEdit?: boolean; explainEditMiss?: boolean }
   toolCalls: { mode: 'native' | 'prompted'; format?: ToolCallFormat; enforceSchema: boolean; promptedTemplate: string; parseErrorHint: string }
@@ -36,6 +36,7 @@ export function validateConfig(c: unknown): string[] {
     if (typeof b.model !== 'string' || !b.model) e.push('backend.model is required')
     if (typeof b.temperature !== 'number') e.push('backend.temperature must be a number')
     if (b.numCtx !== undefined && !(Number.isInteger(b.numCtx) && b.numCtx > 0)) e.push('backend.numCtx must be a positive integer')
+    if (b.maxTokens !== undefined && !(Number.isInteger(b.maxTokens) && b.maxTokens > 0)) e.push('backend.maxTokens must be a positive integer')
   }
   if (typeof c.systemPrompt !== 'string') e.push('systemPrompt must be a string')
   const t = c.tools

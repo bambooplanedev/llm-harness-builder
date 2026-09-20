@@ -44,6 +44,8 @@ export type ChatRequest = {
   responseSchema?: Record<string, unknown>
   temperature: number
   numCtx?: number
+  /** Cap on generated tokens, thinking included; absent = the server's default, which is the rest of the window. */
+  maxTokens?: number
 }
 
 export type NormalizedResponse = {
