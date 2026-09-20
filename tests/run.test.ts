@@ -414,14 +414,51 @@ test('maxRepeats: an edit the guard refused, then read_file, then the same edit 
   expect(last(ev).reason).toBe('final')
 })
 
-// The third loop in the README: old === new "succeeds", which clears every count but its own.
-test('maxRepeats: a no-op edit repeated is still caught', async () => {
+// The third loop in the README: old === new. It is an error now, so it changes no file and clears no count.
+test('maxRepeats: a no-op edit is an error, and the calls around it keep their counts', async () => {
   const noop = { toolCalls: [{ name: 'edit_file', args: { path: 'a.txt', old: 'A'.repeat(120), new: 'A'.repeat(120) } }] }
-  const be = Fake([noop, readA, noop, readA, noop, { content: 'never reached' }])
+  const be = Fake([readA, noop, readA, { content: 'never reached' }])
+  const cfg = base({ tools: { enabled: ['read_file', 'edit_file'], approveBash: false }, loop: { maxTurns: 10, maxRepeats: 0 } })
+  const ev = await collect({ config: cfg, task: 'do', workdir: await wd() }, { backend: be })
+  expect(results(ev).map(r => r.error)).toEqual([false, true, false])
+  expect(last(ev)).toMatchObject({ reason: 'repeat_loop', turns: 3 })
+})
+
+// Two edits that undo each other: each one used to clear the other's count, so neither reached 2.
+test('maxRepeats: an edit and its undo, repeated, are counted across each other', async () => {
+  const a = 'A'.repeat(120)
+  const there = { toolCalls: [{ name: 'edit_file', args: { path: 'a.txt', old: a, new: 'B' } }] }
+  const back = { toolCalls: [{ name: 'edit_file', args: { path: 'a.txt', old: 'B', new: a } }] }
+  const be = Fake([there, back, there, back, there, { content: 'never reached' }])
   const cfg = base({ tools: { enabled: ['read_file', 'edit_file'], approveBash: false }, loop: { maxTurns: 10, maxRepeats: 1 } })
   const ev = await collect({ config: cfg, task: 'do', workdir: await wd() }, { backend: be })
-  expect(results(ev).every(r => !r.error)).toBe(true)
+  const out = results(ev)
+  expect(out.every(r => !r.error)).toBe(true) // every one of them really edited the file
+  expect(out.map(r => r.output.split('\n').at(-1))).toEqual([
+    'edited a.txt', 'edited a.txt',
+    'note: identical call #2 in this run', 'note: identical call #2 in this run', 'note: identical call #3 in this run',
+  ])
   expect(last(ev)).toMatchObject({ reason: 'repeat_loop', turns: 5 })
+})
+
+test('maxRepeats: write_file is counted over the run like an edit', async () => {
+  const w = (content: string) => ({ toolCalls: [{ name: 'write_file', args: { path: 'a.txt', content } }] })
+  const be = Fake([w('one'), w('two'), w('one'), { content: 'never reached' }])
+  const cfg = base({ tools: { enabled: ['write_file'], approveBash: false }, loop: { maxTurns: 10, maxRepeats: 0 } })
+  const ev = await collect({ config: cfg, task: 'do', workdir: await wd() }, { backend: be })
+  expect(results(ev)[2].output.endsWith('note: identical call #2 in this run')).toBe(true)
+  expect(last(ev)).toMatchObject({ reason: 'repeat_loop', turns: 3 })
+})
+
+// Only an edit that has succeeded keeps its count: a miss, a write that repairs the file, the same edit again is a recovery.
+test('maxRepeats: an edit that only ever missed is new again after the file changed', async () => {
+  const edit = { toolCalls: [{ name: 'edit_file', args: { path: 'a.txt', old: 'ZZ', new: 'Y' } }] }
+  const write = { toolCalls: [{ name: 'write_file', args: { path: 'a.txt', content: 'ZZ' } }] }
+  const be = Fake([edit, write, edit, { content: 'fin' }])
+  const cfg = base({ tools: { enabled: ['edit_file', 'write_file'], approveBash: false }, loop: { maxTurns: 10, maxRepeats: 0 } })
+  const ev = await collect({ config: cfg, task: 'do', workdir: await wd() }, { backend: be })
+  expect(results(ev).map(r => r.error)).toEqual([true, false, false])
+  expect(last(ev).reason).toBe('final')
 })
 
 // A response cut off at the token limit filled the window; sent back whole, the retry cannot fit (README, MCP).
@@ -461,4 +498,206 @@ test('backend.maxTokens reaches the request, and only when the harness sets it',
   await collect({ config: base(), task: 'do', workdir: await wd() }, { backend: plain })
   expect(capped.requests[0].maxTokens).toBe(1024)
   expect(plain.requests[0].maxTokens).toBeUndefined()
+})
+
+const temps = (be: { requests: { temperature?: number }[] }) => be.requests.map(r => r.temperature)
+
+test('repeatTemperature: the turn after a repeat is sampled at it, and a turn without a repeat goes back', async () => {
+  const be = Fake([readA, readA, { toolCalls: [{ name: 'read_file', args: { path: 'b.txt' } }] }, { content: 'fin' }])
+  const ev = await collect({ config: base({ loop: { maxTurns: 10, maxRepeats: 3, repeatTemperature: 0.9 } }), task: 'do', workdir: await wd() }, { backend: be })
+  expect(temps(be)).toEqual([0, 0, 0.9, 0])
+  expect(last(ev).reason).toBe('final')
+})
+
+// tuned-repeat and guard-repeat have maxRepeats and no repeatTemperature: their requests must not change by a byte.
+test('repeatTemperature absent: a repeat under maxRepeats leaves the base temperature in the next request', async () => {
+  const be = Fake([readA, readA, { content: 'fin' }])
+  await collect({ config: base({ loop: { maxTurns: 10, maxRepeats: 3 } }), task: 'do', workdir: await wd() }, { backend: be })
+  expect(temps(be)).toEqual([0, 0, 0])
+  expect(be.requests.every(r => 'temperature' in r && r.temperature === 0)).toBe(true)
+})
+
+test('repeatTemperature: 0 is a temperature, not "off"', async () => {
+  const cfg = base({ loop: { maxTurns: 10, maxRepeats: 3, repeatTemperature: 0 } }); cfg.backend = { ...cfg.backend, temperature: 0.2 }
+  const be = Fake([readA, readA, { content: 'fin' }])
+  await collect({ config: cfg, task: 'do', workdir: await wd() }, { backend: be })
+  expect(temps(be)).toEqual([0.2, 0.2, 0])
+})
+
+test('repeatTemperature: the retry after a parse error goes out at the base temperature', async () => {
+  const be = Fake([readA, readA, { content: '' }, { content: 'fin' }])
+  await collect({ config: base({ loop: { maxTurns: 10, maxRepeats: 3, repeatTemperature: 0.9 } }), task: 'do', workdir: await wd() }, { backend: be })
+  expect(temps(be)).toEqual([0, 0, 0.9, 0])
+})
+
+const THINK_SYS = 'sys\n/no_think'
+const sysOf = (be: { requests: { messages: { content: string }[] }[] }) => be.requests.map(r => r.messages[0].content)
+const caps = (be: { requests: { maxTokens?: number }[] }) => be.requests.map(r => r.maxTokens)
+
+test('repeatThinkTokens: the turn after a repeat goes out with /think and its own token cap, and the next one goes back', async () => {
+  const be = Fake([readA, readA, { toolCalls: [{ name: 'read_file', args: { path: 'b.txt' } }] }, { content: 'fin' }])
+  const cfg = base({ systemPrompt: THINK_SYS, loop: { maxTurns: 10, maxRepeats: 3, repeatThinkTokens: 2048 } }); cfg.backend = { ...cfg.backend, maxTokens: 1024 }
+  await collect({ config: cfg, task: 'do', workdir: await wd() }, { backend: be })
+  expect(sysOf(be)).toEqual([THINK_SYS, THINK_SYS, 'sys\n/think', THINK_SYS])
+  expect(caps(be)).toEqual([1024, 1024, 2048, 1024])
+  expect(temps(be)).toEqual([0, 0, 0, 0]) // thinking on its own leaves the temperature alone
+  // only the system message differs: the history the thinking turn sees is the history
+  expect(be.requests[2].messages.slice(1)).toEqual(be.requests[3].messages.slice(1, be.requests[2].messages.length))
+})
+
+test('repeatThinkTokens: in a prompted run the switch is flipped inside the system message, the tool template stays', async () => {
+  const be = Fake([{ content: '{"calls":[{"name":"read_file","args":{"path":"a.txt"}}],"final":null}' }, { content: '{"calls":[{"name":"read_file","args":{"path":"a.txt"}}],"final":null}' }, { content: '{"calls":[],"final":"fin"}' }])
+  const cfg = base({ systemPrompt: THINK_SYS, loop: { maxTurns: 10, maxRepeats: 3, repeatThinkTokens: 2048 } })
+  cfg.toolCalls = { ...cfg.toolCalls, mode: 'prompted' }
+  await collect({ config: cfg, task: 'do', workdir: await wd() }, { backend: be })
+  const [a, , c] = sysOf(be)
+  expect(c).toBe(a.replace('/no_think', '/think')); expect(c).not.toBe(a); expect(c).toContain('read_file')
+})
+
+test('repeatThinkTokens absent: a repeat leaves the system message and the token cap as they were', async () => {
+  const be = Fake([readA, readA, { content: 'fin' }])
+  const cfg = base({ systemPrompt: THINK_SYS, loop: { maxTurns: 10, maxRepeats: 3 } }); cfg.backend = { ...cfg.backend, maxTokens: 1024 }
+  await collect({ config: cfg, task: 'do', workdir: await wd() }, { backend: be })
+  expect(sysOf(be)).toEqual([THINK_SYS, THINK_SYS, THINK_SYS]); expect(caps(be)).toEqual([1024, 1024, 1024])
+})
+
+test('repeatThinkTokens: a thinking reply cut off by the cap is retried without thinking', async () => {
+  const be = Fake([readA, readA, { content: '', truncated: true }, { content: 'fin' }])
+  await collect({ config: base({ systemPrompt: THINK_SYS, loop: { maxTurns: 10, maxRepeats: 3, repeatThinkTokens: 2048 } }), task: 'do', workdir: await wd() }, { backend: be })
+  expect(sysOf(be).map(s => s.includes('/think'))).toEqual([false, false, true, false])
+})
+
+const resets = (ev: HarnessEvent[]) => ev.filter(e => e.type === 'context_reset') as Extract<HarnessEvent, { type: 'context_reset' }>[]
+
+test('freshContext: after N repeats the history is the task again, once; the second loop is for maxRepeats', async () => {
+  const be = Fake([readA, readA, readA, readA, readA, { content: 'never reached' }])
+  const ev = await collect({ config: base({ loop: { maxTurns: 10, maxRepeats: 1, freshContext: 1 } }), task: 'do', workdir: await wd() }, { backend: be })
+  const before = be.requests[1].messages, after = be.requests[2].messages
+  expect(after.map(m => m.role)).toEqual(['system', 'user'])
+  expect(after[0].content).toBe('sys')
+  expect(after[1].content.startsWith('do\n\nNote: an earlier attempt')).toBe(true)
+  // what went: the assistant turns and tool results of turns 1 and 2 (the second result never entered the history)
+  expect(resets(ev)).toHaveLength(1)
+  expect(resets(ev)[0]).toMatchObject({ turn: 2, chars: before.slice(2).reduce((n, m) => n + m.content.length, 0) })
+  const out = results(ev).map(r => r.output)
+  expect(out[1]).toContain('identical call #2')
+  expect(out[2]).not.toContain('identical call') // the counts went with the history
+  expect(out[3]).toContain('identical call #2')
+  expect(last(ev)).toMatchObject({ reason: 'repeat_loop', turns: 5, toolCallCount: 5 })
+})
+
+test('freshContext: the looping call twice in one response resets, and the second copy never runs', async () => {
+  const cfg = base({ loop: { maxTurns: 10, maxRepeats: 1, freshContext: 1 }, toolCalls: { mode: 'prompted', enforceSchema: false, promptedTemplate: 'T:{{tools}}', parseErrorHint: 'HINT' } })
+  const call = '{"name":"read_file","args":{"path":"a.txt"}}'
+  const be = Fake([{ content: `{"calls":[${call}],"final":null}` }, { content: `{"calls":[${call},${call}],"final":null}` }, { content: '{"calls":[],"final":"fin"}' }])
+  const ev = await collect({ config: cfg, task: 'do', workdir: await wd() }, { backend: be })
+  expect(resets(ev)).toHaveLength(1)
+  expect(results(ev)).toHaveLength(2)
+  expect(be.requests[2].messages.map(m => m.role)).toEqual(['system', 'user'])
+  expect(last(ev)).toMatchObject({ reason: 'final', toolCallCount: 2 })
+})
+
+test('freshContext: the new context has read nothing, so the guard asks for a read again', async () => {
+  const cfg = base({ context: { maxToolOutputChars: 200, budgetTokens: 0 }, loop: { maxTurns: 10, maxRepeats: 1, freshContext: 1 },
+    tools: { enabled: ['read_file', 'edit_file'], approveBash: false, requireReadBeforeEdit: true } })
+  const be = Fake([readA, readA, { toolCalls: [{ name: 'edit_file', args: { path: 'a.txt', old: 'A'.repeat(120), new: 'B' } }] }, { content: 'fin' }])
+  const ev = await collect({ config: cfg, task: 'do', workdir: await wd() }, { backend: be })
+  expect(results(ev)[2]).toMatchObject({ error: true })
+  expect(results(ev)[2].output).toContain('has not been read in this run')
+})
+
+test('freshContext: the turn after the reset is not a hot one', async () => {
+  const be = Fake([readA, readA, { content: 'fin' }])
+  await collect({ config: base({ loop: { maxTurns: 10, maxRepeats: 1, freshContext: 1, repeatTemperature: 0.9 } }), task: 'do', workdir: await wd() }, { backend: be })
+  expect(temps(be)).toEqual([0, 0, 0])
+})
+
+test('freshContext absent: nothing is reset', async () => {
+  const be = Fake([readA, readA, { content: 'fin' }])
+  const ev = await collect({ config: base({ loop: { maxTurns: 10, maxRepeats: 3 } }), task: 'do', workdir: await wd() }, { backend: be })
+  expect(resets(ev)).toHaveLength(0)
+  expect(be.requests[2].messages).toHaveLength(6)
+})
+
+const until = (cmd: string, over: Partial<HarnessConfig> = {}) => base({ loop: { maxTurns: 4, untilBash: cmd }, ...over })
+const checks = (ev: HarnessEvent[]) => ev.filter(e => e.type === 'final_check') as Extract<HarnessEvent, { type: 'final_check' }>[]
+const asked = (ev: HarnessEvent[]) => (ev.filter(e => e.type === 'approval_required') as Extract<HarnessEvent, { type: 'approval_required' }>[]).map(e => e.call)
+const yes = { approve: async () => true }
+
+test('untilBash: approved once before any model time; a final with the command green is final', async () => {
+  const be = Fake([{ content: 'fin' }])
+  const ev = await collect({ config: until('true'), task: 'do', workdir: await wd() }, { backend: be, ...yes })
+  expect(types(ev).slice(0, 2)).toEqual(['approval_required', 'context_stats'])
+  expect(asked(ev)).toEqual([{ callId: 'until0', name: 'until_bash', args: { command: 'true' } }])
+  expect(checks(ev)).toMatchObject([{ command: 'true', passed: true }])
+  expect(last(ev)).toMatchObject({ reason: 'final', text: 'fin' })
+})
+
+test('untilBash: a final with the command red goes back to the model with the output, and the run goes on', async () => {
+  const be = Fake([{ content: 'done!' }, { toolCalls: [{ name: 'bash', args: { command: 'touch ok.txt' } }] }, { content: 'now done' }])
+  const ev = await collect({ config: until('echo looking; test -f ok.txt'), task: 'do', workdir: await wd() }, { backend: be, ...yes })
+  expect(checks(ev).map(c => c.passed)).toEqual([false, true])
+  const m = be.requests[1].messages
+  expect(m.slice(-2).map(x => x.role)).toEqual(['assistant', 'user'])
+  expect(m[m.length - 1].content).toBe('not finished: `echo looking; test -f ok.txt` did not exit 0\nlooking\n\n[exit 1]')
+  expect(last(ev)).toMatchObject({ reason: 'final', text: 'now done', turns: 3, toolCallCount: 1 })
+})
+
+test('untilBash: a model that only ever says it is done ends max_turns', async () => {
+  const be = Fake([{ content: 'a' }, { content: 'b' }, { content: 'c' }, { content: 'd' }])
+  const ev = await collect({ config: until('false'), task: 'do', workdir: await wd() }, { backend: be, ...yes })
+  expect(checks(ev)).toHaveLength(4)
+  expect(last(ev).reason).toBe('max_turns')
+})
+
+test('untilBash: exit 0 is read before the output is cut, and the event carries the cut text', async () => {
+  const be = Fake([{ content: 'fin' }])
+  const ev = await collect({ config: until('cat a.txt'), task: 'do', workdir: await wd() }, { backend: be, ...yes })
+  expect(checks(ev)[0].passed).toBe(true)
+  expect(checks(ev)[0].output).toBe('A'.repeat(50) + '\n[truncated: 79 more chars]')
+  expect(last(ev).reason).toBe('final')
+})
+
+test('untilBash: refused, or nobody to ask, is a stated error and no model time', async () => {
+  for (const opts of [{ approve: async () => false }, {}]) {
+    const be = Fake([])
+    const ev = await collect({ config: until('true'), task: 'do', workdir: await wd() }, { backend: be, ...opts })
+    expect(types(ev)).toEqual(['approval_required', 'error', 'done'])
+    expect((ev[1] as any).message).toContain('untilBash')
+    expect(last(ev).reason).toBe('aborted')
+    expect(be.requests).toHaveLength(0)
+  }
+})
+
+test('untilBash: refused after the mcp servers were approved, no server is ever started', async () => {
+  let started = 0
+  const ev = await collect({ config: withMcp({ loop: { maxTurns: 4, untilBash: 'true' } }), task: 'do', workdir: await wd() }, {
+    backend: Fake([]), mcp: async () => { started++; return fakeMcp() }, approve: async (c: any) => c.name !== 'until_bash',
+  })
+  expect(asked(ev).map(c => c.callId)).toEqual(['mcp1', 'until0'])
+  expect(started).toBe(0)
+  expect(last(ev).reason).toBe('aborted')
+})
+
+test('untilBash under approveBash: every execution asks, because it runs what the model wrote', async () => {
+  const cfg = until('false', { tools: { enabled: ['read_file', 'bash'], approveBash: true } })
+  const be = Fake([{ content: 'a' }, { content: 'b' }])
+  const answers = [true, true, false]
+  const ev = await collect({ config: cfg, task: 'do', workdir: await wd() }, { backend: be, approve: async () => answers.shift()! })
+  expect(asked(ev).map(c => c.callId)).toEqual(['until0', 'until1', 'until2'])
+  expect(checks(ev)).toHaveLength(1) // the refused one never ran
+  expect(ev.some(e => e.type === 'error' && e.message.includes('untilBash'))).toBe(true)
+  expect(last(ev).reason).toBe('aborted')
+})
+
+test('untilBash: a stop that arrives while the check runs is aborted, even if the check came back green', async () => {
+  const ac = new AbortController()
+  setTimeout(() => ac.abort(), 60)
+  const ev = await collect({ config: until('sleep 0.4'), task: 'do', workdir: await wd() }, { backend: Fake([{ content: 'fin' }]), signal: ac.signal, ...yes })
+  expect(last(ev).reason).toBe('aborted')
+})
+
+test('untilBash absent: a final is final, nothing is asked and nothing is run', async () => {
+  const ev = await collect({ config: base(), task: 'do', workdir: await wd() }, { backend: Fake([{ content: 'fin' }]) })
+  expect(types(ev)).toEqual(['context_stats', 'llm_request', 'llm_response', 'done'])
 })

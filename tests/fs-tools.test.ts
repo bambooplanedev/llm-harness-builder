@@ -49,6 +49,12 @@ test('edit_file errors on 0 and 2 matches', async () => {
   await expect(editFile({ path: 'a.txt', old: 'x', new: 'y' }, ctx)).rejects.toThrow(/2 occurrences/)
 })
 
+test('edit_file refuses an edit that changes nothing; a miss is still reported as a miss', async () => {
+  await expect(editFile({ path: 'a.txt', old: 'world', new: 'world' }, ctx)).rejects.toThrow(/identical/)
+  await expect(editFile({ path: 'crlf.txt', old: 'two\r\nthree', new: 'two\nthree' }, ctx)).rejects.toThrow(/identical/)
+  await expect(editFile({ path: 'a.txt', old: 'zzz', new: 'zzz' }, ctx)).rejects.toThrow(/0 occurrences/)
+})
+
 test('edit_file matches LF against CRLF file and preserves CRLF', async () => {
   await editFile({ path: 'crlf.txt', old: 'two\nthree', new: 'TWO' }, ctx)
   expect(await rf(join(ctx.workdir, 'crlf.txt'), 'utf8')).toBe('one\r\nTWO\r\n')

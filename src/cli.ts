@@ -1,23 +1,24 @@
 #!/usr/bin/env node
 // src/cli.ts
 import { parseArgs } from 'node:util'
-import { readFile, mkdtemp, cp, writeFile, rename, access, mkdir } from 'node:fs/promises'
+import { readFile, cp, writeFile, rename, access, mkdir } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { spawn, spawnSync } from 'node:child_process'
 import { createInterface } from 'node:readline/promises'
-import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { runAgent, type RunOpts } from './core/run.js'
-import { validateConfig, type HarnessConfig } from './core/config.js'
+import { validateConfig, type HarnessConfig, type BackendKind } from './core/config.js'
 import { validateWorkdir } from './core/tools/sandbox.js'
 import type { Backend, NormalizedResponse } from './core/backends/types.js'
-import { mcpApprovalServer, mcpCounts, quitWithoutWork, type HarnessEvent, type ToolCall } from './core/events.js'
+import { mcpApprovalServer, mcpCounts, UNTIL_BASH, quitWithoutWork, type HarnessEvent, type ToolCall } from './core/events.js'
 import { startServer } from './server/index.js'
 import { TraceWriter, type Meta } from './server/runs.js'
-import { DEMO_TASK } from './core/prompts.js'
+import { TASKS, type Task } from './core/tasks.js'
 import { median, formatTable, type BenchRun, type BenchHarness, type BenchResult } from './core/bench.js'
 import { GUARD_BLOCKED, EDIT_MISS } from './core/tools/fs.js'
+import { createBackend } from './core/backends/index.js'
+import { replayPayload, replySignature, recordedTurn } from './core/replay.js'
 
 const PKG_ROOT = fileURLToPath(new URL('..', import.meta.url))
 const die = (msg: string): never => { console.error(msg); process.exit(2) }
@@ -35,7 +36,7 @@ function fakeBackendFromEnv(): Promise<Backend | undefined> {
   })())
 }
 
-async function loadHarness(file: string, over: { model?: string; baseUrl?: string; kind?: string }): Promise<HarnessConfig> {
+async function loadHarness(file: string, over: { model?: string; baseUrl?: string; kind?: string; maxTurns?: number }): Promise<HarnessConfig> {
   // One catch for the whole read: a missing file, a directory and malformed JSON all used to reach
   // the top-level handler and print a stack at someone who mistyped a path.
   let cfg: any
@@ -45,6 +46,8 @@ async function loadHarness(file: string, over: { model?: string; baseUrl?: strin
   if (over.model) cfg.backend.model = over.model
   if (over.baseUrl) cfg.backend.baseUrl = over.baseUrl
   if (over.kind) cfg.backend.kind = over.kind
+  // Only onto a loop object that is there: a harness without one is validateConfig's to report.
+  if (over.maxTurns && cfg.loop && typeof cfg.loop === 'object') cfg.loop.maxTurns = over.maxTurns
   const errs = validateConfig(cfg)
   if (errs.length) die(`invalid harness ${file}:\n  ${errs.join('\n  ')}`)
   return cfg
@@ -59,6 +62,8 @@ function describe(e: HarnessEvent, streamed = false): string {
     case 'parse_error': return `[t${e.turn}] parse_error: ${e.message}${e.droppedChars ? ` (${e.droppedChars} chars kept out of the history)` : ''}`
     case 'tool_call': return `[t${e.turn}] tool_call ${e.call.name} ${JSON.stringify(e.call.args).slice(0, 200)}`
     case 'mcp_server_start': return `mcp ${e.server}: ${mcpCounts(e)}`
+    case 'final_check': return `[t${e.turn}] final_check ${e.passed ? 'passed' : 'failed'}: ${e.command}${e.passed ? '' : `\n    ${e.output.slice(0, 200).replace(/\n/g, ' ')}`}`
+    case 'context_reset': return `[t${e.turn}] context_reset: ${e.chars} chars of history cleared, the next request is the task again`
     case 'approval_required': return `[t${e.turn}] approval_required ${e.call.name}`
     case 'tool_result': return `[t${e.turn}] tool_result ${e.name}${e.error ? ' (error)' : ''}${e.truncated ? ' (truncated)' : ''}: ${e.output.slice(0, 200).replace(/\n/g, ' ')}`
     case 'error': return `error: ${e.message}${e.body ? `\n${e.body}` : ''}`
@@ -83,7 +88,9 @@ async function execRun(config: HarnessConfig, task: string, workdir: string, o: 
     const server = mcpApprovalServer(call.name)
     const what = server
       ? `start mcp server "${server}": ${call.args.command}`
-      : `run bash: ${call.args.command}`
+      : call.name === UNTIL_BASH
+        ? `run each time the model says it is done, on files the model has written: ${call.args.command}`
+        : `run bash: ${call.args.command}`
     const a = await rl!.question(`${what}\n[y/N] `)
     return /^y(es)?$/i.test(a.trim())
   }
@@ -129,26 +136,14 @@ async function cmdRun(argv: string[]) {
   process.exitCode = last.type === 'done' && last.reason === 'final' ? 0 : 1
 }
 
-async function makeDemoWorkdir(): Promise<string> {
-  const dir = await mkdtemp(path.join(tmpdir(), 'lhb-demo-'))
-  await cp(path.join(PKG_ROOT, 'examples'), dir, { recursive: true })
-  const lines: string[] = []
-  for (let i = 0; i < 3000; i++) lines.push(`2026-09-11T10:${String(i % 60).padStart(2, '0')}:00Z INFO request id=${i} path=/api/slug status=200 ms=${(i * 7) % 90}`)
-  lines.push('2026-09-11T11:00:00Z ERROR bug report: slugify("  Hello, World!  ") returned "hello-world-" but expected "hello-world" (leading and trailing dashes must be stripped)')
-  lines.push('2026-09-11T11:00:01Z INFO request id=3001 path=/api/slug status=200 ms=12')
-  await mkdir(path.join(dir, 'data'), { recursive: true })
-  await writeFile(path.join(dir, 'data', 'app.log'), lines.join('\n') + '\n')
-  return dir
-}
-
 async function cmdDemo(argv: string[]) {
   const { values } = parseArgs({ args: argv, options: { model: { type: 'string' }, 'base-url': { type: 'string' }, kind: { type: 'string' }, json: { type: 'boolean', default: false } } })
   const rows: string[] = []
   for (const name of DEMO_HARNESSES) {
     const config = await loadHarness(path.join(PKG_ROOT, 'harnesses', `${name}.json`), { model: values.model, baseUrl: values['base-url'], kind: values.kind })
-    const workdir = await makeDemoWorkdir()
+    const workdir = await TASKS.slug.prepare()
     console.error(`\n=== ${name} (${config.backend.model}) in ${workdir}`)
-    const { id, last } = await execRun(config, DEMO_TASK, workdir, { yes: true, json: values.json })
+    const { id, last } = await execRun(config, TASKS.slug.prompt, workdir, { yes: true, json: values.json })
     const check = spawnSync('sh', [path.join(workdir, 'check.sh')])
     const verdict = check.status === 0 ? 'PASS' : 'FAIL'
     const d = last.type === 'done' ? last : undefined
@@ -162,15 +157,15 @@ async function cmdDemo(argv: string[]) {
 const INT = /^[1-9]\d*$/
 const stamp = (d: Date) => { const p = (n: number) => String(n).padStart(2, '0'); return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}` }
 
-/** One bench run: fresh demo workdir → execRun (timed) → check.sh. Never throws; an exception becomes a FAIL row with reason 'error'. */
-async function benchOnce(config: HarnessConfig, round: number, timeoutS: number, out: string): Promise<BenchRun> {
+/** One bench run: fresh task workdir → execRun (timed) → the task's check. Never throws; an exception becomes a FAIL row with reason 'error'. */
+async function benchOnce(config: HarnessConfig, round: number, timeoutS: number, out: string, task: Task, size?: number): Promise<BenchRun> {
   let workdir = '', parseErrors = 0, toolChars = 0, toolErrors = 0, guardBlocks = 0, editMiss = 0, lastError: string | undefined, t0 = Date.now(), run: BenchRun
   process.stderr.write(`${config.name} #${round} `)
   try {
-    workdir = await makeDemoWorkdir()
+    workdir = await task.prepare(size)
     process.stderr.write(`${workdir} ... `)
     t0 = Date.now()
-    const { id, last } = await execRun(config, DEMO_TASK, workdir, {
+    const { id, last } = await execRun(config, task.prompt, workdir, {
       yes: true, json: false, quiet: true, signal: AbortSignal.timeout(timeoutS * 1000), bench: { file: path.basename(out), round },
       onEvent: e => {
         if (e.type === 'parse_error') parseErrors++
@@ -184,7 +179,7 @@ async function benchOnce(config: HarnessConfig, round: number, timeoutS: number,
       },
     })
     const ms = Date.now() - t0
-    const verdict = spawnSync('sh', [path.join(workdir, 'check.sh')], { timeout: 60_000 }).status === 0 ? 'PASS' : 'FAIL'
+    const verdict = task.check(workdir, size) ? 'PASS' : 'FAIL'
     const d = last.type === 'done' ? last : undefined
     run = { round, verdict, reason: d?.reason ?? 'error', turns: d?.turns ?? 0, toolCalls: d?.toolCallCount ?? 0, parseErrors, lastError, ms, workdir, trace: id, toolChars: toolChars || undefined, toolErrors, guardBlocks: config.tools.requireReadBeforeEdit ? guardBlocks : undefined, editMiss }
   } catch (e) {
@@ -203,25 +198,31 @@ function rollup(h: BenchHarness) {
 }
 
 async function cmdBench(argv: string[]) {
-  const usage = 'usage: llm-harness-builder bench [harness.json ...] [--n 3] [--timeout 1800] [--out runs/bench-<ts>.json] [--model m] [--base-url u] [--kind openai|ollama]'
+  const usage = 'usage: llm-harness-builder bench [harness.json ...] [--n 3] [--timeout 1800] [--out runs/bench-<ts>.json] [--task slug|pool|pool2] [--size N] [--max-turns N] [--model m] [--base-url u] [--kind openai|ollama]'
   const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: {
     n: { type: 'string', default: '3' }, timeout: { type: 'string', default: '1800' }, out: { type: 'string' },
+    task: { type: 'string', default: 'slug' }, size: { type: 'string' }, 'max-turns': { type: 'string' },
     model: { type: 'string' }, 'base-url': { type: 'string' }, kind: { type: 'string' },
   } })
   if (!INT.test(values.n) || !INT.test(values.timeout)) die(usage)
+  const task: Task | undefined = Object.hasOwn(TASKS, values.task) ? TASKS[values.task as keyof typeof TASKS] : undefined
+  const size = values.size === undefined ? undefined : Number(values.size)
+  // A task with sizes needs one in range; a task without sizes takes none.
+  const sizeOk = task?.max === undefined ? size === undefined : values.size !== undefined && INT.test(values.size) && size! <= task.max
+  if (!task || !sizeOk || (values['max-turns'] !== undefined && !INT.test(values['max-turns']))) die(usage)
   const n = Number(values.n), timeoutS = Number(values.timeout)
   const started = new Date()
   const out = values.out ?? path.join('runs', `bench-${stamp(started)}.json`)
   const localDir = path.join(process.cwd(), 'harnesses')
   const files = positionals.length ? positionals : DEMO_HARNESSES.map(h => path.join(existsSync(localDir) ? localDir : path.join(PKG_ROOT, 'harnesses'), `${h}.json`))
-  const over = { model: values.model, baseUrl: values['base-url'], kind: values.kind }
+  const over = { model: values.model, baseUrl: values['base-url'], kind: values.kind, maxTurns: values['max-turns'] === undefined ? undefined : Number(values['max-turns']) }
   const harnesses: BenchHarness[] = []
   for (const f of files) {
     const config = await loadHarness(f, over)
     harnesses.push({ name: config.name, config, pass: 0, reasons: {}, median: { turns: 0, toolCalls: 0, ms: 0 }, runs: [] })
   }
   await mkdir(path.dirname(out), { recursive: true })
-  const result: BenchResult = { version: 1, date: started.toISOString(), task: DEMO_TASK, n, timeoutS, complete: false, harnesses }
+  const result: BenchResult = { version: 1, date: started.toISOString(), task: task!.prompt, taskName: values.task, size, node: process.version, n, timeoutS, complete: false, harnesses }
   // tmp + rename in the same directory: the SIGINT handler exits immediately, and a half-written
   // JSON would be the only thing left of a 90-minute run. `.tmp`, not `.json`, so /api/bench skips it.
   const tmpOut = `${out}.${process.pid}.tmp`
@@ -241,7 +242,7 @@ async function cmdBench(argv: string[]) {
   for (let round = 1; round <= n; round++) {
     console.error(`--- round ${round}/${n}`)
     for (const h of harnesses) {
-      h.runs.push(await benchOnce(h.config, round, timeoutS, out))
+      h.runs.push(await benchOnce(h.config, round, timeoutS, out, task!, size))
       rollup(h)
       await save()
     }
@@ -249,6 +250,40 @@ async function cmdBench(argv: string[]) {
   result.complete = true
   await save()
   finish()
+}
+
+/** Sends the recorded request of one turn again, as it was sent, and counts the distinct replies. No tool runs: one reply says where the next call goes, not how the run ends. */
+async function cmdReplay(argv: string[]) {
+  const usage = 'usage: llm-harness-builder replay <run-id | trace.jsonl> --turn N --base-url u --kind openai|ollama [--n 5] [--temperature t] [--max-tokens m] [--json]'
+  const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: {
+    turn: { type: 'string' }, n: { type: 'string', default: '5' }, temperature: { type: 'string' }, 'max-tokens': { type: 'string' },
+    'base-url': { type: 'string' }, kind: { type: 'string' }, json: { type: 'boolean', default: false },
+  } })
+  const [run] = positionals, kind = values.kind, baseUrl = values['base-url']
+  const temperature = values.temperature === undefined ? undefined : Number(values.temperature)
+  const INT = /^[1-9]\d*$/
+  if (!run || positionals.length > 1 || !INT.test(values.turn ?? '') || !INT.test(values.n) || (values['max-tokens'] !== undefined && !INT.test(values['max-tokens']))) die(usage)
+  if ((kind !== 'openai' && kind !== 'ollama') || !baseUrl || !/^https?:\/\//.test(baseUrl)) die(usage)
+  if (temperature !== undefined && !(values.temperature!.trim() && temperature >= 0 && temperature <= 2)) die('--temperature must be a number from 0 to 2')
+  const file = run!.endsWith('.jsonl') ? run! : path.join('runs', `${run}.jsonl`)
+  let rec: ReturnType<typeof recordedTurn>
+  try { rec = recordedTurn((await readFile(file, 'utf8')).trim().split('\n').map(l => JSON.parse(l)), Number(values.turn)) }
+  catch (e) { return die(`cannot replay ${file}:\n  ${(e as Error).message}`) }
+  const payload = replayPayload(rec.payload, kind as BackendKind, { temperature, maxTokens: values['max-tokens'] === undefined ? undefined : Number(values['max-tokens']) })
+  const backend = (await fakeBackendFromEnv()) ?? createBackend({ kind: kind as BackendKind, baseUrl: baseUrl!, model: '', temperature: 0 })
+  const recorded = rec.raw === undefined ? undefined : replySignature(rec.raw)
+  const replies = new Map<string, { count: number; sameAsRecorded: boolean; promptTokens?: number; truncated: boolean }>()
+  for (let i = 0; i < Number(values.n); i++) {
+    const r = await backend.send(payload).catch(e => die(`backend: ${(e as Error).message}${(e as { body?: string }).body ? `\n${(e as { body?: string }).body}` : ''}`))
+    const sig = replySignature(r.raw), seen = replies.get(sig)
+    if (seen) seen.count++
+    else replies.set(sig, { count: 1, sameAsRecorded: sig === recorded, promptTokens: r.usage?.promptTokens, truncated: !!r.truncated })
+    if (!values.json) console.error(`sample ${i + 1}/${values.n}: ${sig === recorded ? 'same as recorded' : 'differs'}`)
+  }
+  const out = [...replies].map(([reply, v]) => ({ ...v, reply })).sort((a, b) => b.count - a.count)
+  if (values.json) { console.log(JSON.stringify({ trace: file, turn: Number(values.turn), n: Number(values.n), payload, recorded, replies: out })); return }
+  console.log(`${file} turn ${values.turn}: ${values.n} samples${temperature === undefined ? '' : ` at temperature ${temperature}`}, ${out.length} distinct${recorded === undefined ? '; the recorded turn has no reply to compare with' : ''}`)
+  for (const o of out) console.log(`  ${o.count}x ${o.sameAsRecorded ? 'same as recorded' : 'differs'}${o.truncated ? ', cut by max tokens' : ''}${o.promptTokens === undefined ? '' : `, ${o.promptTokens} prompt tok`}\n     ${o.reply.slice(0, 300).replace(/\n/g, ' ')}`)
 }
 
 async function cmdServe(argv: string[]) {
@@ -267,6 +302,6 @@ async function cmdServe(argv: string[]) {
 }
 
 const [cmd = 'serve', ...rest] = process.argv.slice(2)
-const commands: Record<string, (a: string[]) => Promise<void>> = { serve: cmdServe, run: cmdRun, demo: cmdDemo, bench: cmdBench }
-if (!commands[cmd]) die('usage: llm-harness-builder [serve|run|demo|bench] ...')
+const commands: Record<string, (a: string[]) => Promise<void>> = { serve: cmdServe, run: cmdRun, demo: cmdDemo, bench: cmdBench, replay: cmdReplay }
+if (!commands[cmd]) die('usage: llm-harness-builder [serve|run|demo|bench|replay] ...')
 commands[cmd](rest).catch(e => die(String(e?.stack ?? e)))

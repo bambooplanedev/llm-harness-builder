@@ -20,9 +20,9 @@ export type BenchHarness = {
   name: string; config: HarnessConfig; pass: number; reasons: Record<string, number>
   median: { turns: number; toolCalls: number; ms: number }; runs: BenchRun[]
 }
-export type BenchResult = { version: 1; date: string; task: string; n: number; timeoutS: number; complete: boolean; harnesses: BenchHarness[] }
+export type BenchResult = { version: 1; date: string; task: string; taskName?: string; size?: number; node?: string; n: number; timeoutS: number; complete: boolean; harnesses: BenchHarness[] }
 
-/** One row of the Bench tab's file list. `model` is what actually tells two bench files apart: `task` is always DEMO_TASK. */
+/** One row of the Bench tab's file list. `model` and the file name tell two bench files apart; `task` is the prompt text, `taskName`/`size` say which task it was (absent in JSON written before v2.7 = slug). */
 export type BenchFile = { file: string; date: string; model: string; complete: boolean }
 /** The run a `bench` process is executing right now, read from its still-unrenamed runs/<id>.jsonl.part. */
 export type ActiveTrace = { id: string; harness: string; round: number; started: number; events: HarnessEvent[] }

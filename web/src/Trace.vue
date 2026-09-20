@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { Delta, HarnessEvent } from './api'
-import { mcpApprovalServer, mcpCounts } from '../../src/core/events'
+import { mcpApprovalServer, mcpCounts, UNTIL_BASH } from '../../src/core/events'
 // approvable is a Boolean-typed prop, so Vue casts an ABSENT value to `false` (not `undefined`).
 // App.vue's live Workbench never passes this prop and needs the opposite default -- only a
 // finished/replayed trace (Bench.vue, Diff.vue) opts out by passing `false` explicitly.
@@ -22,6 +22,9 @@ const answered = computed(() => {
   if (props.events.some(e => e.type === 'mcp_server_start' || e.type === 'done')) {
     for (const e of props.events) if (e.type === 'approval_required' && mcpApprovalServer(e.call.name)) ids.add(e.call.callId)
   }
+  // Nor does an untilBash approval. The run waits on it, so any later event means it was answered.
+  const lastSeq = props.events.length ? props.events[props.events.length - 1].seq : -1
+  for (const e of props.events) if (e.type === 'approval_required' && e.call.name === UNTIL_BASH && e.seq < lastSeq) ids.add(e.call.callId)
   return ids
 })
 const pretty = (v: unknown) => JSON.stringify(v, null, 2)
@@ -49,11 +52,14 @@ const liveTok = computed(() => Math.ceil(liveText.value.length / 4))
       <div v-else-if="e.type === 'approval_required' && !answered.has(e.call.callId)" class="ev approval">
         <template v-if="props.approvable !== false">
           <template v-if="mcpApprovalServer(e.call.name)">start mcp server <code>{{ mcpApprovalServer(e.call.name) }}</code>: <code>{{ e.call.args.command }}</code>?</template>
+          <template v-else-if="e.call.name === UNTIL_BASH">run <code>{{ e.call.args.command }}</code> each time the model says it is done, on files the model has written?</template>
           <template v-else>run <code>{{ e.call.args.command }}</code>?</template>
           <button @click="emit('approve', e.call.callId, true)">Run</button> <button @click="emit('approve', e.call.callId, false)">Deny</button>
         </template>
         <template v-else>approval_required: <code>{{ e.call.args.command }}</code> (bench: auto-approved)</template>
       </div>
+      <div v-else-if="e.type === 'final_check'" class="ev tool_result" :class="{ err: !e.passed }">final check <code>{{ e.command }}</code>: {{ e.passed ? 'passed' : 'failed, the run goes on' }}<template v-if="!e.passed"><br>{{ e.output }}</template></div>
+      <div v-else-if="e.type === 'context_reset'" class="ev parse_error">context reset: {{ e.chars }} chars of history cleared, the next request is the task again</div>
       <div v-else-if="e.type === 'mcp_server_start'" class="ev tool_call">
         mcp <code>{{ e.server }}</code>: {{ mcpCounts(e) }}
       </div>
