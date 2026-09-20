@@ -351,3 +351,33 @@ test('bench rejects a task/size/max-turns combination that means nothing, with u
     expect(r.stderr).toMatch(/usage/)
   }
 }, 60_000)
+
+test('replay sends the recorded request of one turn --n times and counts the distinct replies against the recorded one', async () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'lhb-cwd-'))
+  const raw = (content: string) => ({ choices: [{ message: { content } }] })
+  execSync('mkdir runs', { cwd })
+  await writeFile(join(cwd, 'runs', 'abc12345.jsonl'), [
+    { meta: { id: 'abc12345' } },
+    { seq: 0, turn: 1, type: 'llm_request', payload: { model: 'm', messages: [], temperature: 0.2, stream: true } },
+    { seq: 1, turn: 1, type: 'llm_response', raw: raw('A'), content: 'A', latencyMs: 1 },
+  ].map(l => JSON.stringify(l)).join('\n') + '\n')
+  const fake = join(cwd, 'fake.json')
+  await writeFile(fake, JSON.stringify([{ raw: raw('A'), usage: { promptTokens: 7, completionTokens: 1 } }, { raw: raw('B') }, { raw: raw('A') }]))
+  const args = ['replay', 'abc12345', '--turn', '1', '--n', '3', '--base-url', 'http://x/v1', '--kind', 'openai']
+  const r = cli([...args, '--temperature', '1', '--json'], { LHB_FAKE_BACKEND: fake }, cwd)
+  expect(r.status).toBe(0)
+  const out = JSON.parse(r.stdout)
+  expect(out.payload.temperature).toBe(1)
+  expect(out.replies).toEqual([
+    { count: 2, sameAsRecorded: true, promptTokens: 7, truncated: false, reply: 'A' },
+    { count: 1, sameAsRecorded: false, truncated: false, reply: 'B' },
+  ])
+  const human = cli(args, { LHB_FAKE_BACKEND: fake }, cwd)
+  expect(human.stdout).toContain('3 samples, 2 distinct')
+  expect(human.stdout).toContain('2x same as recorded, 7 prompt tok')
+  // a turn the run does not have, a missing trace and a missing --kind are one-line errors, not stacks
+  for (const bad of [[...args.slice(0, 2), '--turn', '9', ...args.slice(4)], ['replay', 'nope', ...args.slice(2)], args.slice(0, -2)]) {
+    const e = cli(bad, { LHB_FAKE_BACKEND: fake }, cwd)
+    expect(e.status).toBe(2); expect(e.stderr).not.toContain('    at ')
+  }
+}, 60_000)

@@ -8,7 +8,7 @@ import { createInterface } from 'node:readline/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { runAgent, type RunOpts } from './core/run.js'
-import { validateConfig, type HarnessConfig } from './core/config.js'
+import { validateConfig, type HarnessConfig, type BackendKind } from './core/config.js'
 import { validateWorkdir } from './core/tools/sandbox.js'
 import type { Backend, NormalizedResponse } from './core/backends/types.js'
 import { mcpApprovalServer, mcpCounts, UNTIL_BASH, quitWithoutWork, type HarnessEvent, type ToolCall } from './core/events.js'
@@ -17,6 +17,8 @@ import { TraceWriter, type Meta } from './server/runs.js'
 import { TASKS, type Task } from './core/tasks.js'
 import { median, formatTable, type BenchRun, type BenchHarness, type BenchResult } from './core/bench.js'
 import { GUARD_BLOCKED, EDIT_MISS } from './core/tools/fs.js'
+import { createBackend } from './core/backends/index.js'
+import { replayPayload, replySignature, recordedTurn } from './core/replay.js'
 
 const PKG_ROOT = fileURLToPath(new URL('..', import.meta.url))
 const die = (msg: string): never => { console.error(msg); process.exit(2) }
@@ -250,6 +252,40 @@ async function cmdBench(argv: string[]) {
   finish()
 }
 
+/** Sends the recorded request of one turn again, as it was sent, and counts the distinct replies. No tool runs: one reply says where the next call goes, not how the run ends. */
+async function cmdReplay(argv: string[]) {
+  const usage = 'usage: llm-harness-builder replay <run-id | trace.jsonl> --turn N --base-url u --kind openai|ollama [--n 5] [--temperature t] [--max-tokens m] [--json]'
+  const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: {
+    turn: { type: 'string' }, n: { type: 'string', default: '5' }, temperature: { type: 'string' }, 'max-tokens': { type: 'string' },
+    'base-url': { type: 'string' }, kind: { type: 'string' }, json: { type: 'boolean', default: false },
+  } })
+  const [run] = positionals, kind = values.kind, baseUrl = values['base-url']
+  const temperature = values.temperature === undefined ? undefined : Number(values.temperature)
+  const INT = /^[1-9]\d*$/
+  if (!run || positionals.length > 1 || !INT.test(values.turn ?? '') || !INT.test(values.n) || (values['max-tokens'] !== undefined && !INT.test(values['max-tokens']))) die(usage)
+  if ((kind !== 'openai' && kind !== 'ollama') || !baseUrl || !/^https?:\/\//.test(baseUrl)) die(usage)
+  if (temperature !== undefined && !(values.temperature!.trim() && temperature >= 0 && temperature <= 2)) die('--temperature must be a number from 0 to 2')
+  const file = run!.endsWith('.jsonl') ? run! : path.join('runs', `${run}.jsonl`)
+  let rec: ReturnType<typeof recordedTurn>
+  try { rec = recordedTurn((await readFile(file, 'utf8')).trim().split('\n').map(l => JSON.parse(l)), Number(values.turn)) }
+  catch (e) { return die(`cannot replay ${file}:\n  ${(e as Error).message}`) }
+  const payload = replayPayload(rec.payload, kind as BackendKind, { temperature, maxTokens: values['max-tokens'] === undefined ? undefined : Number(values['max-tokens']) })
+  const backend = (await fakeBackendFromEnv()) ?? createBackend({ kind: kind as BackendKind, baseUrl: baseUrl!, model: '', temperature: 0 })
+  const recorded = rec.raw === undefined ? undefined : replySignature(rec.raw)
+  const replies = new Map<string, { count: number; sameAsRecorded: boolean; promptTokens?: number; truncated: boolean }>()
+  for (let i = 0; i < Number(values.n); i++) {
+    const r = await backend.send(payload).catch(e => die(`backend: ${(e as Error).message}${(e as { body?: string }).body ? `\n${(e as { body?: string }).body}` : ''}`))
+    const sig = replySignature(r.raw), seen = replies.get(sig)
+    if (seen) seen.count++
+    else replies.set(sig, { count: 1, sameAsRecorded: sig === recorded, promptTokens: r.usage?.promptTokens, truncated: !!r.truncated })
+    if (!values.json) console.error(`sample ${i + 1}/${values.n}: ${sig === recorded ? 'same as recorded' : 'differs'}`)
+  }
+  const out = [...replies].map(([reply, v]) => ({ ...v, reply })).sort((a, b) => b.count - a.count)
+  if (values.json) { console.log(JSON.stringify({ trace: file, turn: Number(values.turn), n: Number(values.n), payload, recorded, replies: out })); return }
+  console.log(`${file} turn ${values.turn}: ${values.n} samples${temperature === undefined ? '' : ` at temperature ${temperature}`}, ${out.length} distinct${recorded === undefined ? '; the recorded turn has no reply to compare with' : ''}`)
+  for (const o of out) console.log(`  ${o.count}x ${o.sameAsRecorded ? 'same as recorded' : 'differs'}${o.truncated ? ', cut by max tokens' : ''}${o.promptTokens === undefined ? '' : `, ${o.promptTokens} prompt tok`}\n     ${o.reply.slice(0, 300).replace(/\n/g, ' ')}`)
+}
+
 async function cmdServe(argv: string[]) {
   const { values } = parseArgs({ args: argv, options: { port: { type: 'string', default: '7331' }, 'no-open': { type: 'boolean', default: false } } })
   const cwd = process.cwd()
@@ -266,6 +302,6 @@ async function cmdServe(argv: string[]) {
 }
 
 const [cmd = 'serve', ...rest] = process.argv.slice(2)
-const commands: Record<string, (a: string[]) => Promise<void>> = { serve: cmdServe, run: cmdRun, demo: cmdDemo, bench: cmdBench }
-if (!commands[cmd]) die('usage: llm-harness-builder [serve|run|demo|bench] ...')
+const commands: Record<string, (a: string[]) => Promise<void>> = { serve: cmdServe, run: cmdRun, demo: cmdDemo, bench: cmdBench, replay: cmdReplay }
+if (!commands[cmd]) die('usage: llm-harness-builder [serve|run|demo|bench|replay] ...')
 commands[cmd](rest).catch(e => die(String(e?.stack ?? e)))

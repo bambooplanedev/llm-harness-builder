@@ -67,6 +67,7 @@ dropped for what it cost, and its paragraph says on what evidence.
     llm-harness-builder run <harness.json> --workdir <dir> "task" [--yes] [--json] [--model m] [--base-url u] [--kind k]
     llm-harness-builder demo [--model m] [--base-url u] [--kind k]
     llm-harness-builder bench [harness.json ...] [--n 3] [--timeout 1800] [--out runs/bench-<ts>.json] [--task slug|pool|pool2] [--size N] [--max-turns N] [--model m] [--base-url u] [--kind k]
+    llm-harness-builder replay <run-id | trace.jsonl> --turn N --base-url u --kind k [--n 5] [--temperature t] [--max-tokens m] [--json]
 
 `run` exits 0 only when the model finished with a final answer. `--json` writes the event
 stream as JSONL to stdout; human-readable progress goes to stderr.
@@ -78,6 +79,20 @@ writes a JSON to `runs/` after every run, so Ctrl-C keeps what finished. The JSO
 harness's full config and each run's `reason`, `parseErrors`, `toolErrors`, `lastError`, temp `workdir` and
 `trace` (the run's `runs/<id>.jsonl`), so two files are comparable by config, not by name. Exit
 code is 0 whatever the verdicts.
+
+`replay` takes the request a recorded run sent at turn N (`runs/<id>.jsonl` keeps every one) and
+sends it again, as it was sent, `--n` times; `--temperature` and `--max-tokens` are the only things
+it can change. It prints how many distinct replies came back and which of them is the recorded one.
+Replies are compared by content and native tool calls, not by thinking text or call ids. No tool
+runs, so a replay says where the next call goes on that turn and nothing about how a run would end.
+The trace does not record where the run was sent, hence `--base-url` and `--kind`; the server has
+to have the window the run had, and one that is too small refuses the request. Of the checks this
+README calls replays, the command repeats the ones that sent a recorded request unchanged: the
+`pool2` loop turn and the harmless turn under `repeatTemperature` (`replay 153d3718 --turn 8
+--temperature 1 --n 10`, and `411812a4 --turn 6` likewise). It does not repeat the ones that edited
+the recorded history first (the stub text, the notes of a counter the run did not have), and the
+"replayed against 5120" passages are arithmetic over traces, with no model in them. The traces
+named here are not in the repository; the command is for yours.
 
 ## Harness file
 
