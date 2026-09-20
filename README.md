@@ -902,6 +902,15 @@ execution asks again: otherwise "write a file, say done" would be a way around t
 runs whether or not `bash` is among the enabled tools. One thing it invites and nothing here
 prevents: a model told "not finished" by tests it can reach may edit the tests.
 
+With `loop.maxRepeats` set, a failed check is counted the way a call is: a check that fails
+again with no file change through a tool since the last one carries
+`note: check #2 with no file change since the last one`, more than `maxRepeats` of them end the
+run `repeat_loop`, and `repeatTemperature` / `repeatThinkTokens` treat it as a repeat. What the
+claim says is not compared — with the files as they were, the check had nothing new to find.
+`freshContext` does not fire on it, and without `maxRepeats` nothing is counted and the run goes
+on as before. This came from the live check at the end of this section and has itself not been
+run live.
+
 ### The check, 2026-09-20
 
 Written down before any model time: what is counted, what would refute what, which words are
@@ -1096,8 +1105,9 @@ the last line of `chunk.js` back and forth six times; at turn 9 it claimed "Fixe
 tests." with five tests red, was refused, and sent the byte-identical claim on each of the next
 seven turns, with no tool call in between. Every refusal put the cut test output, about 1450
 tokens, into the history: the prompt went from 22626 to 34190 tokens and the run ended on the
-32768 window, not on `max_turns`. `maxRepeats` would not have ended it either: it counts calls,
-and a claim has none. That is one run of this model on this task in which a refusal did not move
+32768 window, not on `max_turns`. `maxRepeats`, as it was then, would not have ended it either:
+it counted calls, and a claim has none. (It counts a failed check now — see `untilBash` above;
+that change came from this run and has not been run live.) That is one run of this model on this task in which a refusal did not move
 it; it is not a reading of what the knob does anywhere else.
 
 **`repeatThinkTokens: 3072` in an 8192 window.** The harness of the live check above with two

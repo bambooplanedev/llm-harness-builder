@@ -650,6 +650,35 @@ test('untilBash: a model that only ever says it is done ends max_turns', async (
   expect(last(ev).reason).toBe('max_turns')
 })
 
+const lastMsg = (be: { requests: { messages: { content: string }[] }[] }, i: number) => be.requests[i].messages.at(-1)!.content
+
+test('untilBash under maxRepeats: a check that fails again with no file change is a repeat, whatever the claim says', async () => {
+  const be = Fake([{ content: 'a' }, { content: 'b' }, { content: 'c' }, { content: 'd' }])
+  const ev = await collect({ config: until('false', { loop: { maxTurns: 10, untilBash: 'false', maxRepeats: 1 } }), task: 'do', workdir: await wd() }, { backend: be, ...yes })
+  expect(lastMsg(be, 1)).not.toContain('note:')
+  expect(lastMsg(be, 2).endsWith('[exit 1]\nnote: check #2 with no file change since the last one')).toBe(true)
+  expect(checks(ev)).toHaveLength(3) // the third is still run and recorded: bash may have changed what no tool saw
+  expect(last(ev)).toMatchObject({ reason: 'repeat_loop', turns: 3 })
+})
+
+test('untilBash under maxRepeats: a file change between two failed checks starts the count again', async () => {
+  const edit = { toolCalls: [{ name: 'write_file', args: { path: 'b.txt', content: 'x' } }] }
+  const be = Fake([{ content: 'a' }, edit, { content: 'b' }, { content: 'c' }, { content: 'd' }])
+  const cfg = until('false', { tools: { enabled: ['write_file', 'bash'], approveBash: false }, loop: { maxTurns: 5, untilBash: 'false', maxRepeats: 1 } })
+  const ev = await collect({ config: cfg, task: 'do', workdir: await wd() }, { backend: be, ...yes })
+  expect(lastMsg(be, 3)).not.toContain('note:')
+  expect(lastMsg(be, 4)).toContain('note: check #2')
+  expect(last(ev)).toMatchObject({ reason: 'repeat_loop', turns: 5 }) // without the restart it would have been turn 4
+})
+
+test('untilBash with repeatThinkTokens: a repeated failed check draws the thinking turn, a first one after a thinking turn does not keep it', async () => {
+  const be = Fake([readA, readA, { content: 'done' }, { content: 'done' }, { content: 'done' }, { content: 'fin' }])
+  const cfg = until('false', { systemPrompt: THINK_SYS, loop: { maxTurns: 5, untilBash: 'false', maxRepeats: 3, repeatThinkTokens: 2048 } })
+  await collect({ config: cfg, task: 'do', workdir: await wd() }, { backend: be, ...yes })
+  // turn 3 thinks for the repeated read; its claim is check #1, so turn 4 does not think; check #2 on turn 4 makes turn 5 think
+  expect(sysOf(be).map(s => s.includes('/think'))).toEqual([false, false, true, false, true])
+})
+
 test('untilBash: exit 0 is read before the output is cut, and the event carries the cut text', async () => {
   const be = Fake([{ content: 'fin' }])
   const ev = await collect({ config: until('cat a.txt'), task: 'do', workdir: await wd() }, { backend: be, ...yes })
