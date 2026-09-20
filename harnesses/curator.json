@@ -5,5 +5,5 @@
   "tools": { "enabled": ["list_dir", "read_file", "write_file", "bash"], "approveBash": true },
   "toolCalls": { "mode": "native", "enforceSchema": false, "promptedTemplate": "You can call tools. Available tools:\n{{tools}}\n\nRespond with exactly one JSON object of this shape and nothing else:\n{\"calls\": [{\"name\": \"<tool name>\", \"args\": {...}}], \"final\": null}\nSend one call per response. Put several calls in one response only when they are independent reads; never send an edit or a command in the same response as the call whose output it depends on.\nTo finish, send {\"calls\": [], \"final\": \"<your answer>\"}.\nTool results will be sent back to you inside <tool_result> tags.", "parseErrorHint": "Your last message was not a valid response. Reply with exactly one JSON object: {\"calls\": [...], \"final\": null|string}." },
   "context": { "maxToolOutputChars": 24000, "budgetTokens": 0 },
-  "loop": { "maxTurns": 15 }
+  "loop": { "maxTurns": 15, "maxRepeats": 3 }
 }

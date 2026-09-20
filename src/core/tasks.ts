@@ -120,6 +120,7 @@ const sift: Task = (() => {
 
 /** Step 2 of the curator: which new posts are worth fetching. A judgement, so the fixture carries its key: KEEP, DROP, EITHER (left open,
  *  not part of the verdict) or DUP (of the posts of one `dup` group that are in the list, exactly one is kept). Synthetic; the key never reaches a workdir.
+ *  Only the same URL makes a duplicate: on the real feed "by substance" folded three articles about one launch into one, twice at the cost of a topic.
  *  No post added by hand is in the list: a person chose it, so the curator passes it on without asking a model — told to keep them all, the model still dropped 15 of 105 on the real feed. */
 const TRIAGE_FIXTURE = path.join(PKG_ROOT, 'examples-triage', 'posts.jsonl')
 const triage: Task = (() => {
@@ -131,7 +132,7 @@ const triage: Task = (() => {
     return { head: head as { head: string[]; foot: string }, posts: (posts as Post[]).slice(0, size) }
   }
   return {
-    prompt: '`posts.txt` lists the new posts of a feed: a line `--- <id> · <date> · <source>`, then the title, a summary of up to 400 characters, and the URL. Triage them for a channel whose audience is working engineers new to AI agents. The channel is about how to work with agents, not about the news: delegation and oversight, permissions and security, review and testing of what an agent wrote, evals, context and cost, harnesses and local models, and the engineering practice around all of that. DROP a post that claims nothing (an announcement, an empty release note, a bare link), a post that duplicates another one in this list by URL or by substance (keep one of the two), and a post that is off-topic. KEEP the rest. If you cannot tell, DROP. Write `triage.jsonl`: one line per post, `{"id": <id>, "verdict": "KEEP" or "DROP", "reason": "<a few words>"}`, every post exactly once. Do not edit `posts.txt`. Finally answer with the two counts, as `N KEEP, M DROP`.',
+    prompt: '`posts.txt` lists the new posts of a feed: a line `--- <id> · <date> · <source>`, then the title, a summary of up to 400 characters, and the URL. Triage them for a channel whose audience is working engineers new to AI agents. The channel is about how to work with agents, not about the news: delegation and oversight, permissions and security, review and testing of what an agent wrote, evals, context and cost, harnesses and local models, and the engineering practice around all of that. DROP a post that claims nothing (an announcement, an empty release note, a bare link), a post that has the same URL as another one in this list, tracking parameters aside (keep one of the two; two articles about one event are not duplicates), and a post that is off-topic. KEEP the rest. If you cannot tell, DROP. Write `triage.jsonl`: one line per post, `{"id": <id>, "verdict": "KEEP" or "DROP", "reason": "<a few words>"}`, every post exactly once. Do not edit `posts.txt`. Finally answer with the two counts, as `N KEEP, M DROP`.',
     max,
     async prepare(size = max) {
       const { head, posts } = load(size)

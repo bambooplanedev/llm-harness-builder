@@ -147,4 +147,6 @@ test('curator: native calls, thinking off through the template, nothing about co
   expect([h.toolCalls.mode, h.backend.think, h.backend.temperature]).toEqual(['native', false, 0])
   expect(h.systemPrompt).not.toMatch(/no_think|node --test|coding agent|edit_file/)
   expect(h.tools.enabled).toEqual(['list_dir', 'read_file', 'write_file', 'bash'])
+  // 3 of the 4 one-post windows of the real feed re-read posts.txt 14 times, to max_turns (2026-09-20)
+  expect(h.loop.maxRepeats).toBe(3)
 })
