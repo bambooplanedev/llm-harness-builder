@@ -19,7 +19,8 @@ export type HarnessConfig = {
   mcpServers?: Record<string, McpServerConfig>
 }
 
-export type RunParams = { config: HarnessConfig; task: string; workdir: string }
+/** `answerSchema`: the JSON form of the final answer, when the task has one. It is enforced only by a harness with no tools at all and `toolCalls.enforceSchema` on. */
+export type RunParams = { config: HarnessConfig; task: string; workdir: string; answerSchema?: Record<string, unknown> }
 
 // A misspelt key would be silently off, and every optional knob is off when absent. '' is the top level.
 const KEYS: Record<string, string[]> = {

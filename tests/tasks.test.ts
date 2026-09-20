@@ -2,7 +2,7 @@ import { test, expect } from 'vitest'
 import { createHash } from 'node:crypto'
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { TASKS, POOL, POOL2 } from '../src/core/tasks.js'
+import { TASKS, POOL, POOL2, verdictSchema } from '../src/core/tasks.js'
 import { DEMO_TASK } from '../src/core/prompts.js'
 
 // Every number in the README before 2026-09-19 was measured on this workdir and this text.
@@ -224,4 +224,47 @@ test('triage: a wrong verdict, both or neither of a duplicate pair, a missing or
   expect(await broken(rows => [...rows, rows[0]])).toBe(false)
   expect(await broken(set(8002, 'drop'))).toBe(false)
   expect(await broken(rows => [...rows, 'done'])).toBe(false)
+})
+
+// judge: the same step and the same key as triage, as one request. The posts are in the task text and the verdicts are the final answer.
+const judgeAnswer = (size: number, edit: (o: Record<string, any>) => unknown = o => o) => {
+  const seen = new Set<string>()
+  return JSON.stringify(edit(Object.fromEntries(TRIAGE.slice(0, size).map(p => {
+    const first = p.dup !== undefined && !seen.has(p.dup)
+    if (p.dup !== undefined) seen.add(p.dup)
+    return [String(p.message_id), { reason: 'x', verdict: p.key === 'DUP' ? (first ? 'KEEP' : 'DROP') : p.key === 'EITHER' ? 'DROP' : p.key }]
+  }))))
+}
+
+test('judge: says what triage says about what to keep, shows the posts triage puts in posts.txt, and leaves the workdir empty', async () => {
+  const rules = (p: string) => p.slice(p.indexOf('Triage them'), p.indexOf('If you cannot tell, DROP.') + 'If you cannot tell, DROP.'.length)
+  expect(rules(TASKS.judge.prompt)).toBe(rules(TASKS.triage.prompt))
+  expect(rules(TASKS.judge.prompt).length).toBeGreaterThan(400)
+  expect(TASKS.judge.prompt).not.toMatch(/posts\.txt|triage\.jsonl|Write/)
+  expect(TASKS.judge.input!(3)).toBe(readFileSync(join(await TASKS.triage.prepare(3), 'posts.txt'), 'utf8'))
+  expect(readdirSync(await TASKS.judge.prepare(3))).toEqual([])
+  expect(() => TASKS.judge.input!(13)).toThrow(RangeError)
+})
+
+test('judge: the schema has one required key per shown post and no other, a reason and then a verdict of KEEP or DROP under each', () => {
+  const s = TASKS.judge.answerSchema!(3) as any
+  expect([s.required, Object.keys(s.properties), s.additionalProperties]).toEqual([['8001', '8002', '8004'], ['8001', '8002', '8004'], false])
+  expect(s.properties['8001']).toEqual({ type: 'object', additionalProperties: false, required: ['reason', 'verdict'], properties: { reason: { type: 'string', maxLength: 200 }, verdict: { enum: ['KEEP', 'DROP'] } } })
+  expect(verdictSchema([7, 5])).toMatchObject({ required: ['7', '5'] })
+})
+
+test('judge: an answer that follows the key is PASS at every size; no answer, prose around it, a missing or unshown id, a wrong or absent verdict — each is FAIL', async () => {
+  const dir = await TASKS.judge.prepare(12)
+  for (const size of [1, 3, 8, 12]) expect([size, TASKS.judge.check(dir, size, judgeAnswer(size))]).toEqual([size, true])
+  const bad = (edit: (o: Record<string, any>) => unknown) => TASKS.judge.check(dir, 12, judgeAnswer(12, edit))
+  expect(TASKS.judge.check(dir, 12)).toBe(false)
+  expect(TASKS.judge.check(dir, 12, 'Here it is:\n' + judgeAnswer(12))).toBe(false)
+  expect(TASKS.judge.check(dir, 12, '```json\n' + judgeAnswer(12) + '\n```')).toBe(false)
+  expect(bad(o => Object.values(o))).toBe(false)
+  expect(bad(o => { delete o['8009']; return o })).toBe(false)
+  expect(bad(o => ({ ...o, 101: { reason: 'x', verdict: 'KEEP' } }))).toBe(false)
+  expect(bad(o => ({ ...o, 8009: { reason: 'x', verdict: 'DROP' } }))).toBe(false)
+  expect(bad(o => ({ ...o, 8009: { reason: 'x', verdict: 'MAYBE' } }))).toBe(false)
+  expect(bad(o => ({ ...o, 8009: null }))).toBe(false)
+  expect(bad(o => ({ ...o, 8005: { reason: 'x', verdict: 'KEEP' } }))).toBe(false) // both of a duplicate pair
 })

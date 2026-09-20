@@ -746,3 +746,21 @@ test('untilBash absent: a final is final, nothing is asked and nothing is run', 
   const ev = await collect({ config: base(), task: 'do', workdir: await wd() }, { backend: Fake([{ content: 'fin' }]) })
   expect(types(ev)).toEqual(['context_stats', 'llm_request', 'llm_response', 'done'])
 })
+
+// answerSchema: the form of the final answer comes with the task; the harness decides whether the server holds the model to it.
+test('answerSchema goes out only from a native harness with no tools and enforceSchema on, and then no tools field goes with it', async () => {
+  const schema = { type: 'object' }
+  const tc = base().toolCalls
+  const sent = async (over: Partial<HarnessConfig>, answerSchema?: Record<string, unknown>) => {
+    const be = Fake([{ content: '{}' }])
+    const ev = await collect({ config: base(over), task: 'judge', workdir: await wd(), answerSchema }, { backend: be })
+    expect(last(ev)).toMatchObject({ reason: 'final', text: '{}', turns: 1 })
+    return [be.requests[0].responseSchema, be.requests[0].tools]
+  }
+  const none = { enabled: [], approveBash: true }
+  expect(await sent({ tools: none, toolCalls: { ...tc, mode: 'native', enforceSchema: true } }, schema)).toEqual([schema, undefined])
+  expect(await sent({ tools: none, toolCalls: { ...tc, mode: 'native', enforceSchema: false } }, schema)).toEqual([undefined, undefined])
+  expect(await sent({ tools: none, toolCalls: { ...tc, mode: 'native', enforceSchema: true } })).toEqual([undefined, undefined])
+  const withTool = await sent({ tools: { enabled: ['read_file'], approveBash: true }, toolCalls: { ...tc, mode: 'native', enforceSchema: true } }, schema)
+  expect([withTool[0], (withTool[1] as unknown[]).length]).toEqual([undefined, 1])
+})

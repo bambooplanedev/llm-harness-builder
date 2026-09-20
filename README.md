@@ -119,6 +119,12 @@ shipped harnesses is a Qwen3 convention and another family does not read it. Wit
 (`<tool_call>{"name":…,"arguments":…}</tool_call>` blocks, results in `<tool_response>`, and a
 plain-text reply means "done"). `enforceSchema` only applies to `json`.
 
+In `native` mode `enforceSchema` does one other thing, and only in a harness with no tools at all
+(`tools.enabled` empty, no `mcpServers`): when the task has a schema for its final answer (the
+`judge` task of `bench` does), the request carries it, and the server holds the reply to it. Such a
+run is one request. With any tool enabled the schema is not sent: it is the form of the final
+answer, not of the turns before it.
+
 ## Model families
 
 A family button in the UI (`applyFamily` in `src/core/prompts.ts`) fills the tool-call mode,
