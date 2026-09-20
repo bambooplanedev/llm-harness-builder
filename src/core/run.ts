@@ -209,7 +209,14 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
         const passed = raw.endsWith('\n[exit 0]')
         yield ev({ type: 'final_check', command, passed, output: cut(raw) })
         if (passed) { yield done('final', final ?? res.content); return }
-        messages.push({ role: 'user', content: `not finished: \`${command}\` did not exit 0\n${cut(raw)}`, isToolResult: true })
+        // loop.maxRepeats: a failed check is counted like a call, under its own key. What the claim said is not compared:
+        // with no file change in between, the check had nothing new to find. loop.freshContext does not fire here.
+        const key = UNTIL_BASH + command
+        const n = config.loop.maxRepeats === undefined ? 1 : (seen.get(key) ?? 0) + 1
+        seen.set(key, n)
+        hot = n > 1 && (config.loop.repeatTemperature !== undefined || thinkTokens !== undefined)
+        messages.push({ role: 'user', content: `not finished: \`${command}\` did not exit 0\n${cut(raw)}${n > 1 ? `\nnote: check #${n} with no file change since the last one` : ''}`, isToolResult: true })
+        if (n - 1 > (config.loop.maxRepeats ?? Infinity)) { yield done('repeat_loop'); return }
         continue
       }
 

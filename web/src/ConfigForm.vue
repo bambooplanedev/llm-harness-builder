@@ -132,7 +132,7 @@ function editMcp(text: string) {
     <label>Loop</label>
     <div class="row"><span>max turns</span><input type="number" v-model.number="config.loop.maxTurns"></div>
     <div class="row">
-      <span title="a call repeated more than this many times ends the run as repeat_loop; empty = no detector, 0 = the first repeat ends it">max repeats</span><input type="number" min="0" :value="config.loop.maxRepeats ?? ''" @change="setLoop('maxRepeats', ($event.target as HTMLInputElement).value)">
+      <span title="a call (or a failed until-bash check) repeated more than this many times ends the run as repeat_loop; empty = no detector, 0 = the first repeat ends it">max repeats</span><input type="number" min="0" :value="config.loop.maxRepeats ?? ''" @change="setLoop('maxRepeats', ($event.target as HTMLInputElement).value)">
       <span title="after this many repeats of one call the history is cleared back to the task, once per run; 1 to max repeats">fresh context</span><input type="number" min="1" :value="config.loop.freshContext ?? ''" @change="setLoop('freshContext', ($event.target as HTMLInputElement).value)">
     </div>
     <div class="row">
