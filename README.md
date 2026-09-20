@@ -43,6 +43,17 @@ appear as they are generated; the UI adds a rough `~N tok` counter. The trace ke
 Run `demo` first: it takes a few minutes and shows you the trace and that the backend is alive.
 `bench --n 5` on the setup below took 96 minutes, most of it `bare`.
 
+## How to read the results
+
+Every number below, and every "did not help", comes from one model — Qwen3-8B Q4_K_M on
+llama-server — and three small tasks, two of which are the same ten units in another order; five
+runs or fewer per arm, often near-clones at temperature 0.2. A result here says what that model did
+on that task with that harness. It does not say what a knob does: a knob that moved nothing here
+may move another model, or this one on another task, and a knob that helped here may not help
+yours. That is what `bench` and the traces are for. The knobs that showed no effect are still in
+the tool, off by default, for that reason; the one change that was dropped (the labelled stub) was
+dropped for what it cost, and its paragraph says on what evidence.
+
 ## Backends
 
 - `kind: "ollama"` talks to Ollama's native `/api/chat` so `num_ctx` is honoured.
@@ -91,7 +102,7 @@ stored in the harness file — only the resulting plain fields.
 
 | family | mode / format | prompt line | why |
 |---|---|---|---|
-| `qwen3` | prompted / hermes | `/no_think` | trained on `<tool_call>` XML; `/no_think` keeps an 8B from burning the window in `<think>` |
+| `qwen3` | prompted / hermes | `/no_think` | trained on `<tool_call>` XML; `/no_think` kept Qwen3-8B from burning the window in `<think>` (one run: "Isolating the knobs") |
 | `gemma` | prompted / json | — | no native tool calling in the chat template (Ollama rejects `tools[]`); no thinking switch |
 | `llama3` | native / json | — | native tool calls work through the chat template; nothing to add |
 
@@ -261,7 +272,7 @@ an argument only at 5-against-1 or 4-against-0. `guard-only` 0/5 against `tuned`
 and against `rule-none` 4/5 is p = 0.048, so this time PASS is one. Three things the traces show,
 identical in every run of an arm:
 
-- **The sentence in the prompt does all the work.** Without it the model's first edit was blind in
+- **In these runs the sentence in the prompt did all the work.** Without it the model's first edit was blind in
   10 runs out of 10 — `edit_file` on `src/slugify.js` with an `old` it had invented, the file never
   opened. With it, 0 out of 10, and the guard in `rule-and-guard` never fired. The `editMiss` of 16
   in `rule-none` against 0 in `tuned` is the same fact counted from the other side, and it is the
@@ -276,9 +287,9 @@ identical in every run of an arm:
   `edit_file` and rewriting the three-line file with `write_file`. In `guard-only` the file is
   already read, and the model has no second idea.
 
-So on this model a rule in the prompt and the same rule in code are not equivalent, and code is
-the weaker of the two: the refusal repairs the one call it refuses, the sentence changes how the
-model edits at all. What these five runs cannot separate is the guard from the path it forces —
+So on this model and this task a rule in the prompt and the same rule in code were not equivalent,
+and code was the weaker of the two: the refusal repaired the one call it refused, the sentence
+changed how the model edited at all. What these five runs cannot separate is the guard from the path it forces —
 the honest reading is "a recovered refusal left the model in a state it did not recover from
 twice", not "guards are harmful". The cheap next knobs are on the other error: `found 0
 occurrences` says nothing about what *is* in the file, and nothing in the loop notices the same
@@ -347,8 +358,8 @@ the same turn, and a final answer only after both tests were green. 36 s of gene
 src/slugify.js`, one `edit_file` copied from what it had just read, `bash node --test` — two tests
 green — and then turn 6 was plain prose with no block at all, which in `hermes` format *is* the
 final answer. Six turns, five calls, one block per response, not one malformed block and not one
-parse error. 34 s of generation, against the 35 s `tuned` took in the v2.0.1 re-run of all three: on this model
-the XML shape costs nothing and buys the trace. And the server did not do the parsing — prompted
+parse error. 34 s of generation, against the 35 s `tuned` took in the v2.0.1 re-run of all three: in this
+one run the XML shape cost nothing and bought the trace. And the server did not do the parsing — prompted
 mode sends no `tools[]`, so llama-server left the blocks in `message.content` (visible in the raw
 response in the trace) and `parseHermes` read them.
 
@@ -368,12 +379,12 @@ carried it. Two runs isolate them:
   an 8192-token window: `400 exceed_context_size_error`. `bare` has no `maxToolOutputChars`, so
   nothing capped that read.
 
-Read that as: on this model no single knob fixes `bare`. Turning thinking off stops the model
-from burning its whole context window before it answers; truncating tool output stops one
-`read_file` from doing the same. Only both together leave enough room for the loop to finish.
-The knobs that come next in the trace — "run `node --test` before you answer" and one tool call
-per response — are what keep the model from declaring victory on a red test suite, which is how
-both harnesses failed on the very first run of this demo.
+Read that as: on this model and this task, in one run each, no single knob fixed `bare`. Turning
+thinking off stopped the model from burning its whole context window before it answered;
+truncating tool output stops one `read_file` from doing the same. Only both together left enough
+room for the loop to finish. The knobs that come next in the trace — "run `node --test` before you
+answer" and one tool call per response — are there because both harnesses declared victory on a
+red test suite on the very first run of this demo; what each of them contributes was not isolated.
 
 ## Explaining an edit miss
 
@@ -437,7 +448,7 @@ all five runs — the trailing dash only — and the test goes red. Three runs f
 edit; two send the same `new` eight times, red each time, until the context runs out
 (`backend_error`). Every PASS in this table is a full fix, and the price was 5/5 → 3/5. With the
 `;` loop and the `node --test` loop in `guard-hint`, that is the third place this model repeats a
-call that has just failed, and telling it why did not help. The knob these runs argue for is the
+call that has just failed, and in these runs telling it why did not help. The knob they argue for is the
 one that notices the repetition.
 
 ## Noticing a repeated call
@@ -567,15 +578,16 @@ contained `parseDuration` it never touched the lookup table that held the bug, c
 `toLowerCase()` — and in one of them `/ 1000` and `* 1000` — on the line below it until the run
 ended. The plan allowed one repair of a unit the model loops on, said in advance: both bugs kept
 their kind and moved into the line the failure points at (commit `a1579a0`). `parseDuration` has
-been fixed first try since. `chunk` has not: the model goes for `return out` wherever the bug is.
+been fixed first try since. `chunk` has not: when it misses, the model goes for `return out`
+wherever the bug is.
 Every run on this page was measured on the units as of that commit; the final review then found that
 a fix hardcoding the tests' piece size passed `chunk`, and a second size was added to its test
 afterwards — a correct fix is unaffected.
 
 What the calibration measured:
 
-- **The pressure is real, and it is not where the design put it.** The model does not work unit by
-  unit. It reads all N files in one turn and edits all N in the next, so a healthy run is seven
+- **The pressure is real, and it is not where the design put it.** In these runs the model did not
+  work unit by unit. It read all N files in one turn and edited all N in the next, so a healthy run is seven
   turns at N = 5 and six at N = 7, and what fills the window is `node --test` output, cut at 4000
   characters a run. Healthy peaks: 4943 tokens at N = 5 (measured before the rewrite), 7594 and
   7602 at N = 7. The estimate the budget trims by is 0.69–0.83 of the exact count here, median 0.76,
@@ -622,7 +634,7 @@ assistant message alone.
 data above was seen, and this is what changed. The window became the parameter instead of N: the
 PASS runs above show that N hardly moves the peak — reading all seven files costs about 800 tokens,
 one `node --test` output 1000 to 1900 — so what fills the window is the number of test cycles, and
-a lucky two-cycle run fits 8192 at any N up to 10. The plan: N = 7, the server at `-c 5120`,
+by that arithmetic a lucky two-cycle run would fit 8192 at any N up to 10 (no size above 8 was run). The plan: N = 7, the server at `-c 5120`,
 `tuned-repeat` as the base arm so that a loop ends as `repeat_loop` and a 400 means the window,
 `budgetTokens` 2670 by the same rule, `--max-turns 18`, and the first gate unchanged — at least two
 of three unbound runs PASS. They were not:
@@ -652,8 +664,9 @@ measures in this model, before anything about context, is whether it finds the b
 
 `pool2` is the same ten units in another order — `clamp`, `words`, `titleCase`, `parseDuration`,
 `dedupe`, `range`, `formatBytes`, `median`, `chunk`, `paginate` — so sizes 1 to 8 hold neither
-`chunk` nor the `paginate` that imports it. It exists because this model does not find the bug in
-`chunk`, and a task lost to that two times in three measures nothing else. The order was changed
+`chunk` nor the `paginate` that imports it. It exists because this model, with this harness, lost
+two runs in three to the bug in `chunk` — it does find it in the PASS runs above — and a task lost
+to that so often measures nothing else. The order was changed
 after the data above was seen. That selects for PASS, for shorter histories, for fewer loops and
 fewer re-reads, so no `pool2` number is comparable with a `pool` number and the two never share a
 table. `pool` did not move: a test pins a hash of its first eight units, the largest size ever
@@ -769,10 +782,11 @@ src/clamp.js`. At turn 9 the history is 2798 in `chars / 4` units against a budg
 nothing left to stub — 592 above what `applyBudget` may not touch, where the arm with the mark
 ends at 2238, 32 above it. In real tokens that is 3662–3667 against 2952–2953, growing by about 220 a turn
 against about 145. Nothing died of it here; the breaker ended the runs first. But the knob's one
-job is to hold the history down, and it did that worse, for no change in what the model did. So
+job is to hold the history down, and it did that worse, for no change in what this model did on
+this task. So
 the change is not in the repo, these three rows reproduce on no commit of it, and `applyBudget`
-is as the paragraphs above describe. What that leaves standing is narrower than it looks: telling
-the model what it lost does not help once the file is lost. Whether losing the file is the harm is
+is as the paragraphs above describe. What that leaves standing is narrower than it looks: on this
+task, telling this model what it lost did not help once the file was lost. Whether losing the file is the harm is
 the next paragraph.
 
 **A budget with room in it, 2026-09-19.** At 2670 the question of what to stub never comes up:
@@ -806,8 +820,8 @@ not a rate. What does hold across every run made: at turn 5 all four runs with n
 read `formatBytes.js` again, and none of the fifteen with a stub in the history does — not even
 these, where the stub is only the directory listing and a test output the model has a newer copy
 of. It repeats the no-op edit instead (nine runs) or rewrites the `return` line (six). On this
-model a stub anywhere changes the next move; keeping the files in is what lets two of three
-recover from it.
+model and this task a stub anywhere in the history changed the move at turn 5; with the files kept
+in, two runs of three recovered from it.
 
 (An accident, reported and not read: the first three runs at 3300 —
 `bench-v210-pool2-budget3300-unbound-n3` — were made by mistake on a stale build of the unmerged
@@ -818,7 +832,7 @@ differ only in the text of two stubs; with three clones against
 a split three it does not say the labelled stub is worse, only that it was not better here
 either.)
 
-What follows for the knob is arithmetic, not policy. A budget works when three quarters of it
+What follows for the knob is arithmetic, not policy. A budget can work only when three quarters of it
 clears what cannot be stubbed by a margin worth having. On this task that floor is 1800–2350 in
 `chars / 4` units, and the budget that is safe for a 5120 window is 2670: there is no room, and
 no order of stubbing would make any. The candidate this leaves — stub test output before files
@@ -828,15 +842,15 @@ read — cannot be measured on this task at this window for the same reason.
 
 Every measurement above loses runs to `repeat_loop`, and everything tried against it so far was
 text added to a history that already holds the loop: the `identical call` note, the explained
-edit miss, the stub that names the call. None moved the model. Three knobs in `loop` change
+edit miss, the stub that names the call. None moved this model on these tasks. Three knobs in `loop` change
 something else. All three are absent, and so off, in every shipped harness; the first two need
 `loop.maxRepeats`, because a repeat is what that detector counts, and a harness that sets one
 without it is refused. `loop` now refuses a key it does not know: a misspelt knob would
 otherwise be silently off. The second and third ideas are taken from
 [Archon](https://github.com/coleam00/Archon)'s `fresh_context` and `until_bash`, which do this
 between the steps of a workflow; here they act inside one agent run. **They were built first and
-checked after**, so read "The check" below before relying on any of them: one of the three does
-nothing on this model.
+checked after**, so read "The check" below before relying on any of them: one of the three did
+nothing on this model, on the two loop turns it was tried on.
 
 `loop.repeatTemperature` (0 to 2). The turn after a turn in which some call drew an `identical
 call` note is sampled at this temperature instead of `backend.temperature`; a turn without a
@@ -885,7 +899,7 @@ passes gained: what this model does with red tests in front of it is the loop. I
 live: nothing on the stand used below ends that way. On `slug` the natural command is the
 grader itself, which would be a different experiment.
 
-**`repeatTemperature`: a replay, and it does nothing here.** One recorded request, replayed ten
+**`repeatTemperature`: a replay, and it did nothing on these turns.** One recorded request, replayed ten
 times at each temperature. Two loop turns: turn 6 of `2e9da379` (`pool`, the `chunk` flip-flop,
 with the `identical call` notes written in as the detector would have — the run itself had none)
 and turn 8 of `153d3718` (`pool2`, the first request after the no-op edit of `formatBytes.js`
@@ -908,12 +922,13 @@ the sampler; but on the `pool2` loop turn every one of the 123 reply tokens has 
 2.0 gives the same reply five times out of five. llama-server applies `top_p` 0.95 and `min_p`
 0.05 *before* temperature (`/props`: `… top_k, typ_p, top_p, min_p, xtc, temperature`), none of
 which the harness sets: when one token holds 0.999, one candidate is left by the time
-temperature is applied. **The loop is not sampling noise; the model is sure.** On this model and
-server `repeatTemperature` cannot move a loop turn at any value it accepts. One reply is not a
-trajectory, and live the knob would already have been hot a turn or two earlier; neither
-changes that arithmetic.
+temperature is applied. **On these two turns the loop is not sampling noise; the model is sure.**
+With this model and this server's sampler order `repeatTemperature` could not have moved either
+of them at any value it accepts; a loop turn on which a model is less sure, or another model, is
+a different measurement. One reply is not a trajectory, and live the knob would already have been
+hot a turn or two earlier; neither changes the arithmetic for these two.
 
-**Would other sampler settings do it? One more request per turn, arithmetic, and no.** The same
+**Would other sampler settings do it? One more request per turn, arithmetic, and not on these turns.** The same
 three turns once more at temperature 0 with `top_logprobs: 40`: the reply's path and the 40 raw
 candidates at each position. (Checked that they are raw: with `post_sampling_probs` the server
 reports one candidate, p = 1, at each of the 123 positions of the `pool2` reply — the chain
@@ -935,9 +950,10 @@ at p ≈ 1, and the alternative is the same edit, damaged. The one position in t
 with a real second candidate is on the harmless turn — the first token of `old`, `while` 0.93
 against `return` 0.07 — and the server's defaults leave it open. That is the different reply in
 the table above (0.07 at temperature 1, 0.02 at 0.7, against 1 of 10 seen at each): the
-`return` rewrite was not noise. Temperature moves the turn on which the model hesitates, and
-there the other candidate is the wrong edit. So the harness got no `top_p` / `min_p` knobs, and
-`repeatTemperature` stays as it is, off unless asked for, for a model less sure than this one.
+`return` rewrite was not noise. Of these three turns temperature moves only the one on which the
+model hesitates, and there the other candidate is the wrong edit. So the harness got no `top_p` /
+`min_p` knobs — a decision taken on two loop turns of one model, to be reopened for a model that
+loops less surely — and `repeatTemperature` stays as it is, off unless asked for, for such a model.
 One rule was added after seeing the data: a chosen token that is not the raw argmax was forced
 by the `json_schema` grammar and counts as fixed — one position, on the harmless turn, where
 the model wanted `],` at 0.965 and the grammar allowed `},`. The loop turns have none, and a
@@ -964,8 +980,8 @@ calls turn for turn: before the reset they had put a wrong `(n / 1024)` into the
 after it they read the file, took that back, read again, fixed `while`, and passed. In #3 the
 `return` line was still the original one when the history was cleared; the model read the
 file, sent the same no-op edit of that line four times, to `repeat_loop` at turn
-12: the loop re-formed from a clean history in three turns. So the loop lives in the model's
-reading of this file, not only in its history; a clean history got out of it where the files
+12: the loop re-formed from a clean history in three turns. So in these runs the loop lived in the
+model's reading of this file, not only in its history; a clean history got out of it where the files
 gave the model something of its own to undo. Two passes of three against one of nine is a
 direction, not a rate, and two of the three are one observation. `budgetTokens` stubbed again
 after the reset (turn 11 in #1 and #2, turn 12 in #3), so the confound named beforehand is
@@ -1018,7 +1034,7 @@ there. Nothing was written under `test/`.
   answering 400, and nothing here was measured on it.
 - `backend.maxTokens` caps what one response may generate (`max_tokens` / `num_predict`), thinking
   included. Every shipped harness except `bare` carries 1024 since 2026-09-19: across the recorded
-  runs the `/no_think` harnesses never needed more than 162 tokens for a response. `bare` has no cap
+  runs — one model, the tasks of this README — the `/no_think` harnesses never needed more than 162 tokens for a response. `bare` has no cap
   because it thinks — 592 tokens at the median and 1317 at most in its two recorded runs — so there a runaway still costs about
   295 s before anything can react, and a second one after the clipped retry makes a ten-minute run
   that ends as `parse_failed`, or as `aborted` if the bench timeout comes first. A cap set below
@@ -1054,7 +1070,7 @@ there. Nothing was written under `test/`.
   5900–6300 real tokens. `applyBudget` stubs the oldest tool results first and whole messages only
   — in a prompted harness one message is all the results of a turn — leaves `[dropped: N chars]`
   with no word of what it was (naming the call in the stub was built and measured, changed nothing
-  in what the model did and held the history down worse: "The stub that says what it was"), and
+  in what this model did on `pool2` and held the history down worse: "The stub that says what it was"), and
   cannot touch the system prompt, the task, the assistant's own
   messages or the newest results. Since 2026-09-19 it stubs down to three quarters of the budget
   once over it. Measured once: "The measurement, on `pool2`".
