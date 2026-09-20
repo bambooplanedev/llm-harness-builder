@@ -182,7 +182,7 @@ const triageAnswer = (dir: string, size: number, open: 'KEEP' | 'DROP' = 'DROP',
 }
 
 test('triage: the fixture is byte for byte what it was, and the workdir holds posts.txt in the form the curator prints, without the key', async () => {
-  expect(createHash('sha256').update(readFileSync(new URL('../examples-triage/posts.jsonl', import.meta.url))).digest('hex')).toBe('72866607993b59834150b6c69c50d9b3541e460e10b1b8663d99e145a7a7e25a')
+  expect(createHash('sha256').update(readFileSync(new URL('../examples-triage/posts.jsonl', import.meta.url))).digest('hex')).toBe('0c43a081c0fa73e4ec4eb842fb4f0e04716c25f0e9cec2cd33d4e3ee384f5f76')
   expect(TASKS.triage.max).toBe(16)
   const dir = await TASKS.triage.prepare(3)
   expect(readdirSync(dir)).toEqual(['posts.txt'])
@@ -217,6 +217,7 @@ test('triage: a wrong verdict, both or neither of a duplicate pair, a missing or
   const set = (id: number, verdict: string) => (rows: any[]) => rows.map(r => r.id === id ? { ...r, verdict } : r)
   expect(await broken(set(8011, 'DROP'))).toBe(false)   // a post worth reading thrown away
   expect(await broken(set(8004, 'KEEP'))).toBe(false)   // the car review let through
+  expect(await broken(set(8007, 'DROP'))).toBe(false)   // a post added by hand is always kept, whatever its URL says
   expect(await broken(set(8005, 'KEEP'))).toBe(false)   // both of a pair kept
   expect(await broken(set(8006, 'DROP'))).toBe(false)   // neither of a pair kept
   expect(await broken(rows => rows.slice(1))).toBe(false)

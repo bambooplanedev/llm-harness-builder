@@ -126,7 +126,8 @@ test('tuned-budget is tuned-repeat plus context.budgetTokens and nothing else', 
 })
 
 // Every /no_think harness answers in under 200 tokens; bare thinks, and <think> counts against the cap.
-test('every shipped harness caps generation at 1024 tokens, except bare', async () => {
+// curator writes a verdict per post in one call: 29 of them did not fit 1024 tokens (a window of the real feed, 2026-09-20), 19 did.
+test('every shipped harness caps generation at 1024 tokens, except bare (no cap) and curator (4096)', async () => {
   const { readdir } = await import('node:fs/promises')
   const dir = new URL('../harnesses/', import.meta.url)
   const files = (await readdir(dir)).filter(f => f.endsWith('.json'))
@@ -134,7 +135,7 @@ test('every shipped harness caps generation at 1024 tokens, except bare', async 
   for (const f of files) {
     const h = JSON.parse(await readFile(new URL(f, dir), 'utf8'))
     expect(validateConfig(h)).toEqual([])
-    expect([f, h.backend.maxTokens]).toEqual([f, f === 'bare.json' ? undefined : 1024])
+    expect([f, h.backend.maxTokens]).toEqual([f, f === 'bare.json' ? undefined : f === 'curator.json' ? 4096 : 1024])
   }
 })
 
