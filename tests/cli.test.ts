@@ -1,7 +1,7 @@
 import { test, expect } from 'vitest'
 import { spawn, spawnSync, execSync } from 'node:child_process'
 import { writeFile, readFile, readdir, stat, cp } from 'node:fs/promises'
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { tmp } from './helpers.js'
@@ -379,5 +379,45 @@ test('replay sends the recorded request of one turn --n times and counts the dis
   for (const bad of [[...args.slice(0, 2), '--turn', '9', ...args.slice(4)], ['replay', 'nope', ...args.slice(2)], args.slice(0, -2)]) {
     const e = cli(bad, { LHB_FAKE_BACKEND: fake }, cwd)
     expect(e.status).toBe(2); expect(e.stderr).not.toContain('    at ')
+  }
+}, 60_000)
+
+test('run --answer-schema sends the schema with the request, and exits 0 only on a final answer that is JSON', async () => {
+  const wd = await tmp('lhb-cli-')
+  const schema = { type: 'object', properties: { '1': { type: 'string' } }, required: ['1'] }
+  await writeFile(join(wd, 'schema.json'), JSON.stringify(schema))
+  const fake = join(wd, 'fake.json')
+  await writeFile(fake, JSON.stringify([{ content: '{"1":"KEEP"}' }]))
+  const ok = cli(['run', harness('curator-judge'), '--workdir', wd, '--json', '--answer-schema', join(wd, 'schema.json'), 'judge'], { LHB_FAKE_BACKEND: fake })
+  expect(ok.status).toBe(0)
+  const events = ok.stdout.trim().split('\n').map(l => JSON.parse(l))
+  expect(events.find(e => e.type === 'llm_request').payload.responseSchema).toEqual(schema)
+  expect(events.at(-1)).toMatchObject({ type: 'done', reason: 'final', text: '{"1":"KEEP"}' })
+  // a server that ignored the schema: the same JSON comes back inside a fence, and that is not the answer asked for
+  await writeFile(fake, JSON.stringify([{ content: '```json\n{"1":"KEEP"}\n```' }]))
+  const fenced = cli(['run', harness('curator-judge'), '--workdir', wd, '--answer-schema', join(wd, 'schema.json'), 'judge'], { LHB_FAKE_BACKEND: fake })
+  expect(fenced.status).toBe(1)
+  expect(fenced.stderr).toMatch(/final answer is not JSON/)
+}, 30_000)
+
+test('run --answer-schema dies before any request on a harness that would not send it, or a file that is not a JSON object', async () => {
+  const wd = await tmp('lhb-cli-')
+  await writeFile(join(wd, 'schema.json'), '{"type":"object"}')
+  await writeFile(join(wd, 'array.json'), '[]')
+  await writeFile(join(wd, 'broken.json'), '{')
+  const fake = join(wd, 'fake.json')
+  await writeFile(fake, JSON.stringify([{ content: '{}' }]))
+  const cases: [string, string, RegExp][] = [
+    ['bare', 'schema.json', /--answer-schema needs a harness that sends it/],
+    ['curator-judge', 'array.json', /must hold a JSON object/],
+    ['curator-judge', 'broken.json', /cannot read answer schema/],
+    ['curator-judge', 'nope.json', /cannot read answer schema/],
+  ]
+  for (const [h, file, message] of cases) {
+    const r = cli(['run', harness(h), '--workdir', wd, '--yes', '--answer-schema', join(wd, file), 'judge'], { LHB_FAKE_BACKEND: fake })
+    expect(r.status).toBe(2)
+    expect(r.stderr).toMatch(message)
+    expect(r.stderr).not.toMatch(/at .*cli\.ts/)
+    expect(existsSync(join(r.cwd, 'runs'))).toBe(false)
   }
 }, 60_000)

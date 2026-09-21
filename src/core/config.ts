@@ -22,6 +22,10 @@ export type HarnessConfig = {
 /** `answerSchema`: the JSON form of the final answer, when the task has one. It is enforced only by a harness with no tools at all and `toolCalls.enforceSchema` on. */
 export type RunParams = { config: HarnessConfig; task: string; workdir: string; answerSchema?: Record<string, unknown> }
 
+/** Whether a run of this harness sends `answerSchema` at all — what `run --answer-schema` asks before any model time. The run itself looks at the tools it ended up with. */
+export const sendsAnswerSchema = (c: HarnessConfig): boolean =>
+  c.toolCalls.mode === 'native' && c.toolCalls.enforceSchema && !c.tools.enabled.length && !Object.keys(c.mcpServers ?? {}).length
+
 // A misspelt key would be silently off, and every optional knob is off when absent. '' is the top level.
 const KEYS: Record<string, string[]> = {
   '': ['name', 'backend', 'systemPrompt', 'tools', 'toolCalls', 'context', 'loop', 'mcpServers'],
