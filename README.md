@@ -870,8 +870,8 @@ between the steps of a workflow; here they act inside one agent run. **They were
 checked after**, so read "The check" below before relying on any of them: one of the three did
 nothing on this model, on the two loop turns it was tried on. A fourth knob,
 `loop.repeatThinkTokens`, came later and was checked before it was built; it has its own part
-below, and the section ends with two later live checks: `untilBash`, and that knob with a
-larger cap.
+below, and the section ends with three later live checks: `untilBash`, the same stand with
+repeated checks counted, and that knob with a larger cap.
 
 `loop.repeatTemperature` (0 to 2). The turn after a turn in which some call drew an `identical
 call` note is sampled at this temperature instead of `backend.temperature`; a turn without a
@@ -908,8 +908,8 @@ again with no file change through a tool since the last one carries
 run `repeat_loop`, and `repeatTemperature` / `repeatThinkTokens` treat it as a repeat. What the
 claim says is not compared — with the files as they were, the check had nothing new to find.
 `freshContext` does not fire on it, and without `maxRepeats` nothing is counted and the run goes
-on as before. This came from the live check at the end of this section and has itself not been
-run live.
+on as before. This came from the live check of `untilBash` at the end of this section, and its
+own live run follows that one.
 
 ### The check, 2026-09-20
 
@@ -1107,8 +1107,32 @@ seven turns, with no tool call in between. Every refusal put the cut test output
 tokens, into the history: the prompt went from 22626 to 34190 tokens and the run ended on the
 32768 window, not on `max_turns`. `maxRepeats`, as it was then, would not have ended it either:
 it counted calls, and a claim has none. (It counts a failed check now — see `untilBash` above;
-that change came from this run and has not been run live.) That is one run of this model on this task in which a refusal did not move
+that change came from this run, and its own live run follows.) That is one run of this model on this task in which a refusal did not move
 it; it is not a reading of what the knob does anywhere else.
+
+**The same stand with `maxRepeats: 3`, so that a repeated failed check counts.** Same model, task,
+window and server build; three runs, written down before any model time. A "noted turn" is the
+model's turn right after a refusal that carries `note: check #N`.
+
+| run | verdict | done | turns | s | `final_check` failed / all | peak prompt, tokens |
+|---|---|---|---|---|---|---|
+| `8c2cef49` | PASS | `final` | 5 | 124 | 0 / 1 | 4357 |
+| `55ee8917` | FAIL | `backend_error` | 15 | 454 | 5 / 5 | 33281, refused by the server |
+| `8fba4a07` | FAIL | `repeat_loop` | 13 | 370 | 5 / 5 | 28356 |
+
+Written down beforehand, in two halves: a run with more than three repeated checks ends
+`repeat_loop` (held in the one run where it could: `8fba4a07`, on its fifth failed check), and no
+run ends on the window after consecutive failed checks (did not hold). `55ee8917` was refused at
+turn 9, made calls, and one edit applied, which set the count back to zero as designed; then it
+sent the same claim on turns 11–14, each refusal adding about 1450 tokens, 27480 → 33281, and the
+request of turn 15 overflowed the 32768 window one check before the detector would have ended the
+run. The question with no threshold — a call or the claim again on a noted turn: five noted turns
+got a reply, and on none of the five did the model make a call; each time it sent the
+byte-identical claim. The only calls after a refusal came after a first refusal, which carries no
+note. Both failed runs had already collected identical-call notes on tool calls earlier (9 and
+8), and PASS counts are not compared with the three runs above. So in these three runs the count
+ended one loop of claims and came one check too late for the other, and the note moved this
+model on this task zero times out of five; neither is a reading of what they do anywhere else.
 
 **`repeatThinkTokens: 3072` in an 8192 window.** The harness of the live check above with two
 coupled changes: server `-c 8192` (was 5120) and the cap at 3072 (was 1536). `pool2:7`,
