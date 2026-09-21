@@ -71,7 +71,7 @@ function describe(e: HarnessEvent, streamed = false): string {
   }
 }
 
-type ExecOpts = { yes: boolean; json: boolean; quiet?: boolean; signal?: AbortSignal; onEvent?: (e: HarnessEvent) => void; bench?: Meta['meta']['bench'] }
+type ExecOpts = { yes: boolean; json: boolean; quiet?: boolean; signal?: AbortSignal; onEvent?: (e: HarnessEvent) => void; bench?: Meta['meta']['bench']; answerSchema?: Record<string, unknown> }
 
 /** Runs one agent loop and keeps its trace in ./runs/<id>.jsonl, the file format serve reads. Written as .part and renamed when the loop ends, so a live or killed run is never listed. */
 async function execRun(config: HarnessConfig, task: string, workdir: string, o: ExecOpts): Promise<{ id: string; last: HarnessEvent }> {
@@ -104,7 +104,7 @@ async function execRun(config: HarnessConfig, task: string, workdir: string, o: 
   }
   let last: HarnessEvent | undefined
   try {
-    for await (const e of runAgent({ config, task, workdir }, opts)) {
+    for await (const e of runAgent({ config, task, workdir, answerSchema: o.answerSchema }, opts)) {
       last = e
       await trace.append(e)
       if (o.json) process.stdout.write(JSON.stringify(e) + '\n')
@@ -165,8 +165,8 @@ async function benchOnce(config: HarnessConfig, round: number, timeoutS: number,
     workdir = await task.prepare(size)
     process.stderr.write(`${workdir} ... `)
     t0 = Date.now()
-    const { id, last } = await execRun(config, task.prompt, workdir, {
-      yes: true, json: false, quiet: true, signal: AbortSignal.timeout(timeoutS * 1000), bench: { file: path.basename(out), round },
+    const { id, last } = await execRun(config, task.input ? `${task.prompt}\n\n${task.input(size)}` : task.prompt, workdir, {
+      yes: true, json: false, quiet: true, answerSchema: task.answerSchema?.(size), signal: AbortSignal.timeout(timeoutS * 1000), bench: { file: path.basename(out), round },
       onEvent: e => {
         if (e.type === 'parse_error') parseErrors++
         if (e.type === 'mcp_server_start') toolChars += e.descriptionChars + e.schemaChars
@@ -179,8 +179,8 @@ async function benchOnce(config: HarnessConfig, round: number, timeoutS: number,
       },
     })
     const ms = Date.now() - t0
-    const verdict = task.check(workdir, size) ? 'PASS' : 'FAIL'
     const d = last.type === 'done' ? last : undefined
+    const verdict = task.check(workdir, size, d?.reason === 'final' ? d.text : undefined) ? 'PASS' : 'FAIL'
     run = { round, verdict, reason: d?.reason ?? 'error', turns: d?.turns ?? 0, toolCalls: d?.toolCallCount ?? 0, parseErrors, lastError, ms, workdir, trace: id, toolChars: toolChars || undefined, toolErrors, guardBlocks: config.tools.requireReadBeforeEdit ? guardBlocks : undefined, editMiss }
   } catch (e) {
     run = { round, verdict: 'FAIL', reason: 'error', turns: 0, toolCalls: 0, parseErrors, lastError: String(e), ms: Date.now() - t0, workdir, toolChars: toolChars || undefined, toolErrors, guardBlocks: config.tools.requireReadBeforeEdit ? guardBlocks : undefined, editMiss }
@@ -198,7 +198,7 @@ function rollup(h: BenchHarness) {
 }
 
 async function cmdBench(argv: string[]) {
-  const usage = 'usage: llm-harness-builder bench [harness.json ...] [--n 3] [--timeout 1800] [--out runs/bench-<ts>.json] [--task slug|pool|pool2] [--size N] [--max-turns N] [--model m] [--base-url u] [--kind openai|ollama]'
+  const usage = 'usage: llm-harness-builder bench [harness.json ...] [--n 3] [--timeout 1800] [--out runs/bench-<ts>.json] [--task slug|pool|pool2|sift|triage|judge] [--size N] [--max-turns N] [--model m] [--base-url u] [--kind openai|ollama]'
   const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: {
     n: { type: 'string', default: '3' }, timeout: { type: 'string', default: '1800' }, out: { type: 'string' },
     task: { type: 'string', default: 'slug' }, size: { type: 'string' }, 'max-turns': { type: 'string' },

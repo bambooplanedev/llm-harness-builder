@@ -28,7 +28,7 @@ type Ev = DistributiveOmit<HarnessEvent, 'seq' | 'turn' | 'ts'>
 const FRESH_NOTE = 'Note: an earlier attempt at this task was cleared from this conversation. Files in the project may already have been changed. Look at their current state before editing.'
 
 export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGenerator<HarnessEvent> {
-  const { config, task, workdir } = params
+  const { config, task, workdir, answerSchema } = params
   const backend = opts.backend ?? createBackend(config.backend)
   const prompted = config.toolCalls.mode === 'prompted'
   const hermes = prompted && config.toolCalls.format === 'hermes'
@@ -129,8 +129,13 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
       const req: ChatRequest = {
         model: config.backend.model, messages: think ? [{ role: 'system', content: systemThinking }, ...messages.slice(1)] : messages,
         temperature: hot && config.loop.repeatTemperature !== undefined ? config.loop.repeatTemperature : config.backend.temperature, numCtx: config.backend.numCtx, maxTokens: think ? thinkTokens : config.backend.maxTokens,
-        tools: prompted ? undefined : schemas,
-        responseSchema: prompted && !hermes && config.toolCalls.enforceSchema ? PROMPTED_SCHEMA : undefined,
+        // A thinking turn needs the template's switch on as well: with it off, the /think line would be overruled.
+        think: config.backend.think === undefined ? undefined : think || config.backend.think,
+        tools: prompted || !schemas.length ? undefined : schemas,
+        // The schema is the form of the final answer, not of the turns before it, so it goes out only where no call can be made.
+        // Such a run is one request: nothing in it can loop, run a script or write a file.
+        responseSchema: prompted ? (!hermes && config.toolCalls.enforceSchema ? PROMPTED_SCHEMA : undefined)
+          : !schemas.length && config.toolCalls.enforceSchema ? answerSchema : undefined,
       }
       const payload = backend.buildPayload(req)
       const exactTokens = await backend.countTokens?.(payload, opts.signal)

@@ -10,7 +10,7 @@ export type McpServerConfig = { command: string; args?: string[]; tools?: string
 
 export type HarnessConfig = {
   name: string
-  backend: { kind: BackendKind; baseUrl: string; model: string; numCtx?: number; maxTokens?: number; temperature: number }
+  backend: { kind: BackendKind; baseUrl: string; model: string; numCtx?: number; maxTokens?: number; think?: boolean; temperature: number }
   systemPrompt: string
   tools: { enabled: ToolName[]; approveBash: boolean; requireReadBeforeEdit?: boolean; explainEditMiss?: boolean }
   toolCalls: { mode: 'native' | 'prompted'; format?: ToolCallFormat; enforceSchema: boolean; promptedTemplate: string; parseErrorHint: string }
@@ -19,12 +19,13 @@ export type HarnessConfig = {
   mcpServers?: Record<string, McpServerConfig>
 }
 
-export type RunParams = { config: HarnessConfig; task: string; workdir: string }
+/** `answerSchema`: the JSON form of the final answer, when the task has one. It is enforced only by a harness with no tools at all and `toolCalls.enforceSchema` on. */
+export type RunParams = { config: HarnessConfig; task: string; workdir: string; answerSchema?: Record<string, unknown> }
 
 // A misspelt key would be silently off, and every optional knob is off when absent. '' is the top level.
 const KEYS: Record<string, string[]> = {
   '': ['name', 'backend', 'systemPrompt', 'tools', 'toolCalls', 'context', 'loop', 'mcpServers'],
-  backend: ['kind', 'baseUrl', 'model', 'numCtx', 'maxTokens', 'temperature'],
+  backend: ['kind', 'baseUrl', 'model', 'numCtx', 'maxTokens', 'think', 'temperature'],
   tools: ['enabled', 'approveBash', 'requireReadBeforeEdit', 'explainEditMiss'],
   toolCalls: ['mode', 'format', 'enforceSchema', 'promptedTemplate', 'parseErrorHint'],
   context: ['maxToolOutputChars', 'budgetTokens'],
@@ -51,6 +52,7 @@ export function validateConfig(c: unknown): string[] {
     if (typeof b.temperature !== 'number') e.push('backend.temperature must be a number')
     if (b.numCtx !== undefined && !(Number.isInteger(b.numCtx) && b.numCtx > 0)) e.push('backend.numCtx must be a positive integer')
     if (b.maxTokens !== undefined && !(Number.isInteger(b.maxTokens) && b.maxTokens > 0)) e.push('backend.maxTokens must be a positive integer')
+    if (b.think !== undefined && typeof b.think !== 'boolean') e.push('backend.think must be true or false')
   }
   if (typeof c.systemPrompt !== 'string') e.push('systemPrompt must be a string')
   const t = c.tools

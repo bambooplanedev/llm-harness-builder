@@ -46,6 +46,8 @@ export type ChatRequest = {
   numCtx?: number
   /** Cap on generated tokens, thinking included; absent = the server's default, which is the rest of the window. */
   maxTokens?: number
+  /** The chat template's thinking switch (llama-server `chat_template_kwargs.enable_thinking`, Ollama `think`); absent = not sent, the model's default. */
+  think?: boolean
 }
 
 export type NormalizedResponse = {

@@ -126,7 +126,8 @@ test('tuned-budget is tuned-repeat plus context.budgetTokens and nothing else', 
 })
 
 // Every /no_think harness answers in under 200 tokens; bare thinks, and <think> counts against the cap.
-test('every shipped harness caps generation at 1024 tokens, except bare', async () => {
+// curator writes a verdict per post in one call: 29 of them did not fit 1024 tokens (a window of the real feed, 2026-09-20), 19 did.
+test('every shipped harness caps generation at 1024 tokens, except bare (no cap) and the two curator ones (4096)', async () => {
   const { readdir } = await import('node:fs/promises')
   const dir = new URL('../harnesses/', import.meta.url)
   const files = (await readdir(dir)).filter(f => f.endsWith('.json'))
@@ -134,6 +135,29 @@ test('every shipped harness caps generation at 1024 tokens, except bare', async 
   for (const f of files) {
     const h = JSON.parse(await readFile(new URL(f, dir), 'utf8'))
     expect(validateConfig(h)).toEqual([])
-    expect([f, h.backend.maxTokens]).toEqual([f, f === 'bare.json' ? undefined : 1024])
+    expect([f, h.backend.maxTokens]).toEqual([f, f === 'bare.json' ? undefined : /^curator(-judge)?\.json$/.test(f) ? 4096 : 1024])
   }
+})
+
+// Each line here came from a recorded run of 2026-09-20: the coder's prompt made the model retype lines, the enforced JSON shape was where
+// every cut-off reply happened, and /no_think is a Qwen3 line that Gemma did not read.
+test('curator: native calls, thinking off through the template, nothing about code in the prompt, no edit_file', async () => {
+  const h = JSON.parse(await readFile(new URL('../harnesses/curator.json', import.meta.url), 'utf8'))
+  expect(validateConfig(h)).toEqual([])
+  expect([h.toolCalls.mode, h.backend.think, h.backend.temperature]).toEqual(['native', false, 0])
+  expect(h.systemPrompt).not.toMatch(/no_think|node --test|coding agent|edit_file/)
+  expect(h.tools.enabled).toEqual(['list_dir', 'read_file', 'write_file', 'bash'])
+  // 3 of the 4 one-post windows of the real feed re-read posts.txt 14 times, to max_turns (2026-09-20)
+  expect(h.loop.maxRepeats).toBe(3)
+})
+
+// In the agent loop the same model, on windows of the real feed, looped on a one-post file, scripted the judgement and wrote ids it was never
+// shown (2026-09-20). The line about shell tools is what it followed into the script, so this prompt has none.
+test('curator-judge: no tool at all, the answer held to the schema of the task, one request and one retry, nothing about files or shell in the prompt', async () => {
+  const h = JSON.parse(await readFile(new URL('../harnesses/curator-judge.json', import.meta.url), 'utf8'))
+  const c = JSON.parse(await readFile(new URL('../harnesses/curator.json', import.meta.url), 'utf8'))
+  expect(validateConfig(h)).toEqual([])
+  expect(h.backend).toEqual(c.backend)
+  expect([h.tools.enabled, h.mcpServers, h.toolCalls.mode, h.toolCalls.enforceSchema, h.loop]).toEqual([[], undefined, 'native', true, { maxTurns: 2 }])
+  expect(h.systemPrompt).not.toMatch(/shell|grep|jq|python|working directory|no_think/)
 })
