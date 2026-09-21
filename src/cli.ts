@@ -8,7 +8,7 @@ import { createInterface } from 'node:readline/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { runAgent, type RunOpts } from './core/run.js'
-import { validateConfig, type HarnessConfig, type BackendKind } from './core/config.js'
+import { validateConfig, sendsAnswerSchema, type HarnessConfig, type BackendKind } from './core/config.js'
 import { validateWorkdir } from './core/tools/sandbox.js'
 import type { Backend, NormalizedResponse } from './core/backends/types.js'
 import { mcpApprovalServer, mcpCounts, UNTIL_BASH, quitWithoutWork, type HarnessEvent, type ToolCall } from './core/events.js'
@@ -125,15 +125,28 @@ async function execRun(config: HarnessConfig, task: string, workdir: string, o: 
 async function cmdRun(argv: string[]) {
   const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: {
     workdir: { type: 'string' }, yes: { type: 'boolean', default: false }, json: { type: 'boolean', default: false },
-    model: { type: 'string' }, 'base-url': { type: 'string' }, kind: { type: 'string' },
+    model: { type: 'string' }, 'base-url': { type: 'string' }, kind: { type: 'string' }, 'answer-schema': { type: 'string' },
   } })
   const [file, ...taskParts] = positionals
-  if (!file || !taskParts.length) die('usage: llm-harness-builder run <harness.json> --workdir <dir> "task" [--yes] [--json] [--model m] [--base-url u] [--kind openai|ollama]')
+  if (!file || !taskParts.length) die('usage: llm-harness-builder run <harness.json> --workdir <dir> "task" [--yes] [--json] [--answer-schema file.json] [--model m] [--base-url u] [--kind openai|ollama]')
   const workdir = path.resolve(values.workdir ?? '.')
   const werr = await validateWorkdir(workdir); if (werr) die(werr)
   const config = await loadHarness(file, { model: values.model, baseUrl: values['base-url'], kind: values.kind })
-  const { last } = await execRun(config, taskParts.join(' '), workdir, { yes: values.yes, json: values.json })
-  process.exitCode = last.type === 'done' && last.reason === 'final' ? 0 : 1
+  // A schema the harness would not send is a run whose answer nothing holds to a form, and it would look like any other: refuse it here.
+  let answerSchema: Record<string, unknown> | undefined
+  const schemaFile = values['answer-schema']
+  if (schemaFile !== undefined) {
+    if (!sendsAnswerSchema(config)) die(`--answer-schema needs a harness that sends it: toolCalls.mode "native", toolCalls.enforceSchema true, no tools enabled and no mcpServers (${file} is not one)`)
+    try { answerSchema = JSON.parse(await readFile(schemaFile, 'utf8')) }
+    catch (e) { die(`cannot read answer schema ${schemaFile}:\n  ${(e as Error).message}`) }
+    if (typeof answerSchema !== 'object' || answerSchema === null || Array.isArray(answerSchema)) die(`answer schema ${schemaFile} must hold a JSON object`)
+  }
+  const { last } = await execRun(config, taskParts.join(' '), workdir, { yes: values.yes, json: values.json, answerSchema })
+  const final = last.type === 'done' && last.reason === 'final' ? last : undefined
+  let ok = final !== undefined
+  // The schema is the server's to enforce, and a server may ignore it; then the same JSON comes back inside a fence. Whether it fits the schema is the caller's to check.
+  if (final && answerSchema) try { JSON.parse(final.text ?? '') } catch { ok = false; console.error('final answer is not JSON: the server did not hold it to --answer-schema') }
+  process.exitCode = ok ? 0 : 1
 }
 
 async function cmdDemo(argv: string[]) {

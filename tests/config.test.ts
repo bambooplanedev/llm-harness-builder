@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest'
-import { validateConfig } from '../src/core/config.js'
+import { validateConfig, sendsAnswerSchema } from '../src/core/config.js'
 import { harness } from './helpers.js'
 
 const validConfig = harness()
@@ -203,4 +203,13 @@ test('loop.repeatThinkTokens is a positive integer, needs loop.maxRepeats and a 
   // without the line there is nothing to flip, and the knob would be silently off
   expect(make(2048, 'sys')).toEqual(['loop.repeatThinkTokens needs a line "/no_think" in systemPrompt: that line is what it turns into "/think"'])
   expect(make(2048, 'never write /no_think in prose')).toHaveLength(1)
+})
+
+test('sendsAnswerSchema: native, enforceSchema on, and no tool of any kind', () => {
+  const judge = harness({ tools: { enabled: [], approveBash: true }, toolCalls: { mode: 'native', enforceSchema: true, promptedTemplate: '{{tools}}', parseErrorHint: 'h' } })
+  expect(sendsAnswerSchema(judge)).toBe(true)
+  expect(sendsAnswerSchema({ ...judge, tools: { enabled: ['bash'], approveBash: true } })).toBe(false)
+  expect(sendsAnswerSchema({ ...judge, mcpServers: { fs: { command: 'npx' } } })).toBe(false)
+  expect(sendsAnswerSchema({ ...judge, toolCalls: { ...judge.toolCalls, enforceSchema: false } })).toBe(false)
+  expect(sendsAnswerSchema({ ...judge, toolCalls: { ...judge.toolCalls, mode: 'prompted' } })).toBe(false)
 })

@@ -97,7 +97,7 @@ export const FAMILIES: Record<'qwen3' | 'gemma' | 'llama3', Family> = {
   },
   gemma: {
     mode: 'prompted', format: 'json', systemSuffix: '', promptedTemplate: DEFAULT_PROMPTED_TEMPLATE, parseErrorHint: DEFAULT_PARSE_ERROR_HINT,
-    note: 'no native tool calling in the chat template (Ollama rejects tools[]); no thinking switch',
+    note: 'no native tool calling in the chat template (Ollama rejects tools[]); no line to add for thinking: a Gemma that thinks by default is switched by backend.think',
   },
   llama3: {
     mode: 'native', format: 'json', systemSuffix: '', promptedTemplate: DEFAULT_PROMPTED_TEMPLATE, parseErrorHint: DEFAULT_PARSE_ERROR_HINT,
