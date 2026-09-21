@@ -36,6 +36,12 @@ function setMaxTokens(text: string) {
   else delete config.value.backend.maxTokens
 }
 
+/** Three states, and the first is no key at all: absent, nothing about thinking is sent. */
+function setThink(text: string) {
+  if (text === '') delete config.value.backend.think
+  else config.value.backend.think = text === 'on'
+}
+
 /** Same rule for the optional loop knobs: an empty box removes the key, so a harness without them saves as before.
  *  What a value may be is validateConfig's to say: its message names the knob and what it needs. */
 function setLoop(k: 'maxRepeats' | 'repeatTemperature' | 'repeatThinkTokens' | 'freshContext', text: string) {
@@ -95,6 +101,7 @@ function editMcp(text: string) {
       <span>temp</span><input type="number" step="0.1" v-model.number="config.backend.temperature">
       <span>num_ctx</span><input type="number" v-model.number="config.backend.numCtx" :disabled="config.backend.kind !== 'ollama'">
       <span title="cap on generated tokens, thinking included; empty = no cap">max_tokens</span><input type="number" min="1" :value="config.backend.maxTokens ?? ''" @change="setMaxTokens(($event.target as HTMLInputElement).value)">
+      <span title="the chat template's thinking switch: chat_template_kwargs.enable_thinking on an OpenAI-compatible server, think on Ollama; — sends nothing, and the model does what its template does">think</span><select :value="config.backend.think === undefined ? '' : config.backend.think ? 'on' : 'off'" @change="setThink(($event.target as HTMLSelectElement).value)"><option value="">—</option><option>on</option><option>off</option></select>
     </div>
 
     <label>System prompt <span v-for="(_, k) in PRESETS" :key="k"><button @click="applyPreset(k)">{{ k }}</button> </span></label>
