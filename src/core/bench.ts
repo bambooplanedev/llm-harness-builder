@@ -19,6 +19,8 @@ export type BenchRun = {
 export type BenchHarness = {
   name: string; config: HarnessConfig; pass: number; reasons: Record<string, number>
   median: { turns: number; toolCalls: number; ms: number }; runs: BenchRun[]
+  /** What preflight learnt from the server: its window (Ollama: the harness's numCtx) and llama-server's build. Absent in JSON written before v2.27, and under the test backend. */
+  server?: { nCtx?: number; build?: string }
 }
 export type BenchResult = { version: 1; date: string; task: string; taskName?: string; size?: number; node?: string; n: number; timeoutS: number; complete: boolean; harnesses: BenchHarness[] }
 

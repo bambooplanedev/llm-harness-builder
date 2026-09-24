@@ -60,6 +60,9 @@ export type NormalizedResponse = {
   raw: unknown
 }
 
+/** What a server says about itself. `nCtx`: the window a request gets there; `router`: llama-server serving several models, one of which the request names. */
+export type ServerInfo = { nCtx?: number; build?: string; router?: boolean }
+
 export interface Backend {
   listModels(): Promise<string[]>
   /** Pure: turns a ChatRequest into the exact JSON body that will be sent. */
@@ -68,6 +71,8 @@ export interface Backend {
   send(payload: unknown, signal?: AbortSignal, onDelta?: (d: Delta) => void): Promise<NormalizedResponse>
   /** Exact prompt token count for a payload from buildPayload; undefined when the server cannot count. */
   countTokens?(payload: unknown, signal?: AbortSignal): Promise<number | undefined>
+  /** The server's window and build for `model`; undefined when the server does not say. Never throws. */
+  serverInfo?(model: string): Promise<ServerInfo | undefined>
 }
 
 export class BackendError extends Error {

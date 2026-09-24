@@ -148,6 +148,15 @@ test('bench without files uses ./harnesses in demo order, round-robin', async ()
   expect(j.harnesses.flatMap((h: any) => h.runs.map((x: any) => x.reason))).toEqual(['final', 'final', 'final'])
 }, 90_000)
 
+test('bench against a server that does not answer stops before the first run, with no JSON written', async () => {
+  const wd = await tmp('lhb-cli-'); const out = join(wd, 'b.json')
+  const r = cli(['bench', '--n', '1', '--out', out, '--kind', 'openai', '--base-url', 'http://127.0.0.1:1/v1', harness('tuned')])
+  expect(r.status).toBe(2)
+  expect(r.stderr).toMatch(/^preflight: http:\/\/127\.0\.0\.1:1\/v1 \(openai\) does not answer: /m)
+  expect(r.stderr).not.toMatch(/--- round/)
+  expect(existsSync(out)).toBe(false)
+}, 30_000)
+
 test('bench rejects non-positive-integer --n and --timeout with usage', () => {
   for (const args of [['bench', '--n', '0'], ['bench', '--n', '2.5'], ['bench', '--n', '1', '--timeout', 'x']]) {
     const r = cli(args)

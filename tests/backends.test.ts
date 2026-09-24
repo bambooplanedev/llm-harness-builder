@@ -187,3 +187,37 @@ test('maxTokens becomes max_tokens / num_predict, and is absent from the payload
   expect(new OpenAIBackend('http://x/v1').buildPayload(req)).not.toHaveProperty('max_tokens')
   expect((new OllamaBackend('http://x').buildPayload(req) as any).options).not.toHaveProperty('num_predict')
 })
+
+/** Routes by path *and* query, as llama-server's router answers /props and /props?model= differently. */
+const urlFetch = (routes: Record<string, [number, unknown]>) => {
+  const urls: string[] = []
+  const fn = (async (url: string) => {
+    urls.push(url)
+    const u = new URL(url), [status, body] = routes[u.pathname + u.search] ?? [404, { error: 'no route' }]
+    return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
+  }) as unknown as typeof fetch
+  return { fn, urls }
+}
+
+test('openai serverInfo: one-model llama-server — window and build from /props at the server root', async () => {
+  const f = urlFetch({ '/props': [200, { default_generation_settings: { n_ctx: 4096 }, build_info: 'b11046-60081bb2b', total_slots: 1 }] })
+  expect(await new OpenAIBackend('http://x:8080/v1', f.fn).serverInfo('m')).toEqual({ nCtx: 4096, build: 'b11046-60081bb2b', router: false })
+  expect(f.urls).toEqual(['http://x:8080/props'])
+})
+
+test('openai serverInfo: llama-server router — the window is the model\'s, from /props?model=', async () => {
+  const f = urlFetch({
+    '/props': [200, { role: 'router', default_generation_settings: { params: null, n_ctx: 0 }, build_info: 'b11046-60081bb2b' }],
+    '/props?model=unsloth%2FQwen3-8B-GGUF%3AQ4_K_M': [200, { default_generation_settings: { n_ctx: 40960 }, build_info: 'b11046-60081bb2b', total_slots: 4 }],
+    '/props?model=nope': [400, { error: { code: 400, message: "model 'nope' not found" } }],
+  })
+  const be = new OpenAIBackend('http://x:8080/v1', f.fn)
+  expect(await be.serverInfo('unsloth/Qwen3-8B-GGUF:Q4_K_M')).toEqual({ nCtx: 40960, build: 'b11046-60081bb2b', router: true })
+  // a model the router does not have: still a router, window unknown
+  expect(await be.serverInfo('nope')).toEqual({ build: 'b11046-60081bb2b', router: true })
+})
+
+test('openai serverInfo: a server without /props (LM Studio, vLLM) yields undefined, no throw', async () => {
+  expect(await new OpenAIBackend('http://x:1234/v1', urlFetch({}).fn).serverInfo('m')).toBeUndefined()
+  expect(await new OpenAIBackend('http://x:1234/v1', (async () => { throw new Error('ECONNREFUSED') }) as unknown as typeof fetch).serverInfo('m')).toBeUndefined()
+})
