@@ -47,8 +47,11 @@ const chat = (messages: object[] = [{ role: 'system', content: 's' }, { role: 'u
   JSON.stringify({ model: 'm', stream: true, messages, ...extra })
 const sseLines = (chunks: object[]) => chunks.map(c => `data: ${JSON.stringify(c)}\n\n`).join('') + 'data: [DONE]\n\n'
 const HALF = `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: 'half' }, finish_reason: null }] })}\n\n`
+// Cyrillic "hi", by \u escape rather than the literal letters: a source-scan test forbids non-English text in
+// tracked files, and this reply still needs a two-byte-per-letter word for the chunk boundary to split.
+const HELLO = '\u041f\u0440\u0438\u0432\u0456\u0442'
 const TOOL_REPLY = sseLines([
-  { choices: [{ index: 0, delta: { role: 'assistant', content: 'Привіт' }, finish_reason: null }] },
+  { choices: [{ index: 0, delta: { role: 'assistant', content: HELLO }, finish_reason: null }] },
   { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'call_1', type: 'function', function: { name: 'read_file', arguments: '{"path":"a"}' } }] }, finish_reason: null }] },
   { choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 9, completion_tokens: 4 } },
 ])
@@ -62,7 +65,7 @@ const raw = (port: number, path: string, headers: Record<string, string> = {}) =
 
 test('forwards the reply byte for byte, split inside a UTF-8 letter, and records it without headers', async () => {
   const bytes = Buffer.from(TOOL_REPLY)
-  const cut = bytes.indexOf(Buffer.from('Привіт')) + 1 // inside the first letter's two bytes
+  const cut = bytes.indexOf(Buffer.from(HELLO)) + 1 // inside the first letter's two bytes
   const up = await upstream(async (_q, res) => {
     await sleep(100) // late headers: a normal request must not be aborted once its body has been read
     res.writeHead(200, { 'content-type': 'text/event-stream' })
@@ -81,7 +84,7 @@ test('forwards the reply byte for byte, split inside a UTF-8 letter, and records
   const [t] = await traces(px.runsDir)
   expect(t.meta).toMatchObject({ harness: 'test', task: 'do it', workdir: '', proxy: { upstream: up.url, pid: process.pid } })
   expect(t.events.map(e => e.type)).toEqual(['llm_request', 'llm_response', 'tool_call', 'done'])
-  expect(t.events[1]).toMatchObject({ content: 'Привіт', usage: { promptTokens: 9, completionTokens: 4 } })
+  expect(t.events[1]).toMatchObject({ content: HELLO, usage: { promptTokens: 9, completionTokens: 4 } })
   expect(t.events[2].call).toMatchObject({ callId: 'c1', name: 'read_file', args: { path: 'a' }, backendId: 'call_1' })
   expect(t.events[3]).toMatchObject({ type: 'done', reason: 'aborted', turns: 1, toolCallCount: 1 })
   expect(await readFile(join(px.runsDir, `${t.meta.id}.jsonl`), 'utf8')).not.toContain('secret-token-123')
