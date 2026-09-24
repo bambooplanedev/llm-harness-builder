@@ -1,8 +1,9 @@
 import { test, expect, afterEach } from 'vitest'
 import http from 'node:http'
+import { EventEmitter } from 'node:events'
 import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { startProxy } from '../src/core/proxy/server.js'
+import { startProxy, drained } from '../src/core/proxy/server.js'
 import { tmp } from './helpers.js'
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
@@ -61,6 +62,18 @@ const post = (base: string, body: string, init: RequestInit = {}) => fetch(`${ba
 const raw = (port: number, path: string, headers: Record<string, string> = {}) => new Promise<{ status: number; body: string }>((resolve, reject) => {
   const r = http.request({ host: '127.0.0.1', port, path, method: 'GET', headers }, res => { let b = ''; res.on('data', c => (b += c)); res.on('end', () => resolve({ status: res.statusCode!, body: b })) })
   r.on('error', reject); r.end()
+})
+
+test('drained resolves immediately when the response is already destroyed, not just on a future close', async () => {
+  const already = Object.assign(new EventEmitter(), { destroyed: true }) as unknown as http.ServerResponse
+  const raced = await Promise.race([drained(already).then(() => 'resolved'), sleep(200).then(() => 'timed out')])
+  expect(raced).toBe('resolved')
+  // The ordinary case still works: not yet destroyed, resolves once 'close' fires.
+  const later = Object.assign(new EventEmitter(), { destroyed: false }) as unknown as http.ServerResponse
+  const p = drained(later).then(() => 'resolved')
+  await sleep(10)
+  ;(later as unknown as EventEmitter).emit('close')
+  expect(await p).toBe('resolved')
 })
 
 test('forwards the reply byte for byte, split inside a UTF-8 letter, and records it without headers', async () => {

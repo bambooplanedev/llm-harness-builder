@@ -351,10 +351,12 @@ async function cmdProxy(argv: string[]) {
   const p = await startProxy({ upstream, port: Number(values.port), runsDir, harness: values.name, log: l => console.error(l) })
     .catch(e => die(`proxy: ${(e as Error).message}`))
   console.error(`proxy on http://127.0.0.1:${p.port}/v1 -> ${upstream}  (runs: ${runsDir}); give the agent that base URL`)
-  // Stopping is how a proxy session ends, so it exits 0, not run's 130. A second signal while stopping is ignored.
+  // Stopping is how a proxy session ends, so it exits 0, not run's 130. A second signal while
+  // stopping force-exits with 130 instead, in case the graceful stop is stuck: any run this leaves
+  // without a `done` gets the usual `aborted` repair from serve once this process's pid is gone.
   let stopping = false
   const stop = () => {
-    if (stopping) return
+    if (stopping) process.exit(130)
     stopping = true
     p.stop().then(() => process.exit(0), e => die(`proxy: ${(e as Error).message}`))
   }

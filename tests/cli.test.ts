@@ -457,6 +457,29 @@ test('proxy records until SIGINT or SIGTERM, then exits 0 with done appended', a
   }
 }, 60_000)
 
+test('a second SIGINT while proxy is stopping force-exits 130, not the graceful 0', async () => {
+  const up = http.createServer(req => { req.resume() }) // accepts, never answers: every request stays in flight until aborted
+  await new Promise<void>(r => up.listen(0, '127.0.0.1', r))
+  const cwd = mkdtempSync(join(tmpdir(), 'lhb-cwd-'))
+  const p = spawn(join(ROOT, 'node_modules', '.bin', 'tsx'), [join(ROOT, 'src', 'cli.ts'), 'proxy', '--upstream', `http://127.0.0.1:${(up.address() as { port: number }).port}`, '--port', '0', '--name', 'cli'], { cwd })
+  let err = ''
+  const port = await new Promise<number>(done => p.stderr.on('data', (b: Buffer) => { err += b; const m = /proxy on http:\/\/127\.0\.0\.1:(\d+)\/v1/.exec(err); if (m) done(Number(m[1])) }))
+  // Many requests of the same session: on the first signal, aborting and recording every one of
+  // them chains through one run's trace file, which keeps stop() busy long enough for a second
+  // signal to land while `stopping` is still true.
+  const body = JSON.stringify({ model: 'm', stream: true, messages: [{ role: 'system', content: 's' }, { role: 'user', content: 'hello' }] })
+  const inflight = Array.from({ length: 80 }, () => fetch(`http://127.0.0.1:${port}/v1/chat/completions`, { method: 'POST', body }).catch(() => {}))
+  await new Promise(r => setTimeout(r, 100)) // let every request reach the proxy and be forwarded to the (silent) upstream
+  const code = await new Promise(done => {
+    p.on('exit', done)
+    p.kill('SIGINT')
+    setTimeout(() => p.kill('SIGINT'), 5)
+  })
+  await Promise.allSettled(inflight)
+  up.close()
+  expect(code).toBe(130)
+}, 30_000)
+
 test('proxy wants the server root, not its /v1', () => {
   const r = cli(['proxy', '--upstream', 'http://127.0.0.1:8080/v1'])
   expect(r.status).toBe(2)

@@ -47,8 +47,14 @@ const refuse = (res: http.ServerResponse, status: number, message: string) => {
   res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: { message } }))
 }
 
-/** 'drain' or 'close', whichever comes first: a client that has left never drains. */
-const drained = (res: http.ServerResponse) => new Promise<void>(resolve => {
+/**
+ * 'drain' or 'close', whichever comes first: a client that has left never drains. `destroyed` is
+ * a state, checked first, not just an event: if `res` already closed before this was called (the
+ * 'close' event fires once and does not replay for a listener attached afterwards), waiting on a
+ * fresh 'close' listener here would hang forever.
+ */
+export const drained = (res: http.ServerResponse) => new Promise<void>(resolve => {
+  if (res.destroyed) return resolve()
   const done = () => { res.off('drain', done); res.off('close', done); resolve() }
   res.on('drain', done); res.on('close', done)
 })
@@ -68,7 +74,7 @@ export async function startProxy(o: ProxyOpts): Promise<ProxyServer> {
   const writers = new Map<string, { t: TraceWriter; chain: Promise<void> }>()
   const inflight = new Set<AbortController>()
   // The subset of inflight that stop() abandons *itself*: an ac already aborted by something else (the client
-  // leaving, the upstream dying) when stop() reaches it keeps that cause, since stop() is not what ended it.
+  // leaving) when stop() reaches it keeps that cause, since stop() is not what ended it.
   const stoppedByUs = new Set<AbortController>()
   const handlers = new Set<Promise<void>>()
 
@@ -121,7 +127,12 @@ export async function startProxy(o: ProxyOpts): Promise<ProxyServer> {
     // Not req.on('close'): since Node 16 that fires once the request body has been read. A close after a failure
     // is our own res.destroy() below, not the agent leaving.
     let clientClosed = false
-    res.on('close', () => { if (!res.writableFinished && failure === undefined) { clientClosed = true; ac.abort() } })
+    // Named, not inline, so it can also be run right below: `res` may already have closed during
+    // the `readAll(req)` await above, and a 'close' listener attached only now would never see an
+    // event that already fired — `destroyed` is the state that event left behind, checked directly.
+    const onResClose = () => { if (!res.writableFinished && failure === undefined) { clientClosed = true; ac.abort() } }
+    res.on('close', onResClose)
+    if (res.destroyed) onResClose()
     try {
       const upRes = await new Promise<http.IncomingMessage>((resolve, reject) => {
         const r = (up.protocol === 'https:' ? https : http).request(target, {
