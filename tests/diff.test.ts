@@ -138,3 +138,11 @@ test('skeleton: a context reset and a final check are chips, and a failed check 
   ])
   expect(t.map(x => x.sig)).toEqual(['context reset', 'check failed!', 'check passed'])
 })
+
+test('a tool_result without flags (a proxy trace) marks nothing bad', () => {
+  const t = skeleton([
+    { seq: 0, turn: 1, ts: 0, type: 'tool_call', call: { callId: 'c1', name: 'read_file', args: {} } },
+    { seq: 1, turn: 1, ts: 0, type: 'tool_result', callId: 'c1', name: 'read_file', output: 'x' },
+  ] as any)
+  expect(t[0].chips).toEqual([{ label: 'read_file', bad: false, truncated: false }])
+})
