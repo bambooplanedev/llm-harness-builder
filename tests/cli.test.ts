@@ -108,7 +108,7 @@ test('bench --n 2 on one harness: table, JSON with per-run reason/parseErrors/wo
   await writeFile(fake, JSON.stringify([{ content: TUNED_EDIT }, { content: TUNED_FINAL }, { content: 'not json' }, { content: TUNED_EDIT }, { content: TUNED_FINAL }]))
   const r = cli(['bench', '--n', '2', '--out', out, harness('tuned')], { LHB_FAKE_BACKEND: fake })
   expect(r.status).toBe(0)
-  expect(r.stdout).toMatch(/^tuned\s+2\/2\s+final×2\s/m)
+  expect(r.stdout).toMatch(/^tuned\s+2\/2\s+0\.34–1\.00\s+final×2\s/m)
   expect(r.stderr).toMatch(/--- round 2\/2/)
   const j = JSON.parse(await readFile(out, 'utf8'))
   expect(j).toMatchObject({ version: 1, n: 2, timeoutS: 1800, complete: true })
@@ -147,6 +147,15 @@ test('bench without files uses ./harnesses in demo order, round-robin', async ()
   expect(j.harnesses.map((h: any) => h.name)).toEqual(['bare', 'tuned', 'tuned-hermes'])
   expect(j.harnesses.flatMap((h: any) => h.runs.map((x: any) => x.reason))).toEqual(['final', 'final', 'final'])
 }, 90_000)
+
+test('bench against a server that does not answer stops before the first run, with no JSON written', async () => {
+  const wd = await tmp('lhb-cli-'); const out = join(wd, 'b.json')
+  const r = cli(['bench', '--n', '1', '--out', out, '--kind', 'openai', '--base-url', 'http://127.0.0.1:1/v1', harness('tuned')])
+  expect(r.status).toBe(2)
+  expect(r.stderr).toMatch(/^preflight: http:\/\/127\.0\.0\.1:1\/v1 \(openai\) does not answer: /m)
+  expect(r.stderr).not.toMatch(/--- round/)
+  expect(existsSync(out)).toBe(false)
+}, 30_000)
 
 test('bench rejects non-positive-integer --n and --timeout with usage', () => {
   for (const args of [['bench', '--n', '0'], ['bench', '--n', '2.5'], ['bench', '--n', '1', '--timeout', 'x']]) {
@@ -312,8 +321,8 @@ test('bench with an mcp server records toolChars/toolErrors and prints the tool 
   expect(run.toolErrors).toBe(1)
   // benchOnce always records editMiss (unlike guardBlocks, which is only set when the guard is on),
   // so its column prints here too even though this harness never turns the guard on.
-  expect(r.stdout).toMatch(/^harness\s+PASS\s+reasons\s+med turns\s+med s\s+toolChars\s+med errs\s+editMiss$/m)
-  expect(r.stdout).toMatch(new RegExp(`^mcp-bench\\s+0/1\\s+final×1\\s+\\d+\\s+\\d+\\s+${run.toolChars}\\s+1\\s+0$`, 'm'))
+  expect(r.stdout).toMatch(/^harness\s+PASS\s+95% CI\s+reasons\s+med turns\s+med s\s+toolChars\s+med errs\s+editMiss$/m)
+  expect(r.stdout).toMatch(new RegExp(`^mcp-bench\\s+0/1\\s+0\\.00–0\\.79\\s+final×1\\s+\\d+\\s+\\d+\\s+${run.toolChars}\\s+1\\s+0$`, 'm'))
 }, 60_000)
 
 test('bench --task pool --size 2 --max-turns 7: a pool workdir, the verdict on it, and all three in the JSON', async () => {

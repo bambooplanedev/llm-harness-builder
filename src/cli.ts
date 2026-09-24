@@ -19,6 +19,7 @@ import { median, formatTable, type BenchRun, type BenchHarness, type BenchResult
 import { GUARD_BLOCKED, EDIT_MISS } from './core/tools/fs.js'
 import { createBackend } from './core/backends/index.js'
 import { replayPayload, replySignature, recordedTurn } from './core/replay.js'
+import { preflight, windowWarning, type PreflightResult } from './core/preflight.js'
 
 const PKG_ROOT = fileURLToPath(new URL('..', import.meta.url))
 const die = (msg: string): never => { console.error(msg); process.exit(2) }
@@ -233,6 +234,25 @@ async function cmdBench(argv: string[]) {
   for (const f of files) {
     const config = await loadHarness(f, over)
     harnesses.push({ name: config.name, config, pass: 0, reasons: {}, median: { turns: 0, toolCalls: 0, ms: 0 }, runs: [] })
+  }
+  // Before any JSON exists: a server that is down, or lacks the model, is a typo to report, not 90 minutes of 'error' rows.
+  // The test backend is the network itself; there is no server behind it to ask.
+  if (!(await fakeBackendFromEnv())) {
+    const asked = new Map<string, PreflightResult>()
+    for (const h of harnesses) {
+      const b = h.config.backend, key = `${b.kind} ${b.baseUrl} ${b.model} ${b.numCtx ?? ''}`
+      let r = asked.get(key)
+      if (!r) {
+        asked.set(key, r = await preflight(createBackend(b), b))
+        if (r.ok) console.error(`preflight: ${b.baseUrl} ${b.model}: window ${r.server.nCtx ?? 'unknown'}${r.server.build ? `, build ${r.server.build}` : ''}`)
+      }
+      if (!r.ok) die(r.message)
+      else {
+        h.server = r.server
+        const w = windowWarning(h.config, r.server.nCtx)
+        if (w) console.error(w)
+      }
+    }
   }
   await mkdir(path.dirname(out), { recursive: true })
   const result: BenchResult = { version: 1, date: started.toISOString(), task: task!.prompt, taskName: values.task, size, node: process.version, n, timeoutS, complete: false, harnesses }
