@@ -29,6 +29,14 @@ test('TraceWriter takes its id from the caller', async () => {
   expect(meta).toMatchObject({ id: 'abcd1234', proxy: { upstream: 'http://u', pid: 1 } })
 })
 
+test('list() reports active only for a run this store\'s own start() is running, never for a proxy run', async () => {
+  const dir = await tmp('lhb-runs-')
+  await proxyRun(dir, 'live0003', process.pid) // a live proxy run: not started by this store, so never "active" here
+  const store = new RunStore(dir)
+  const list = await store.list()
+  expect(list.find(r => r.id === 'live0003')).toMatchObject({ active: false })
+})
+
 test('the events stream of a live proxy run ends without done, and a reconnect sends only newer events', async () => {
   const dir = await tmp('lhb-runs-'), hd = await tmp('lhb-h-')
   await proxyRun(dir, 'live0002', process.pid)

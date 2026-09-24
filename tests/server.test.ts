@@ -109,6 +109,10 @@ test('run with approval over SSE, events persisted to jsonl', async () => {
   expect(r.status).toBe(201)
   const { runId } = await r.json()
   const first = await sse(runId, e => e.type === 'approval_required')
+  // Parked on the approval: the UI's Abort must work here even if the page reloaded and lost
+  // track of which run it started itself, so /api/runs must say this one is still active.
+  const parked = await (await fetch(`${base}/api/runs`)).json()
+  expect(parked.find((s: any) => s.id === runId)).toMatchObject({ active: true })
   const call = first.at(-1).call
   const a = await fetch(`${base}/api/runs/${runId}/approve`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ callId: call.callId, ok: true }) })
   expect(a.status).toBe(200)
@@ -120,7 +124,7 @@ test('run with approval over SSE, events persisted to jsonl', async () => {
   expect(lines[0].meta).toMatchObject({ harness: 'h', task: 't' })
   expect(lines.at(-1)).toMatchObject({ type: 'done' })
   const list = await (await fetch(`${base}/api/runs`)).json()
-  expect(list.find((s: any) => s.id === runId)).toMatchObject({ harness: 'h', reason: 'final', toolCallCount: 1 })
+  expect(list.find((s: any) => s.id === runId)).toMatchObject({ harness: 'h', reason: 'final', toolCallCount: 1, active: false })
 })
 
 test('validation: bad config 400, bad workdir 400, busy workdir 409', async () => {
