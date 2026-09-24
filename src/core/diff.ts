@@ -52,7 +52,7 @@ export function skeleton(events: HarnessEvent[]): Turn[] {
         }
         case 'tool_result': {
           const chip = byCall.get(e.callId)
-          if (chip) { chip.bad ||= e.error; chip.truncated ||= e.truncated }
+          if (chip) { chip.bad ||= e.error ?? false; chip.truncated ||= e.truncated ?? false }
           break
         }
         case 'done': chips.push({ label: `done: ${e.reason}`, bad: e.reason !== 'final' || quitWithoutWork(e), truncated: false }); break
