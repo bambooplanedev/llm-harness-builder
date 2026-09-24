@@ -52,7 +52,9 @@ on that task with that harness. It does not say what a knob does: a knob that mo
 may move another model, or this one on another task, and a knob that helped here may not help
 yours. That is what `bench` and the traces are for. The knobs that showed no effect are still in
 the tool, off by default, for that reason; the one change that was dropped (the labelled stub) was
-dropped for what it cost, and its paragraph says on what evidence.
+dropped for what it cost, and its paragraph says on what evidence. At five runs an interval is
+wide: `bench` prints the 95% one next to every PASS count now, and the tables below, printed before
+it did, carry none.
 
 ## Backends
 
@@ -75,7 +77,9 @@ stream as JSONL to stdout; human-readable progress goes to stderr.
 `bench` runs the demo task `--n` times per harness, round-robin, with a per-run `--timeout`
 (seconds). With no files it takes `bare`, `tuned` and `tuned-hermes` from `./harnesses` (the copies
 `serve` made, i.e. what you edited in the UI) or from the package. It prints a PASS-rate table and
-writes a JSON to `runs/` after every run, so Ctrl-C keeps what finished. The JSON carries each
+writes a JSON to `runs/` after every run, so Ctrl-C keeps what finished. Next to each PASS count the
+table prints its 95% Wilson interval: 1/3 is 0.06–0.79 and 3/3 is 0.44–1.00, so at `--n 3` even
+3/3 against 1/3 does not tell two harnesses apart. The JSON carries each
 harness's full config and each run's `reason`, `parseErrors`, `toolErrors`, `lastError`, temp `workdir` and
 `trace` (the run's `runs/<id>.jsonl`), so two files are comparable by config, not by name. Exit
 code is 0 whatever the verdicts.
