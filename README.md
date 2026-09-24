@@ -148,8 +148,11 @@ message, and a request with the same pair and no fewer messages than the last on
 That fits agents whose first user message is the task and whose history only grows; it does not fit
 aider, whose first user message is its edit examples. So:
 - a new round of the same task, and a history the agent compacts, start new runs; a retry stays;
-- a side request with its own system prompt is its own short run: opencode's session title, and
-  each of its history compactions;
+- a side request with its own system prompt is its own short run: each of opencode's history
+  compactions is one. Its session title is not: that request never grows past three messages and
+  does not depend on the task, so every session's title request over the proxy's whole lifetime
+  joins the one run opened by the first; that run's Runs row shows the title instruction, not the
+  task;
 - our own harness through the proxy splits where it changes those messages: a
   `loop.repeatThinkTokens` turn is a one-turn run, and `loop.freshContext` starts a new one;
 - two identical sessions at the same time interleave in one run, and two sessions of the same task
