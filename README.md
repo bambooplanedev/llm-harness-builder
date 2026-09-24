@@ -148,7 +148,8 @@ message, and a request with the same pair and no fewer messages than the last on
 That fits agents whose first user message is the task and whose history only grows; it does not fit
 aider, whose first user message is its edit examples. So:
 - a new round of the same task, and a history the agent compacts, start new runs; a retry stays;
-- a side request with its own system prompt (a session title) is its own short run;
+- a side request with its own system prompt is its own short run: opencode's session title, and
+  each of its history compactions;
 - our own harness through the proxy splits where it changes those messages: a
   `loop.repeatThinkTokens` turn is a one-turn run, and `loop.freshContext` starts a new one;
 - two identical sessions at the same time interleave in one run, and two sessions of the same task
@@ -161,6 +162,33 @@ as running until that process ends.
 
 Like every trace, a recorded one holds everything the agent read and its system prompt, local paths
 included. Request headers, an API key among them, are never written.
+
+Checked with opencode 1.18.32 (`npx opencode-ai run --pure "calc.py has a bug in add; fix it"`) on
+`unsloth/Qwen3-8B-GGUF:Q4_K_M`, llama-server b11046 with `--jinja --parallel 1`, and this in the
+project's `opencode.json`:
+
+    {
+      "provider": {
+        "lab": {
+          "npm": "@ai-sdk/openai-compatible",
+          "options": { "baseURL": "http://127.0.0.1:8090/v1" },
+          "models": { "unsloth/Qwen3-8B-GGUF:Q4_K_M": { "name": "qwen3-8b" } }
+        }
+      },
+      "model": "lab/unsloth/Qwen3-8B-GGUF:Q4_K_M",
+      "permission": { "edit": "allow", "bash": "deny", "webfetch": "deny" }
+    }
+
+What the proxy saw. Every request was streamed and asked for `usage`, which came on every reply.
+The main session's first request is two messages and eight tools, about 8,900 tokens, so opencode
+does not fit the 4096 window the other checks here use. At `-c 4096` the server refused it; opencode
+took the refusal for oversized attachments and compacted its history again and again, nine runs in
+five minutes before it was stopped. At `-c 16384` it fixed the bug in three turns (a `read`, an
+`edit`, then nothing), recorded as the main run plus a one-turn title run. The third turn is worth
+opening: the model wrote its next `read` call inside its thinking, the server found no tool call in
+the reply, and opencode took that as the end. `replay` of the `edit` turn gave the recorded call 2
+times out of 2. That is one model on one task: it says the proxy records what opencode sends, not
+how opencode does on local models.
 
 ## Harness file
 
