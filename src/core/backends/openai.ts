@@ -43,6 +43,9 @@ export async function collect(chunks: AsyncIterable<any>, onDelta?: (d: Delta) =
 
 /** A non-streamed reply (`stream: false`) as the same NormalizedResponse; `raw` is the body as it came. */
 export function fromJson(body: any): NormalizedResponse {
+  // Mirrors jsonChunks' rule: a 2xx body carrying only `error` is a failure, not an empty reply.
+  if (body?.error !== undefined && body?.choices === undefined && body?.message === undefined)
+    throw new BackendError(`POST /chat/completions: ${typeof body.error === 'string' ? body.error : body.error?.message ?? 'stream error'}`, JSON.stringify(body))
   const ch = body?.choices?.[0], m = ch?.message ?? {}
   const calls: AccCall[] = (Array.isArray(m.tool_calls) ? m.tool_calls : []).map((t: any) => ({
     id: t?.id, name: t?.function?.name,

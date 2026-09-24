@@ -238,6 +238,17 @@ test('fromJson: bad arguments, object arguments, null content, length', () => {
   expect(r.toolCalls[1]).toEqual({ backendId: undefined, name: 'y', args: { k: 1 } })
 })
 
+test('send on a 200 application/json {error} rejects with BackendError, not an empty reply', async () => {
+  await expect(new OpenAIBackend('http://x/v1', fakeFetch(200, { error: { message: 'boom' } })).send({}))
+    .rejects.toSatisfy((e: unknown) => e instanceof BackendError && /boom/.test(e.message))
+})
+
+test('fromJson: a body with only error throws; one with error and choices does not', () => {
+  expect(() => fromJson({ error: { message: 'boom' } })).toThrow(/boom/)
+  expect(() => fromJson({ error: 'string error' })).toThrow(/string error/)
+  expect(fromJson({ error: 'ignored', choices: [{ message: { content: 'ok' } }] }).content).toBe('ok')
+})
+
 test('send takes the stream path when the fetch gives no headers', async () => {
   const noHeaders = (async () => {
     const r = new Response(sseBody(fx('openai-tool-call')), { status: 200 })

@@ -143,6 +143,17 @@ test('a non-streamed JSON reply is recorded', async () => {
   expect(t.events[1]).toMatchObject({ type: 'llm_response', content: 'plain', raw: body, usage: { promptTokens: 3, completionTokens: 1 } })
 })
 
+test('a non-streamed JSON reply carrying only an error is recorded as an error, not an empty llm_response', async () => {
+  const body = { error: { message: 'boom' } }
+  const up = await upstream((_q, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)) })
+  const px = await proxy(up.url)
+  await (await post(px.base, chat(undefined, { stream: false }))).text()
+  await px.stop()
+  const [t] = await traces(px.runsDir)
+  expect(t.events.map(e => e.type)).toEqual(['llm_request', 'error', 'done'])
+  expect(t.events[1].message).toMatch(/boom/)
+})
+
 test('an agent that leaves mid-reply aborts the upstream request', async () => {
   const up = await upstream((_q, res) => { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.write(HALF) })
   const px = await proxy(up.url)
