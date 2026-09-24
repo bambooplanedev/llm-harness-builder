@@ -20,6 +20,7 @@ import { GUARD_BLOCKED, EDIT_MISS } from './core/tools/fs.js'
 import { createBackend } from './core/backends/index.js'
 import { replayPayload, replySignature, recordedTurn } from './core/replay.js'
 import { preflight, windowWarning, type PreflightResult } from './core/preflight.js'
+import { startProxy } from './core/proxy/server.js'
 
 const PKG_ROOT = fileURLToPath(new URL('..', import.meta.url))
 const die = (msg: string): never => { console.error(msg); process.exit(2) }
@@ -300,7 +301,10 @@ async function cmdReplay(argv: string[]) {
   if (temperature !== undefined && !(values.temperature!.trim() && temperature >= 0 && temperature <= 2)) die('--temperature must be a number from 0 to 2')
   const file = run!.endsWith('.jsonl') ? run! : path.join('runs', `${run}.jsonl`)
   let rec: ReturnType<typeof recordedTurn>
-  try { rec = recordedTurn((await readFile(file, 'utf8')).trim().split('\n').map(l => JSON.parse(l)), Number(values.turn)) }
+  try {
+    const lines = (await readFile(file, 'utf8')).split('\n').filter(Boolean).flatMap(l => { try { return [JSON.parse(l)] } catch { return [] } })
+    rec = recordedTurn(lines, Number(values.turn))
+  }
   catch (e) { return die(`cannot replay ${file}:\n  ${(e as Error).message}`) }
   const payload = replayPayload(rec.payload, kind as BackendKind, { temperature, maxTokens: values['max-tokens'] === undefined ? undefined : Number(values['max-tokens']) })
   const backend = (await fakeBackendFromEnv()) ?? createBackend({ kind: kind as BackendKind, baseUrl: baseUrl!, model: '', temperature: 0 })
@@ -334,7 +338,30 @@ async function cmdServe(argv: string[]) {
   if (!values['no-open']) spawn(process.platform === 'darwin' ? 'open' : 'xdg-open', [url], { stdio: 'ignore', detached: true }).on('error', () => {}).unref()
 }
 
+/** Sits between another agent and the server; forwards everything, records chat completions into ./runs, live. */
+async function cmdProxy(argv: string[]) {
+  const usage = 'usage: llm-harness-builder proxy [--upstream http://127.0.0.1:8080] [--port 8090] [--name label]'
+  const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: {
+    upstream: { type: 'string', default: 'http://127.0.0.1:8080' }, port: { type: 'string', default: '8090' }, name: { type: 'string', default: 'proxy' },
+  } })
+  if (positionals.length || !/^https?:\/\/[^/]/.test(values.upstream) || !/^\d+$/.test(values.port)) die(usage)
+  const upstream = values.upstream.replace(/\/+$/, '')
+  if (/\/v1$/.test(upstream)) die(`--upstream is the server root, not its /v1: try ${upstream.slice(0, -3)}`)
+  const runsDir = path.join(process.cwd(), 'runs')
+  const p = await startProxy({ upstream, port: Number(values.port), runsDir, harness: values.name, log: l => console.error(l) })
+    .catch(e => die(`proxy: ${(e as Error).message}`))
+  console.error(`proxy on http://127.0.0.1:${p.port}/v1 -> ${upstream}  (runs: ${runsDir}); give the agent that base URL`)
+  // Stopping is how a proxy session ends, so it exits 0, not run's 130. A second signal while stopping is ignored.
+  let stopping = false
+  const stop = () => {
+    if (stopping) return
+    stopping = true
+    p.stop().then(() => process.exit(0), e => die(`proxy: ${(e as Error).message}`))
+  }
+  process.on('SIGINT', stop); process.on('SIGTERM', stop)
+}
+
 const [cmd = 'serve', ...rest] = process.argv.slice(2)
-const commands: Record<string, (a: string[]) => Promise<void>> = { serve: cmdServe, run: cmdRun, demo: cmdDemo, bench: cmdBench, replay: cmdReplay }
-if (!commands[cmd]) die('usage: llm-harness-builder [serve|run|demo|bench|replay] ...')
+const commands: Record<string, (a: string[]) => Promise<void>> = { serve: cmdServe, run: cmdRun, demo: cmdDemo, bench: cmdBench, replay: cmdReplay, proxy: cmdProxy }
+if (!commands[cmd]) die('usage: llm-harness-builder [serve|run|demo|bench|replay|proxy] ...')
 commands[cmd](rest).catch(e => die(String(e?.stack ?? e)))

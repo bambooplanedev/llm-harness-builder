@@ -4,6 +4,7 @@ import { writeFile, readFile, readdir, stat, cp } from 'node:fs/promises'
 import { mkdtempSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import http from 'node:http'
 import { tmp } from './helpers.js'
 import { RunStore } from '../src/server/runs'
 
@@ -430,3 +431,50 @@ test('run --answer-schema dies before any request on a harness that would not se
     expect(existsSync(join(r.cwd, 'runs'))).toBe(false)
   }
 }, 60_000)
+
+test('proxy records until SIGINT or SIGTERM, then exits 0 with done appended', async () => {
+  for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+    const up = http.createServer((req, res) => {
+      req.resume()
+      req.on('end', () => { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: 'hi' }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`) })
+    })
+    await new Promise<void>(r => up.listen(0, '127.0.0.1', r))
+    const cwd = mkdtempSync(join(tmpdir(), 'lhb-cwd-'))
+    const p = spawn(join(ROOT, 'node_modules', '.bin', 'tsx'), [join(ROOT, 'src', 'cli.ts'), 'proxy', '--upstream', `http://127.0.0.1:${(up.address() as { port: number }).port}`, '--port', '0', '--name', 'cli'], { cwd })
+    let err = ''
+    const port = await new Promise<number>(done => p.stderr.on('data', (b: Buffer) => { err += b; const m = /proxy on http:\/\/127\.0\.0\.1:(\d+)\/v1/.exec(err); if (m) done(Number(m[1])) }))
+    const r = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, { method: 'POST', body: JSON.stringify({ model: 'm', stream: true, messages: [{ role: 'user', content: 'hello' }] }) })
+    expect(await r.text()).toContain('"hi"')
+    const code = await new Promise(done => { p.on('exit', done); p.kill(signal) })
+    up.close()
+    expect(code).toBe(0)
+    const files = await readdir(join(cwd, 'runs'))
+    expect(files).toEqual([expect.stringMatching(/^[0-9a-f]{8}\.jsonl$/)])
+    const lines = (await readFile(join(cwd, 'runs', files[0]), 'utf8')).trim().split('\n').map(l => JSON.parse(l))
+    expect(lines[0].meta).toMatchObject({ harness: 'cli', task: 'hello', workdir: '' })
+    expect(lines.slice(1).map(l => l.type)).toEqual(['llm_request', 'llm_response', 'done'])
+    expect(err).toContain(`run ${files[0].slice(0, 8)}: hello`)
+  }
+}, 60_000)
+
+test('proxy wants the server root, not its /v1', () => {
+  const r = cli(['proxy', '--upstream', 'http://127.0.0.1:8080/v1'])
+  expect(r.status).toBe(2)
+  expect(r.stderr).toMatch(/server root/); expect(r.stderr).toContain('http://127.0.0.1:8080')
+}, 30_000)
+
+test('replay reads a trace whose last line is half-written', async () => {
+  const wd = await tmp('lhb-cli-')
+  const trace = join(wd, 't.jsonl')
+  const reply = { choices: [{ message: { content: 'hi' } }] }
+  await writeFile(trace, [
+    JSON.stringify({ meta: { id: 't', harness: 'p', task: 'x', workdir: '', started: 1 } }),
+    JSON.stringify({ seq: 0, turn: 1, ts: 1, type: 'llm_request', payload: { model: 'm', messages: [] } }),
+    JSON.stringify({ seq: 1, turn: 1, ts: 2, type: 'llm_response', raw: reply, content: 'hi', latencyMs: 1 }),
+    '{"seq":2,"turn":2,"ts":',
+  ].join('\n'))
+  const fake = join(wd, 'fake.json')
+  await writeFile(fake, JSON.stringify([{ content: 'hi', raw: reply }]))
+  const r = cli(['replay', trace, '--turn', '1', '--base-url', 'http://x', '--kind', 'openai', '--n', '1'], { LHB_FAKE_BACKEND: fake })
+  expect(r.status).toBe(0); expect(r.stdout).toMatch(/1x same as recorded/)
+}, 30_000)
