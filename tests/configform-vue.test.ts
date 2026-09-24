@@ -88,3 +88,11 @@ test('a prompted harness without toolCalls.format shows json, and rendering it d
   expect('format' in c.toolCalls).toBe(false)
   expect(formatSelect(await render({ ...base, toolCalls: { ...base.toolCalls, format: 'hermes' } }))).toBe('hermes')
 })
+
+test('think shows the harness value: on, off, and — when the harness sends nothing; rendering does not write the key', async () => {
+  const selected = (html: string) => /think<\/span><select value="(\w*)">/.exec(html)?.[1]
+  expect(selected(await render(base))).toBe('')
+  expect('think' in base.backend).toBe(false)
+  expect(selected(await render({ ...base, backend: { ...base.backend, think: false } }))).toBe('off')
+  expect(selected(await render({ ...base, backend: { ...base.backend, think: true } }))).toBe('on')
+})

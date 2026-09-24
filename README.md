@@ -64,9 +64,9 @@ dropped for what it cost, and its paragraph says on what evidence.
 ## CLI
 
     llm-harness-builder serve [--port 7331] [--no-open]
-    llm-harness-builder run <harness.json> --workdir <dir> "task" [--yes] [--json] [--model m] [--base-url u] [--kind k]
+    llm-harness-builder run <harness.json> --workdir <dir> "task" [--yes] [--json] [--answer-schema file.json] [--model m] [--base-url u] [--kind k]
     llm-harness-builder demo [--model m] [--base-url u] [--kind k]
-    llm-harness-builder bench [harness.json ...] [--n 3] [--timeout 1800] [--out runs/bench-<ts>.json] [--task slug|pool|pool2] [--size N] [--max-turns N] [--model m] [--base-url u] [--kind k]
+    llm-harness-builder bench [harness.json ...] [--n 3] [--timeout 1800] [--out runs/bench-<ts>.json] [--task slug|pool|pool2|sift|triage|judge] [--size N] [--max-turns N] [--model m] [--base-url u] [--kind k]
     llm-harness-builder replay <run-id | trace.jsonl> --turn N --base-url u --kind k [--n 5] [--temperature t] [--max-tokens m] [--json]
 
 `run` exits 0 only when the model finished with a final answer. `--json` writes the event
@@ -79,6 +79,13 @@ writes a JSON to `runs/` after every run, so Ctrl-C keeps what finished. The JSO
 harness's full config and each run's `reason`, `parseErrors`, `toolErrors`, `lastError`, temp `workdir` and
 `trace` (the run's `runs/<id>.jsonl`), so two files are comparable by config, not by name. Exit
 code is 0 whatever the verdicts.
+
+`--task` picks another task, and every task but `slug` needs a `--size`. `pool` and `pool2` are
+described with their measurements below. `sift`, `triage` and `judge` (sizes up to 12) are steps of a news curator on synthetic
+fixtures (`examples-sift`, `examples-triage`): `sift` splits a screener's verdicts into two files
+and is checked character by character; `triage` has the model write KEEP or DROP for each new
+post into a file, and the fixture carries its key; `judge` is the same judgement as one request,
+with the posts in the task text and the verdicts as the final answer.
 
 `replay` takes the request a recorded run sent at turn N (`runs/<id>.jsonl` keeps every one) and
 sends it again, as it was sent, `--n` times; `--temperature` and `--max-tokens` are the only things
@@ -125,6 +132,13 @@ In `native` mode `enforceSchema` does one other thing, and only in a harness wit
 run is one request. With any tool enabled the schema is not sent: it is the form of the final
 answer, not of the turns before it.
 
+`run --answer-schema <file.json>` gives such a schema to a task of your own. With a harness that
+would not send it, `run` stops before any request and says why; a schema quietly dropped would be
+a run like any other whose answer nothing had held to a form. The server does the enforcing, and
+a server may ignore the field, so with the flag `run` exits 0 only when the final answer parses
+as JSON. Whether that JSON fits the schema is left to the caller. The answer is the `text` of the
+`done` event in `--json`.
+
 ## Model families
 
 A family button in the UI (`applyFamily` in `src/core/prompts.ts`) fills the tool-call mode,
@@ -135,7 +149,7 @@ stored in the harness file — only the resulting plain fields.
 | family | mode / format | prompt line | why |
 |---|---|---|---|
 | `qwen3` | prompted / hermes | `/no_think` | trained on `<tool_call>` XML; `/no_think` kept Qwen3-8B from burning the window in `<think>` (one run: "Isolating the knobs") |
-| `gemma` | prompted / json | — | no native tool calling in the chat template (Ollama rejects `tools[]`); no thinking switch |
+| `gemma` | prompted / json | — | no native tool calling in the chat template (Ollama rejects `tools[]`); no line to add for thinking — a Gemma that thinks by default is switched by `backend.think` (Gemma 12B on llama-server: reasoning on 0 of 36 turns of `sift` with `think: false`) |
 | `llama3` | native / json | — | native tool calls work through the chat template; nothing to add |
 
 Why a prompted hermes format when llama-server (`--jinja`) and Ollama already parse Qwen's
