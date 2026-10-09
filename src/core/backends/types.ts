@@ -4,7 +4,7 @@ import { fetch as undiciFetch, Agent } from 'undici'
 export type FetchLike = (
   url: string,
   init?: { method?: string; headers?: Record<string, string>; body?: string; signal?: AbortSignal },
-) => Promise<{ ok: boolean; status: number; text(): Promise<string>; body?: AsyncIterable<Uint8Array> | null }>
+) => Promise<{ ok: boolean; status: number; text(): Promise<string>; body?: AsyncIterable<Uint8Array> | null; headers?: { get(name: string): string | null } }>
 // `body` is typed as AsyncIterable, not ReadableStream: undici's stream is the stream/web one, the global type
 // without `lib` is the DOM one, and the two do not unify; AsyncIterable covers both and `new Response` in tests.
 

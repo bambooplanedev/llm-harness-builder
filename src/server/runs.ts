@@ -8,11 +8,13 @@ import type { HarnessEvent, ToolCall } from '../core/events.js'
 import type { Backend, Delta } from '../core/backends/types.js'
 import type { BenchResult, BenchFile, ActiveTrace } from '../core/bench.js'
 
-export type RunSummary = { id: string; harness: string; task: string; workdir: string; started: number; reason?: string; turns?: number; toolCallCount?: number }
+export type RunSummary = { id: string; harness: string; task: string; workdir: string; started: number; reason?: string; turns?: number; toolCallCount?: number; active: boolean }
 export type Meta = { meta: {
   id: string; harness: string; task: string; workdir: string; started: number
   /** Only on runs started by `bench`: the bench JSON's basename (a label, not a key) and the round. */
   bench?: { file: string; round: number }
+  /** Only on runs a `proxy` records: its upstream, and its pid, which tells serve a live writer from a killed one. */
+  proxy?: { upstream: string; pid: number }
 } }
 /** Live-only: fanned out to listeners, never written to the run file, no seq. */
 export type DeltaMsg = Delta & { type: 'delta' }
@@ -35,12 +37,14 @@ export const safeName = (n: string) => /^[\w.-]{1,64}$/.test(n)
  * meant to show a run while it is still going.
  */
 export class TraceWriter {
-  readonly id = randomUUID().slice(0, 8)
+  readonly id: string
   /** Final path, the one that exists once the run has ended. */
   readonly file: string
   private path: string
 
-  constructor(private dir: string, private part = false) {
+  /** `id` is minted here unless the caller already has one (the proxy names a run before it opens its file). */
+  constructor(private dir: string, private part = false, id: string = randomUUID().slice(0, 8)) {
+    this.id = id
     this.file = path.join(dir, `${this.id}.jsonl`)
     this.path = part ? `${this.file}.part` : this.file
   }
@@ -160,13 +164,22 @@ export class RunStore {
       .filter(e => !('meta' in e))
   }
 
+  /** A proxy run is written by another process: while that process lives, a missing `done` means "still recording", not "killed". */
+  private async liveProxy(id: string): Promise<boolean> {
+    let pid: unknown
+    try { pid = (JSON.parse((await firstAndLastLine(this.file(id)))[0]) as Meta).meta.proxy?.pid } catch { return false }
+    if (!Number.isInteger(pid) || (pid as number) <= 0) return false
+    try { process.kill(pid as number, 0); return true } catch (e) { return (e as NodeJS.ErrnoException).code === 'EPERM' }
+  }
+
   /**
    * Repairs a run file left without a terminal `done` event (process killed mid-run):
    * appends a synthetic `{ reason: 'aborted' }` done and returns it. Returns null if the
-   * run is still active or already has a `done` event, so callers can no-op in that case.
+   * run is still active, or already has a `done` event, or is a proxy run whose proxy
+   * process is still alive, so callers can no-op in that case.
    */
   async ensureDone(id: string): Promise<HarnessEvent | null> {
-    if (this.isActive(id)) return null
+    if (this.isActive(id) || await this.liveProxy(id)) return null
     const events = await this.read(id)
     if (events.some(e => e.type === 'done')) return null
     const last = events[events.length - 1]
@@ -209,7 +222,7 @@ export class RunStore {
         const meta = (JSON.parse(first) as Meta).meta
         const lastEv = last !== first ? JSON.parse(last) : null
         const done = lastEv?.type === 'done' ? lastEv : undefined
-        out.push({ id: meta.id, harness: meta.harness, task: meta.task, workdir: meta.workdir, started: meta.started, reason: done?.reason, turns: done?.turns, toolCallCount: done?.toolCallCount })
+        out.push({ id: meta.id, harness: meta.harness, task: meta.task, workdir: meta.workdir, started: meta.started, reason: done?.reason, turns: done?.turns, toolCallCount: done?.toolCallCount, active: this.isActive(meta.id) })
       } catch {
         // Unreadable or malformed run file (e.g. truncated write, stray empty file): skip it
         // rather than failing the whole listing.

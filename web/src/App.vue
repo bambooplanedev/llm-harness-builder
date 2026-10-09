@@ -23,7 +23,19 @@ const runs = ref<RunSummary[]>([]); const runId = ref(''); const events = ref<Ha
 const mcpError = ref('')
 const live = ref<Delta>({}) // the current turn's streamed text; live-only, never in the trace
 let unsub: (() => void) | null = null
-const running = () => runId.value && !events.value.some(e => e.type === 'done')
+/** The task of the run on screen; the form's textarea is the next run's, not this one's. */
+const runTask = ref('')
+/** The run this page started. Run is about it, not about any run opened from the list (a live proxy session among them). */
+const ownRun = ref('')
+/** Whether the opened run's own RunSummary reported `active` when it was opened: a run this page
+ *  did not start itself, but that the server still tracks as running (its own run reopened after
+ *  a reload, or another tab's) and so can still abort. A live proxy session is never active this
+ *  way, since serve never started it. */
+const openActive = ref(false)
+const isDone = () => events.value.some(e => e.type === 'done')
+const running = () => !!ownRun.value && runId.value === ownRun.value && !isDone()
+/** Abort is enabled for a run this page started, or for any opened run the server still marks active — never for a run that only looks live because it has no `done` yet (a proxy session), which would 404. */
+const canAbort = () => !!runId.value && !isDone() && (running() || openActive.value)
 
 async function refreshModels() {
   modelsError.value = ''
@@ -43,8 +55,8 @@ async function load(name: string) {
   setConfig({ ...c, backend: config.value.backend.model ? config.value.backend : c.backend })
 }
 async function saveAs(name: string) { error.value = ''; try { config.value.name = name; await api.saveHarness(name, outbound(config.value)); await refreshLists() } catch (e) { error.value = (e as Error).message } }
-function open(id: string) {
-  unsub?.(); events.value = []; live.value = {}; runId.value = id
+function open(id: string, runTaskText: string, active = false) {
+  unsub?.(); events.value = []; live.value = {}; runId.value = id; runTask.value = runTaskText; openActive.value = active
   unsub = api.events(id,
     e => { events.value.push(e); if (e.type === 'done') refreshLists(); else if (e.type !== 'error') live.value = {} }, // keep partial text visible after an abort
     msg => (error.value = msg),
@@ -52,7 +64,7 @@ function open(id: string) {
 }
 async function start() {
   error.value = ''
-  try { const { runId: id } = await api.startRun(outbound(config.value), task.value, workdir.value); open(id) }
+  try { const { runId: id } = await api.startRun(outbound(config.value), task.value, workdir.value); ownRun.value = id; open(id, task.value, true) }
   catch (e) { error.value = (e as Error).message }
 }
 const approve = (callId: string, ok: boolean) => api.approve(runId.value, callId, ok).catch(e => (error.value = e.message))
@@ -90,15 +102,15 @@ watch(() => [config.value.backend.kind, config.value.backend.baseUrl], refreshMo
         <textarea v-model="task" style="min-height:50px"></textarea>
         <div class="row" style="margin:8px 0">
           <button @click="start" :disabled="!!running() || !!mcpError">Run</button>
-          <button @click="abort" :disabled="!running()">Abort</button>
+          <button @click="abort" :disabled="!canAbort()">Abort</button>
           <span class="err">{{ error }}</span>
         </div>
         <ContextBar :events="events" :num-ctx="config.backend.kind === 'ollama' ? config.backend.numCtx : undefined" />
-        <Trace v-if="runId" :events="events" :live="live" :task="task" @approve="approve" />
+        <Trace v-if="runId" :events="events" :live="live" :task="runTask" @approve="approve" />
         <h4>Runs</h4>
         <div class="runs">
-          <div v-for="r in runs" :key="r.id" @click="open(r.id)">
-            {{ r.harness }} · {{ r.reason ?? 'running' }} · {{ r.turns ?? '-' }} turns · {{ r.toolCallCount ?? '-' }} tool calls · {{ new Date(r.started).toLocaleTimeString() }}
+          <div v-for="r in runs" :key="r.id" @click="open(r.id, r.task, r.active)">
+            {{ r.harness }} · {{ r.reason ?? 'running' }} · {{ r.turns ?? '-' }} turns · {{ r.toolCallCount ?? '-' }} tool calls · {{ new Date(r.started).toLocaleTimeString() }} · {{ r.task.slice(0, 60) }}
           </div>
         </div>
       </div>

@@ -1,9 +1,9 @@
 import { test, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { createServer } from 'node:http'
-import { OpenAIBackend } from '../src/core/backends/openai.js'
+import { OpenAIBackend, collect, fromJson } from '../src/core/backends/openai.js'
 import { OllamaBackend } from '../src/core/backends/ollama.js'
-import { BackendError, defaultFetch, type ChatRequest, type Delta } from '../src/core/backends/types.js'
+import { BackendError, defaultFetch, jsonChunks, type ChatRequest, type Delta } from '../src/core/backends/types.js'
 
 const fx = (n: string) => JSON.parse(readFileSync(new URL(`./fixtures/${n}.json`, import.meta.url), 'utf8'))
 const fakeFetch = (status: number, body: unknown) => (async (_url: string, init?: RequestInit) => {
@@ -220,4 +220,46 @@ test('openai serverInfo: llama-server router — the window is the model\'s, fro
 test('openai serverInfo: a server without /props (LM Studio, vLLM) yields undefined, no throw', async () => {
   expect(await new OpenAIBackend('http://x:1234/v1', urlFetch({}).fn).serverInfo('m')).toBeUndefined()
   expect(await new OpenAIBackend('http://x:1234/v1', (async () => { throw new Error('ECONNREFUSED') }) as unknown as typeof fetch).serverInfo('m')).toBeUndefined()
+})
+
+test('send reads a non-streamed JSON reply by its content-type', async () => {
+  const body = { choices: [{ index: 0, message: { role: 'assistant', content: 'hi', reasoning_content: 'r', tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'bash', arguments: '{"command":"ls"}' } }] }, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 7, completion_tokens: 3 } }
+  const r = await new OpenAIBackend('http://x/v1', fakeFetch(200, body)).send({ stream: false })
+  expect(r).toMatchObject({ content: 'hi', reasoning: 'r', usage: { promptTokens: 7, completionTokens: 3 }, raw: body })
+  expect(r.toolCalls).toEqual([{ backendId: 'call_1', name: 'bash', args: { command: 'ls' } }])
+  expect(r.truncated).toBeUndefined()
+})
+
+test('fromJson: bad arguments, object arguments, null content, length', () => {
+  const r = fromJson({ choices: [{ message: { content: null, tool_calls: [{ id: 'a', function: { name: 'x', arguments: '{bad' } }, { function: { name: 'y', arguments: { k: 1 } } }] }, finish_reason: 'length' }] })
+  expect(r.content).toBe(''); expect(r.truncated).toBe(true)
+  expect(r.toolCalls[0]).toMatchObject({ backendId: 'a', name: 'x', args: {} })
+  expect(r.toolCalls[0].argsError).toMatch(/\{bad/)
+  expect(r.toolCalls[1]).toEqual({ backendId: undefined, name: 'y', args: { k: 1 } })
+})
+
+test('send on a 200 application/json {error} rejects with BackendError, not an empty reply', async () => {
+  await expect(new OpenAIBackend('http://x/v1', fakeFetch(200, { error: { message: 'boom' } })).send({}))
+    .rejects.toSatisfy((e: unknown) => e instanceof BackendError && /boom/.test(e.message))
+})
+
+test('fromJson: a body with only error throws; one with error and choices does not', () => {
+  expect(() => fromJson({ error: { message: 'boom' } })).toThrow(/boom/)
+  expect(() => fromJson({ error: 'string error' })).toThrow(/string error/)
+  expect(fromJson({ error: 'ignored', choices: [{ message: { content: 'ok' } }] }).content).toBe('ok')
+})
+
+test('send takes the stream path when the fetch gives no headers', async () => {
+  const noHeaders = (async () => {
+    const r = new Response(sseBody(fx('openai-tool-call')), { status: 200 })
+    return { ok: r.ok, status: r.status, text: () => r.text(), body: r.body }
+  }) as any
+  const r = await new OpenAIBackend('http://x/v1', noHeaders).send({})
+  expect(r.toolCalls.length).toBeGreaterThan(0)
+})
+
+test('collect over the same stream gives what send gives', async () => {
+  const a = await openai().send({})
+  const b = await collect(jsonChunks(new Response(sseBody(fx('openai-tool-call')), { status: 200 }), 'POST /chat/completions', 'data:'))
+  expect(b).toEqual(a)
 })
