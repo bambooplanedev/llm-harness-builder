@@ -19,6 +19,8 @@ export type BenchRun = {
 export type BenchHarness = {
   name: string; config: HarnessConfig; pass: number; reasons: Record<string, number>
   median: { turns: number; toolCalls: number; ms: number }; runs: BenchRun[]
+  /** What preflight learnt from the server: its window (Ollama: the harness's numCtx) and llama-server's build. Absent in JSON written before v2.27, and under the test backend. */
+  server?: { nCtx?: number; build?: string }
 }
 export type BenchResult = { version: 1; date: string; task: string; taskName?: string; size?: number; node?: string; n: number; timeoutS: number; complete: boolean; harnesses: BenchHarness[] }
 
@@ -36,6 +38,15 @@ export const mmss = (ms: number): string => {
   return s < 120 ? `${s}s` : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
 }
 
+/** 95% Wilson score interval of a PASS rate, as [low, high] in 0..1; no runs → undefined. At n = 3 it is wide on purpose: 1/3 is 0.06–0.79. */
+export function wilson(pass: number, n: number, z = 1.96): [number, number] | undefined {
+  if (n <= 0) return undefined
+  const p = pass / n, z2 = z * z
+  const center = (p + z2 / (2 * n)) / (1 + z2 / n)
+  const half = (z * Math.sqrt(p * (1 - p) / n + z2 / (4 * n * n))) / (1 + z2 / n)
+  return [Math.max(0, center - half), Math.min(1, center + half)]
+}
+
 export function formatTable(harnesses: BenchHarness[]): string {
   // The tool columns only earn their width when a run measured them: a bench of built-in harnesses
   // prints exactly the table it printed before mcp existed.
@@ -43,9 +54,10 @@ export function formatTable(harnesses: BenchHarness[]): string {
   const guard = harnesses.some(h => h.runs.some(r => r.guardBlocks !== undefined))
   const miss = harnesses.some(h => h.runs.some(r => r.editMiss !== undefined))
   const sum = (xs: (number | undefined)[]) => xs.reduce<number>((a, x) => a + (x ?? 0), 0)
-  const head = ['harness', 'PASS', 'reasons', 'med turns', 'med s', ...tools ? ['toolChars', 'med errs'] : [], ...guard ? ['guard'] : [], ...miss ? ['editMiss'] : []]
+  const head = ['harness', 'PASS', '95% CI', 'reasons', 'med turns', 'med s', ...tools ? ['toolChars', 'med errs'] : [], ...guard ? ['guard'] : [], ...miss ? ['editMiss'] : []]
   const rows = harnesses.map(h => [
     h.name, `${h.pass}/${h.runs.length}`,
+    wilson(h.pass, h.runs.length)?.map(x => x.toFixed(2)).join('–') ?? '-',
     Object.entries(h.reasons).map(([k, v]) => `${k}×${v}`).join(' ') || '-',
     String(h.median.turns), String(Math.round(h.median.ms / 1000)),
     // toolChars is the same in every run of a harness, so it is taken, not averaged.
@@ -57,5 +69,6 @@ export function formatTable(harnesses: BenchHarness[]): string {
   ])
   const w = head.map((c, i) => Math.max(c.length, ...rows.map(r => r[i].length)) + 2)
   const line = (r: string[]) => r.map((c, i) => c.padEnd(w[i])).join('').trimEnd()
-  return [line(head), ...rows.map(line), 'medians over all runs incl. failures; s = wall-clock per run'].join('\n')
+  return [line(head), ...rows.map(line), 'medians over all runs incl. failures; s = wall-clock per run',
+    '95% CI = Wilson interval of the PASS rate; two harnesses whose intervals overlap are not told apart by this bench'].join('\n')
 }

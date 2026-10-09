@@ -1,4 +1,4 @@
-import { BackendError, defaultFetch, readJson, jsonChunks, toolsField, type Backend, type ChatRequest, type Delta, type FetchLike, type NormalizedResponse, type NormalizedToolCall } from './types.js'
+import { BackendError, defaultFetch, readJson, jsonChunks, toolsField, type Backend, type ChatRequest, type Delta, type FetchLike, type NormalizedResponse, type NormalizedToolCall, type ServerInfo } from './types.js'
 
 export class OpenAIBackend implements Backend {
   constructor(private baseUrl: string, private fetchFn: FetchLike = defaultFetch) { this.baseUrl = baseUrl.replace(/\/+$/, '') }
@@ -41,6 +41,29 @@ export class OpenAIBackend implements Backend {
       if (typeof prompt !== 'string') return undefined
       const { tokens } = await post('/tokenize', { content: prompt, add_special: true, model: (payload as { model?: string }).model })
       return Array.isArray(tokens) ? tokens.length : undefined
+    } catch { return undefined }
+  }
+
+  /**
+   * llama-server only: GET /props at the server root. A router answers it for itself, with n_ctx 0, and
+   * for one of its models at /props?model= — which loads that model if it is not loaded yet.
+   */
+  async serverInfo(model: string): Promise<ServerInfo | undefined> {
+    const root = this.baseUrl.replace(/\/v1$/, '')
+    const props = async (q = '') => {
+      const r = await this.fetchFn(`${root}/props${q}`)
+      return r.ok ? readJson(r, 'GET /props') : undefined
+    }
+    const info = (p: any): ServerInfo => ({
+      ...(p?.default_generation_settings?.n_ctx > 0 ? { nCtx: p.default_generation_settings.n_ctx } : {}),
+      ...(typeof p?.build_info === 'string' ? { build: p.build_info } : {}),
+    })
+    try {
+      const top = await props()
+      if (!top) return undefined
+      if (top.role !== 'router') return { ...info(top), router: false }
+      const one = await props(`?model=${encodeURIComponent(model)}`).catch(() => undefined)
+      return { ...info(top), ...info(one), router: true }
     } catch { return undefined }
   }
 
