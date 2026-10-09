@@ -47,8 +47,9 @@ Run `demo` first: it takes a few minutes and shows you the trace and that the ba
 
 Every number below, and every "did not help", comes from one model — Qwen3-8B Q4_K_M on
 llama-server — and three small tasks, two of which are the same ten units in another order; five
-runs or fewer per arm, often near-clones at temperature 0.2. A result here says what that model did
-on that task with that harness. It does not say what a knob does: a knob that moved nothing here
+runs or fewer per arm, often near-clones at temperature 0.2. The one exception is its own section,
+"A second model", three runs per arm of one other model on two of those tasks. A result here says
+what that model did on that task with that harness. It does not say what a knob does: a knob that moved nothing here
 may move another model, or this one on another task, and a knob that helped here may not help
 yours. That is what `bench` and the traces are for. The knobs that showed no effect are still in
 the tool, off by default, for that reason; the one change that was dropped (the labelled stub) was
@@ -1274,6 +1275,62 @@ second of them drew the `identical call` note and ended the run. Four, in the th
 `formatBytes` one after another, the failing tests going 1, 2, 1, 2, until the timeout. Thinking
 replies took 364–3072 tokens. One pass of three is reported and compared to nothing: no run of
 this stand in an 8192 window exists without the knob.
+
+## A second model, 2026-10-09
+
+Everything above is Qwen3-8B. This section is the one other model: prism-ml's
+`Ternary-Bonsai-2-27B` at `PQ2_0`, on prism-ml's own llama.cpp build (b10754) — mainline llama.cpp
+(b11429) refuses the file, `tensor 'output.weight' has invalid ggml type 142`. Server
+`-c 8192 --parallel 1 --jinja`, about 8 tokens/s, 7.7 GB resident. Its chat template is a Qwen
+one, laid out like Qwen3.5's: tool calls as `<tool_call><function=…>` XML, thinking on by
+default, switched by `enable_thinking`. Every arm except `bare` is a shipped harness with `backend.think: false` added
+(the `/no_think` line stays in the prompt, where this template does not look for it) and, where
+the table says so, another `budgetTokens`; three runs per arm. Nothing was written down before
+these runs, and each budget after the first was chosen after the traces before it were read.
+
+**The old task.** `bench --n 3`, `bare` against `tuned` with thinking off:
+
+| harness | PASS | 95% CI | done | median turns | median s |
+|---|---|---|---|---|---|
+| `bare` | **3/3** | 0.44–1.00 | `final×3` | 6 | 112 |
+| `tuned` + `think: false` | **3/3** | 0.44–1.00 | `final×3` | 5 | 62 |
+
+No parse errors; every run edited `src/slugify.js` and nothing else, and the test has asserted
+the leading dash since 2026-09-18, so these are full fixes. On this model the task tells the two
+harnesses apart by time only.
+
+**`pool2`.** `--size 7 --max-turns 18 --timeout 1200`, the arms of "The measurement, on `pool2`",
+with thinking off. The budget is in `chars / 4` units, as everywhere in this README; "first stub"
+is the first turn whose request had results dropped.
+
+| harness | `budgetTokens` | first stub | PASS | 95% CI | done | median turns | median s | peak prompt, tokens |
+|---|---|---|---|---|---|---|---|---|
+| `tuned-repeat` | 0 | — | **3/3** | 0.44–1.00 | `final×3` | 6 | 231 | 6216–6293 |
+| `tuned-budget` | 2670 | turn 5 | **0/3** | 0.00–0.56 | `repeat_loop×3` | 11 | 480 | 5012–5024 |
+| `tuned-budget` | 4691 | never | **3/3** | 0.44–1.00 | `final×3` | 6 | 235 | 6248–6278 |
+| `tuned-budget` | 4000 | turn 6 | **3/3** | 0.44–1.00 | `final×3` | 6 | 282 | 4612–4618 |
+
+The model reads in batches. Every run of every arm reads the seven source files in one turn
+(turn 3) and the seven test files in the next (turn 4), and the estimate of the history then
+grows the same way in every run: about 2536 at turn 4, 3458 at turn 5, 4620 at turn 6. Turn 5 is
+the one the model answers with all seven rewrites in a single batch; turn 6 checks and ends. (In
+two runs without a stub, a parse error and its retry put one turn in between.)
+
+At 2670 the first stub lands on turn 5, before the rewrites, and takes the source files the model
+has just read. In all three runs it reads them again; the next request stubs those, and it reads
+the tests again; turns 5–10 alternate the two batches, no edit is ever made, and the detector ends
+the run at turn 11. The history never shrank below one batch of reads: the newest results cannot
+be stubbed, and one batch is larger than the budget. 4691 is the same formula as on `pool2`,
+fitted to an 8192 window; no run reached it, so those three are runs without the knob. 4000 sits
+between turn 5 and turn 6: the stub lands on the checking turn, after the rewrites — 6729–6733
+characters dropped, the estimate going from about 4630 to 2940–2990 — and all three runs end
+`final` without reading anything again. What it cost was time: the stub breaks the server's
+prompt cache, so turn 6 evaluated 3719 prompt tokens in 63 s against 639 in 12.6 s without it.
+
+So on this model, on this task, what decided the outcome was not the budget but the turn on which
+it first fired: before the turn that used what had been read, three loops with no edit; after it,
+three passes. That is one model, one task size and three near-clone runs per arm; it does not say
+what a budget does elsewhere, and none of the Qwen3-8B tables above share a row with these.
 
 ## Honest notes
 
