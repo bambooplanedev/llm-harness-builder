@@ -71,7 +71,7 @@ test('pool2: the order is its own literal, a permutation of pool, and the prompt
   expect(readdirSync(join(dir, 'test')).sort()).toEqual(seven.map(n => `${n}.test.js`))
 })
 
-const POOLS = [['pool', POOL], ['pool2', POOL2]] as const
+const POOLS = [['pool', POOL], ['pool2', POOL2], ['pool3', POOL2]] as const
 
 // The slug oracle once let 11 half fixes of 14 through. Here: every unit has a bug of its own, the
 // tests pin it, and the reference fix — all ten of them, and nothing less — turns the suite green.
@@ -96,6 +96,36 @@ test('pool2: formatBytes fixed with 1000 instead of 1024 is FAIL', async () => {
   writeFileSync(f, readFileSync(f, 'utf8').replace('n >= 1000', 'n >= 1024'))
   expect(TASKS.pool2.check(dir, 7)).toBe(true)
 })
+
+// pool3 is pool2 with the two oracle holes the README admits closed: the same order, the same sources,
+// two test files of its own. Each cheat below passes pool2 — the hole is real — and fails pool3.
+test('pool3: pool2\'s units and sources; its own tests for parseDuration and median only', async () => {
+  expect(TASKS.pool3.max).toBe(10)
+  expect(TASKS.pool3.prompt).toBe(TASKS.pool2.prompt)
+  const [a, b] = [await TASKS.pool2.prepare(10), await TASKS.pool3.prepare(10)]
+  for (const n of POOL2) {
+    expect([n, readFileSync(join(b, 'src', `${n}.js`), 'utf8')]).toEqual([n, readFileSync(join(a, 'src', `${n}.js`), 'utf8')])
+    const same = readFileSync(join(b, 'test', `${n}.test.js`), 'utf8') === readFileSync(join(a, 'test', `${n}.test.js`), 'utf8')
+    expect([n, same]).toEqual([n, !['parseDuration', 'median'].includes(n)])
+  }
+})
+
+const CHEATS: [string, number, string, string][] = [
+  // the test's own literal, special-cased: the minutes bug is still there
+  ['parseDuration', 4, 'export function parseDuration(s) {\n', "export function parseDuration(s) {\n  if (s === '1h30m15s') return 5415\n"],
+  // numeric order, but the caller's array is sorted in place
+  ['median', 8, 'const s = [...nums].sort()', 'const s = nums.sort((a, b) => a - b)'],
+]
+test.each(CHEATS)('pool3: the %s cheat that passes pool2 is FAIL', async (unit, size, old, cheat) => {
+  for (const [name, verdict] of [['pool2', true], ['pool3', false]] as const) {
+    const dir = await TASKS[name].prepare(size)
+    fixAllBut(dir, POOL2, size, unit)
+    const f = join(dir, 'src', `${unit}.js`), src = readFileSync(f, 'utf8')
+    expect(src.split(old).length - 1).toBe(1)
+    writeFileSync(f, src.replace(old, cheat))
+    expect([name, TASKS[name].check(dir, size)]).toEqual([name, verdict])
+  }
+}, 60_000)
 
 test.each(POOLS)('%s: the verdict does not depend on what the model did to test/', async (name, order) => {
   const green = await TASKS[name].prepare(2)

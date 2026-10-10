@@ -46,18 +46,19 @@ export const POOL = ['clamp', 'words', 'titleCase', 'chunk', 'paginate', 'parseD
 export const POOL2 = ['clamp', 'words', 'titleCase', 'parseDuration', 'dedupe', 'range', 'formatBytes', 'median', 'chunk', 'paginate'] as const
 const POOL_ROOT = path.join(PKG_ROOT, 'examples-pool')
 const POOL_PROMPT = 'The test suite of this project fails. Find and fix the bugs in the files under src/ until `node --test` passes. Do not edit the tests. Finally answer with a one-line summary.'
-const copyUnits = async (dir: string, units: string[], kinds: ('src' | 'test')[]) => {
-  for (const kind of kinds) {
-    await mkdir(path.join(dir, kind), { recursive: true })
-    for (const name of units) {
-      const file = kind === 'src' ? `${name}.js` : `${name}.test.js`
-      await cp(path.join(POOL_ROOT, kind, file), path.join(dir, kind, file))
-    }
+/** A unit's test, relative to examples-pool: test/<unit>.test.js, unless the task has one of its own. */
+type TestOf = (unit: string) => string
+const sharedTest: TestOf = u => path.join('test', `${u}.test.js`)
+const copyUnits = async (dir: string, units: string[], testOf: TestOf) => {
+  for (const kind of ['src', 'test'] as const) await mkdir(path.join(dir, kind), { recursive: true })
+  for (const name of units) {
+    await cp(path.join(POOL_ROOT, 'src', `${name}.js`), path.join(dir, 'src', `${name}.js`))
+    await cp(path.join(POOL_ROOT, testOf(name)), path.join(dir, 'test', `${name}.test.js`))
   }
 }
 
 /** Grows with --size until a healthy run fills the window. The text names no technique; `node --test` is the success criterion. */
-const poolTask = (name: string, order: readonly string[]): Task => {
+const poolTask = (name: string, order: readonly string[], testOf: TestOf = sharedTest): Task => {
   /** The first `size` units. A size outside 1..order.length is a caller's bug: an empty list would turn `node --test` into recursive discovery. */
   const firstUnits = (size: number): string[] => {
     if (!Number.isInteger(size) || size < 1 || size > order.length) throw new RangeError(`${name} size must be an integer from 1 to ${order.length}, got ${size}`)
@@ -70,7 +71,7 @@ const poolTask = (name: string, order: readonly string[]): Task => {
       const units = firstUnits(size)
       const dir = await mkdtemp(path.join(tmpdir(), `lhb-${name}-`))
       await cp(path.join(POOL_ROOT, 'package.json'), path.join(dir, 'package.json'))
-      await copyUnits(dir, units, ['src', 'test'])
+      await copyUnits(dir, units, testOf)
       return dir
     },
     // The model can reach test/: the verdict is taken on pristine tests, and only on them — a file it
@@ -78,10 +79,10 @@ const poolTask = (name: string, order: readonly string[]): Task => {
     check(dir, size = order.length) {
       // This function deletes <dir>/test: a relative or empty dir would resolve against the cwd.
       if (!path.isAbsolute(dir)) throw new RangeError(`${name} check needs an absolute workdir, got ${JSON.stringify(dir)}`)
-      const files = firstUnits(size).map(u => path.join('test', `${u}.test.js`))
+      const units = firstUnits(size), files = units.map(u => path.join('test', `${u}.test.js`))
       rmSync(path.join(dir, 'test'), { recursive: true, force: true })
       mkdirSync(path.join(dir, 'test'))
-      for (const f of files) copyFileSync(path.join(POOL_ROOT, f), path.join(dir, f))
+      units.forEach((u, i) => copyFileSync(path.join(POOL_ROOT, testOf(u)), path.join(dir, files[i])))
       return spawnSync(process.execPath, ['--test', ...files], { cwd: dir, timeout: 60_000 }).status === 0
     },
   }
@@ -205,4 +206,9 @@ const { triage, judge }: { triage: Task; judge: Task } = (() => {
   return { triage, judge }
 })()
 
-export const TASKS = { slug, pool: poolTask('pool', POOL), pool2: poolTask('pool2', POOL2), sift, triage, judge }
+/** pool2 with the two oracle holes closed (a parseDuration that special-cases the test's literal, a median that
+ *  sorts its input in place): the same order and sources, its own tests for those two units. pool2 stays as measured. */
+const POOL3_TESTS = new Set(['parseDuration', 'median'])
+const pool3Test: TestOf = u => POOL3_TESTS.has(u) ? path.join('test-pool3', `${u}.test.js`) : sharedTest(u)
+
+export const TASKS = { slug, pool: poolTask('pool', POOL), pool2: poolTask('pool2', POOL2), pool3: poolTask('pool3', POOL2, pool3Test), sift, triage, judge }

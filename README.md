@@ -71,7 +71,7 @@ did, carry none.
     llm-harness-builder serve [--port 7331] [--no-open]
     llm-harness-builder run <harness.json> --workdir <dir> "task" [--yes] [--json] [--answer-schema file.json] [--model m] [--base-url u] [--kind k]
     llm-harness-builder demo [--model m] [--base-url u] [--kind k]
-    llm-harness-builder bench [harness.json ...] [--n 3] [--timeout 1800] [--out runs/bench-<ts>.json] [--task slug|pool|pool2|sift|triage|judge] [--size N] [--max-turns N] [--model m] [--base-url u] [--kind k]
+    llm-harness-builder bench [harness.json ...] [--n 3] [--timeout 1800] [--out runs/bench-<ts>.json] [--task slug|pool|pool2|pool3|sift|triage|judge] [--size N] [--max-turns N] [--model m] [--base-url u] [--kind k]
     llm-harness-builder replay <run-id | trace.jsonl> --turn N --base-url u --kind k [--n 5] [--temperature t] [--max-tokens m] [--json]
     llm-harness-builder analyze <bench.json | run-id | trace.jsonl> ... [--json]
     llm-harness-builder proxy [--upstream http://127.0.0.1:8080] [--port 8090] [--name label]
@@ -100,7 +100,12 @@ budget cannot keep such a run inside it. LM Studio and vLLM have no `/props`: wi
 warning.
 
 `--task` picks another task, and every task but `slug` needs a `--size`. `pool` and `pool2` are
-described with their measurements in [The pool task](docs/findings.md#the-pool-task). `sift`,
+described with their measurements in [The pool task](docs/findings.md#the-pool-task). `pool3` is
+`pool2` with its two oracle holes closed: the same order and the same buggy sources, and tests of
+its own for `parseDuration` (minutes alone and next to the other units, so a fix that special-cases
+the old test's literal fails) and `median` (the input array must come back as it was, so a sort in
+place fails). At `--size 7` the two differ in `parseDuration` only; `median` is the eighth unit.
+Nothing has been measured on `pool3` yet, and its rows do not compare with `pool2`'s. `sift`,
 `triage` and `judge` (sizes up to 12) are steps of a news curator on synthetic fixtures
 (`examples-sift`, `examples-triage`): `sift` splits a screener's verdicts into two files and is
 checked character by character; `triage` has the model write KEEP or DROP for each new post into a
