@@ -96,3 +96,11 @@ test('think shows the harness value: on, off, and — when the harness sends not
   expect(selected(await render({ ...base, backend: { ...base.backend, think: false } }))).toBe('off')
   expect(selected(await render({ ...base, backend: { ...base.backend, think: true } }))).toBe('on')
 })
+
+test('the edit-miss escalation box shows the value, and an empty box for a harness without it', async () => {
+  const on = await render({ ...base, tools: { ...base.tools, editMissEscalation: 3 } })
+  expect(on).toContain('after this many failed edits of one file')
+  expect(on).toMatch(/title="after this many failed edits of one file[^"]*"[^>]*>edit misses before a re-read note<\/span><input type="number" min="1" value="3"/)
+  const off = await render(base)
+  expect(off).toMatch(/edit misses before a re-read note<\/span><input type="number" min="1" value=""/)
+})

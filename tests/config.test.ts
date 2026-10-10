@@ -213,3 +213,14 @@ test('sendsAnswerSchema: native, enforceSchema on, and no tool of any kind', () 
   expect(sendsAnswerSchema({ ...judge, toolCalls: { ...judge.toolCalls, enforceSchema: false } })).toBe(false)
   expect(sendsAnswerSchema({ ...judge, toolCalls: { ...judge.toolCalls, mode: 'prompted' } })).toBe(false)
 })
+
+test('tools.editMissEscalation is optional and must be a positive integer', () => {
+  const on = structuredClone(validConfig) as any
+  on.tools.editMissEscalation = 3
+  expect(validateConfig(on)).toEqual([])
+  for (const bad of [0, -1, 2.5, '3']) {
+    const c = structuredClone(validConfig) as any
+    c.tools.editMissEscalation = bad
+    expect(validateConfig(c)).toContain('tools.editMissEscalation must be a positive integer')
+  }
+})

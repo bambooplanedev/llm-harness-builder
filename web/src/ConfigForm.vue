@@ -48,6 +48,11 @@ function setLoop(k: 'maxRepeats' | 'repeatTemperature' | 'repeatThinkTokens' | '
   if (text.trim() && Number.isFinite(Number(text))) config.value.loop[k] = Number(text)
   else delete config.value.loop[k]
 }
+function setEscalation(text: string) {
+  const n = Number(text)
+  if (text.trim() && Number.isFinite(n)) config.value.tools.editMissEscalation = n
+  else delete config.value.tools.editMissEscalation
+}
 function setUntilBash(text: string) {
   if (text.trim()) config.value.loop.untilBash = text
   else delete config.value.loop.untilBash
@@ -114,6 +119,7 @@ function editMcp(text: string) {
     </div>
     <div><input type="checkbox" v-model="config.tools.approveBash"> ask before running bash</div>
     <div><input type="checkbox" :checked="!!config.tools.requireReadBeforeEdit" @change="toggleGuard(($event.target as HTMLInputElement).checked)"> refuse to edit a file that has not been read</div>
+    <div class="row"><span title="after this many failed edits of one file, each further failed edit tells the model to read the file again; a read or a change of the file starts the count over; empty = off">edit misses before a re-read note</span><input type="number" min="1" :value="config.tools.editMissEscalation ?? ''" @change="setEscalation(($event.target as HTMLInputElement).value)"></div>
     <details><summary>MCP servers ({{ mcpCount() }})</summary>
       <textarea :value="mcpText" @input="editMcp(($event.target as HTMLTextAreaElement).value)" style="min-height:80px"
         placeholder='{"fs": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "."], "tools": ["read_text_file"]}}'></textarea>
