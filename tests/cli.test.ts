@@ -267,7 +267,9 @@ test('Ctrl-C during bench with a live mcp server leaves the PASS table intact an
     loop: { maxTurns: 5 },
     mcpServers: { test: { command: process.execPath, args: [mcpFixture, `--marker=${marker}`], tools: ['stall'] } },
   }))
-  const count = () => Number(execSync(`pgrep -f ${marker} | wc -l`).toString().trim())
+  // No shell: a `sh -c` around pgrep carries the marker in its own command line, and Linux's pgrep,
+  // unlike macOS's, does not leave its ancestors out — it would count that shell.
+  const count = () => spawnSync('pgrep', ['-f', marker]).stdout.toString().split('\n').filter(Boolean).length
   const cwd = mkdtempSync(join(tmpdir(), 'lhb-cwd-'))
   // Piped stdout (not inherited) so the async-flush path in bench's finish() is the one under test.
   const p = spawn(join(ROOT, 'node_modules', '.bin', 'tsx'),

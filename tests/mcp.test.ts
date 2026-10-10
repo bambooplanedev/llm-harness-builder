@@ -1,5 +1,5 @@
 import { test, expect, vi } from 'vitest'
-import { execSync } from 'node:child_process'
+import { execSync, spawnSync } from 'node:child_process'
 import { closeSync, openSync } from 'node:fs'
 
 import { join } from 'node:path'
@@ -177,7 +177,9 @@ test('close kills a grandchild, not just the direct child', async () => {
   // `close()` temporarily changed to `process.kill(this.pid, ...)` (direct child only,
   // no leading `-`), the marked fixture survives — reparented to pid 1 — instead of dying.
   const marker = `lhb-grandchild-${process.pid}-${Date.now()}`
-  const count = () => Number(execSync(`pgrep -f ${marker} | wc -l`).toString().trim())
+  // No shell: a `sh -c` around pgrep carries the marker in its own command line, and Linux's pgrep,
+  // unlike macOS's, does not leave its ancestors out — it would count that shell.
+  const count = () => spawnSync('pgrep', ['-f', marker]).stdout.toString().split('\n').filter(Boolean).length
   const dir = await wd()
   const fifo = join(dir, 'stdin.fifo')
   execSync(`mkfifo ${fifo}`)
