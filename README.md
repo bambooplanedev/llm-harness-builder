@@ -254,6 +254,17 @@ a server may ignore the field, so with the flag `run` exits 0 only when the fina
 as JSON. Whether that JSON fits the schema is left to the caller. The answer is the `text` of the
 `done` event in `--json`.
 
+`tools.editMissEscalation: N` counts the failed `edit_file` calls on each file since that file was
+last read or changed through a tool. From the Nth on, the error ends with `note: miss #N on <path>
+— read the file again with read_file before editing it, or rewrite it with write_file`. A
+`read_file` of that file, a successful edit or write of it, or a `freshContext` reset start the
+count over; the read-before-edit guard's refusal is not counted, it has its own text. The idea is
+Hermes Agent's (its per-file miss counter in `tools/file_operations.py`), and the reason here is the
+2026-10-10 count in [the findings](docs/findings.md#a-second-model-2026-10-09): on `pool2` the runs
+that read the looping file again passed far more often. It is built, not measured. Counted over the
+recorded traces with no model, `N = 3` would have fired in 36 of the 166 runs that edited anything —
+what the model would then have done, only a run can say.
+
 ## Model families
 
 A family button in the UI (`applyFamily` in `src/core/prompts.ts`) fills the tool-call mode,

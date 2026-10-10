@@ -764,3 +764,35 @@ test('answerSchema goes out only from a native harness with no tools and enforce
   const withTool = await sent({ tools: { enabled: ['read_file'], approveBash: true }, toolCalls: { ...tc, mode: 'native', enforceSchema: true } }, schema)
   expect([withTool[0], (withTool[1] as unknown[]).length]).toEqual([undefined, 1])
 })
+
+// tools.editMissEscalation: failed edits of one file since it was last read or changed; from the Nth on, the error says to read it again.
+const escCfg = (n?: number) => base({ context: { maxToolOutputChars: 1000, budgetTokens: 0 }, loop: { maxTurns: 8 },
+  tools: { enabled: ['read_file', 'edit_file'], approveBash: false, ...(n === undefined ? {} : { editMissEscalation: n }) } })
+const miss = { toolCalls: [{ name: 'edit_file', args: { path: './a.txt', old: 'zzz', new: 'y' } }] }
+const reread = { toolCalls: [{ name: 'read_file', args: { path: 'a.txt' } }] }
+const fix = { toolCalls: [{ name: 'edit_file', args: { path: 'a.txt', old: 'A'.repeat(120), new: 'B' } }] }
+const edits = (ev: HarnessEvent[]) => (ev.filter(e => e.type === 'tool_result' && e.name === 'edit_file') as any[]).map(e => e.output as string)
+const NOTE = 'note: miss #3 on a.txt — read the file again with read_file before editing it, or rewrite it with write_file'
+
+test('editMissEscalation: the third miss on a file says to read it again, the first two do not', async () => {
+  const ev = await collect({ config: escCfg(3), task: 'do', workdir: await wd() }, { backend: Fake([miss, miss, miss, { content: 'x' }]) })
+  const out = edits(ev)
+  expect(out[0]).not.toContain('note: miss'); expect(out[1]).not.toContain('note: miss')
+  expect(out[2]).toContain(NOTE)
+})
+
+test('editMissEscalation: reading the file starts the count again', async () => {
+  const ev = await collect({ config: escCfg(3), task: 'do', workdir: await wd() }, { backend: Fake([miss, miss, reread, miss, { content: 'x' }]) })
+  expect(edits(ev).some(o => o.includes('note: miss'))).toBe(false)
+})
+
+test('editMissEscalation: a successful edit starts the count again', async () => {
+  const ev = await collect({ config: escCfg(3), task: 'do', workdir: await wd() }, { backend: Fake([miss, miss, fix, miss, { content: 'x' }]) })
+  expect(edits(ev)[2]).toBe('edited a.txt')
+  expect(edits(ev).some(o => o.includes('note: miss'))).toBe(false)
+})
+
+test('editMissEscalation off: three misses, no note — the requests are what they were', async () => {
+  const ev = await collect({ config: escCfg(), task: 'do', workdir: await wd() }, { backend: Fake([miss, miss, miss, { content: 'x' }]) })
+  expect(edits(ev).some(o => o.includes('note: miss'))).toBe(false)
+})

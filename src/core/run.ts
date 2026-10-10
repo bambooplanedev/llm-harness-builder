@@ -7,6 +7,7 @@ import { bash } from './tools/bash.js'
 import { renderTools, PROMPTED_SCHEMA } from './prompts.js'
 import { parsePrompted, parseHermes } from './parse.js'
 import { estimateTokens, applyBudget } from './tokens.js'
+import { normPath } from './analyze.js'
 import { startServers, type McpSession } from './mcp.js'
 
 export type RunOpts = {
@@ -114,6 +115,8 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
     // An edit that has succeeded is counted over the whole run: it succeeds twice only when it was undone in between.
     const seen = new Map<string, number>()
     const applied = new Set<string>()
+    // tools.editMissEscalation: failed edit_file calls per file since that file was last read or changed through a tool.
+    const misses = new Map<string, number>()
     // loop.repeatTemperature, loop.repeatThinkTokens: true while the previous turn carried a repeat. Never true without one of them:
     // a harness with maxRepeats alone must send the requests it always sent.
     let hot = false
@@ -263,6 +266,17 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
           if (repeats && (config.loop.repeatTemperature !== undefined || thinkTokens !== undefined)) hot = true
           if (repeats) output += `\nnote: identical call #${n} ${applied.has(key) ? 'in this run' : 'since the last file change'}`
         }
+        // From the Nth failed edit of one file on, the error says to read it again. A read or a change of that file
+        // starts the count over: reading it is exactly what the note asks for. The guard's refusal has its own text.
+        const esc = config.tools.editMissEscalation
+        if (esc !== undefined && ['edit_file', 'write_file', 'read_file'].includes(c.name)) {
+          const p = normPath(c.args.path)
+          if (c.name === 'edit_file' && result.error && !result.output.includes(GUARD_BLOCKED)) {
+            const m = (misses.get(p) ?? 0) + 1
+            misses.set(p, m)
+            if (m >= esc) output += `\nnote: miss #${m} on ${p} — read the file again with read_file before editing it, or rewrite it with write_file`
+          } else if (!result.error) misses.delete(p)
+        }
         yield ev({ type: 'tool_result', callId: call.callId, name: call.name, output, truncated, error: result.error })
         if (repeats > (config.loop.maxRepeats ?? Infinity)) { yield done('repeat_loop'); return }
         // The rest of this response's calls do not run: no context would ever hold their results.
@@ -276,7 +290,7 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
         wasReset = true
         const chars = messages.slice(2).reduce((n, m) => n + m.content.length, 0)
         messages.splice(0, messages.length, { role: 'system', content: system }, { role: 'user', content: task + '\n\n' + FRESH_NOTE })
-        seen.clear(); applied.clear(); ctx.reads?.clear(); hot = false
+        seen.clear(); applied.clear(); misses.clear(); ctx.reads?.clear(); hot = false
         yield ev({ type: 'context_reset', chars })
         continue
       }

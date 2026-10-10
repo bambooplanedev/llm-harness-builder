@@ -12,7 +12,7 @@ export type HarnessConfig = {
   name: string
   backend: { kind: BackendKind; baseUrl: string; model: string; numCtx?: number; maxTokens?: number; think?: boolean; temperature: number }
   systemPrompt: string
-  tools: { enabled: ToolName[]; approveBash: boolean; requireReadBeforeEdit?: boolean; explainEditMiss?: boolean }
+  tools: { enabled: ToolName[]; approveBash: boolean; requireReadBeforeEdit?: boolean; explainEditMiss?: boolean; editMissEscalation?: number }
   toolCalls: { mode: 'native' | 'prompted'; format?: ToolCallFormat; enforceSchema: boolean; promptedTemplate: string; parseErrorHint: string }
   context: { maxToolOutputChars: number; budgetTokens: number }
   loop: { maxTurns: number; maxRepeats?: number; repeatTemperature?: number; repeatThinkTokens?: number; freshContext?: number; untilBash?: string }
@@ -30,7 +30,7 @@ export const sendsAnswerSchema = (c: HarnessConfig): boolean =>
 const KEYS: Record<string, string[]> = {
   '': ['name', 'backend', 'systemPrompt', 'tools', 'toolCalls', 'context', 'loop', 'mcpServers'],
   backend: ['kind', 'baseUrl', 'model', 'numCtx', 'maxTokens', 'think', 'temperature'],
-  tools: ['enabled', 'approveBash', 'requireReadBeforeEdit', 'explainEditMiss'],
+  tools: ['enabled', 'approveBash', 'requireReadBeforeEdit', 'explainEditMiss', 'editMissEscalation'],
   toolCalls: ['mode', 'format', 'enforceSchema', 'promptedTemplate', 'parseErrorHint'],
   context: ['maxToolOutputChars', 'budgetTokens'],
   loop: ['maxTurns', 'maxRepeats', 'repeatTemperature', 'repeatThinkTokens', 'freshContext', 'untilBash'],
@@ -66,6 +66,7 @@ export function validateConfig(c: unknown): string[] {
     if (typeof t.approveBash !== 'boolean') e.push('tools.approveBash must be boolean')
     for (const k of ['requireReadBeforeEdit', 'explainEditMiss'] as const)
       if (t[k] !== undefined && typeof t[k] !== 'boolean') e.push(`tools.${k} must be boolean`)
+    if (t.editMissEscalation !== undefined && !(Number.isInteger(t.editMissEscalation) && t.editMissEscalation >= 1)) e.push('tools.editMissEscalation must be a positive integer')
   }
   const tc = c.toolCalls
   if (!isObj(tc)) e.push('toolCalls is required')
