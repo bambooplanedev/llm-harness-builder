@@ -325,3 +325,42 @@ test('GET /api/bench?file= validates the name and 404s on anything that is not a
   expect((await fetch(`${bbase}/api/bench?file=notbench.json`)).status).toBe(404)
   expect((await (await fetch(`${bbase}/api/bench?file=nope.json`)).json()).error).toBe('not a bench file')
 })
+
+test('GET /api/bench?file= carries an analysis per finished trace, keyed by trace id; a hostile trace id is never read', async () => {
+  const line = (o: object) => JSON.stringify(o)
+  const traceLines = [
+    line({ meta: { id: 'anal0001', harness: 'tuned', task: 't', workdir: '/w', started: 1 } }),
+    line({ seq: 0, turn: 1, ts: 0, type: 'llm_request', payload: { messages: [{ role: 'user', content: 'do' }] } }),
+    line({ seq: 1, turn: 1, ts: 0, type: 'tool_call', call: { callId: 'c1', name: 'edit_file', args: { path: 'a.txt' } } }),
+    line({ seq: 2, turn: 1, ts: 0, type: 'tool_result', callId: 'c1', name: 'edit_file', output: 'edited a.txt' }),
+    line({ seq: 3, turn: 1, ts: 0, type: 'done', reason: 'final', turns: 1, toolCallCount: 1 }),
+  ]
+  await writeFile(join(benchDir, 'anal0001.jsonl'), traceLines.join('\n') + '\n')
+  const b = JSON.parse(benchJson({ date: '2026-09-13T16:00:00.000Z', complete: true }))
+  const run = { round: 1, verdict: 'PASS', reason: 'final', turns: 1, toolCalls: 1, parseErrors: 0, ms: 1, workdir: '/w' }
+  b.harnesses[0].runs = [{ ...run, trace: 'anal0001' }, { ...run, round: 2, trace: '../../etc/passwd' }, { ...run, round: 3, trace: 'missing1' }]
+  await writeFile(join(benchDir, 'banal.json'), JSON.stringify(b))
+  const r = await (await fetch(`${bbase}/api/bench?file=banal.json`)).json()
+  expect(r.analysis).toEqual({ anal0001: { stub: '—', ate: '—', edit: 't1', loop: '—', reread: '—' } })
+})
+
+test('the analysis cache is keyed by size: same size is not re-read, a grown trace is', async () => {
+  const get = async () => (await (await fetch(`${bbase}/api/bench?file=banal.json`)).json()).analysis.anal0001
+  const file = join(benchDir, 'anal0001.jsonl')
+  const text = await readFile(file, 'utf8')
+  await writeFile(file, text.replace('"turn":1,"ts":0,"type":"tool_result"', '"turn":2,"ts":0,"type":"tool_result"')) // same length
+  expect((await get()).edit).toBe('t1')   // cached
+  await appendFile(file, JSON.stringify({ seq: 9, turn: 3, ts: 0, type: 'tool_call', call: { callId: 'c9', name: 'read_file', args: { path: 'x' } } }) + '\n')
+  expect((await get()).edit).toBe('t2')   // re-read after it grew
+})
+
+// Final review: an untrusted bench JSON with a non-string trace or a null run must not take the whole file down.
+test('GET /api/bench?file= with a malformed run still opens the bench; the bad rows get no analysis', async () => {
+  const b = JSON.parse(benchJson({ date: '2026-09-13T08:00:00.000Z', complete: true }))
+  const run = { round: 1, verdict: 'PASS', reason: 'final', turns: 1, toolCalls: 1, parseErrors: 0, ms: 1, workdir: '/w' }
+  b.harnesses[0].runs = [{ ...run, trace: 5 }, null, { ...run, trace: true }]
+  await writeFile(join(benchDir, 'bweird.json'), JSON.stringify(b))
+  const r = await fetch(`${bbase}/api/bench?file=bweird.json`)
+  expect(r.status).toBe(200)
+  expect((await r.json()).analysis).toEqual({})
+})

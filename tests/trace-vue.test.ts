@@ -42,3 +42,23 @@ test('a parse error whose text was kept out of the history says how much', async
   expect(await render({ events: pe(7765) })).toContain('7765 chars kept out of the history')
   expect(await render({ events: pe() })).not.toContain('kept out of the history')
 })
+
+const stubbed: HarnessEvent[] = [
+  { seq: 0, turn: 1, ts: 0, type: 'llm_request', payload: { messages: [{ role: 'user', content: 'do' }] } },
+  { seq: 1, turn: 1, ts: 0, type: 'tool_call', call: { callId: 'c1', name: 'read_file', args: { path: 'a.txt' } } },
+  { seq: 2, turn: 1, ts: 0, type: 'tool_result', callId: 'c1', name: 'read_file', output: 'AAAA' },
+  { seq: 3, turn: 2, ts: 0, type: 'llm_request', payload: { messages: [{ role: 'user', content: 'do' }, { role: 'assistant', content: '' }, { role: 'tool', content: 'AAAA' }] } },
+  { seq: 4, turn: 3, ts: 0, type: 'context_stats', estimatedTokens: 9, budgetTokens: 5, droppedChars: 4 },
+  { seq: 5, turn: 3, ts: 0, type: 'llm_request', payload: { messages: [{ role: 'user', content: 'do' }, { role: 'assistant', content: '' }, { role: 'tool', content: '[dropped: 4 chars]' }] } },
+]
+
+test('the trace says what the stub removed: a summary line, and a mark on the result', async () => {
+  const html = await renderToString(createSSRApp(Trace, { events: stubbed, task: 'x', approvable: false }))
+  expect(html).toContain('first stub t3 (ate: read_file a.txt)')
+  expect(html).toContain('stubbed at t3')
+})
+
+test('an empty trace shows no summary line', async () => {
+  const html = await renderToString(createSSRApp(Trace, { events: [], task: 'x', approvable: false }))
+  expect(html).not.toContain('no stub')
+})

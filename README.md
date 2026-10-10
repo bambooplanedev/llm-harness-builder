@@ -73,6 +73,7 @@ did, carry none.
     llm-harness-builder demo [--model m] [--base-url u] [--kind k]
     llm-harness-builder bench [harness.json ...] [--n 3] [--timeout 1800] [--out runs/bench-<ts>.json] [--task slug|pool|pool2|sift|triage|judge] [--size N] [--max-turns N] [--model m] [--base-url u] [--kind k]
     llm-harness-builder replay <run-id | trace.jsonl> --turn N --base-url u --kind k [--n 5] [--temperature t] [--max-tokens m] [--json]
+    llm-harness-builder analyze <bench.json | run-id | trace.jsonl> ... [--json]
     llm-harness-builder proxy [--upstream http://127.0.0.1:8080] [--port 8090] [--name label]
 
 `run` exits 0 only when the model finished with a final answer. `--json` writes the event
@@ -119,6 +120,16 @@ README calls replays, the command repeats the ones that sent a recorded request 
 the recorded history first (the stub text, the notes of a counter the run did not have), and the
 "replayed against 5120" passages are arithmetic over traces, with no model in them. The traces
 named here are not in the repository; the command is for yours.
+
+`analyze` reads traces and prints, per run, what the model never saw again: the turn the budget
+first stubbed and which tool results that stub removed, the turn of the first successful edit, the
+file with the most failed edits (with the errors by kind), and the first time the model read a file
+again after its earlier read was stubbed. A trace records each request as sent, not what a stub
+removed, so the stubs are rebuilt by comparing consecutive requests; a stub that cannot be tied to
+results is printed as `unmatched`, never guessed. It takes bench JSONs, run ids and trace paths,
+`.jsonl.part` included; `--json` prints the whole analysis. The Bench tab shows the same cells under
+each run, and a trace shows them above its first turn, with `[stubbed at tN]` on each removed
+result.
 
 ## Recording another agent
 

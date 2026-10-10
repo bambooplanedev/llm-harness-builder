@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import type { Delta, HarnessEvent } from './api'
 import { mcpApprovalServer, mcpCounts, UNTIL_BASH } from '../../src/core/events'
+import { analyzeTrace, summaryLine } from '../../src/core/analyze'
 // approvable is a Boolean-typed prop, so Vue casts an ABSENT value to `false` (not `undefined`).
 // App.vue's live Workbench never passes this prop and needs the opposite default -- only a
 // finished/replayed trace (Bench.vue, Diff.vue) opts out by passing `false` explicitly.
@@ -27,6 +28,14 @@ const answered = computed(() => {
   for (const e of props.events) if (e.type === 'approval_required' && e.call.name === UNTIL_BASH && e.seq < lastSeq) ids.add(e.call.callId)
   return ids
 })
+const analysis = computed(() => analyzeTrace(props.events))
+const summary = computed(() => props.events.length ? summaryLine(analysis.value) : '')
+/** callId → the turn whose request first went out without that result. */
+const stubbedAt = computed(() => {
+  const m = new Map<string, number>(), s = analysis.value.stubs
+  if (s !== 'unknown') for (const st of s) for (const it of st.items) if (it.callId && !m.has(it.callId)) m.set(it.callId, st.turn)
+  return m
+})
 const pretty = (v: unknown) => JSON.stringify(v, null, 2)
 // The current turn is "open" from its llm_request until its llm_response; the live bubble shows the streamed text meanwhile,
 // and stays (without the cursor) if the run ended first, since that text is not in the trace.
@@ -40,6 +49,7 @@ const liveText = computed(() => (props.live.reasoning ?? '') + (props.live.conte
 const liveTok = computed(() => Math.ceil(liveText.value.length / 4))
 </script>
 <template>
+  <div v-if="summary" class="analysis">{{ summary }}</div>
   <div v-if="task" class="ev user">{{ task }}</div>
   <div v-for="[turn, evs] in turns" :key="turn" class="turn">
     <template v-for="e in evs" :key="e.seq">
@@ -63,7 +73,7 @@ const liveTok = computed(() => Math.ceil(liveText.value.length / 4))
       <div v-else-if="e.type === 'mcp_server_start'" class="ev tool_call">
         mcp <code>{{ e.server }}</code>: {{ mcpCounts(e) }}
       </div>
-      <div v-else-if="e.type === 'tool_result'" class="ev tool_result" :class="{ err: e.error }">{{ e.output }}<small v-if="e.truncated" class="warn"> [truncated]</small></div>
+      <div v-else-if="e.type === 'tool_result'" class="ev tool_result" :class="{ err: e.error }">{{ e.output }}<small v-if="e.truncated" class="warn"> [truncated]</small><small v-if="stubbedAt.has(e.callId)" class="stubbed"> [stubbed at t{{ stubbedAt.get(e.callId) }}]</small></div>
       <div v-else-if="e.type === 'error'" class="ev error">{{ e.message }}<br>{{ e.body }}</div>
       <div v-else-if="e.type === 'done'" class="ev" :class="{ parse_error: e.reason === 'final' && e.toolCallCount === 0 }"><b>done: {{ e.reason }}</b> · {{ e.turns }} turns · {{ e.toolCallCount }} tool calls<span v-if="e.reason === 'final' && e.toolCallCount === 0"> · final after 0 tool calls: the model quit without doing anything</span></div>
     </template>

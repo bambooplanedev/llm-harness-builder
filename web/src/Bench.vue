@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
-import { api, type ActiveTrace, type BenchFile, type BenchResult, type BenchRun, type HarnessConfig, type HarnessEvent } from './api'
+import { api, type ActiveTrace, type AnalysisCells, type BenchFile, type BenchResult, type BenchRun, type HarnessConfig, type HarnessEvent } from './api'
+import { cellsLine } from '../../src/core/analyze'
 import { formatTable, mmss } from '../../src/core/bench'
 import Trace from './Trace.vue'
 import Diff from './Diff.vue'
@@ -11,6 +12,7 @@ const emit = defineEmits<{ toWorkbench: [config: HarnessConfig, workdir: string]
 const files = ref<BenchFile[]>([])
 const file = ref('')
 const result = ref<BenchResult | null>(null)
+const analysis = ref<Record<string, AnalysisCells>>({})
 const active = ref<ActiveTrace | null>(null)
 const events = ref<HarnessEvent[]>([])
 /** 'live' follows the running trace; { id } pins the panel to one finished run (SSE). */
@@ -73,6 +75,7 @@ async function tick() {
     now.value = Date.now()
     if (file.value) {
       result.value = r.result ?? null
+      analysis.value = r.analysis ?? {}
       const prev = active.value?.id
       active.value = r.active ?? null // always tracks reality; only `events` freezes below
       if (sel.value === 'live') {
@@ -95,7 +98,7 @@ function restart() { if (timer) clearTimeout(timer); timer = null; void tick() }
 
 function openFile(f: string) {
   closeDiff()
-  file.value = f; sel.value = 'live'; result.value = null; active.value = null; events.value = []
+  file.value = f; sel.value = 'live'; result.value = null; analysis.value = {}; active.value = null; events.value = []
   unsub?.(); unsub = null
   restart()
 }
@@ -161,6 +164,7 @@ onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer); unsub?.(); d
               {{ h.name }} #{{ r.round }} {{ r.verdict }} {{ r.reason }} {{ mmss(r.ms) }}<span
                 v-if="r.verdict === 'FAIL' && r.reason === 'final'"> — the model answered, tests are red</span>
               <div v-if="r.lastError" class="clip" :title="r.lastError">{{ r.lastError }}</div>
+              <div v-if="r.trace && analysis[r.trace]" class="analysis">{{ cellsLine(analysis[r.trace]) }}</div>
               <small>
                 <template v-if="r.trace">{{ r.trace }}</template>
                 <template v-else>no trace written (JSON predates v2.0.3)</template> · {{ r.workdir }}

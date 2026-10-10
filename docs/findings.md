@@ -977,3 +977,18 @@ So on this model, on this task, what decided the outcome was not the budget but 
 it first fired: before the turn that used what had been read, three loops with no edit; after it,
 three passes. That is one model, one task size and three near-clone runs per arm; it does not say
 what a budget does elsewhere, and none of the Qwen3-8B tables above share a row with these.
+
+**The same question over the Qwen3-8B traces, 2026-10-10, no model time.** `analyze` over the eight
+`pool2 --size 7` bench files with a budget (24 runs, 2670 or 3300) and the two Bonsai ones above. In
+all 24 Qwen runs the first stub came on turn 5 and the first edit on turn 4: seven edits in one
+batch, then a stub of the turn-1 `list_dir` and `node --test` output. In 18 of them the stub is tied
+to those results; in the six runs of the labelled-stub variants of v2.10, whose stub text this code
+does not write, it is `unmatched` and only its size is known. So on that model the budget never
+fired before the edit turn, and what it decided cannot be the turn. The runs lost on
+`src/formatBytes.js`, the one unit new to the model, repeating an edit whose `old` and `new` were
+identical until `repeat_loop`. What split them was whether the model read that file again after its
+read had been stubbed: five of six such runs passed, two of the other eighteen did — and for the six
+`unmatched` runs among those eighteen a reread cannot be counted at all. Bonsai 2 with 2670: stub on
+turn 5, no edit, rereads from turn 5 on, fourteen paths; with 4000: stub on turn 6, after the edit
+on turn 5. Near-clone runs, two models, one task: the reread goes with the pass, and nothing here
+says it causes it.
