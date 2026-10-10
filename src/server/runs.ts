@@ -1,4 +1,4 @@
-import { appendFile, readFile, readdir, writeFile, mkdir, realpath, open, rename } from 'node:fs/promises'
+import { appendFile, readFile, readdir, writeFile, mkdir, realpath, open, rename, stat } from 'node:fs/promises'
 import { renameSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
@@ -7,6 +7,7 @@ import type { RunParams } from '../core/config.js'
 import type { HarnessEvent, ToolCall } from '../core/events.js'
 import type { Backend, Delta } from '../core/backends/types.js'
 import type { BenchResult, BenchFile, ActiveTrace } from '../core/bench.js'
+import { analyzeTrace, analysisCells, type AnalysisCells } from '../core/analyze.js'
 
 export type RunSummary = { id: string; harness: string; task: string; workdir: string; started: number; reason?: string; turns?: number; toolCallCount?: number; active: boolean }
 export type Meta = { meta: {
@@ -258,6 +259,27 @@ export class RunStore {
       model: result.harnesses[0].config.backend.model ?? '',
     }))
     return files.sort((a, b) => b.date.localeCompare(a.date))
+  }
+
+  /** Finished traces do not change, and the Bench page polls every two seconds: keyed by size, a grown file is read again. */
+  private analyses = new Map<string, { size: number; cells: AnalysisCells }>()
+
+  /** Cells for each run of a bench that has a finished trace here. The bench JSON is untrusted: an id that is not a plain name is skipped, never read. */
+  async benchAnalysis(result: BenchResult): Promise<Record<string, AnalysisCells>> {
+    const out: Record<string, AnalysisCells> = {}
+    for (const h of result.harnesses) for (const r of h.runs ?? []) {
+      if (!r.trace || !safeName(r.trace) || r.trace.includes('..')) continue
+      const file = this.file(r.trace)
+      let size: number
+      try { size = (await stat(file)).size } catch { continue }
+      const hit = this.analyses.get(r.trace)
+      if (hit?.size === size) { out[r.trace] = hit.cells; continue }
+      try {
+        const cells = analysisCells(analyzeTrace(await this.readPath(file)))
+        this.analyses.set(r.trace, { size, cells }); out[r.trace] = cells
+      } catch { continue }
+    }
+    return out
   }
 
   /**

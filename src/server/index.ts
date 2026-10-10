@@ -83,7 +83,7 @@ export async function startServer(opts: ServerOpts) {
         if (!safeName(file) || !file.endsWith('.json')) return json(res, 400, { error: 'bad name' })
         const opened = await store.benchOpen(file)
         if (!opened) return json(res, 404, { error: 'not a bench file' })
-        return json(res, 200, { files: await store.benchList(), ...opened })
+        return json(res, 200, { files: await store.benchList(), ...opened, analysis: await store.benchAnalysis(opened.result) })
       }
       if (m('POST', /^\/api\/runs$/)) {
         const body = await readBody(req) as Partial<RunParams>
