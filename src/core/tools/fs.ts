@@ -1,6 +1,7 @@
 import { readdir, open, mkdir, writeFile as fsWrite, readFile as fsRead, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { resolveInside } from './sandbox.js'
+import { GUARD_BLOCKED, EDIT_MISS, EDIT_IDENTICAL } from './errors.js'
 
 export type ToolCtx = { workdir: string; maxToolOutputChars: number; reads?: Set<string>; explainEditMiss?: boolean }
 type Args = Record<string, unknown>
@@ -11,12 +12,9 @@ const str = (args: Args, key: string): string => {
   return v
 }
 
-/**
- * Substrings of the two errors bench counts. Exported so the counter keys off the text the tool
- * writes rather than a copy of it: change the wording here and both move together.
- */
-export const GUARD_BLOCKED = 'has not been read in this run'
-export const EDIT_MISS = 'must occur exactly once'
+// The texts bench counts and analyze classifies live in errors.ts, which the browser can import;
+// they are thrown here, so changing the wording there moves the counters with it.
+export { GUARD_BLOCKED, EDIT_MISS }
 
 const exists = async (p: string): Promise<boolean> => { try { await stat(p); return true } catch { return false } }
 
@@ -92,7 +90,7 @@ export async function editFile(args: Args, ctx: ToolCtx): Promise<string> {
   if (count !== 1) throw new Error(`"old" ${EDIT_MISS}; found ${count} occurrences`
     + (count === 0 && ctx.explainEditMiss ? explainMiss(lf, needle, str(args, 'path')) : ''))
   const replacement = newS.replace(/\r\n/g, '\n')
-  if (needle === replacement) throw new Error('"old" and "new" are identical: nothing to change')
+  if (needle === replacement) throw new Error(`${EDIT_IDENTICAL}: nothing to change`)
   let out = lf.replace(needle, () => replacement)
   if (crlf) out = out.replace(/\n/g, '\r\n')
   await fsWrite(file, out, 'utf8')
