@@ -353,3 +353,14 @@ test('the analysis cache is keyed by size: same size is not re-read, a grown tra
   await appendFile(file, JSON.stringify({ seq: 9, turn: 3, ts: 0, type: 'tool_call', call: { callId: 'c9', name: 'read_file', args: { path: 'x' } } }) + '\n')
   expect((await get()).edit).toBe('t2')   // re-read after it grew
 })
+
+// Final review: an untrusted bench JSON with a non-string trace or a null run must not take the whole file down.
+test('GET /api/bench?file= with a malformed run still opens the bench; the bad rows get no analysis', async () => {
+  const b = JSON.parse(benchJson({ date: '2026-09-13T08:00:00.000Z', complete: true }))
+  const run = { round: 1, verdict: 'PASS', reason: 'final', turns: 1, toolCalls: 1, parseErrors: 0, ms: 1, workdir: '/w' }
+  b.harnesses[0].runs = [{ ...run, trace: 5 }, null, { ...run, trace: true }]
+  await writeFile(join(benchDir, 'bweird.json'), JSON.stringify(b))
+  const r = await fetch(`${bbase}/api/bench?file=bweird.json`)
+  expect(r.status).toBe(200)
+  expect((await r.json()).analysis).toEqual({})
+})

@@ -65,6 +65,7 @@ function rebuildStubs(events: HarnessEvent[], calls: Map<string, ToolCall>): Stu
   const results = events.filter((e): e is Ev<'tool_result'> | Ev<'final_check'> => e.type === 'tool_result' || e.type === 'final_check')
   const dropped = new Map(of(events, 'context_stats').map(e => [e.turn, e.droppedChars]))
   const stubs: Stub[] = []
+  const credited = new Set<Ev<'tool_result'> | Ev<'final_check'>>()
   let prev: string[] = [], firstSeen: number[] = []
   for (const r of reqs) {
     const seen: number[] = [], turnStubs: Stub[] = []
@@ -74,10 +75,14 @@ function rebuildStubs(events: HarnessEvent[], calls: Map<string, ToolCall>): Stu
         seen[i] = firstSeen[i]
         const chars = Number(m[1])
         if (was.length !== chars) { turnStubs.push({ turn: r.turn, chars, status: 'unmatched', items: [] }); return }
-        const items = results
-          .filter(e => e.turn === firstSeen[i] - 1 && e.output !== '' && was.includes(e.output))
-          .map(e => e.type === 'final_check' ? { what: 'final check' }
-            : { callId: e.callId, what: describeCall(e.name, calls.get(e.callId)?.args ?? {}) })
+        // A result goes to one stub only. A native tool message is exactly one output, so an exact
+        // match is that message; only a prompted message, which wraps a whole turn, is matched by containment.
+        const open = results.filter(e => e.turn === firstSeen[i] - 1 && !credited.has(e))
+        const exact = open.find(e => e.output === was)
+        const hit = exact ? [exact] : open.filter(e => e.output !== '' && was.includes(e.output))
+        for (const e of hit) credited.add(e)
+        const items = hit.map(e => e.type === 'final_check' ? { what: 'final check' }
+          : { callId: e.callId, what: describeCall(e.name, calls.get(e.callId)?.args ?? {}) })
         turnStubs.push({ turn: r.turn, chars, status: items.length ? 'matched' : 'unmatched', items })
       } else seen[i] = was === c ? firstSeen[i] : r.turn
     })
@@ -109,7 +114,8 @@ function rebuildRereads(events: HarnessEvent[], stubs: Stub[], calls: Map<string
 
 export function analyzeTrace(events: HarnessEvent[]): TraceAnalysis {
   const calls = new Map<string, ToolCall>(of(events, 'tool_call').map(e => [e.call.callId, e.call]))
-  const edits: Record<string, PathEdits> = {}
+  // Keys are model-chosen paths: "constructor" or "__proto__" must be plain keys here.
+  const edits: Record<string, PathEdits> = Object.create(null)
   let firstEdit: number | undefined
   for (const r of of(events, 'tool_result')) {
     if (!EDIT_TOOLS.has(r.name)) continue
@@ -132,12 +138,15 @@ export type AnalyzedRun = { harness: string; run: string; verdict: string; turns
 
 const t = (n?: number) => n === undefined ? '—' : `t${n}`
 
-/** The first stub's items, a name that occurs more than once collapsed: "read_file ×7". */
-function ate(s: Stub): string {
-  if (s.status === 'unmatched') return `${s.chars} chars, unmatched`
+/** Everything the first stub turn removed — the low-water mark can take several messages at once —
+ *  a name that occurs more than once collapsed: "read_file ×7". */
+function ate(turn: Stub[]): string {
+  const lost = turn.filter(s => s.status === 'unmatched').reduce((n, s) => n + s.chars, 0)
+  const items = turn.flatMap(s => s.items)
+  if (!items.length) return `${lost} chars, unmatched`
   const names = new Map<string, string[]>()
-  for (const it of s.items) { const n = it.what.split(' ')[0]; names.set(n, [...(names.get(n) ?? []), it.what]) }
-  return [...names].map(([n, whats]) => whats.length > 1 ? `${n} ×${whats.length}` : whats[0]).join('; ')
+  for (const it of items) { const n = it.what.split(' ')[0]; names.set(n, [...(names.get(n) ?? []), it.what]) }
+  return [...[...names].map(([n, whats]) => whats.length > 1 ? `${n} ×${whats.length}` : whats[0]), ...(lost ? [`+${lost} chars unmatched`] : [])].join('; ')
 }
 
 function loop(a: TraceAnalysis): string {
@@ -151,7 +160,7 @@ export function analysisCells(a: TraceAnalysis): AnalysisCells {
   const first = a.stubs === 'unknown' ? undefined : a.stubs[0]
   return {
     stub: a.stubs === 'unknown' ? '?' : t(first?.turn),
-    ate: first ? ate(first) : '—',
+    ate: first && a.stubs !== 'unknown' ? ate(a.stubs.filter(s => s.turn === first.turn)) : '—',
     edit: t(a.firstEdit),
     loop: loop(a),
     reread: a.rereads.length ? `t${a.rereads[0].turn} ${a.rereads[0].path}${a.rereads.length > 1 ? ` +${a.rereads.length - 1}` : ''}` : '—',

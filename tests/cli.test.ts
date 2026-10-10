@@ -558,3 +558,14 @@ test('analyze with no argument or an unknown id exits 2 with a message', () => {
   expect(r.status).toBe(2)
   expect(r.stderr).toMatch(/^cannot analyze nope0000:/)
 })
+
+// Final review, Important 3: `bench --out elsewhere/b.json` writes the JSON there but the traces to runs/.
+test('analyze finds the traces of a bench JSON written with --out outside runs/', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'lhb-an-')); mkdirSync(join(cwd, 'runs')); mkdirSync(join(cwd, 'results')); analyzeFixture(join(cwd, 'runs'), 'abcd0004')
+  const run = { round: 1, verdict: 'PASS', reason: 'final', turns: 3, toolCalls: 2, parseErrors: 0, ms: 1, workdir: '/w', trace: 'abcd0004' }
+  writeFileSync(join(cwd, 'results', 'b.json'), JSON.stringify({ version: 1, date: '2026-10-10T00:00:00Z', task: 't', n: 1, timeoutS: 1, complete: true,
+    harnesses: [{ name: 'h', config: {}, pass: 1, reasons: {}, median: { turns: 3, toolCalls: 2, ms: 1 }, runs: [run] }] }))
+  const r = cli(['analyze', 'results/b.json'], {}, cwd)
+  expect(r.status).toBe(0)
+  expect(r.stdout).toMatch(/abcd0004\s+PASS final\s+3\s+t3/)
+})

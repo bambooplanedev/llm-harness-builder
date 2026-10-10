@@ -86,3 +86,28 @@ test('formatAnalysisTable pads columns; a run without a trace says so', () => {
   // columns line up: "verdict" starts where the run's verdict starts
   expect(lines[1].indexOf('FAIL')).toBe(lines[0].indexOf('verdict'))
 })
+
+// Final review, Important 2: the 0.75 mark stubs several messages in one turn; ate names them all.
+test('ate covers every message the first stub turn removed, and counts what could not be tied', () => {
+  const two = A({ stubs: [
+    { turn: 6, chars: 76, status: 'matched', items: [{ callId: 'c1', what: 'list_dir .' }] },
+    { turn: 6, chars: 900, status: 'matched', items: [1, 2, 3].map(n => ({ callId: `c${n + 1}`, what: `read_file src/${n}.js` })) },
+    { turn: 6, chars: 40, status: 'unmatched', items: [] },
+    { turn: 7, chars: 50, status: 'matched', items: [{ callId: 'c9', what: 'bash node --test' }] },
+  ] })
+  expect(analysisCells(two).ate).toBe('list_dir .; read_file ×3; +40 chars unmatched')
+  expect(analysisCells(A({ stubs: [{ turn: 3, chars: 50, status: 'unmatched', items: [] }, { turn: 3, chars: 7, status: 'unmatched', items: [] }] })).ate).toBe('57 chars, unmatched')
+})
+
+// Final review: a path is model-chosen; on a plain object "constructor" broke the count and "__proto__" polluted Object.prototype.
+test('a path named constructor or __proto__ is an ordinary path', () => {
+  const ev = [
+    call(2, 'c1', 'edit_file', { path: 'constructor' }), result(2, 'c1', 'edit_file', 'tool edit_file failed: boom', true),
+    call(3, 'c2', 'edit_file', { path: 'constructor' }), result(3, 'c2', 'edit_file', 'tool edit_file failed: boom', true),
+    call(4, 'c3', 'write_file', { path: '__proto__' }), result(4, 'c3', 'write_file', 'wrote 1 chars to __proto__'),
+  ]
+  const a = analyzeTrace(ev)
+  expect(a.loopFile).toBe('constructor')
+  expect(a.edits['__proto__']).toEqual({ calls: 1, failed: 0, byKind: {} })
+  expect(({} as Record<string, unknown>).calls).toBeUndefined()
+})

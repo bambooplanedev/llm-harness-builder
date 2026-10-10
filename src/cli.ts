@@ -340,7 +340,9 @@ async function analyzeArg(arg: string): Promise<AnalyzedRun[]> {
     for (const h of b.harnesses) for (const r of h.runs ?? []) {
       const verdict = `${r.verdict} ${r.reason}`
       if (!r.trace) { out.push({ harness: h.name, run: '—', verdict, turns: r.turns, analysis: null }); continue }
-      const { events } = await readTraceFile(path.join(path.dirname(arg), `${r.trace}.jsonl`))
+      // Next to the JSON by default; `bench --out elsewhere` still writes the traces to runs/.
+      const near = path.join(path.dirname(arg), `${r.trace}.jsonl`)
+      const { events } = await readTraceFile(existsSync(near) ? near : path.join('runs', `${r.trace}.jsonl`))
       out.push({ harness: h.name, run: r.trace, verdict, turns: r.turns, analysis: analyzeTrace(events) })
     }
     return out

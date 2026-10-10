@@ -267,8 +267,9 @@ export class RunStore {
   /** Cells for each run of a bench that has a finished trace here. The bench JSON is untrusted: an id that is not a plain name is skipped, never read. */
   async benchAnalysis(result: BenchResult): Promise<Record<string, AnalysisCells>> {
     const out: Record<string, AnalysisCells> = {}
-    for (const h of result.harnesses) for (const r of h.runs ?? []) {
-      if (!r.trace || !safeName(r.trace) || r.trace.includes('..')) continue
+    for (const h of result.harnesses) for (const r of Array.isArray(h.runs) ? h.runs : []) {
+      // `safeName(5)` passes — RegExp.test stringifies — so the type is checked first.
+      if (typeof r?.trace !== 'string' || !safeName(r.trace) || r.trace.includes('..')) continue
       const file = this.file(r.trace)
       let size: number
       try { size = (await stat(file)).size } catch { continue }

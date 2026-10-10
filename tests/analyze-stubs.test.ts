@@ -93,3 +93,23 @@ test('a stub in a format this code does not write (the v2.10 labelled one) is st
   ]
   expect(analyzeTrace(ev).stubs).toEqual([{ turn: 3, chars: 4, status: 'unmatched', items: [] }])
 })
+
+// Final review, Important 1: in native mode each tool message holds one output, so a result must be
+// credited to one stub only — not to every message its text happens to be inside.
+test('native: the same file read twice in one turn — each stub is credited one call, no call twice', async () => {
+  const cfg = harness({ tools, context: ctx(100), loop: { maxTurns: 6 } })
+  const ev = await trace(cfg, [{ toolCalls: [read('a.txt'), read('a.txt'), read('b.txt')] }, { toolCalls: [read('b.txt')] }, { toolCalls: [read('b.txt')] }, { content: 'fin' }])
+  const stubs = analyzeTrace(ev).stubs as Stub[]
+  expect(stubs.length).toBeGreaterThan(0)
+  const ids = stubs.flatMap(s => s.items.map(i => i.callId))
+  expect(new Set(ids).size).toBe(ids.length)
+  for (const s of stubs) expect(s.items).toHaveLength(1)
+})
+
+test('native: a silent command next to another exit-0 command is not pulled into its stub', async () => {
+  const cfg = harness({ tools, context: ctx(60), loop: { maxTurns: 6 } })
+  const bash = (command: string) => ({ name: 'bash', args: { command } })
+  const ev = await trace(cfg, [{ toolCalls: [bash('true'), bash("printf '%0200d' 0")] }, { toolCalls: [read('a.txt')] }, { toolCalls: [read('b.txt')] }, { content: 'fin' }])
+  const ids = (analyzeTrace(ev).stubs as Stub[]).flatMap(s => s.items.map(i => i.callId))
+  expect(new Set(ids).size).toBe(ids.length)
+})
