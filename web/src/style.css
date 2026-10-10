@@ -42,3 +42,5 @@ details.inspector pre { max-height: 300px; overflow: auto; background: #f4f4f4; 
 .diff .chip { display: inline-block; margin-right: 4px; padding: 0 4px; background: #eee; border-radius: 3px; font-family: ui-monospace, monospace; }
 .diff .chip.err { background: #fee; color: #c00; }
 .diff .layout { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; height: auto; }
+.analysis { color: #888; font-size: 0.85em; margin: 0 0 6px; }
+.stubbed { color: #888; }
