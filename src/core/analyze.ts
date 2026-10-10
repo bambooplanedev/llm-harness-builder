@@ -123,3 +123,56 @@ export function analyzeTrace(events: HarnessEvent[]): TraceAnalysis {
   const rereads = stubs === 'unknown' ? [] : rebuildRereads(events, stubs, calls)
   return { stubs, firstEdit, edits, loopFile, rereads, done: d && { reason: d.reason, turns: d.turns } }
 }
+
+export type AnalysisCells = { stub: string; ate: string; edit: string; loop: string; reread: string }
+export type AnalyzedRun = { harness: string; run: string; verdict: string; turns: number; analysis: TraceAnalysis | null }
+
+const t = (n?: number) => n === undefined ? '—' : `t${n}`
+
+/** The first stub's items, a name that occurs more than once collapsed: "read_file ×7". */
+function ate(s: Stub): string {
+  if (s.status === 'unmatched') return `${s.chars} chars, unmatched`
+  const names = new Map<string, string[]>()
+  for (const it of s.items) { const n = it.what.split(' ')[0]; names.set(n, [...(names.get(n) ?? []), it.what]) }
+  return [...names].map(([n, whats]) => whats.length > 1 ? `${n} ×${whats.length}` : whats[0]).join('; ')
+}
+
+function loop(a: TraceAnalysis): string {
+  if (!a.loopFile) return '—'
+  const pe = a.edits[a.loopFile]
+  const kinds = Object.entries(pe.byKind).sort((x, y) => y[1]! - x[1]!).map(([k, n]) => `${k} ${n}`).join(', ')
+  return `${a.loopFile} ×${pe.calls} (${kinds})`
+}
+
+export function analysisCells(a: TraceAnalysis): AnalysisCells {
+  const first = a.stubs === 'unknown' ? undefined : a.stubs[0]
+  return {
+    stub: a.stubs === 'unknown' ? '?' : t(first?.turn),
+    ate: first ? ate(first) : '—',
+    edit: t(a.firstEdit),
+    loop: loop(a),
+    reread: a.rereads.length ? `t${a.rereads[0].turn} ${a.rereads[0].path}${a.rereads.length > 1 ? ` +${a.rereads.length - 1}` : ''}` : '—',
+  }
+}
+
+/** One line for a Bench-tab run row. */
+export const cellsLine = (c: AnalysisCells): string => `stub ${c.stub} · edit ${c.edit} · loop ${c.loop} · reread ${c.reread}`
+
+/** One line above a trace. */
+export function summaryLine(a: TraceAnalysis): string {
+  const c = analysisCells(a)
+  const stub = a.stubs === 'unknown' ? 'stubs unknown (no recorded request)' : c.stub === '—' ? 'no stub' : `first stub ${c.stub} (ate: ${c.ate})`
+  return [stub, c.edit === '—' ? 'no edit' : `first edit ${c.edit}`, c.loop === '—' ? 'no loop' : `loop on ${c.loop}`,
+    ...(c.reread === '—' ? [] : [`reread ${c.reread}`])].join(' · ')
+}
+
+export function formatAnalysisTable(rows: AnalyzedRun[]): string {
+  const head = ['harness', 'run', 'verdict', 'turns', 'stub@', 'ate', 'edit@', 'loop on', 'reread']
+  const body = rows.map(r => {
+    if (!r.analysis) return [r.harness, r.run, r.verdict, String(r.turns), 'no trace', '', '', '', '']
+    const c = analysisCells(r.analysis)
+    return [r.harness, r.run, r.verdict, String(r.turns), c.stub, c.ate, c.edit, c.loop, c.reread]
+  })
+  const w = head.map((h, i) => Math.max(h.length, ...body.map(b => b[i].length)))
+  return [head, ...body].map(cols => cols.map((s, i) => s.padEnd(w[i])).join('  ').trimEnd()).join('\n')
+}

@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest'
-import { analyzeTrace, editKind, normPath, describeCall } from '../src/core/analyze.js'
+import { analyzeTrace, editKind, normPath, describeCall, analysisCells, cellsLine, summaryLine, formatAnalysisTable, type TraceAnalysis } from '../src/core/analyze.js'
 import type { HarnessEvent } from '../src/core/events.js'
 
 let seq = 0
@@ -47,4 +47,42 @@ test('one failed edit is not a loop; no done → done absent', () => {
   expect(a.loopFile).toBeUndefined()
   expect(a.firstEdit).toBeUndefined()
   expect(a.done).toBeUndefined()
+})
+
+
+const A = (over: Partial<TraceAnalysis> = {}): TraceAnalysis => ({ stubs: [], edits: {}, rereads: [], ...over })
+const looped = A({
+  stubs: [{ turn: 5, chars: 4213, status: 'matched', items: [{ callId: 'c1', what: 'list_dir src/' }, { callId: 'c2', what: 'bash node --test' }] },
+          { turn: 6, chars: 2244, status: 'matched', items: [1, 2, 3].map(n => ({ callId: `c${n + 2}`, what: `read_file src/${n}.js` })) }],
+  firstEdit: 4, loopFile: 'src/b.js', edits: { 'src/b.js': { calls: 7, failed: 6, byKind: { identical: 5, zero: 1 } } },
+  rereads: [{ path: 'src/b.js', turn: 6 }, { path: 'src/c.js', turn: 8 }], done: { reason: 'repeat_loop', turns: 10 },
+})
+
+test('cells: first stub only, same-name items collapsed, kinds by count', () => {
+  expect(analysisCells(looped)).toEqual({ stub: 't5', ate: 'list_dir src/; bash node --test', edit: 't4', loop: 'src/b.js ×7 (identical 5, zero 1)', reread: 't6 src/b.js +1' })
+  expect(analysisCells(A({ stubs: [{ turn: 6, chars: 9, status: 'matched', items: [1, 2].map(n => ({ callId: `c${n}`, what: `read_file ${n}` })) }] })).ate).toBe('read_file ×2')
+  expect(analysisCells(A())).toEqual({ stub: '—', ate: '—', edit: '—', loop: '—', reread: '—' })
+  expect(analysisCells(A({ stubs: 'unknown' })).stub).toBe('?')
+  expect(analysisCells(A({ stubs: [{ turn: 3, chars: 50, status: 'unmatched', items: [] }] })).ate).toBe('50 chars, unmatched')
+})
+
+test('cellsLine and summaryLine', () => {
+  expect(cellsLine(analysisCells(looped))).toBe('stub t5 · edit t4 · loop src/b.js ×7 (identical 5, zero 1) · reread t6 src/b.js +1')
+  expect(summaryLine(looped)).toBe('first stub t5 (ate: list_dir src/; bash node --test) · first edit t4 · loop on src/b.js ×7 (identical 5, zero 1) · reread t6 src/b.js +1')
+  expect(summaryLine(A())).toBe('no stub · no edit · no loop')
+  expect(summaryLine(A({ stubs: 'unknown' }))).toBe('stubs unknown (no recorded request) · no edit · no loop')
+})
+
+test('formatAnalysisTable pads columns; a run without a trace says so', () => {
+  const t = formatAnalysisTable([
+    { harness: 'tuned-budget', run: '3855ef63', verdict: 'FAIL repeat_loop', turns: 10, analysis: looped },
+    { harness: 'tuned', run: '—', verdict: 'PASS final', turns: 5, analysis: null },
+  ])
+  const lines = t.split('\n')
+  expect(lines[0]).toMatch(/^harness\s+run\s+verdict\s+turns\s+stub@\s+ate\s+edit@\s+loop on\s+reread$/)
+  expect(lines[1]).toContain('3855ef63')
+  expect(lines[1]).toContain('src/b.js ×7 (identical 5, zero 1)')
+  expect(lines[2]).toContain('no trace')
+  // columns line up: "verdict" starts where the run's verdict starts
+  expect(lines[1].indexOf('FAIL')).toBe(lines[0].indexOf('verdict'))
 })
