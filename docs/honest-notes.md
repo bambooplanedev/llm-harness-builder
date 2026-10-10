@@ -94,7 +94,7 @@ Limits of [llm-harness-builder](../README.md) and of what its [findings](finding
 - In `pool2`, "N = 7" means those seven units; `formatBytes` was new to the model when it was
   measured. Two oracles have holes that were left alone: `parseDuration` passes a fix that
   special-cases the test's literal (it is in published rows), and `median` passes a sort in place
-  (it is outside size 7).
+  (it is outside size 7). `pool3` closes both and leaves `pool2` as it was measured.
 - `bench --max-turns` overrides the harness the way `--model` does and is recorded in
   `harnesses[].config`; `demo` runs the old task only.
 - `demo` runs `check.sh` without a timeout; `bench` gives it 60 s.
