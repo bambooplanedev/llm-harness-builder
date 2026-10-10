@@ -76,15 +76,15 @@ it did, carry none.
 `run` exits 0 only when the model finished with a final answer. `--json` writes the event
 stream as JSONL to stdout; human-readable progress goes to stderr.
 
-`bench` runs the demo task `--n` times per harness, round-robin, with a per-run `--timeout`
-(seconds). With no files it takes `bare`, `tuned` and `tuned-hermes` from `./harnesses` (the copies
-`serve` made, i.e. what you edited in the UI) or from the package. It prints a PASS-rate table and
-writes a JSON to `runs/` after every run, so Ctrl-C keeps what finished. Next to each PASS count the
-table prints its 95% Wilson interval: 1/3 is 0.06–0.79 and 3/3 is 0.44–1.00, so at `--n 3` even
-3/3 against 1/3 does not tell two harnesses apart. The JSON carries each
-harness's full config and each run's `reason`, `parseErrors`, `toolErrors`, `lastError`, temp `workdir` and
-`trace` (the run's `runs/<id>.jsonl`), so two files are comparable by config, not by name. Exit
-code is 0 whatever the verdicts.
+`bench` runs a task (`slug`, the demo's, by default) `--n` times per harness, round-robin, with a
+per-run `--timeout` (seconds). With no files it takes `bare`, `tuned` and `tuned-hermes` from
+`./harnesses` (the copies `serve` made, i.e. what you edited in the UI) or from the package. It
+prints a PASS-rate table and writes a JSON to `runs/` after every run, so Ctrl-C keeps what
+finished. Next to each PASS count the table prints its 95% Wilson interval: 1/3 is 0.06–0.79 and 3/3
+is 0.44–1.00, so at `--n 3` even 3/3 against 1/3 does not tell two harnesses apart. The JSON carries
+each harness's full config and each run's `reason`, `parseErrors`, `toolErrors`, `lastError`, temp
+`workdir` and `trace` (the run's `runs/<id>.jsonl`), so two files are comparable by config, not by
+name. Exit code is 0 whatever the verdicts.
 
 Before the first run `bench` asks each server what it can without generating. A server that does not
 answer, or lacks the model, stops the bench with exit code 2 and no JSON. The model name is checked
@@ -193,6 +193,14 @@ opening: the model wrote its next `read` call inside its thinking, the server fo
 the reply, and opencode took that as the end. `replay` of the `edit` turn gave the recorded call 2
 times out of 2. That is one model on one task: it says the proxy records what opencode sends, not
 how opencode does on local models.
+
+Whether that third turn was worth a knob — taking a call out of the thinking — was checked by
+`replay`, each turn of that session sent ten times as recorded. The first two turns gave a real
+call ten times out of ten: the `read`, then the `edit`. The third, after the fix, gave a final
+text seven times and the `read` inside the thinking three times. None of the 197 earlier traces in
+`runs/` has a reply that ended with a call in its thinking. So on this model and task the call
+went into the thinking only on the turn that checks finished work, never on a working turn (0 of
+20), and no knob was built for it. That says nothing about other models.
 
 ## Harness file
 
