@@ -83,6 +83,9 @@ function rebuildStubs(events: HarnessEvent[], calls: Map<string, ToolCall>): Stu
     })
     const sum = turnStubs.reduce((n, s) => n + s.chars, 0), stat = dropped.get(r.turn)
     if (turnStubs.length && stat !== undefined && stat !== sum) for (const s of turnStubs) { s.status = 'unmatched'; s.items = [] }
+    // The run says it dropped something and no `[dropped: K chars]` shows it: a stub in a text this
+    // code does not write (the labelled stub of v2.10). Reported as a stub, tied to nothing.
+    if (!turnStubs.length && stat) turnStubs.push({ turn: r.turn, chars: stat, status: 'unmatched', items: [] })
     stubs.push(...turnStubs)
     prev = r.c; firstSeen = seen
   }

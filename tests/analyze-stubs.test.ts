@@ -83,3 +83,13 @@ test('a proxy-style trace (content not a string, no context_stats) does not thro
   const ev = [{ seq: 0, turn: 1, ts: 0, type: 'llm_request', payload: { messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }] } }] as HarnessEvent[]
   expect(analyzeTrace(ev).stubs).toEqual([])
 })
+
+test('a stub in a format this code does not write (the v2.10 labelled one) is still a stub: unmatched, with context_stats chars', () => {
+  const req = (turn: number, contents: string[]) => ({ seq: turn * 10, turn, ts: 0, type: 'llm_request', payload: { messages: contents.map(content => ({ role: 'user', content })) } }) as HarnessEvent
+  const ev: HarnessEvent[] = [
+    req(1, ['s', 't']), req(2, ['s', 't', 'xxxx']),
+    { seq: 25, turn: 3, ts: 0, type: 'context_stats', estimatedTokens: 9, budgetTokens: 5, droppedChars: 4 },
+    req(3, ['s', 't', '[dropped: read_file {"path":"a"}, 4 chars]']),
+  ]
+  expect(analyzeTrace(ev).stubs).toEqual([{ turn: 3, chars: 4, status: 'unmatched', items: [] }])
+})
