@@ -19,6 +19,7 @@ import { median, formatTable, type BenchRun, type BenchHarness, type BenchResult
 import { GUARD_BLOCKED, EDIT_MISS } from './core/tools/fs.js'
 import { createBackend } from './core/backends/index.js'
 import { replayPayload, replySignature, recordedTurn } from './core/replay.js'
+import { analyzeTrace, formatAnalysisTable, type AnalyzedRun } from './core/analyze.js'
 import { preflight, windowWarning, type PreflightResult } from './core/preflight.js'
 import { startProxy } from './core/proxy/server.js'
 
@@ -323,6 +324,46 @@ async function cmdReplay(argv: string[]) {
   for (const o of out) console.log(`  ${o.count}x ${o.sameAsRecorded ? 'same as recorded' : 'differs'}${o.truncated ? ', cut by max tokens' : ''}${o.promptTokens === undefined ? '' : `, ${o.promptTokens} prompt tok`}\n     ${o.reply.slice(0, 300).replace(/\n/g, ' ')}`)
 }
 
+/** A trace file's meta line and events; a half-written last line is skipped, as replay and serve do. */
+async function readTraceFile(file: string): Promise<{ harness?: string; events: HarnessEvent[] }> {
+  const lines = (await readFile(file, 'utf8')).split('\n').filter(Boolean).flatMap(l => { try { return [JSON.parse(l)] } catch { return [] } })
+  const meta = lines.find(l => 'meta' in l)?.meta as Meta['meta'] | undefined
+  return { harness: meta?.harness, events: lines.filter(l => !('meta' in l)) }
+}
+
+/** One argument of analyze: a bench JSON (its runs' traces sit next to it), or one trace by id or path. */
+async function analyzeArg(arg: string): Promise<AnalyzedRun[]> {
+  if (arg.endsWith('.json')) {
+    const b = JSON.parse(await readFile(arg, 'utf8')) as BenchResult
+    if (b?.version !== 1 || !Array.isArray(b.harnesses)) throw new Error('not a bench JSON')
+    const out: AnalyzedRun[] = []
+    for (const h of b.harnesses) for (const r of h.runs ?? []) {
+      const verdict = `${r.verdict} ${r.reason}`
+      if (!r.trace) { out.push({ harness: h.name, run: '—', verdict, turns: r.turns, analysis: null }); continue }
+      const { events } = await readTraceFile(path.join(path.dirname(arg), `${r.trace}.jsonl`))
+      out.push({ harness: h.name, run: r.trace, verdict, turns: r.turns, analysis: analyzeTrace(events) })
+    }
+    return out
+  }
+  const file = /\.jsonl(\.part)?$/.test(arg) ? arg : path.join('runs', `${arg}.jsonl`)
+  const { harness, events } = await readTraceFile(file)
+  const a = analyzeTrace(events)
+  return [{ harness: harness ?? '?', run: path.basename(file).replace(/\.jsonl(\.part)?$/, ''), verdict: a.done?.reason ?? '—', turns: a.done?.turns ?? 0, analysis: a }]
+}
+
+/** What each budget stub removed, the first edit and the loop file, per run. Reads traces only; no model. */
+async function cmdAnalyze(argv: string[]) {
+  const usage = 'usage: llm-harness-builder analyze <bench.json | run-id | trace.jsonl> ... [--json]'
+  const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: { json: { type: 'boolean', default: false } } })
+  if (!positionals.length) die(usage)
+  const rows: AnalyzedRun[] = []
+  for (const arg of positionals) {
+    try { rows.push(...await analyzeArg(arg)) }
+    catch (e) { die(`cannot analyze ${arg}:\n  ${(e as Error).message}`) }
+  }
+  console.log(values.json ? JSON.stringify(rows) : formatAnalysisTable(rows))
+}
+
 async function cmdServe(argv: string[]) {
   const { values } = parseArgs({ args: argv, options: { port: { type: 'string', default: '7331' }, 'no-open': { type: 'boolean', default: false } } })
   const cwd = process.cwd()
@@ -364,6 +405,6 @@ async function cmdProxy(argv: string[]) {
 }
 
 const [cmd = 'serve', ...rest] = process.argv.slice(2)
-const commands: Record<string, (a: string[]) => Promise<void>> = { serve: cmdServe, run: cmdRun, demo: cmdDemo, bench: cmdBench, replay: cmdReplay, proxy: cmdProxy }
-if (!commands[cmd]) die('usage: llm-harness-builder [serve|run|demo|bench|replay|proxy] ...')
+const commands: Record<string, (a: string[]) => Promise<void>> = { serve: cmdServe, run: cmdRun, demo: cmdDemo, bench: cmdBench, replay: cmdReplay, analyze: cmdAnalyze, proxy: cmdProxy }
+if (!commands[cmd]) die('usage: llm-harness-builder [serve|run|demo|bench|replay|analyze|proxy] ...')
 commands[cmd](rest).catch(e => die(String(e?.stack ?? e)))

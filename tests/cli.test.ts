@@ -1,7 +1,7 @@
 import { test, expect } from 'vitest'
 import { spawn, spawnSync, execSync } from 'node:child_process'
 import { writeFile, readFile, readdir, stat, cp } from 'node:fs/promises'
-import { mkdtempSync, existsSync } from 'node:fs'
+import { mkdtempSync, existsSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import http from 'node:http'
@@ -503,3 +503,58 @@ test('replay reads a trace whose last line is half-written', async () => {
   const r = cli(['replay', trace, '--turn', '1', '--base-url', 'http://x', '--kind', 'openai', '--n', '1'], { LHB_FAKE_BACKEND: fake })
   expect(r.status).toBe(0); expect(r.stdout).toMatch(/1x same as recorded/)
 }, 30_000)
+
+const ev = (o: object) => JSON.stringify(o)
+/** A tiny trace: one failed and one good edit, a stub at turn 3 of the read from turn 1. */
+function analyzeFixture(dir: string, id: string, done = true) {
+  const lines = [
+    ev({ meta: { id, harness: 'tuned-budget', task: 't', workdir: '/w', started: 1 } }),
+    ev({ seq: 0, turn: 1, ts: 0, type: 'llm_request', payload: { messages: [{ role: 'system', content: 's' }, { role: 'user', content: 'do' }] } }),
+    ev({ seq: 1, turn: 1, ts: 0, type: 'tool_call', call: { callId: 'c1', name: 'read_file', args: { path: 'a.txt' } } }),
+    ev({ seq: 2, turn: 1, ts: 0, type: 'tool_result', callId: 'c1', name: 'read_file', output: 'AAAA' }),
+    ev({ seq: 3, turn: 2, ts: 0, type: 'llm_request', payload: { messages: [{ role: 'system', content: 's' }, { role: 'user', content: 'do' }, { role: 'assistant', content: '' }, { role: 'tool', content: 'AAAA' }] } }),
+    ev({ seq: 4, turn: 2, ts: 0, type: 'tool_call', call: { callId: 'c2', name: 'edit_file', args: { path: 'a.txt' } } }),
+    ev({ seq: 5, turn: 2, ts: 0, type: 'tool_result', callId: 'c2', name: 'edit_file', output: 'edited a.txt' }),
+    ev({ seq: 6, turn: 3, ts: 0, type: 'context_stats', estimatedTokens: 9, budgetTokens: 5, droppedChars: 4 }),
+    ev({ seq: 7, turn: 3, ts: 0, type: 'llm_request', payload: { messages: [{ role: 'system', content: 's' }, { role: 'user', content: 'do' }, { role: 'assistant', content: '' }, { role: 'tool', content: '[dropped: 4 chars]' }, { role: 'assistant', content: '' }, { role: 'tool', content: 'edited a.txt' }] } }),
+    ...(done ? [ev({ seq: 8, turn: 3, ts: 0, type: 'done', reason: 'final', turns: 3, toolCallCount: 2 })] : []),
+  ]
+  writeFileSync(join(dir, `${id}.jsonl${done ? '' : '.part'}`), lines.join('\n') + '\n')
+}
+
+test('analyze <run-id> prints one row: stub t3 ate the read, first edit t2', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'lhb-an-')); mkdirSync(join(cwd, 'runs')); analyzeFixture(join(cwd, 'runs'), 'abcd0001')
+  const r = cli(['analyze', 'abcd0001'], {}, cwd)
+  expect(r.status).toBe(0)
+  const [head, row] = r.stdout.trim().split('\n')
+  expect(head).toMatch(/^harness\s+run\s+verdict/)
+  expect(row).toMatch(/^tuned-budget\s+abcd0001\s+final\s+3\s+t3\s+read_file a\.txt\s+t2\s+—\s+—$/)
+})
+
+test('analyze <bench.json> reads verdicts from the JSON and traces next to it; a run with no trace is a row', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'lhb-an-')); const runs = join(cwd, 'runs'); mkdirSync(runs); analyzeFixture(runs, 'abcd0002')
+  const run = (trace?: string) => ({ round: 1, verdict: 'PASS', reason: 'final', turns: 3, toolCalls: 2, parseErrors: 0, ms: 1, workdir: '/w', ...(trace ? { trace } : {}) })
+  writeFileSync(join(runs, 'bench-x.json'), JSON.stringify({ version: 1, date: '2026-10-10T00:00:00Z', task: 't', n: 2, timeoutS: 1, complete: true,
+    harnesses: [{ name: 'tuned-budget', config: {}, pass: 2, reasons: {}, median: { turns: 3, toolCalls: 2, ms: 1 }, runs: [run('abcd0002'), run()] }] }))
+  const r = cli(['analyze', 'runs/bench-x.json'], {}, cwd)
+  expect(r.status).toBe(0)
+  const rows = r.stdout.trim().split('\n').slice(1)
+  expect(rows[0]).toMatch(/^tuned-budget\s+abcd0002\s+PASS final\s+3\s+t3/)
+  expect(rows[1]).toContain('no trace')
+})
+
+test('analyze takes a killed run by its .part path; --json gives the full analysis', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'lhb-an-')); mkdirSync(join(cwd, 'runs')); analyzeFixture(join(cwd, 'runs'), 'abcd0003', false)
+  const r = cli(['analyze', 'runs/abcd0003.jsonl.part', '--json'], {}, cwd)
+  expect(r.status).toBe(0)
+  const [row] = JSON.parse(r.stdout)
+  expect(row).toMatchObject({ run: 'abcd0003', verdict: '—', analysis: { firstEdit: 2, stubs: [{ turn: 3, status: 'matched', items: [{ callId: 'c1', what: 'read_file a.txt' }] }] } })
+  expect(row.analysis.done).toBeUndefined()
+})
+
+test('analyze with no argument or an unknown id exits 2 with a message', () => {
+  expect(cli(['analyze']).status).toBe(2)
+  const r = cli(['analyze', 'nope0000'])
+  expect(r.status).toBe(2)
+  expect(r.stderr).toMatch(/^cannot analyze nope0000:/)
+})
