@@ -364,3 +364,10 @@ test('GET /api/bench?file= with a malformed run still opens the bench; the bad r
   expect(r.status).toBe(200)
   expect((await r.json()).analysis).toEqual({})
 })
+
+test('PUT of a harness with tools.bashEnv is accepted and comes back as it was', async () => {
+  const c = config({ name: 'envy', tools: { enabled: ['bash'], approveBash: true, bashEnv: ['GITHUB_TOKEN'] } })
+  const put = await fetch(`${base}/api/harnesses/envy`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(c) })
+  expect(put.status).toBe(200)
+  expect((await (await fetch(`${base}/api/harnesses/envy`)).json()).tools.bashEnv).toEqual(['GITHUB_TOKEN'])
+})

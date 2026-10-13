@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest'
-import { validateConfig, sendsAnswerSchema } from '../src/core/config.js'
+import { validateConfig, sendsAnswerSchema, ENV_NAME } from '../src/core/config.js'
 import { harness } from './helpers.js'
 
 const validConfig = harness()
@@ -223,4 +223,20 @@ test('tools.editMissEscalation is optional and must be a positive integer', () =
     c.tools.editMissEscalation = bad
     expect(validateConfig(c)).toContain('tools.editMissEscalation must be a positive integer')
   }
+})
+
+test('tools.bashEnv is optional: environment variable names, never values', () => {
+  const on = structuredClone(validConfig) as any
+  on.tools.bashEnv = ['GITHUB_TOKEN', 'http_proxy', '_X1']
+  expect(validateConfig(on)).toEqual([])
+  for (const bad of ['GITHUB_TOKEN', [1], ['A-B'], ['1A'], [''], ['A=1'], { GITHUB_TOKEN: 'x' }]) {
+    const c = structuredClone(validConfig) as any
+    c.tools.bashEnv = bad
+    expect(validateConfig(c)).toContain('tools.bashEnv must be an array of environment variable names')
+  }
+})
+
+test('ENV_NAME: shell variable names only', () => {
+  for (const ok of ['A', '_x', 'http_proxy', 'GITHUB_TOKEN', 'X1']) expect(ENV_NAME.test(ok)).toBe(true)
+  for (const bad of ['', '1A', 'A-B', 'A B', 'A=1', '$A']) expect(ENV_NAME.test(bad)).toBe(false)
 })

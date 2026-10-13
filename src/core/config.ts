@@ -6,13 +6,16 @@ export type BackendKind = 'openai' | 'ollama'
 export type ToolCallFormat = 'json' | 'hermes'
 export const TOOL_CALL_FORMATS: ToolCallFormat[] = ['json', 'hermes']
 
+/** A name `tools.bashEnv` may hold: a shell variable name. The value always comes from the user's environment. */
+export const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
+
 export type McpServerConfig = { command: string; args?: string[]; tools?: string[] }
 
 export type HarnessConfig = {
   name: string
   backend: { kind: BackendKind; baseUrl: string; model: string; numCtx?: number; maxTokens?: number; think?: boolean; temperature: number }
   systemPrompt: string
-  tools: { enabled: ToolName[]; approveBash: boolean; requireReadBeforeEdit?: boolean; explainEditMiss?: boolean; editMissEscalation?: number }
+  tools: { enabled: ToolName[]; approveBash: boolean; requireReadBeforeEdit?: boolean; explainEditMiss?: boolean; editMissEscalation?: number; bashEnv?: string[] }
   toolCalls: { mode: 'native' | 'prompted'; format?: ToolCallFormat; enforceSchema: boolean; promptedTemplate: string; parseErrorHint: string }
   context: { maxToolOutputChars: number; budgetTokens: number }
   loop: { maxTurns: number; maxRepeats?: number; repeatTemperature?: number; repeatThinkTokens?: number; freshContext?: number; untilBash?: string }
@@ -30,7 +33,7 @@ export const sendsAnswerSchema = (c: HarnessConfig): boolean =>
 const KEYS: Record<string, string[]> = {
   '': ['name', 'backend', 'systemPrompt', 'tools', 'toolCalls', 'context', 'loop', 'mcpServers'],
   backend: ['kind', 'baseUrl', 'model', 'numCtx', 'maxTokens', 'think', 'temperature'],
-  tools: ['enabled', 'approveBash', 'requireReadBeforeEdit', 'explainEditMiss', 'editMissEscalation'],
+  tools: ['enabled', 'approveBash', 'requireReadBeforeEdit', 'explainEditMiss', 'editMissEscalation', 'bashEnv'],
   toolCalls: ['mode', 'format', 'enforceSchema', 'promptedTemplate', 'parseErrorHint'],
   context: ['maxToolOutputChars', 'budgetTokens'],
   loop: ['maxTurns', 'maxRepeats', 'repeatTemperature', 'repeatThinkTokens', 'freshContext', 'untilBash'],
@@ -67,6 +70,7 @@ export function validateConfig(c: unknown): string[] {
     for (const k of ['requireReadBeforeEdit', 'explainEditMiss'] as const)
       if (t[k] !== undefined && typeof t[k] !== 'boolean') e.push(`tools.${k} must be boolean`)
     if (t.editMissEscalation !== undefined && !(Number.isInteger(t.editMissEscalation) && t.editMissEscalation >= 1)) e.push('tools.editMissEscalation must be a positive integer')
+    if (t.bashEnv !== undefined && !(Array.isArray(t.bashEnv) && t.bashEnv.every((n: unknown) => typeof n === 'string' && ENV_NAME.test(n)))) e.push('tools.bashEnv must be an array of environment variable names')
   }
   const tc = c.toolCalls
   if (!isObj(tc)) e.push('toolCalls is required')
