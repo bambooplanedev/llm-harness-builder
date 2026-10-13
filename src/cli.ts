@@ -3,7 +3,7 @@
 import { parseArgs } from 'node:util'
 import { readFile, cp, writeFile, rename, access, mkdir } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
-import { spawn, spawnSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -15,6 +15,7 @@ import { mcpApprovalServer, mcpCounts, UNTIL_BASH, quitWithoutWork, type Harness
 import { startServer } from './server/index.js'
 import { TraceWriter, type Meta } from './server/runs.js'
 import { TASKS, type Task } from './core/tasks.js'
+import { childEnv } from './core/tools/env.js'
 import { median, formatTable, type BenchRun, type BenchHarness, type BenchResult } from './core/bench.js'
 import { GUARD_BLOCKED, EDIT_MISS } from './core/tools/fs.js'
 import { createBackend } from './core/backends/index.js'
@@ -160,8 +161,8 @@ async function cmdDemo(argv: string[]) {
     const workdir = await TASKS.slug.prepare()
     console.error(`\n=== ${name} (${config.backend.model}) in ${workdir}`)
     const { id, last } = await execRun(config, TASKS.slug.prompt, workdir, { yes: true, json: values.json })
-    const check = spawnSync('sh', [path.join(workdir, 'check.sh')])
-    const verdict = check.status === 0 ? 'PASS' : 'FAIL'
+    // The same check bench runs: the model's code, the environment its bash had, and a 60 s limit.
+    const verdict = TASKS.slug.check(workdir, undefined, undefined, childEnv(config.tools.bashEnv)) ? 'PASS' : 'FAIL'
     const d = last.type === 'done' ? last : undefined
     rows.push(`${name.padEnd(12)} ${verdict}  reason=${d?.reason ?? '?'} turns=${d?.turns ?? '?'} toolCalls=${d?.toolCallCount ?? '?'} trace=${id}`)
   }
@@ -196,7 +197,7 @@ async function benchOnce(config: HarnessConfig, round: number, timeoutS: number,
     })
     const ms = Date.now() - t0
     const d = last.type === 'done' ? last : undefined
-    const verdict = task.check(workdir, size, d?.reason === 'final' ? d.text : undefined) ? 'PASS' : 'FAIL'
+    const verdict = task.check(workdir, size, d?.reason === 'final' ? d.text : undefined, childEnv(config.tools.bashEnv)) ? 'PASS' : 'FAIL'
     run = { round, verdict, reason: d?.reason ?? 'error', turns: d?.turns ?? 0, toolCalls: d?.toolCallCount ?? 0, parseErrors, lastError, ms, workdir, trace: id, toolChars: toolChars || undefined, toolErrors, guardBlocks: config.tools.requireReadBeforeEdit ? guardBlocks : undefined, editMiss }
   } catch (e) {
     run = { round, verdict: 'FAIL', reason: 'error', turns: 0, toolCalls: 0, parseErrors, lastError: String(e), ms: Date.now() - t0, workdir, toolChars: toolChars || undefined, toolErrors, guardBlocks: config.tools.requireReadBeforeEdit ? guardBlocks : undefined, editMiss }

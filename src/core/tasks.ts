@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { DEMO_TASK } from './prompts.js'
+import { childEnv } from './tools/env.js'
 
 const PKG_ROOT = fileURLToPath(new URL('../..', import.meta.url))
 
@@ -19,8 +20,9 @@ export type Task = {
   input?(size?: number): string
   /** The JSON form of the final answer. A harness with no tools and `enforceSchema` on has the server hold the model to it. */
   answerSchema?(size?: number): Record<string, unknown>
-  /** true = PASS. `answer` is the text of the final reply; absent when the run ended without one. */
-  check(dir: string, size?: number, answer?: string): boolean
+  /** true = PASS. `answer` is the text of the final reply; absent when the run ended without one.
+   *  `env`: the environment of what the check runs — the model's code — the base set when absent. */
+  check(dir: string, size?: number, answer?: string, env?: NodeJS.ProcessEnv): boolean
 }
 
 /** The task every number in the README up to v2.6 was measured on. Moved here from cli.ts unchanged; tests/tasks.test.ts pins the bytes. */
@@ -37,7 +39,7 @@ const slug: Task = {
     await writeFile(path.join(dir, 'data', 'app.log'), lines.join('\n') + '\n')
     return dir
   },
-  check: dir => spawnSync('sh', [path.join(dir, 'check.sh')], { timeout: 60_000 }).status === 0,
+  check: (dir, _size, _answer, env = childEnv()) => spawnSync('sh', [path.join(dir, 'check.sh')], { timeout: 60_000, env }).status === 0,
 }
 
 /** The order IS the task: size N means the first N of these. titleCase imports words and paginate imports chunk, on purpose. */
@@ -76,14 +78,14 @@ const poolTask = (name: string, order: readonly string[], testOf: TestOf = share
     },
     // The model can reach test/: the verdict is taken on pristine tests, and only on them — a file it
     // added cannot fail a correct fix, a test it rewrote cannot pass a wrong one.
-    check(dir, size = order.length) {
+    check(dir, size = order.length, _answer?: string, env = childEnv()) {
       // This function deletes <dir>/test: a relative or empty dir would resolve against the cwd.
       if (!path.isAbsolute(dir)) throw new RangeError(`${name} check needs an absolute workdir, got ${JSON.stringify(dir)}`)
       const units = firstUnits(size), files = units.map(u => path.join('test', `${u}.test.js`))
       rmSync(path.join(dir, 'test'), { recursive: true, force: true })
       mkdirSync(path.join(dir, 'test'))
       units.forEach((u, i) => copyFileSync(path.join(POOL_ROOT, testOf(u)), path.join(dir, files[i])))
-      return spawnSync(process.execPath, ['--test', ...files], { cwd: dir, timeout: 60_000 }).status === 0
+      return spawnSync(process.execPath, ['--test', ...files], { cwd: dir, timeout: 60_000, env }).status === 0
     },
   }
 }

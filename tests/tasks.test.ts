@@ -4,6 +4,7 @@ import { readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { TASKS, POOL, POOL2, verdictSchema } from '../src/core/tasks.js'
 import { DEMO_TASK } from '../src/core/prompts.js'
+import { childEnv } from '../src/core/tools/env.js'
 
 // Every number in the README before 2026-09-19 was measured on this workdir and this text.
 // The literal was taken from the CLI before makeDemoWorkdir moved into tasks.ts.
@@ -297,4 +298,29 @@ test('judge: an answer that follows the key is PASS at every size; no answer, pr
   expect(bad(o => ({ ...o, 8009: { reason: 'x', verdict: 'MAYBE' } }))).toBe(false)
   expect(bad(o => ({ ...o, 8009: null }))).toBe(false)
   expect(bad(o => ({ ...o, 8005: { reason: 'x', verdict: 'KEEP' } }))).toBe(false) // both of a duplicate pair
+})
+
+test('slug check: check.sh runs with the base environment unless more is passed in', async () => {
+  process.env.LHB_CHECK_SECRET = 'synthetic-s3cr3t'
+  try {
+    const dir = await TASKS.slug.prepare()
+    // the model has write_file and can replace check.sh; the check runs it unasked
+    writeFileSync(join(dir, 'check.sh'), 'cd "$(dirname "$0")" && printf %s "$LHB_CHECK_SECRET" > leaked.txt\n')
+    expect(TASKS.slug.check(dir)).toBe(true)
+    expect(readFileSync(join(dir, 'leaked.txt'), 'utf8')).toBe('')
+    TASKS.slug.check(dir, undefined, undefined, childEnv(['LHB_CHECK_SECRET']))
+    expect(readFileSync(join(dir, 'leaked.txt'), 'utf8')).toBe('synthetic-s3cr3t')
+  } finally { delete process.env.LHB_CHECK_SECRET }
+})
+
+test('pool check: node --test imports the model\'s src with the base environment', async () => {
+  process.env.LHB_CHECK_SECRET = 'synthetic-s3cr3t'
+  try {
+    const dir = await TASKS.pool.prepare(1)
+    const src = join(dir, 'src', 'clamp.js'), leaked = join(dir, 'leaked.txt')
+    // model-written source runs at import time inside the check
+    writeFileSync(src, `import { writeFileSync as leak } from 'node:fs'\nleak(${JSON.stringify(leaked)}, process.env.LHB_CHECK_SECRET ?? '')\n` + readFileSync(src, 'utf8'))
+    TASKS.pool.check(dir, 1)
+    expect(readFileSync(leaked, 'utf8')).toBe('')
+  } finally { delete process.env.LHB_CHECK_SECRET }
 })

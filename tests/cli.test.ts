@@ -355,6 +355,45 @@ test('bench without --task is the slug task, and says so', async () => {
   expect(await readdir(join(j.harnesses[0].runs[0].workdir, 'data'))).toEqual(['app.log'])
 }, 60_000)
 
+// The check runs what the model wrote, with the environment its bash had: the base set and the names in tools.bashEnv.
+// The model has write_file, so it can replace check.sh; here it does, and the script reports what it was given.
+const reportEnv = (file: string) => ({ toolCalls: [{ name: 'write_file', args: { path: 'check.sh', content: `printf '[%s][%s]' "$LHB_CHECK_NAMED" "$LHB_CHECK_SECRET" > '${file}'\n` } }] })
+const OURS = { LHB_CHECK_NAMED: 'named-value', LHB_CHECK_SECRET: 'synthetic-s3cr3t' }
+
+test('bench: the check gets the base environment and the names in the harness\'s tools.bashEnv, nothing else of ours', async () => {
+  const wd = await tmp('lhb-cli-')
+  const fake = join(wd, 'fake.json'), out = join(wd, 'b.json'), seen = { named: join(wd, 'named.txt'), plain: join(wd, 'plain.txt') }
+  const harnessFile = async (name: string, bashEnv?: string[]) => {
+    const file = join(wd, `${name}.json`)
+    await writeFile(file, JSON.stringify({
+      name,
+      backend: { kind: 'openai', baseUrl: 'http://x/v1', model: 'm', temperature: 0 },
+      systemPrompt: 'sys',
+      tools: { enabled: ['write_file'], approveBash: false, bashEnv },
+      toolCalls: { mode: 'native', enforceSchema: false, promptedTemplate: 'T:{{tools}}', parseErrorHint: 'HINT' },
+      context: { maxToolOutputChars: 1000, budgetTokens: 0 },
+      loop: { maxTurns: 5 },
+    }))
+    return file
+  }
+  await writeFile(fake, JSON.stringify([reportEnv(seen.named), { content: 'Done.' }, reportEnv(seen.plain), { content: 'Done.' }]))
+  const r = cli(['bench', '--n', '1', '--out', out, await harnessFile('named', ['LHB_CHECK_NAMED']), await harnessFile('plain')], { LHB_FAKE_BACKEND: fake, ...OURS })
+  expect(r.status).toBe(0)
+  expect(await readFile(seen.named, 'utf8')).toBe('[named-value][]')
+  expect(await readFile(seen.plain, 'utf8')).toBe('[][]')
+}, 60_000)
+
+test('demo: the check runs with the base environment, not ours', async () => {
+  const wd = await tmp('lhb-cli-')
+  const fake = join(wd, 'fake.json'), seen = join(wd, 'seen.txt')
+  // bare replaces check.sh; tuned and tuned-hermes answer at once
+  await writeFile(fake, JSON.stringify([reportEnv(seen), { content: 'Done.' }, { content: TUNED_FINAL }, { content: 'Done.' }]))
+  const r = cli(['demo'], { LHB_FAKE_BACKEND: fake, ...OURS })
+  expect(r.status).toBe(0)
+  expect(r.stdout).toMatch(/bare\s+PASS/)
+  expect(await readFile(seen, 'utf8')).toBe('[][]')
+}, 60_000)
+
 test('bench rejects a task/size/max-turns combination that means nothing, with usage', () => {
   for (const extra of [['--task', 'nope'], ['--size', '3'], ['--task', 'slug', '--size', '3'], ['--task', 'pool'],
     ['--task', 'pool', '--size', '0'], ['--task', 'pool', '--size', '11'], ['--task', 'pool', '--size', '2.5'], ['--max-turns', '0']]) {
