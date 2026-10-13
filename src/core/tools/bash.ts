@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
 import type { ToolCtx } from './fs.js'
+import { childEnv } from './env.js'
 import { track, untrack } from '../procs.js'
 
 export type BashOpts = { timeoutMs?: number; maxBuffer?: number }
@@ -10,7 +11,7 @@ export function bash(args: Record<string, unknown>, ctx: ToolCtx, opts: BashOpts
   const timeoutMs = opts.timeoutMs ?? 30_000
   const maxBuffer = opts.maxBuffer ?? 1 << 20
   return new Promise(resolve => {
-    const child = spawn('sh', ['-c', command], { cwd: ctx.workdir, detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn('sh', ['-c', command], { cwd: ctx.workdir, env: childEnv(ctx.bashEnv), detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
     const pid = child.pid
     if (pid) track(pid)
     const release = () => { clearTimeout(timer); if (pid) untrack(pid) }

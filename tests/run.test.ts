@@ -796,3 +796,16 @@ test('editMissEscalation off: three misses, no note — the requests are what th
   const ev = await collect({ config: escCfg(), task: 'do', workdir: await wd() }, { backend: Fake([miss, miss, miss, { content: 'x' }]) })
   expect(edits(ev).some(o => o.includes('note: miss'))).toBe(false)
 })
+
+test('the model\'s bash and loop.untilBash see a variable named in tools.bashEnv and nothing else of ours', async () => {
+  process.env.LHB_RUN_NAMED = 'named'; process.env.LHB_RUN_SECRET = 'secret'
+  try {
+    const tools: HarnessConfig['tools'] = { enabled: ['bash'], approveBash: false, bashEnv: ['LHB_RUN_NAMED'] }
+    const be = Fake([{ toolCalls: [{ name: 'bash', args: { command: 'echo "[$LHB_RUN_NAMED][$LHB_RUN_SECRET]"' } }] }, { content: 'fin' }])
+    const ev = await collect({ config: until('test "$LHB_RUN_NAMED" = named && test -z "$LHB_RUN_SECRET"', { tools }), task: 'do', workdir: await wd() }, { backend: be, ...yes })
+    const tr = ev.find(e => e.type === 'tool_result') as Extract<HarnessEvent, { type: 'tool_result' }>
+    expect(tr.output).toContain('[named][]')
+    expect(checks(ev)).toMatchObject([{ passed: true }])
+    expect(last(ev)).toMatchObject({ reason: 'final' })
+  } finally { delete process.env.LHB_RUN_NAMED; delete process.env.LHB_RUN_SECRET }
+})

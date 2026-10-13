@@ -53,3 +53,22 @@ test('a running command dies with the parent process (SIGINT)', { timeout: 20_00
   for (let i = 0; i < 30; i++) { try { process.kill(shPid, 0) } catch { return }; await sleep(100) }
   throw new Error(`sh ${shPid} outlived its parent`)
 })
+
+test('a variable of ours that is neither in the base set nor in bashEnv does not reach the command', async () => {
+  process.env.LHB_BASH_SECRET = 'synthetic-s3cr3t'
+  try {
+    const out = await bash({ command: 'echo "[$LHB_BASH_SECRET]"; env' }, await ctx())
+    expect(out).toContain('[]')
+    expect(out).not.toContain('synthetic-s3cr3t')
+    expect(out).toMatch(/^PATH=/m)
+    expect(out).toMatch(/^HOME=/m)
+  } finally { delete process.env.LHB_BASH_SECRET }
+})
+
+test('a name in bashEnv reaches the command with its value', async () => {
+  process.env.LHB_BASH_NAMED = 'named-value'
+  try {
+    const out = await bash({ command: 'echo "[$LHB_BASH_NAMED]"' }, { ...(await ctx()), bashEnv: ['LHB_BASH_NAMED'] })
+    expect(out).toContain('[named-value]')
+  } finally { delete process.env.LHB_BASH_NAMED }
+})

@@ -110,6 +110,8 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
       // Present only when the harness asked for it; the tools treat "absent" as "guard off".
       reads: config.tools.requireReadBeforeEdit ? new Set<string>() : undefined,
       explainEditMiss: config.tools.explainEditMiss,
+      // bash and loop.untilBash get the base environment plus these names; see tools/env.ts.
+      bashEnv: config.tools.bashEnv,
     }
     // loop.maxRepeats: how many times each call was made since the files last changed through a tool.
     // An edit that has succeeded is counted over the whole run: it succeeds twice only when it was undone in between.
