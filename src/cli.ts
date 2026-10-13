@@ -2,7 +2,7 @@
 // src/cli.ts
 import { parseArgs } from 'node:util'
 import { readFile, cp, writeFile, rename, access, mkdir } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline/promises'
 import path from 'node:path'
@@ -23,9 +23,13 @@ import { replayPayload, replySignature, recordedTurn } from './core/replay.js'
 import { analyzeTrace, formatAnalysisTable, type AnalyzedRun } from './core/analyze.js'
 import { preflight, windowWarning, type PreflightResult } from './core/preflight.js'
 import { startProxy } from './core/proxy/server.js'
+import { COMMANDS, isCommand, usage, commandHelp, overview, type CommandName } from './cli-help.js'
 
 const PKG_ROOT = fileURLToPath(new URL('..', import.meta.url))
 const die = (msg: string): never => { console.error(msg); process.exit(2) }
+const PKG = JSON.parse(readFileSync(path.join(PKG_ROOT, 'package.json'), 'utf8')) as { version: string; description: string }
+/** A command's --help: printed before the command does anything, so `serve --help` copies nothing. */
+const printHelp = (name: CommandName): void => { console.log(commandHelp(name)) }
 
 const DEMO_HARNESSES = ['bare', 'tuned', 'tuned-hermes']
 
@@ -127,12 +131,10 @@ async function execRun(config: HarnessConfig, task: string, workdir: string, o: 
 }
 
 async function cmdRun(argv: string[]) {
-  const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: {
-    workdir: { type: 'string' }, yes: { type: 'boolean', default: false }, json: { type: 'boolean', default: false },
-    model: { type: 'string' }, 'base-url': { type: 'string' }, kind: { type: 'string' }, 'answer-schema': { type: 'string' },
-  } })
+  const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: COMMANDS.run.options })
+  if (values.help) return printHelp('run')
   const [file, ...taskParts] = positionals
-  if (!file || !taskParts.length) die('usage: llm-harness-builder run <harness.json> --workdir <dir> "task" [--yes] [--json] [--answer-schema file.json] [--model m] [--base-url u] [--kind openai|ollama]')
+  if (!file || !taskParts.length) die(usage('run'))
   const workdir = path.resolve(values.workdir ?? '.')
   const werr = await validateWorkdir(workdir); if (werr) die(werr)
   const config = await loadHarness(file, { model: values.model, baseUrl: values['base-url'], kind: values.kind })
@@ -154,7 +156,8 @@ async function cmdRun(argv: string[]) {
 }
 
 async function cmdDemo(argv: string[]) {
-  const { values } = parseArgs({ args: argv, options: { model: { type: 'string' }, 'base-url': { type: 'string' }, kind: { type: 'string' }, json: { type: 'boolean', default: false } } })
+  const { values } = parseArgs({ args: argv, options: COMMANDS.demo.options })
+  if (values.help) return printHelp('demo')
   const rows: string[] = []
   for (const name of DEMO_HARNESSES) {
     const config = await loadHarness(path.join(PKG_ROOT, 'harnesses', `${name}.json`), { model: values.model, baseUrl: values['base-url'], kind: values.kind })
@@ -215,18 +218,14 @@ function rollup(h: BenchHarness) {
 }
 
 async function cmdBench(argv: string[]) {
-  const usage = 'usage: llm-harness-builder bench [harness.json ...] [--n 3] [--timeout 1800] [--out runs/bench-<ts>.json] [--task slug|pool|pool2|pool3|sift|triage|judge] [--size N] [--max-turns N] [--model m] [--base-url u] [--kind openai|ollama]'
-  const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: {
-    n: { type: 'string', default: '3' }, timeout: { type: 'string', default: '1800' }, out: { type: 'string' },
-    task: { type: 'string', default: 'slug' }, size: { type: 'string' }, 'max-turns': { type: 'string' },
-    model: { type: 'string' }, 'base-url': { type: 'string' }, kind: { type: 'string' },
-  } })
-  if (!INT.test(values.n) || !INT.test(values.timeout)) die(usage)
+  const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: COMMANDS.bench.options })
+  if (values.help) return printHelp('bench')
+  if (!INT.test(values.n) || !INT.test(values.timeout)) die(usage('bench'))
   const task: Task | undefined = Object.hasOwn(TASKS, values.task) ? TASKS[values.task as keyof typeof TASKS] : undefined
   const size = values.size === undefined ? undefined : Number(values.size)
   // A task with sizes needs one in range; a task without sizes takes none.
   const sizeOk = task?.max === undefined ? size === undefined : values.size !== undefined && INT.test(values.size) && size! <= task.max
-  if (!task || !sizeOk || (values['max-turns'] !== undefined && !INT.test(values['max-turns']))) die(usage)
+  if (!task || !sizeOk || (values['max-turns'] !== undefined && !INT.test(values['max-turns']))) die(usage('bench'))
   const n = Number(values.n), timeoutS = Number(values.timeout)
   const started = new Date()
   const out = values.out ?? path.join('runs', `bench-${stamp(started)}.json`)
@@ -290,16 +289,13 @@ async function cmdBench(argv: string[]) {
 
 /** Sends the recorded request of one turn again, as it was sent, and counts the distinct replies. No tool runs: one reply says where the next call goes, not how the run ends. */
 async function cmdReplay(argv: string[]) {
-  const usage = 'usage: llm-harness-builder replay <run-id | trace.jsonl> --turn N --base-url u --kind openai|ollama [--n 5] [--temperature t] [--max-tokens m] [--json]'
-  const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: {
-    turn: { type: 'string' }, n: { type: 'string', default: '5' }, temperature: { type: 'string' }, 'max-tokens': { type: 'string' },
-    'base-url': { type: 'string' }, kind: { type: 'string' }, json: { type: 'boolean', default: false },
-  } })
+  const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: COMMANDS.replay.options })
+  if (values.help) return printHelp('replay')
   const [run] = positionals, kind = values.kind, baseUrl = values['base-url']
   const temperature = values.temperature === undefined ? undefined : Number(values.temperature)
   const INT = /^[1-9]\d*$/
-  if (!run || positionals.length > 1 || !INT.test(values.turn ?? '') || !INT.test(values.n) || (values['max-tokens'] !== undefined && !INT.test(values['max-tokens']))) die(usage)
-  if ((kind !== 'openai' && kind !== 'ollama') || !baseUrl || !/^https?:\/\//.test(baseUrl)) die(usage)
+  if (!run || positionals.length > 1 || !INT.test(values.turn ?? '') || !INT.test(values.n) || (values['max-tokens'] !== undefined && !INT.test(values['max-tokens']))) die(usage('replay'))
+  if ((kind !== 'openai' && kind !== 'ollama') || !baseUrl || !/^https?:\/\//.test(baseUrl)) die(usage('replay'))
   if (temperature !== undefined && !(values.temperature!.trim() && temperature >= 0 && temperature <= 2)) die('--temperature must be a number from 0 to 2')
   const file = run!.endsWith('.jsonl') ? run! : path.join('runs', `${run}.jsonl`)
   let rec: ReturnType<typeof recordedTurn>
@@ -356,9 +352,9 @@ async function analyzeArg(arg: string): Promise<AnalyzedRun[]> {
 
 /** What each budget stub removed, the first edit and the loop file, per run. Reads traces only; no model. */
 async function cmdAnalyze(argv: string[]) {
-  const usage = 'usage: llm-harness-builder analyze <bench.json | run-id | trace.jsonl> ... [--json]'
-  const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: { json: { type: 'boolean', default: false } } })
-  if (!positionals.length) die(usage)
+  const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: COMMANDS.analyze.options })
+  if (values.help) return printHelp('analyze')
+  if (!positionals.length) die(usage('analyze'))
   const rows: AnalyzedRun[] = []
   for (const arg of positionals) {
     try { rows.push(...await analyzeArg(arg)) }
@@ -368,7 +364,8 @@ async function cmdAnalyze(argv: string[]) {
 }
 
 async function cmdServe(argv: string[]) {
-  const { values } = parseArgs({ args: argv, options: { port: { type: 'string', default: '7331' }, 'no-open': { type: 'boolean', default: false } } })
+  const { values } = parseArgs({ args: argv, options: COMMANDS.serve.options })
+  if (values.help) return printHelp('serve')
   const cwd = process.cwd()
   const harnessesDir = path.join(cwd, 'harnesses')
   try { await access(harnessesDir) } catch { await cp(path.join(PKG_ROOT, 'harnesses'), harnessesDir, { recursive: true }) }
@@ -384,11 +381,9 @@ async function cmdServe(argv: string[]) {
 
 /** Sits between another agent and the server; forwards everything, records chat completions into ./runs, live. */
 async function cmdProxy(argv: string[]) {
-  const usage = 'usage: llm-harness-builder proxy [--upstream http://127.0.0.1:8080] [--port 8090] [--name label]'
-  const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: {
-    upstream: { type: 'string', default: 'http://127.0.0.1:8080' }, port: { type: 'string', default: '8090' }, name: { type: 'string', default: 'proxy' },
-  } })
-  if (positionals.length || !/^https?:\/\/[^/]/.test(values.upstream) || !/^\d+$/.test(values.port)) die(usage)
+  const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: COMMANDS.proxy.options })
+  if (values.help) return printHelp('proxy')
+  if (positionals.length || !/^https?:\/\/[^/]/.test(values.upstream) || !/^\d+$/.test(values.port)) die(usage('proxy'))
   const upstream = values.upstream.replace(/\/+$/, '')
   if (/\/v1$/.test(upstream)) die(`--upstream is the server root, not its /v1: try ${upstream.slice(0, -3)}`)
   const runsDir = path.join(process.cwd(), 'runs')
@@ -407,7 +402,16 @@ async function cmdProxy(argv: string[]) {
   process.on('SIGINT', stop); process.on('SIGTERM', stop)
 }
 
+const commands: Record<CommandName, (a: string[]) => Promise<void>> = { serve: cmdServe, run: cmdRun, demo: cmdDemo, bench: cmdBench, replay: cmdReplay, analyze: cmdAnalyze, proxy: cmdProxy }
+function unknownCommand(c: string): never { return die(`error: unknown command "${c}"\n\n${overview(PKG.description)}`) }
+
 const [cmd = 'serve', ...rest] = process.argv.slice(2)
-const commands: Record<string, (a: string[]) => Promise<void>> = { serve: cmdServe, run: cmdRun, demo: cmdDemo, bench: cmdBench, replay: cmdReplay, analyze: cmdAnalyze, proxy: cmdProxy }
-if (!commands[cmd]) die('usage: llm-harness-builder [serve|run|demo|bench|replay|analyze|proxy] ...')
-commands[cmd](rest).catch(e => die(String(e?.stack ?? e)))
+if (cmd === '--version' || cmd === '-v') console.log(PKG.version)
+else if (cmd === '--help' || cmd === '-h' || cmd === 'help') {
+  const [about] = rest
+  if (about === undefined) console.log(overview(PKG.description))
+  else if (isCommand(about)) printHelp(about)
+  else unknownCommand(about)
+}
+else if (!isCommand(cmd)) unknownCommand(cmd)
+else commands[cmd](rest).catch(e => die(String(e?.stack ?? e)))

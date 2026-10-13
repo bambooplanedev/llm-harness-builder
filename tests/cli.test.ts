@@ -1,7 +1,7 @@
 import { test, expect } from 'vitest'
 import { spawn, spawnSync, execSync } from 'node:child_process'
 import { writeFile, readFile, readdir, stat, cp } from 'node:fs/promises'
-import { mkdtempSync, existsSync, writeFileSync, mkdirSync } from 'node:fs'
+import { mkdtempSync, existsSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import http from 'node:http'
@@ -608,3 +608,57 @@ test('analyze finds the traces of a bench JSON written with --out outside runs/'
   expect(r.status).toBe(0)
   expect(r.stdout).toMatch(/abcd0004\s+PASS final\s+3\s+t3/)
 })
+
+const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'))
+const COMMAND_NAMES = ['serve', 'run', 'demo', 'bench', 'replay', 'analyze', 'proxy']
+
+test('--help, -h and help print the overview on stdout and exit 0', () => {
+  for (const f of ['--help', '-h', 'help']) {
+    const r = cli([f])
+    expect([f, r.status]).toEqual([f, 0])
+    expect(r.stdout.split('\n')[0]).toBe(pkg.description)
+    for (const n of COMMAND_NAMES) expect(r.stdout).toMatch(new RegExp(`^  ${n} `, 'm'))
+  }
+}, 60_000)
+
+test('<command> --help, -h and help <command> print that command\'s help and do nothing else', () => {
+  for (const n of COMMAND_NAMES) for (const args of [[n, '--help'], [n, '-h'], ['help', n]]) {
+    const r = cli(args)
+    expect([args, r.status]).toEqual([args, 0])
+    expect(r.stdout.split('\n')[0]).toMatch(new RegExp(`^usage: llm-harness-builder ${n}\\b`))
+    expect(existsSync(join(r.cwd, 'harnesses'))).toBe(false)
+    expect(existsSync(join(r.cwd, 'runs'))).toBe(false)
+  }
+}, 120_000)
+
+test('--help wins over the other arguments of a command', async () => {
+  const wd = await tmp('lhb-cli-')
+  for (const args of [['run', harness('bare'), '--workdir', wd, 'task', '--help'], ['bench', '--n', '0', '--help'], ['serve', '--help', '--port', '1']]) {
+    const r = cli(args)
+    expect([args, r.status]).toEqual([args, 0])
+    expect(r.stdout).toMatch(/^usage: llm-harness-builder /)
+    expect(existsSync(join(r.cwd, 'runs'))).toBe(false)
+    expect(existsSync(join(r.cwd, 'harnesses'))).toBe(false)
+  }
+}, 60_000)
+
+test('--version and -v print the package version', () => {
+  for (const f of ['--version', '-v']) {
+    const r = cli([f])
+    expect(r.status).toBe(0)
+    expect(r.stdout.trim()).toBe(pkg.version)
+  }
+}, 30_000)
+
+test('an unknown command, Object.prototype names included, is an error with the overview, not a stack', () => {
+  for (const c of ['foo', 'toString', '__proto__', 'constructor']) {
+    const r = cli([c])
+    expect([c, r.status]).toEqual([c, 2])
+    expect(r.stderr).toContain(`error: unknown command "${c}"`)
+    expect(r.stderr).toContain(pkg.description)
+    expect(r.stderr).not.toMatch(/^\s+at /m)
+  }
+  const h = cli(['help', 'foo'])
+  expect(h.status).toBe(2)
+  expect(h.stderr).toContain('error: unknown command "foo"')
+}, 60_000)
