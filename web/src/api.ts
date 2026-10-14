@@ -14,7 +14,8 @@ async function j<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  models: (kind: string, baseUrl: string) => j<string[]>(`/api/models?kind=${kind}&baseUrl=${encodeURIComponent(baseUrl)}`),
+  models: (kind: string, baseUrl: string, apiKeyEnv?: string) =>
+    j<string[]>('/api/models', { method: 'POST', body: JSON.stringify({ kind, baseUrl, ...(apiKeyEnv ? { apiKeyEnv } : {}) }) }),
   harnesses: () => j<{ name: string }[]>('/api/harnesses'),
   harness: (name: string) => j<HarnessConfig>(`/api/harnesses/${name}`),
   saveHarness: (name: string, c: HarnessConfig) => j(`/api/harnesses/${name}`, { method: 'PUT', body: JSON.stringify(c) }),

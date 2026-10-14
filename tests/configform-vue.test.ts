@@ -110,3 +110,13 @@ test('tools.bashEnv shows as a read-only line with the names, and not at all whe
   expect(html).toContain('bash gets from your environment: GITHUB_TOKEN, TZ')
   expect(await render(base)).not.toContain('bash gets from your environment')
 })
+
+test('the key env box shows the name, and the line under the backend says where the key goes; nothing without a key or for a name validation refuses', async () => {
+  const keyed = { ...base, backend: { kind: 'openai' as const, baseUrl: 'https://openrouter.ai/api/v1', model: 'm', temperature: 0, apiKeyEnv: 'OPENROUTER_API_KEY' } }
+  const html = await render(keyed)
+  expect(html).toContain('value="OPENROUTER_API_KEY"')
+  expect(html).toContain('the key in OPENROUTER_API_KEY goes to openrouter.ai')
+  expect(await render(base)).not.toContain('the key in')
+  expect(await render({ ...keyed, backend: { ...keyed.backend, apiKeyEnv: 'sk-or-v1-pasted-by-mistake' } })).not.toContain('the key in')
+  expect(await render({ ...keyed, backend: { ...keyed.backend, baseUrl: '' } })).not.toContain('the key in')
+})

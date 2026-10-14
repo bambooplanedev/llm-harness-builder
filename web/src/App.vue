@@ -39,7 +39,12 @@ const canAbort = () => !!runId.value && !isDone() && (running() || openActive.va
 
 async function refreshModels() {
   modelsError.value = ''
-  try { models.value = await api.models(config.value.backend.kind, config.value.backend.baseUrl); if (!config.value.backend.model && models.value[0]) config.value.backend.model = models.value[0] }
+  const b = config.value.backend
+  try {
+    models.value = await api.models(b.kind, b.baseUrl, b.apiKeyEnv)
+    // A hosted list is hundreds of models at every price: with a key the form never picks one by itself.
+    if (!b.model && !b.apiKeyEnv && models.value[0]) b.model = models.value[0]
+  }
   catch (e) { models.value = []; modelsError.value = `cannot list models: ${(e as Error).message}` }
 }
 async function refreshLists() { harnessNames.value = (await api.harnesses()).map(h => h.name); runs.value = await api.runs() }
@@ -81,7 +86,7 @@ function outbound(c: HarnessConfig): HarnessConfig {
 function toWorkbench(c: HarnessConfig, wd: string) { setConfig(c); workdir.value = wd; tab.value = 'workbench' }
 
 onMounted(async () => { await refreshLists(); await refreshModels() })
-watch(() => [config.value.backend.kind, config.value.backend.baseUrl], refreshModels)
+watch(() => [config.value.backend.kind, config.value.backend.baseUrl, config.value.backend.apiKeyEnv], refreshModels)
 </script>
 
 <template>

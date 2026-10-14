@@ -2,7 +2,7 @@
 import { ref, watch } from 'vue'
 import type { HarnessConfig } from './api'
 import { PRESETS, FAMILIES, applyFamily, DEFAULT_PROMPTED_TEMPLATE, DEFAULT_PARSE_ERROR_HINT } from '../../src/core/prompts'
-import { TOOL_NAMES } from '../../src/core/config'
+import { TOOL_NAMES, keyNote } from '../../src/core/config'
 
 const config = defineModel<HarnessConfig>({ required: true })
 const props = defineProps<{ models: string[]; modelsError: string; harnessNames: string[] }>()
@@ -41,6 +41,15 @@ function setThink(text: string) {
   if (text === '') delete config.value.backend.think
   else config.value.backend.think = text === 'on'
 }
+
+/** An empty box removes the key: the harness talks to a local server again, as before. */
+function setKeyEnv(text: string) {
+  const t = text.trim()
+  if (t) config.value.backend.apiKeyEnv = t
+  else delete config.value.backend.apiKeyEnv
+}
+/** Where the key goes; nothing for a name or a URL validation would refuse, so a key pasted as a name is never shown. */
+const keyLine = () => keyNote(config.value.backend)
 
 /** Same rule for the optional loop knobs: an empty box removes the key, so a harness without them saves as before.
  *  What a value may be is validateConfig's to say: its message names the knob and what it needs. */
@@ -96,6 +105,11 @@ function editMcp(text: string) {
       <input type="text" v-model.lazy="config.backend.baseUrl">
     </div>
     <div v-if="ollamaViaV1()" class="warn">Ollama via /v1 ignores num_ctx and silently truncates the prompt. Pick kind "ollama".</div>
+    <div class="row">
+      <span title="name of the environment variable that holds a hosted API's key, like OPENROUTER_API_KEY: serve reads it from the environment it was started in, and a harness file never holds the key itself">key env</span>
+      <input type="text" :value="config.backend.apiKeyEnv ?? ''" placeholder="none (a local server)" @change="setKeyEnv(($event.target as HTMLInputElement).value)">
+    </div>
+    <div v-if="keyLine()" class="hint">{{ keyLine() }}</div>
     <div class="row">
       <select v-model="config.backend.model"><option v-for="m in models" :key="m" :value="m">{{ m }}</option></select>
       <input type="text" v-model="config.backend.model" placeholder="or type a model id">
