@@ -77,27 +77,29 @@ that holds the key:
                  "apiKeyEnv": "OPENROUTER_API_KEY", "model": "qwen/qwen3-32b", "temperature": 0.2 }
 
 The key itself is never in a harness file, and a run takes its value out of what it records and
-shows; the honest notes list what that misses. It is read from the variable when a command starts
-and sent as `Authorization: Bearer` to `baseUrl/models` and `baseUrl/chat/completions`, nowhere
-else, and requests that carry it follow no redirect. The name must be upper-case and end in
-`_API_KEY`, so a harness file from someone else cannot send your `GITHUB_TOKEN` or `AWS_*` along,
-and `baseUrl` must be `https` (plain `http` only on `localhost`, `127.0.0.1` or `[::1]`). `run`,
-`demo`, `bench` and `replay` say on stderr where the key goes —
-`the key in OPENROUTER_API_KEY goes to openrouter.ai` — before the first request. That is a
-notice, not a question: the key leaves with that request (with `bench`, with its preflight). A
-variable that is not set, is empty or holds what a key cannot (spaces, control characters,
-non-ASCII) stops the command with exit code 2 before anything is sent.
+shows; the honest notes list what that misses. The key is read from the variable when a command
+starts and sent as `Authorization: Bearer` to `baseUrl/models` and `baseUrl/chat/completions`,
+nowhere else, and requests that carry it follow no redirect. The name must be upper-case and end in
+`_API_KEY`, so a harness file from someone else cannot send your `GITHUB_TOKEN` or `AWS_*` along.
+It can still send any of your `*_API_KEY` variables, to a host it picks. `baseUrl` must be `https`
+(plain `http` only on `localhost`, `127.0.0.1` or `[::1]`). `run`, `demo`, `bench` and `replay` say
+on stderr where the key goes — `the key in OPENROUTER_API_KEY goes to openrouter.ai` — before the
+first request. That is a notice, not a question: the key leaves with that request (with `bench`,
+with its preflight). A variable that is not set, is empty or holds what a key cannot (spaces,
+control characters, non-ASCII; whitespace at the ends is trimmed first) stops the command with exit
+code 2 before anything is sent.
 
 A key means a hosted API, and the harness sends it only what the OpenAI API defines: no
 `/apply-template` and `/tokenize`, so token counts are the estimate next to the `usage` each reply
 reports; no `/props`; no `chat_template_kwargs`, so `backend.think` with a key is an error — a
 hosted API has its own switch. `bench`'s preflight checks the model against `baseUrl/models` (an
 OpenRouter routing suffix such as `:nitro` is matched without it) and takes the window from that
-list: the smaller of the model's `context_length` and its top provider's. OpenRouter's list is
-public, so a wrong key passes the preflight and shows up as a 401 on the first request. A stream
-that fails after its 200 (OpenRouter's `finish_reason: "error"`) is a `backend_error` with the
-provider's message, not an empty reply; a 429 or a 5xx ends the run the same way, and nothing is
-retried.
+list: the smaller of the model's `context_length` and its top provider's. A list whose
+`total_count` is above the number of models it sent is incomplete, and the preflight does not
+refuse a model missing from it. OpenRouter's list is public, so a wrong key passes the preflight
+and shows up as a 401 on the first request. A stream that fails after its 200 (OpenRouter's
+`finish_reason: "error"`) is a `backend_error` with the provider's message, not an empty reply; a
+429 or a 5xx ends the run the same way, and nothing is retried.
 
 The demo on the cloud, no GPU needed — better with a key of its own and a credit limit, as
 OpenRouter advises:
@@ -110,16 +112,16 @@ OpenRouter advises:
 working directory only when there is none there yet, so an older copy lacks it: copy it by hand. In
 the UI, `serve` reads the variable from the environment it was started in; the form takes a loaded
 harness's backend only while no model is picked, so set kind, base URL, key env and model there. The
-form picks a model from the list by itself only when there is no key and the server is on this
-machine (`localhost`, `127.0.0.1`, `[::1]`): OpenRouter lists hundreds, at every price, and its list
-is public, so it arrives before the key is typed. `replay --api-key-env` sends the recorded request
-to a hosted API as it was recorded.
+form picks a model from the list by itself only when there is no key and the base URL points at
+this machine (`localhost`, `127.0.0.1`, `[::1]`): OpenRouter lists hundreds, at every price, and its
+list is public, so it arrives before the key is typed. `replay --api-key-env` sends the recorded
+request to a hosted API as it was recorded.
 
-The value of the key is taken out of tool output, `loop.untilBash` output and every event: the
-history, the trace, the terminal and the UI see `[redacted: OPENROUTER_API_KEY]` instead, and MCP
-servers start without the variable. What that does not cover — an encoded key, one shorter than 20
-characters, a command that sends it somewhere itself — is in the
-[honest notes](docs/honest-notes.md).
+The value of the key is replaced with `[redacted: OPENROUTER_API_KEY]` in tool output,
+`loop.untilBash` output and every event, before the history, the trace, the terminal or the UI see
+them, and MCP servers start without the variable. The [honest notes](docs/honest-notes.md) list
+what that misses, among them an encoded key, one shorter than 20 characters, the live text of a
+turn and a command that sends the key somewhere itself.
 
 ## CLI
 
@@ -140,8 +142,8 @@ stream as JSONL to stdout; human-readable progress goes to stderr.
 ended with a final answer (with `--answer-schema`, one that parses as JSON) and 1 when it did not,
 while `demo` and `bench` exit 0 whatever the verdicts; 2 for an argument a command cannot take (the
 message names it and the usage follows), for a file it cannot read, for a key variable that is not
-set (see [Cloud](#cloud)), and for the refusal below; 130 for Ctrl-C in `run`, `demo` and `bench`,
-which keeps the trace — `proxy` exits 0 when stopped.
+set, is empty or holds what a key cannot (see [Cloud](#cloud)), and for the refusal below; 130 for
+Ctrl-C in `run`, `demo` and `bench`, which keeps the trace — `proxy` exits 0 when stopped.
 
 `run` without `--yes` asks before each command it may run. When stdin is not a terminal — a pipe,
 `/dev/null`, CI — nobody can answer, so a harness that may ask (`approveBash` with `bash` on,
@@ -167,8 +169,8 @@ A one-model llama-server answers to any name. On llama-server the window and bui
 loaded yet. On Ollama the window is the harness's `numCtx`. Both go into the JSON as each harness's
 `server`, and a `budgetTokens` that with `maxTokens` on top is over the window gets a warning — the
 budget cannot keep such a run inside it. LM Studio and vLLM have no `/props`: window unknown, no
-warning. With a key the model is always checked, against the hosted API's list, and the window comes
-from that list — see [Cloud](#cloud).
+warning. With a key the model is checked against the hosted API's list, unless that list says it is
+incomplete, and the window comes from that list — see [Cloud](#cloud).
 
 `--task` picks another task, and every task but `slug` needs a `--size`. `pool` and `pool2` are
 described with their measurements in [The pool task](docs/findings.md#the-pool-task). `pool3` is
@@ -354,9 +356,9 @@ value. Without it they get `PATH`, `HOME`, `LANG`, `LC_ALL`, `LC_CTYPE`, `LC_COL
 covered: they start with this process's whole environment, except the variable `backend.apiKeyEnv`
 names. `run`, `demo` and `bench` print the names on stderr when they start, and the UI shows them
 under the tools. A value a command prints lands in `runs/` and in the next request to the
-backend — the backend key's own value excepted, which is redacted ([Cloud](#cloud)). This keeps
-keys out of what a command prints by accident; it is not a sandbox — see the
-[honest notes](docs/honest-notes.md).
+backend — the backend key's own value excepted, which is redacted (for the limits, see
+[Cloud](#cloud)). This keeps keys out of what a command prints by accident; it is not a sandbox —
+see the [honest notes](docs/honest-notes.md).
 
 ## Model families
 

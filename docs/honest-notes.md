@@ -29,14 +29,14 @@ Limits of [llm-harness-builder](../README.md) and of what its [findings](finding
   `backend.apiKeyEnv` names; `mcpServers` has no `env`.
 - The backend key is redacted by value: tool output, `loop.untilBash` output and every event carry
   `[redacted: <NAME>]` instead, before the history, the trace, the terminal or the UI see them. It
-  is not found encoded (base64, split in parts), when the value is shorter than 20 characters (the
-  start line says so), or in the live text of a turn on the terminal and in the UI, where it can
-  arrive split between chunks — the model never sees the key while all its inputs are clean, and
-  the live text is not saved. A file the model rewrites from what it read gets the mark instead of
-  the key. The rest of `.env` and the values of `tools.bashEnv` stay as they are, and `replay`
-  prints the server's replies as they come. So does the model list in the UI, and the approval
-  question in the terminal shows a command as the model wrote it. A trace's first line keeps the
-  task text as you typed it.
+  is not found encoded (base64, split in parts), when the value is shorter than 20 characters
+  (`run`, `demo`, `bench` and `replay` say so on stderr; the UI does not), or in the live text of a
+  turn on the terminal and in the UI, where it can arrive split between chunks — the model never
+  sees the key while all its inputs are clean, and the live text is not saved. A file the model
+  rewrites from what it read gets the mark instead of the key. The rest of `.env` and the values of
+  `tools.bashEnv` stay as they are. `replay` prints the server's replies as they come, the model
+  list in the UI shows the ids as the server sent them, and the approval question in the terminal
+  shows a command as the model wrote it. A trace's first line keeps the task text as you typed it.
 - A harness file from someone else is code. It decides where requests go and, with `apiKeyEnv`,
   which of your `*_API_KEY` variables goes along; the start line (`the key in … goes to …`)
   names the host, but the key has left with the first request by the time you read it (with `bench`,
