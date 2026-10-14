@@ -1,4 +1,4 @@
-import { BackendError, defaultFetch, readJson, jsonChunks, toolsField, type Backend, type ChatRequest, type Delta, type FetchLike, type NormalizedResponse, type NormalizedToolCall, type ServerInfo } from './types.js'
+import { BackendError, defaultFetch, readJson, jsonChunks, toolsField, usageFrom, type Backend, type ChatRequest, type Delta, type FetchLike, type NormalizedResponse, type NormalizedToolCall, type ServerInfo } from './types.js'
 
 type AccCall = { id?: string; name?: string; args: string }
 
@@ -12,7 +12,9 @@ function parseCalls(calls: AccCall[]): NormalizedToolCall[] {
   })
 }
 
-const usageOf = (u: any) => u ? { promptTokens: u.prompt_tokens ?? 0, completionTokens: u.completion_tokens ?? 0 } : undefined
+const usageOf = (u: any) => u && typeof u === 'object' ? usageFrom(u.prompt_tokens, u.completion_tokens) : undefined
+/** Text a server sent, only when it is text: a number, an array or an object in its place is dropped, not printed. */
+const text = (x: unknown): string | undefined => typeof x === 'string' && x ? x : undefined
 
 /** Folds the chunks of one streamed reply into a NormalizedResponse; `raw` is the reply as one non-streamed message would carry it. The proxy reads replies with this too, so the two cannot read a stream differently. */
 export async function collect(chunks: AsyncIterable<any>, onDelta?: (d: Delta) => void): Promise<NormalizedResponse> {
@@ -21,14 +23,17 @@ export async function collect(chunks: AsyncIterable<any>, onDelta?: (d: Delta) =
   for await (const c of chunks) {
     last = c
     const ch = c.choices?.[0], d = ch?.delta ?? {}
-    if (d.content) { content += d.content; onDelta?.({ content: d.content }) }
-    const rz = d.reasoning_content ?? d.reasoning
+    const piece = text(d.content)
+    if (piece) { content += piece; onDelta?.({ content: piece }) }
+    const rz = text(d.reasoning_content) ?? text(d.reasoning)
     if (rz) { reasoning += rz; onDelta?.({ reasoning: rz }) }
-    for (const tc of d.tool_calls ?? []) {
-      const t = (calls[tc.index ?? 0] ??= { args: '' })
-      if (tc.id) t.id = tc.id
-      if (tc.function?.name) t.name = tc.function.name
-      if (tc.function?.arguments) t.args += tc.function.arguments
+    for (const tc of Array.isArray(d.tool_calls) ? d.tool_calls : []) {
+      const t = (calls[tc?.index ?? 0] ??= { args: '' })
+      if (tc?.id) t.id = String(tc.id)
+      if (tc?.function?.name) t.name = String(tc.function.name)
+      const a = tc?.function?.arguments
+      if (typeof a === 'string') t.args += a
+      else if (a && typeof a === 'object') t.args += JSON.stringify(a)
     }
     if (ch?.finish_reason) finish = ch.finish_reason
     if (c.usage) usage = c.usage
@@ -48,12 +53,11 @@ export function fromJson(body: any): NormalizedResponse {
     throw new BackendError(`POST /chat/completions: ${typeof body.error === 'string' ? body.error : body.error?.message ?? 'stream error'}`, JSON.stringify(body))
   const ch = body?.choices?.[0], m = ch?.message ?? {}
   const calls: AccCall[] = (Array.isArray(m.tool_calls) ? m.tool_calls : []).map((t: any) => ({
-    id: t?.id, name: t?.function?.name,
+    id: t?.id ? String(t.id) : undefined, name: t?.function?.name ? String(t.function.name) : undefined,
     args: typeof t?.function?.arguments === 'string' ? t.function.arguments : JSON.stringify(t?.function?.arguments ?? {}),
   }))
-  const reasoning = m.reasoning_content ?? m.reasoning
   return {
-    content: typeof m.content === 'string' ? m.content : '', reasoning: reasoning || undefined,
+    content: typeof m.content === 'string' ? m.content : '', reasoning: text(m.reasoning_content) ?? text(m.reasoning),
     toolCalls: parseCalls(calls), usage: usageOf(body?.usage), truncated: ch?.finish_reason === 'length' || undefined, raw: body,
   }
 }

@@ -263,3 +263,37 @@ test('collect over the same stream gives what send gives', async () => {
   const b = await collect(jsonChunks(new Response(sseBody(fx('openai-tool-call')), { status: 200 }), 'POST /chat/completions', 'data:'))
   expect(b).toEqual(a)
 })
+
+test('a server\'s junk reaches nobody raw: usage only from numbers, text only from strings, a tool name as a string', async () => {
+  const esc = '\u001b[?7l'
+  const deltas: Delta[] = []
+  const r = await openai([
+    { choices: [{ index: 0, delta: { content: ['not', 'text'], reasoning: { x: 1 } } }] },
+    { choices: [{ index: 0, delta: { content: 'ok', tool_calls: [{ index: 0, id: 7, function: { name: 42, arguments: '{}' } }] } }] },
+    { choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }], usage: { prompt_tokens: esc, completion_tokens: 3 } },
+  ]).send({}, undefined, d => deltas.push(d))
+  expect(r.content).toBe('ok'); expect(r.reasoning).toBeUndefined(); expect(r.usage).toBeUndefined()
+  expect(r.toolCalls).toEqual([{ backendId: '7', name: '42', args: {} }])
+  expect(deltas).toEqual([{ content: 'ok' }])
+
+  const j = fromJson({ choices: [{ message: { content: 5, reasoning: ['r'], tool_calls: [{ id: 1, function: { name: 9, arguments: '{}' } }] } }], usage: { prompt_tokens: -1, completion_tokens: 2 } })
+  expect(j.content).toBe(''); expect(j.reasoning).toBeUndefined(); expect(j.usage).toBeUndefined()
+  expect(j.toolCalls).toEqual([{ backendId: '1', name: '9', args: {} }])
+
+  const o: Delta[] = []
+  const ol = await ollama([
+    { message: { content: 7, thinking: ['x'] }, done: false },
+    { message: { content: 'ok', tool_calls: [{ function: { name: 9, arguments: { a: 1 } } }] }, done: false },
+    { message: { content: '' }, done: true, done_reason: 'stop', prompt_eval_count: 'lots', eval_count: 2 },
+  ]).send({}, undefined, d => o.push(d))
+  expect(ol.content).toBe('ok'); expect(ol.reasoning).toBeUndefined(); expect(ol.usage).toBeUndefined()
+  expect(ol.toolCalls).toEqual([{ name: '9', args: { a: 1 } }])
+  expect(o).toEqual([{ content: 'ok' }])
+})
+
+test('a count the server leaves out is 0, as before: only a count that is not a number drops the usage', async () => {
+  const r = await openai([{ choices: [{ index: 0, delta: { content: 'x' }, finish_reason: 'stop' }], usage: { prompt_tokens: 5 } }]).send({})
+  expect(r.usage).toEqual({ promptTokens: 5, completionTokens: 0 })
+  const o = await ollama([{ message: { content: 'x' }, done: true, done_reason: 'stop', prompt_eval_count: 4 }]).send({})
+  expect(o.usage).toEqual({ promptTokens: 4, completionTokens: 0 })
+})

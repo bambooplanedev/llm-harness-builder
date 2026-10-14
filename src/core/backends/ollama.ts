@@ -1,4 +1,4 @@
-import { BackendError, defaultFetch, readJson, jsonChunks, toolsField, type Backend, type ChatRequest, type Delta, type FetchLike, type NormalizedResponse, type NormalizedToolCall } from './types.js'
+import { BackendError, defaultFetch, readJson, jsonChunks, toolsField, usageFrom, type Backend, type ChatRequest, type Delta, type FetchLike, type NormalizedResponse, type NormalizedToolCall } from './types.js'
 
 export class OllamaBackend implements Backend {
   constructor(private baseUrl: string, private fetchFn: FetchLike = defaultFetch) { this.baseUrl = baseUrl.replace(/\/+$/, '') }
@@ -35,19 +35,22 @@ export class OllamaBackend implements Backend {
     for await (const c of jsonChunks(r, 'POST /api/chat', '')) {
       last = c
       const m = c.message ?? {}
-      if (m.content) { content += m.content; onDelta?.({ content: m.content }) }
-      if (m.thinking) { thinking += m.thinking; onDelta?.({ reasoning: m.thinking }) }
-      if (m.tool_calls) rawCalls.push(...m.tool_calls)
+      const piece = typeof m.content === 'string' ? m.content : ''
+      if (piece) { content += piece; onDelta?.({ content: piece }) }
+      const th = typeof m.thinking === 'string' ? m.thinking : ''
+      if (th) { thinking += th; onDelta?.({ reasoning: th }) }
+      if (Array.isArray(m.tool_calls)) rawCalls.push(...m.tool_calls)
     }
     const toolCalls: NormalizedToolCall[] = rawCalls.map((tc: any) => {
-      const fn = tc.function ?? {}
+      const fn = tc?.function ?? {}
+      const name = typeof fn.name === 'string' ? fn.name : String(fn.name ?? '')
       const args = fn.arguments
-      if (typeof args === 'object' && args !== null) return { name: fn.name, args }
-      return { name: fn.name, args: {}, argsError: `arguments is not an object: ${JSON.stringify(args)}` }
+      if (typeof args === 'object' && args !== null) return { name, args }
+      return { name, args: {}, argsError: `arguments is not an object: ${JSON.stringify(args)}` }
     })
     return {
       content, reasoning: thinking || undefined, toolCalls,
-      usage: last.prompt_eval_count !== undefined ? { promptTokens: last.prompt_eval_count ?? 0, completionTokens: last.eval_count ?? 0 } : undefined,
+      usage: last.prompt_eval_count !== undefined ? usageFrom(last.prompt_eval_count, last.eval_count) : undefined,
       truncated: last.done_reason === 'length' || undefined,
       raw: { ...last, message: { role: 'assistant', content, thinking: thinking || undefined, tool_calls: rawCalls } },
     }

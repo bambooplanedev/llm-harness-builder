@@ -15,6 +15,17 @@ export const defaultFetch: FetchLike = (url, init) => undiciFetch(url, { ...init
 
 export type Usage = { promptTokens: number; completionTokens: number }
 
+/** A count as a server sent it: absent is 0, as it always was; anything but a finite non-negative number is not one. */
+const tokenCount = (x: unknown): number | undefined =>
+  x === undefined || x === null ? 0 : typeof x === 'number' && Number.isFinite(x) && x >= 0 ? x : undefined
+
+/** Usage from the two counts a server sent, or none at all: a server's text must never reach the terminal as a count,
+ *  two lines above an approval question. */
+export function usageFrom(prompt: unknown, completion: unknown): Usage | undefined {
+  const p = tokenCount(prompt), c = tokenCount(completion)
+  return p === undefined || c === undefined ? undefined : { promptTokens: p, completionTokens: c }
+}
+
 /** One streamed piece of the assistant turn; either field may be absent. */
 export type Delta = { content?: string; reasoning?: string }
 
