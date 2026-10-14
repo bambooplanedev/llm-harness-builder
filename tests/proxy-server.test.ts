@@ -265,3 +265,12 @@ test('a stream that fails after 200 — finish_reason "error", OpenRouter\'s way
   expect(t.events.map(e => e.type)).toEqual(['llm_request', 'error', 'done'])
   expect(t.events[1]).toMatchObject({ message: 'POST /chat/completions: Rate limit exceeded' })
 })
+
+test('a page on another localhost port is another origin: refused; the proxy\'s own origin and no origin pass', async () => {
+  const up = await upstream((_q, res) => res.end('upstream'))
+  const px = await proxy(up.url)
+  expect((await raw(px.p.port, '/props', { host: `localhost:${px.p.port}`, origin: 'http://localhost:5173' })).status).toBe(403)
+  expect(await raw(px.p.port, '/props', { host: `localhost:${px.p.port}`, origin: `http://localhost:${px.p.port}` })).toEqual({ status: 200, body: 'upstream' })
+  expect(await raw(px.p.port, '/props')).toEqual({ status: 200, body: 'upstream' })
+  expect(up.seen).toHaveLength(2)
+})

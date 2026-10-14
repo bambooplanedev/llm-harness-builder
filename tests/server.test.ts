@@ -147,10 +147,30 @@ const rawStatus = (headers: Record<string, string>) => new Promise<number>(resol
   const req = http.request({ host: '127.0.0.1', port: srv.port, path: '/api/runs', method: 'GET', headers }, res => { res.resume(); resolve(res.statusCode!) })
   req.end()
 })
-test('host/origin checks', async () => {
+test('host/origin checks: a local Host, and from a browser only a page of this same server', async () => {
   expect(await rawStatus({ host: 'evil.com' })).toBe(403)
   expect(await rawStatus({ host: '127.0.0.1', origin: 'http://evil.com' })).toBe(403)
-  expect(await rawStatus({ host: 'localhost:9', origin: 'http://localhost:5173' })).toBe(200)
+  // another port of localhost is another origin: a dev server or any local app could otherwise drive serve
+  expect(await rawStatus({ host: `localhost:${srv.port}`, origin: 'http://localhost:5173' })).toBe(403)
+  expect(await rawStatus({ host: `127.0.0.1:${srv.port}`, origin: `http://localhost:${srv.port}` })).toBe(403)
+  expect(await rawStatus({ host: `localhost:${srv.port}`, origin: `https://localhost:${srv.port}` })).toBe(403)
+  expect(await rawStatus({ host: `localhost:${srv.port}`, origin: 'null' })).toBe(403)
+  expect(await rawStatus({ host: `localhost:${srv.port}`, origin: `http://localhost:${srv.port}` })).toBe(200)
+  // the Vite dev proxy keeps the browser's Host, so its Origin matches it
+  expect(await rawStatus({ host: 'localhost:5173', origin: 'http://localhost:5173' })).toBe(200)
+  expect(await rawStatus({ host: 'localhost:9' })).toBe(200)
+})
+
+/** A request with headers fetch would not let us set: Host and Origin. */
+const rawReq = (method: string, path: string, headers: Record<string, string>, body = '', port = srv.port) => new Promise<number>(resolve => {
+  const req = http.request({ host: '127.0.0.1', port, path, method, headers }, res => { res.resume(); resolve(res.statusCode!) })
+  req.end(body)
+})
+
+test('a page on another localhost port cannot PUT a harness or start a run, not even with a text/plain body', async () => {
+  const headers = { host: `localhost:${srv.port}`, origin: 'http://localhost:9999', 'content-type': 'text/plain' }
+  expect(await rawReq('PUT', '/api/harnesses/csrf', headers, JSON.stringify(config({ name: 'csrf' })))).toBe(403)
+  expect(await rawReq('POST', '/api/runs', headers, JSON.stringify({ config: config(), task: 't', workdir }))).toBe(403)
 })
 
 test('harnesses and models', async () => {

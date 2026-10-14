@@ -2,6 +2,7 @@ import http from 'node:http'
 import { readFile, readdir, writeFile, mkdir } from 'node:fs/promises'
 import path from 'node:path'
 import { RunStore, WorkdirBusyError, safeName } from './runs.js'
+import { refusal } from './origin.js'
 import { validateConfig, type HarnessConfig, type RunParams } from '../core/config.js'
 import { validateWorkdir } from '../core/tools/sandbox.js'
 import { createBackend, type Backend } from '../core/backends/index.js'
@@ -9,7 +10,6 @@ import type { HarnessEvent } from '../core/events.js'
 
 export type ServerOpts = { port: number; runsDir: string; harnessesDir: string; staticDir?: string; backendFactory?: (b: HarnessConfig['backend']) => Backend }
 
-const LOCAL = new Set(['localhost', '127.0.0.1'])
 const MIME: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml' }
 const MAX_BODY_BYTES = 5e6
 
@@ -42,15 +42,10 @@ export async function startServer(opts: ServerOpts) {
 
   const server = http.createServer(async (req, res) => {
     try {
-      const host = (req.headers.host ?? '').split(':')[0]
-      if (!LOCAL.has(host)) return json(res, 403, { error: 'forbidden host' })
-      // CSRF: every cross-site request a browser can make to a mutating endpoint (fetch, XHR, form
-      // POST) carries Origin, so a missing Origin only means a non-browser client (curl, tests)
-      // and is deliberately allowed. `Origin: null` fails the URL parse below and is rejected.
-      if (req.headers.origin) {
-        let oh = ''; try { oh = new URL(req.headers.origin).hostname } catch {}
-        if (!LOCAL.has(oh)) return json(res, 403, { error: 'forbidden origin' })
-      }
+      // DNS rebinding (a foreign Host) and CSRF (a page of another origin, other localhost ports included): refused.
+      // A missing Origin only means a non-browser client (curl, tests) and is allowed.
+      const no = refusal(req)
+      if (no) return json(res, 403, { error: no })
       const url = new URL(req.url ?? '/', 'http://localhost')
       const m = (method: string, re: RegExp) => req.method === method ? re.exec(url.pathname) : null
       let mm: RegExpExecArray | null

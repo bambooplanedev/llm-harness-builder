@@ -4,6 +4,7 @@ import http from 'node:http'
 import https from 'node:https'
 import { randomUUID } from 'node:crypto'
 import { TraceWriter } from '../../server/runs.js'
+import { refusal } from '../../server/origin.js'
 import { collect, fromJson } from '../backends/openai.js'
 import { BackendError, jsonChunks, type NormalizedResponse } from '../backends/types.js'
 import type { HarnessEvent } from '../events.js'
@@ -23,7 +24,6 @@ export type ProxyOpts = {
 }
 export type ProxyServer = { port: number; stop(): Promise<void> }
 
-const LOCAL = new Set(['localhost', '127.0.0.1'])
 const HOP = ['connection', 'keep-alive', 'transfer-encoding', 'te', 'trailer', 'upgrade', 'proxy-authorization', 'proxy-authenticate']
 // A request also loses host (http.request sets the upstream's), accept-encoding (the reply and the copy we parse
 // stay plain text) and content-length (set again from the bytes actually sent).
@@ -94,11 +94,8 @@ export async function startProxy(o: ProxyOpts): Promise<ProxyServer> {
   async function handle(req: http.IncomingMessage, res: http.ServerResponse) {
     // The same rules as serve: a page the user visits must not reach the model through us (DNS rebinding, a
     // simple cross-site POST). Agents are not browsers and send no Origin.
-    if (!LOCAL.has((req.headers.host ?? '').replace(/:\d+$/, ''))) return refuse(res, 403, 'forbidden host')
-    if (req.headers.origin) {
-      let oh = ''; try { oh = new URL(req.headers.origin).hostname } catch {}
-      if (!LOCAL.has(oh)) return refuse(res, 403, 'forbidden origin')
-    }
+    const no = refusal(req)
+    if (no) return refuse(res, 403, no)
     // `//host/x` and absolute-form `http://host/x` would send the request somewhere other than the upstream.
     const p = req.url ?? ''
     if (!p.startsWith('/') || p.startsWith('//')) return refuse(res, 400, 'bad request path')
