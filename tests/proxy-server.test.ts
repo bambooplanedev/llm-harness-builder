@@ -249,3 +249,19 @@ test('a body over the cap, or not JSON, is forwarded and not recorded', async ()
   expect(px.lines.join('\n')).toMatch(/over the 100-byte cap/)
   expect(px.lines.join('\n')).toMatch(/not JSON/)
 })
+
+test('a stream that fails after 200 — finish_reason "error", OpenRouter\'s way — is recorded as an error, not an empty reply', async () => {
+  const up = await upstream((_q, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    res.end(sseLines([
+      { choices: [{ index: 0, delta: { content: 'Hel' }, finish_reason: null }] },
+      { error: { code: 429, message: 'Rate limit exceeded' }, choices: [{ index: 0, delta: { content: '' }, finish_reason: 'error' }] },
+    ]))
+  })
+  const px = await proxy(up.url)
+  await (await post(px.base, chat())).text()
+  await px.stop()
+  const [t] = await traces(px.runsDir)
+  expect(t.events.map(e => e.type)).toEqual(['llm_request', 'error', 'done'])
+  expect(t.events[1]).toMatchObject({ message: 'POST /chat/completions: Rate limit exceeded' })
+})

@@ -16,6 +16,14 @@ const usageOf = (u: any) => u && typeof u === 'object' ? usageFrom(u.prompt_toke
 /** Text a server sent, only when it is text: a number, an array or an object in its place is dropped, not printed. */
 const text = (x: unknown): string | undefined => typeof x === 'string' && x ? x : undefined
 
+/** A stream that failed after its 200, OpenRouter's way: a chunk whose finish_reason is "error", the error beside the
+ *  choices. jsonChunks' rule (an error and no choices) does not see it, and the reply would read as an empty one. */
+function streamFailed(c: any): BackendError {
+  const e = c?.error
+  const said = typeof e === 'string' && e ? e : typeof e?.message === 'string' && e.message ? e.message : 'stream ended with finish_reason "error"'
+  return new BackendError(`POST /chat/completions: ${said}`, JSON.stringify(c))
+}
+
 /** Folds the chunks of one streamed reply into a NormalizedResponse; `raw` is the reply as one non-streamed message would carry it. The proxy reads replies with this too, so the two cannot read a stream differently. */
 export async function collect(chunks: AsyncIterable<any>, onDelta?: (d: Delta) => void): Promise<NormalizedResponse> {
   let content = '', reasoning = '', finish: string | undefined, usage: any, last: any = {}
@@ -23,6 +31,7 @@ export async function collect(chunks: AsyncIterable<any>, onDelta?: (d: Delta) =
   for await (const c of chunks) {
     last = c
     const ch = c.choices?.[0], d = ch?.delta ?? {}
+    if (ch?.finish_reason === 'error') throw streamFailed(c)
     const piece = text(d.content)
     if (piece) { content += piece; onDelta?.({ content: piece }) }
     const rz = text(d.reasoning_content) ?? text(d.reasoning)
@@ -51,6 +60,7 @@ export function fromJson(body: any): NormalizedResponse {
   // Mirrors jsonChunks' rule: a 2xx body carrying only `error` is a failure, not an empty reply.
   if (body?.error !== undefined && body?.choices === undefined && body?.message === undefined)
     throw new BackendError(`POST /chat/completions: ${typeof body.error === 'string' ? body.error : body.error?.message ?? 'stream error'}`, JSON.stringify(body))
+  if (body?.choices?.[0]?.finish_reason === 'error') throw streamFailed(body)
   const ch = body?.choices?.[0], m = ch?.message ?? {}
   const calls: AccCall[] = (Array.isArray(m.tool_calls) ? m.tool_calls : []).map((t: any) => ({
     id: t?.id ? String(t.id) : undefined, name: t?.function?.name ? String(t.function.name) : undefined,

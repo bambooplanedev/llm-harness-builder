@@ -297,3 +297,30 @@ test('a count the server leaves out is 0, as before: only a count that is not a 
   const o = await ollama([{ message: { content: 'x' }, done: true, done_reason: 'stop', prompt_eval_count: 4 }]).send({})
   expect(o.usage).toEqual({ promptTokens: 4, completionTokens: 0 })
 })
+
+// The documented OpenRouter chunk for a failure after the 200 (docs: api-reference/errors).
+const orError = { id: 'gen-1', object: 'chat.completion.chunk', error: { code: 429, message: 'Rate limit exceeded', metadata: { error_type: 'rate_limit_exceeded' } }, choices: [{ index: 0, delta: { content: '' }, finish_reason: 'error' }] }
+
+test('a stream that fails after 200 is a BackendError with the provider\'s text, after content and as the only event', async () => {
+  for (const chunks of [[{ choices: [{ index: 0, delta: { content: 'Hel' } }] }, orError], [orError]]) {
+    await expect(openai(chunks).send({})).rejects.toSatisfy((e: unknown) =>
+      e instanceof BackendError && e.message === 'POST /chat/completions: Rate limit exceeded' && JSON.parse(e.body!).error.code === 429)
+  }
+  await expect(openai([{ choices: [{ index: 0, delta: {}, finish_reason: 'error' }] }]).send({}))
+    .rejects.toThrow('POST /chat/completions: stream ended with finish_reason "error"')
+})
+
+test('OpenRouter\'s keep-alive comments and the usage chunk that repeats finish_reason make an ordinary reply', async () => {
+  const text = ': OPENROUTER PROCESSING\n\n' + sseBody([
+    { choices: [{ index: 0, delta: { content: 'hi' }, finish_reason: null }] },
+    { choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] },
+    { choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 9, completion_tokens: 1 } },
+  ])
+  const r = await new OpenAIBackend('http://x/v1', fakeStream(200, text)).send({})
+  expect(r).toMatchObject({ content: 'hi', usage: { promptTokens: 9, completionTokens: 1 } })
+  expect(r.truncated).toBeUndefined()
+})
+
+test('fromJson: finish_reason "error" in a stream:false body throws with the provider\'s text', () => {
+  expect(() => fromJson({ error: { message: 'boom' }, choices: [{ message: { content: '' }, finish_reason: 'error' }] })).toThrow('POST /chat/completions: boom')
+})
