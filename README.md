@@ -68,6 +68,7 @@ did, carry none.
 
 ## CLI
 
+    llm-harness-builder --help | --version | help <command>
     llm-harness-builder serve [--port 7331] [--no-open]
     llm-harness-builder run <harness.json> --workdir <dir> "task" [--yes] [--json] [--answer-schema file.json] [--model m] [--base-url u] [--kind k]
     llm-harness-builder demo [--model m] [--base-url u] [--kind k]
@@ -78,6 +79,17 @@ did, carry none.
 
 `run` exits 0 only when the model finished with a final answer. `--json` writes the event
 stream as JSONL to stdout; human-readable progress goes to stderr.
+
+`--help` lists the commands, `<command> --help` (or `help <command>`) the options of one, and
+`--version` prints the installed version. Exit codes: 0 for help and for a run that ended with a
+final answer, 1 for a run that did not, 2 for an argument a command cannot take (the message names
+it and the usage follows), 130 for Ctrl-C, which keeps the trace.
+
+`run` without `--yes` asks before each command it may run. When stdin is not a terminal — a pipe,
+`/dev/null`, CI — nobody can answer, so a harness that may ask (`approveBash` with `bash` on,
+`loop.untilBash`, any `mcpServers`) is refused before the first request, and `yes | run …` no
+longer answers for you: pass `--yes`. `demo` and `bench` never ask: they approve the model's
+commands and the harness files' `mcpServers` and `loop.untilBash` alike, and say so on stderr.
 
 `bench` runs a task (`slug`, the demo's, by default) `--n` times per harness, round-robin, with a
 per-run `--timeout` (seconds). With no files it takes `bare`, `tuned` and `tuned-hermes` from
@@ -270,6 +282,15 @@ that read the looping file again passed far more often. It is built, not measure
 recorded traces with no model, `N = 3` would have fired in 36 of the 166 runs that edited anything —
 what the model would then have done, only a run can say.
 
+`tools.bashEnv: ["NAME", ...]` names the environment variables that `bash`, `loop.untilBash` and
+the task checks of `bench` and `demo` get from yours — names only; a harness file never sets a
+value. Without it they get `PATH`, `HOME`, `LANG`, the `LC_*` locale variables, `TERM` and
+`TMPDIR`, and nothing else: `TZ`, `HTTPS_PROXY`, `NODE_EXTRA_CA_CERTS`, `CI` and every key are gone
+unless named. `run`, `demo` and `bench` print the names on stderr when they start, and the UI shows
+them under the tools. A value a command prints lands in `runs/` and in the next request to the
+backend. This keeps keys out of what a command prints by accident; it is not a sandbox — see the
+[honest notes](docs/honest-notes.md).
+
 ## Model families
 
 A family button in the UI (`applyFamily` in `src/core/prompts.ts`) fills the tool-call mode,
@@ -299,9 +320,10 @@ A harness can take its tools from MCP servers over stdio instead of, or beside, 
     }
 
 Each server starts with `cwd` set to the run's `workdir` — the same relative-path behaviour `bash`
-already has — and every start asks for approval unless `--yes`. Tool names stay flat, with no server
-prefix; a name that collides with a built-in one ends the run before the first request to the model.
-A server's `tools: [...]` is an allow-list; absent or empty means everything the server offers.
+already has — and every start asks for approval unless `--yes` (`demo` and `bench` never ask). Tool
+names stay flat, with no server prefix; a name that collides with a built-in one ends the run before
+the first request to the model. A server's `tools: [...]` is an allow-list; absent or empty means
+everything the server offers.
 
 Worth measuring, because the tool text is the first thing to eat the context window. Against
 `@modelcontextprotocol/server-filesystem@2026.8.31`:
