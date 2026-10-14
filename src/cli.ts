@@ -8,7 +8,7 @@ import { createInterface } from 'node:readline/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { runAgent, mayAsk, type RunOpts } from './core/run.js'
-import { validateConfig, sendsAnswerSchema, KEY_ENV, keyNameMessage, keyProblem, keyNote, apiKey, type HarnessConfig, type BackendKind } from './core/config.js'
+import { validateConfig, sendsAnswerSchema, KEY_ENV, FLAG_WORDS, keyNameMessage, keyErrors, keyProblem, keyNote, apiKey, isHttpUrl, type HarnessConfig, type BackendKind } from './core/config.js'
 import { validateWorkdir } from './core/tools/sandbox.js'
 import type { Backend, Delta, NormalizedResponse } from './core/backends/types.js'
 import { approvalPrompt, mcpCounts, quitWithoutWork, showable, showableText, type HarnessEvent, type ToolCall } from './core/events.js'
@@ -351,6 +351,7 @@ async function cmdBench(argv: string[]) {
 async function cmdReplay(argv: string[]) {
   const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: COMMANDS.replay.options })
   if (values.help) return printHelp('replay')
+  keyFlag('replay', values['api-key-env'])
   const [run] = positionals, kind = values.kind, baseUrl = values['base-url']
   const temperature = values.temperature === undefined ? undefined : Number(values.temperature)
   const INT = /^[1-9]\d*$/
@@ -359,7 +360,11 @@ async function cmdReplay(argv: string[]) {
   if (!INT.test(values.n)) argError('replay', '--n must be a positive integer')
   if (values['max-tokens'] !== undefined && !INT.test(values['max-tokens'])) argError('replay', '--max-tokens must be a positive integer')
   if (kind !== 'openai' && kind !== 'ollama') argError('replay', '--kind must be openai or ollama')
-  if (!baseUrl || !/^https?:\/\//.test(baseUrl)) argError('replay', '--base-url must be an http(s) URL')
+  // Not the prefix alone: `http://` has it, keyErrors does not judge a URL that does not parse, and the request would go to host "chat" (http:/chat/completions).
+  if (!isHttpUrl(baseUrl)) argError('replay', '--base-url must be an http(s) URL')
+  const keyEnv = values['api-key-env']
+  const keyErrs = keyErrors({ kind, baseUrl, apiKeyEnv: keyEnv }, FLAG_WORDS)
+  if (keyErrs.length) argError('replay', keyErrs.join('; '))
   if (temperature !== undefined && !(values.temperature!.trim() && temperature >= 0 && temperature <= 2)) argError('replay', '--temperature must be a number from 0 to 2')
   const file = run!.endsWith('.jsonl') ? run! : path.join('runs', `${run}.jsonl`)
   let rec: ReturnType<typeof recordedTurn>
@@ -368,12 +373,19 @@ async function cmdReplay(argv: string[]) {
     rec = recordedTurn(lines, Number(values.turn))
   }
   catch (e) { return die(`cannot replay ${file}:\n  ${(e as Error).message}`) }
+  // Before the first request: check the value the name points at and say where it goes. A server's error can echo the key back, so that text is redacted.
+  const keyed = { apiKeyEnv: keyEnv, baseUrl }
+  const problem = keyProblem(keyed, process.env)
+  if (problem) die(`${problem}: --api-key-env names it as the API key`)
+  const note = keyNote(keyed, process.env)
+  if (note) console.error(note)
+  const redact = redactor(apiKey(keyed, process.env), keyEnv ?? '')
   const payload = replayPayload(rec.payload, kind as BackendKind, { temperature, maxTokens: values['max-tokens'] === undefined ? undefined : Number(values['max-tokens']) })
-  const backend = (await fakeBackendFromEnv()) ?? createBackend({ kind: kind as BackendKind, baseUrl: baseUrl!, model: '', temperature: 0 })
+  const backend = (await fakeBackendFromEnv()) ?? createBackend({ kind: kind as BackendKind, baseUrl: baseUrl!, model: '', temperature: 0, ...(keyEnv ? { apiKeyEnv: keyEnv } : {}) })
   const recorded = rec.raw === undefined ? undefined : replySignature(rec.raw)
   const replies = new Map<string, { count: number; sameAsRecorded: boolean; promptTokens?: number; truncated: boolean }>()
   for (let i = 0; i < Number(values.n); i++) {
-    const r = await backend.send(payload).catch(e => die(`backend: ${(e as Error).message}${(e as { body?: string }).body ? `\n${(e as { body?: string }).body}` : ''}`))
+    const r = await backend.send(payload).catch(e => die(redact.text(`backend: ${(e as Error).message}${(e as { body?: string }).body ? `\n${(e as { body?: string }).body}` : ''}`)))
     const sig = replySignature(r.raw), seen = replies.get(sig)
     if (seen) seen.count++
     else replies.set(sig, { count: 1, sameAsRecorded: sig === recorded, promptTokens: r.usage?.promptTokens, truncated: !!r.truncated })

@@ -1088,3 +1088,38 @@ test('a server\'s junk — escape codes as token counts, a number as a tool name
     expect(r.stderr).toContain('tool_call 42 {}')
   } finally { await api.close() }
 }, 30_000)
+
+test('replay --api-key-env sends the key to the server it names, says so on stderr, and refuses a key it cannot send', async () => {
+  const api = await fakeOpenAI([textTurn('A'), textTurn('A')])
+  try {
+    const cwd = mkdtempSync(join(tmpdir(), 'lhb-cwd-')); execSync('mkdir runs', { cwd })
+    await writeFile(join(cwd, 'runs', 'abc12345.jsonl'), [
+      { meta: { id: 'abc12345' } },
+      { seq: 0, turn: 1, type: 'llm_request', payload: { model: 'fake/model', messages: [], temperature: 0.2, stream: true } },
+      { seq: 1, turn: 1, type: 'llm_response', raw: { choices: [{ message: { content: 'A' } }] }, content: 'A', latencyMs: 1 },
+    ].map(l => JSON.stringify(l)).join('\n') + '\n')
+    const at = (kind: string, baseUrl: string) => ['replay', 'abc12345', '--turn', '1', '--n', '2', '--kind', kind, '--base-url', baseUrl, '--api-key-env', KEY_NAME]
+    const r = await cliAsync(at('openai', api.baseUrl), { [KEY_NAME]: KEY }, cwd)
+    expect(r.status).toBe(0)
+    expect(r.stderr).toContain(`the key in ${KEY_NAME} goes to ${new URL(api.baseUrl).host}`)
+    expect(api.seen.map(s => s.headers.authorization)).toEqual([`Bearer ${KEY}`, `Bearer ${KEY}`])
+    expect(r.stdout).toContain('2 samples, 1 distinct')
+    // spawnSync blocks this process, and the fake server lives in it: each call below must refuse before a request, or it waits for a reply that cannot come.
+    const unset = cli(at('openai', api.baseUrl), {}, cwd)
+    expect(unset.status).toBe(2); expect(unset.stderr).toContain(`${KEY_NAME} is not set: --api-key-env names it as the API key`)
+    const ollama = cli(at('ollama', api.baseUrl), { [KEY_NAME]: KEY }, cwd)
+    expect(ollama.status).toBe(2); expect(ollama.stderr).toContain('error: --api-key-env needs --kind openai: a key goes only to an OpenAI-compatible API')
+    const lan = cli(at('openai', 'http://192.168.1.5/v1'), { [KEY_NAME]: KEY }, cwd)
+    expect(lan.status).toBe(2)
+    expect(lan.stderr).toContain('error: --api-key-env needs an https --base-url (http only on localhost, 127.0.0.1 or [::1]): the key would cross the network in clear text')
+    // `http://` has the prefix but no host: keyErrors cannot judge a URL that does not parse, so the --base-url check itself must refuse it.
+    const noHost = cli(at('openai', 'http://'), { [KEY_NAME]: KEY }, cwd)
+    expect(noHost.status).toBe(2); expect(noHost.stderr).toContain('error: --base-url must be an http(s) URL')
+    // The same name rule as in run, demo and bench.
+    const name = cli(['replay', 'abc12345', '--turn', '1', '--kind', 'openai', '--base-url', api.baseUrl, '--api-key-env', 'GITHUB_TOKEN'], {}, cwd)
+    expect(name.status).toBe(2)
+    expect(name.stderr).toContain('error: --api-key-env must be an upper-case variable name ending in _API_KEY (like OPENROUTER_API_KEY)')
+    expect(name.stderr).toContain('usage: llm-harness-builder replay')
+    expect(api.seen).toHaveLength(2)
+  } finally { await api.close() }
+}, 60_000)

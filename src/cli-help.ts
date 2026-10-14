@@ -64,7 +64,7 @@ export const COMMANDS = {
     args: '<run-id | trace.jsonl>',
     options: {
       turn: { type: 'string' }, n: { type: 'string', default: '5' }, temperature: { type: 'string' }, 'max-tokens': { type: 'string' },
-      'base-url': { type: 'string' }, kind: { type: 'string' }, json: { type: 'boolean', default: false }, help,
+      'base-url': { type: 'string' }, kind: { type: 'string' }, 'api-key-env': { type: 'string' }, json: { type: 'boolean', default: false }, help,
     },
     docs: {
       turn: ['<N>', 'the turn to send again (required)'],
@@ -73,6 +73,7 @@ export const COMMANDS = {
       'max-tokens': ['<m>', 'cap on each reply'],
       'base-url': ['<u>', 'server URL (required)'],
       kind: ['<k>', 'openai or ollama (required)'],
+      'api-key-env': ['<NAME>', 'environment variable that holds the API key of a hosted API'],
       json: ['', 'print the result as JSON'],
     },
   }),
