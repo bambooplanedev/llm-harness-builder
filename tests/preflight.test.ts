@@ -47,3 +47,22 @@ test('windowWarning: budget plus response cap over the window; nothing when eith
   expect(windowWarning(c(0, 1024), 512)).toBeUndefined()
   expect(windowWarning(c(6000), undefined)).toBeUndefined()
 })
+
+const keyed = (model: string) => ({ ...openai(model), baseUrl: 'https://openrouter.ai/api/v1', apiKeyEnv: 'OPENROUTER_API_KEY' })
+
+test('with a key the model is checked by id, or by id without a routing suffix; a refusal counts the list instead of printing it', async () => {
+  const list = ['qwen/qwen3-32b', 'qwen/qwen3-coder', 'a:b']
+  expect(await preflight(be(list, { nCtx: 40960, router: false }), keyed('qwen/qwen3-32b'))).toEqual({ ok: true, server: { nCtx: 40960 } })
+  expect(await preflight(be(list, { router: false }), keyed('qwen/qwen3-coder:nitro'))).toEqual({ ok: true, server: {} })
+  expect(await preflight(be(list, { router: false }), keyed('a:b:c'))).toEqual({ ok: true, server: {} })
+  expect(await preflight(be(list), keyed('qwen/qwen3-8b:nitro'))).toEqual({ ok: false, message: 'preflight: model qwen/qwen3-8b:nitro is not among the 3 models https://openrouter.ai/api/v1 lists' })
+  // only the last suffix comes off: a:x is not listed
+  expect(await preflight(be(list), keyed('a:x:c'))).toEqual({ ok: false, message: 'preflight: model a:x:c is not among the 3 models https://openrouter.ai/api/v1 lists' })
+  // a list the server says goes on past what it sent: no verdict
+  expect(await preflight({ ...be(['x']), partialList: true }, keyed('y'))).toEqual({ ok: true, server: {} })
+})
+
+test('a server that does not answer: the cause, when there is one, is in the message', async () => {
+  const e = Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:8080'), { code: 'ECONNREFUSED' }) })
+  expect(await preflight(be(e), openai())).toEqual({ ok: false, message: 'preflight: http://127.0.0.1:8080/v1 (openai) does not answer: fetch failed (ECONNREFUSED)' })
+})

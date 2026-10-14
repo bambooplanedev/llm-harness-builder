@@ -1,4 +1,5 @@
 // src/core/preflight.ts — what `bench` asks a server before the first run: does it answer, has it the model, how big is its window.
+import { withoutVariant } from './backends/openai.js'
 import type { Backend, ServerInfo } from './backends/types.js'
 import type { HarnessConfig } from './config.js'
 
@@ -8,15 +9,23 @@ export type PreflightResult = { ok: true; server: Omit<ServerInfo, 'router'> } |
  * No generation: a list of models and llama-server's /props, nothing that costs model time (a router
  * does load the named model to report its window — the bench would load it anyway). The model name
  * is checked only where the server serves by it: Ollama, and a llama-server router. A one-model
- * llama-server answers any name with the model it has.
+ * llama-server answers any name with the model it has. With a key (a hosted API) the model is always
+ * checked, by id or by id without a routing suffix, and the window comes from the list.
  */
 export async function preflight(backend: Backend, b: HarnessConfig['backend']): Promise<PreflightResult> {
   const where = `${b.baseUrl} (${b.kind})`
   let models: string[]
   try { models = await backend.listModels() }
-  catch (e) { return { ok: false, message: `preflight: ${where} does not answer: ${(e as Error).message}` } }
+  catch (e) {
+    const cause = (e as any)?.cause?.code ?? (e as any)?.cause?.message
+    return { ok: false, message: `preflight: ${where} does not answer: ${(e as Error).message}${cause ? ` (${cause})` : ''}` }
+  }
   const info = b.kind === 'openai' ? await backend.serverInfo?.(b.model) : undefined
-  if (b.kind === 'ollama' || info?.router) {
+  if (b.apiKeyEnv !== undefined) {
+    // A hosted API serves by name. Its list is long, so a refusal counts it instead of printing it.
+    const listed = models.includes(b.model) || models.includes(withoutVariant(b.model))
+    if (!listed && !backend.partialList) return { ok: false, message: `preflight: model ${b.model} is not among the ${models.length} models ${b.baseUrl} lists` }
+  } else if (b.kind === 'ollama' || info?.router) {
     const names = b.kind === 'ollama' && !b.model.includes(':') ? [b.model, `${b.model}:latest`] : [b.model]
     if (!names.some(n => models.includes(n))) return { ok: false, message: `preflight: model ${b.model} is not on ${where}; it has: ${models.join(', ')}` }
   }
