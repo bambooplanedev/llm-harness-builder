@@ -12,7 +12,7 @@ pid, fd = pty.fork()
 if pid == 0:
     os.execvp(sys.argv[2], sys.argv[2:])
 
-out, step, since, deadline = b'', 0, time.time(), time.time() + 30
+out, step, since, deadline = b'', 0, time.time(), time.time() + 25
 while True:
     if time.time() > deadline:
         # pty.fork makes the child a session leader, so its pid is its process group: the CLI behind a launcher dies with it

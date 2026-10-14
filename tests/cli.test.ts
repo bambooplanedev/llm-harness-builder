@@ -923,10 +923,17 @@ test('run without a terminal whose stdin stays open does not wait for an answer 
   const cwd = mkdtempSync(join(tmpdir(), 'lhb-cwd-'))
   const p = spawn(join(ROOT, 'node_modules', '.bin', 'tsx'), [join(ROOT, 'src', 'cli.ts'), 'run', harness('bare'), '--workdir', wd, 'x'],
     { cwd, env: { ...process.env, LHB_FAKE_BACKEND: fake } })
-  let stderr = ''
-  p.stderr.on('data', (b: Buffer) => { stderr += b })
-  const status = await new Promise<number | null>(done => p.on('exit', done)) // stdin is never written nor closed
-  refusedCleanly({ status, stderr, cwd })
+  try {
+    let stderr = ''
+    p.stderr.on('data', (b: Buffer) => { stderr += b })
+    // 'close', not 'exit': it comes after the last byte of stderr has been read. stdin is never written nor closed.
+    // The wait ends by itself before the test's own timeout, so that a refusal that regressed to waiting does not leave the CLI running.
+    const status = await new Promise<number | null>((done, fail) => {
+      p.on('close', done)
+      setTimeout(() => fail(new Error(`the CLI was still running after 20 s; stderr so far: ${stderr}`)), 20_000).unref()
+    })
+    refusedCleanly({ status, stderr, cwd })
+  } finally { p.kill() }
 }, 30_000)
 
 test('run without a terminal goes on when the harness cannot ask (curator-judge: approveBash without bash)', async () => {

@@ -33,4 +33,6 @@ test('overview: the description first, then each command with its summary', () =
   const o = overview('See what your harness sends')
   expect(o.split('\n')[0]).toBe('See what your harness sends')
   for (const n of names) expect(o).toMatch(new RegExp(`^  ${n}\\s+${esc(COMMANDS[n].summary)}$`, 'm'))
+  // serve is what no arguments at all do; `--port 0` alone is an unknown command, so "no command" would overpromise
+  expect(o).toContain('[options]   (no arguments: serve)')
 })

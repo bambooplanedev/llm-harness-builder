@@ -118,7 +118,7 @@ export function overview(description: string): string {
   return [
     description,
     '',
-    'usage: llm-harness-builder <command> [options]   (no command: serve)',
+    'usage: llm-harness-builder <command> [options]   (no arguments: serve)',
     '',
     'commands:',
     ...names.map(n => `  ${n.padEnd(w)}  ${COMMANDS[n].summary}`),
