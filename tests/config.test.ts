@@ -2,7 +2,7 @@ import { test, expect } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { validateConfig, sendsAnswerSchema, ENV_NAME, keyErrors, keyProblem, apiKey, keyNote, FLAG_WORDS, backendErrors } from '../src/core/config.js'
+import { validateConfig, sendsAnswerSchema, ENV_NAME, keyErrors, keyProblem, apiKey, keyNote, FLAG_WORDS, backendErrors, isLoopbackUrl } from '../src/core/config.js'
 import { harness } from './helpers.js'
 
 const validConfig = harness()
@@ -350,4 +350,11 @@ test('keyNote: the variable and the host it goes to, port included; nothing for 
   expect(keyNote({ apiKeyEnv: 'sk-or-v1-pasted', baseUrl: 'https://openrouter.ai/api/v1' })).toBeUndefined()
   expect(keyNote({ apiKeyEnv: 'X_API_KEY', baseUrl: '' })).toBeUndefined()
   expect(keyNote({ baseUrl: 'https://openrouter.ai/api/v1' })).toBeUndefined()
+})
+
+test('isLoopbackUrl: this machine only, judged on the parsed hostname; nothing for what URL cannot parse', () => {
+  for (const u of ['http://localhost:11434', 'http://127.0.0.1:8080/v1', 'http://[::1]:8080/v1', 'http://127.1:8080/v1'])
+    expect([u, isLoopbackUrl(u)]).toEqual([u, true])
+  for (const u of ['https://openrouter.ai/api/v1', 'http://192.168.1.5:8080/v1', 'http://localhost@evil.com/v1', 'http://localhost.evil.com/v1', '', 'http://', 'https://', 7, undefined])
+    expect([u, isLoopbackUrl(u)]).toEqual([u, false])
 })

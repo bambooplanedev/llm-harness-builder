@@ -2,6 +2,7 @@
 import { ref, onMounted, watch } from 'vue'
 import { api, type Delta, type HarnessConfig, type HarnessEvent, type RunSummary } from './api'
 import { PRESETS, DEFAULT_PROMPTED_TEMPLATE, DEFAULT_PARSE_ERROR_HINT, DEMO_TASK } from '../../src/core/prompts'
+import { isLoopbackUrl } from '../../src/core/config'
 import ConfigForm from './ConfigForm.vue'
 import ContextBar from './ContextBar.vue'
 import Trace from './Trace.vue'
@@ -42,8 +43,9 @@ async function refreshModels() {
   const b = config.value.backend
   try {
     models.value = await api.models(b.kind, b.baseUrl, b.apiKeyEnv)
-    // A hosted list is hundreds of models at every price: with a key the form never picks one by itself.
-    if (!b.model && !b.apiKeyEnv && models.value[0]) b.model = models.value[0]
+    // A list from elsewhere is hundreds of models at every price, and a hosted one is public, so it arrives before the key is typed:
+    // the form picks by itself only from a keyless list on this machine.
+    if (!b.model && !b.apiKeyEnv && isLoopbackUrl(b.baseUrl) && models.value[0]) b.model = models.value[0]
   }
   catch (e) { models.value = []; modelsError.value = `cannot list models: ${(e as Error).message}` }
 }
