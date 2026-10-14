@@ -3,7 +3,8 @@ import { renameSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import { runAgent } from '../core/run.js'
-import type { RunParams } from '../core/config.js'
+import { apiKey, type RunParams } from '../core/config.js'
+import { redactor } from '../core/redact.js'
 import type { HarnessEvent, ToolCall } from '../core/events.js'
 import type { Backend, Delta } from '../core/backends/types.js'
 import type { BenchResult, BenchFile, ActiveTrace } from '../core/bench.js'
@@ -104,6 +105,8 @@ export class RunStore {
   }
 
   async start(params: RunParams, backend?: Backend): Promise<string> {
+    // runAgent redacts its own events; the catch below builds one outside it. First, so nothing is reserved yet if this throws.
+    const redact = redactor(apiKey(params.config.backend, process.env), params.config.backend.apiKeyEnv ?? '')
     const workdir = await realpath(params.workdir)
     // Check-and-reserve with no `await` between them: nothing else can run on this thread
     // in between, so two concurrent starts for the same workdir cannot both pass the check.
@@ -139,7 +142,7 @@ export class RunStore {
         // unhandled rejection that kills the process and every other run. Best-effort record
         // it as a terminal error/done pair; if even that fails, swallow it.
         try {
-          const errEvent: HarnessEvent = { seq: seq++, turn: 0, ts: Date.now(), type: 'error', message: (e as Error).message }
+          const errEvent: HarnessEvent = { seq: seq++, turn: 0, ts: Date.now(), type: 'error', message: redact.text((e as Error).message) }
           const doneEvent: HarnessEvent = { seq: seq++, turn: 0, ts: Date.now(), type: 'done', reason: 'backend_error', turns: 0, toolCallCount: 0 }
           await trace.append(errEvent, doneEvent)
           for (const fn of a.listeners) { fn(errEvent); fn(doneEvent) }

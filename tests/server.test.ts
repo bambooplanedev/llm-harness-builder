@@ -186,7 +186,8 @@ test('harnesses and models', async () => {
   const put = await fetch(`${base}/api/harnesses/y`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(config({ name: 'y' })) })
   expect(put.status).toBe(200)
   expect((await (await fetch(`${base}/api/harnesses/y`)).json()).name).toBe('y')
-  expect(await (await fetch(`${base}/api/models?kind=openai&baseUrl=http://x/v1`)).json()).toEqual(['fake-model'])
+  const listed = await fetch(`${base}/api/models`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind: 'openai', baseUrl: 'http://x/v1' }) })
+  expect(await listed.json()).toEqual(['fake-model'])
 })
 
 test('concurrent POST /api/runs for the same workdir: exactly one 201, one 409', async () => {
@@ -397,4 +398,86 @@ test('PUT of a harness with tools.bashEnv is accepted and comes back as it was',
   const put = await fetch(`${base}/api/harnesses/envy`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(c) })
   expect(put.status).toBe(200)
   expect((await (await fetch(`${base}/api/harnesses/envy`)).json()).tools.bashEnv).toEqual(['GITHUB_TOKEN'])
+})
+
+const postJson = (url: string, body: unknown) => fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+
+test('models: POST with the backend fields, the factory gets apiKeyEnv, a missing variable or a bad name is a 400, GET is gone', async () => {
+  const got: HarnessConfig['backend'][] = []
+  const s = await startServer({ port: 0, runsDir, harnessesDir, backendFactory: b => { got.push(b); return fake([]) } })
+  const u = `http://127.0.0.1:${s.port}`
+  const body = { kind: 'openai', baseUrl: 'https://or.example/v1', apiKeyEnv: 'LHB_SRV_TEST_API_KEY' }
+  try {
+    process.env.LHB_SRV_TEST_API_KEY = 'sk-or-v1-' + '9'.repeat(32)
+    const ok = await postJson(`${u}/api/models`, body)
+    expect(ok.status).toBe(200); expect(await ok.json()).toEqual(['fake-model'])
+    expect(got[0]).toMatchObject(body)
+    delete process.env.LHB_SRV_TEST_API_KEY
+    const unset = await postJson(`${u}/api/models`, body)
+    expect(unset.status).toBe(400)
+    expect(await unset.json()).toEqual({ errors: ['backend.apiKeyEnv: LHB_SRV_TEST_API_KEY is not set in the environment serve was started from'] })
+    const badName = await postJson(`${u}/api/models`, { ...body, apiKeyEnv: 'GITHUB_TOKEN' })
+    expect(await badName.json()).toEqual({ errors: ['backend.apiKeyEnv must be an upper-case variable name ending in _API_KEY (like OPENROUTER_API_KEY)'] })
+    expect((await fetch(`${u}/api/models?kind=openai&baseUrl=http://x/v1`)).status).toBe(404)
+    // a page on another localhost port: refused before anything is asked of the factory
+    const foreign = await rawReq('POST', '/api/models', { host: `localhost:${s.port}`, origin: 'http://localhost:9999', 'content-type': 'text/plain' }, JSON.stringify({ ...body, baseUrl: 'https://evil.example/v1' }), s.port)
+    expect(foreign).toBe(403); expect(got).toHaveLength(1)
+  } finally { await s.close(); delete process.env.LHB_SRV_TEST_API_KEY }
+})
+
+test('models through the real backend: the upstream sees the bearer token; a failing upstream\'s body comes back with the key redacted', async () => {
+  const KEYV = 'sk-or-v1-' + '7'.repeat(32)
+  const seen: string[] = []
+  let fail = false
+  const up = http.createServer((q, r) => {
+    seen.push(String(q.headers.authorization))
+    if (fail) { r.writeHead(500); return void r.end(`echo ${q.headers.authorization}`) }
+    r.writeHead(200, { 'content-type': 'application/json' }); r.end(JSON.stringify({ data: [{ id: 'm1' }] }))
+  })
+  await new Promise<void>(r => up.listen(0, '127.0.0.1', r))
+  const s = await startServer({ port: 0, runsDir, harnessesDir })
+  process.env.LHB_SRV_REAL_API_KEY = KEYV
+  try {
+    const body = { kind: 'openai', baseUrl: `http://127.0.0.1:${(up.address() as { port: number }).port}/v1`, apiKeyEnv: 'LHB_SRV_REAL_API_KEY' }
+    expect(await (await postJson(`http://127.0.0.1:${s.port}/api/models`, body)).json()).toEqual(['m1'])
+    expect(seen).toEqual([`Bearer ${KEYV}`])
+    fail = true
+    const bad = await postJson(`http://127.0.0.1:${s.port}/api/models`, body)
+    expect(bad.status).toBe(502)
+    const j = await bad.json()
+    expect(j.body).toBe('echo Bearer [redacted: LHB_SRV_REAL_API_KEY]')
+    expect(JSON.stringify(j)).not.toContain(KEYV)
+  } finally { await s.close(); up.close(); delete process.env.LHB_SRV_REAL_API_KEY }
+})
+
+test('a run whose key variable is not set in serve\'s environment is a 400 that says so; set, it starts; a harness with a key saves either way', async () => {
+  const keyedCfg = config({ backend: { ...harness().backend, baseUrl: 'https://or.example/v1', apiKeyEnv: 'LHB_SRV_RUN_API_KEY' } })
+  const put = await fetch(`${base}/api/harnesses/keyed`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(keyedCfg) })
+  expect(put.status).toBe(200)
+  const start = async () => postJson(`${base}/api/runs`, { config: keyedCfg, task: 't', workdir: await tmp('lhb-wd-key-') })
+  const refused = await start()
+  expect(refused.status).toBe(400)
+  expect(await refused.json()).toEqual({ errors: ['backend.apiKeyEnv: LHB_SRV_RUN_API_KEY is not set in the environment serve was started from'] })
+  process.env.LHB_SRV_RUN_API_KEY = 'sk-or-v1-' + '5'.repeat(32)
+  try {
+    queue = [{ content: 'fin' }]
+    const ok = await start()
+    expect(ok.status).toBe(201)
+    const { runId } = await ok.json()
+    expect((await collectSSE(`${base}/api/runs/${runId}/events`)).at(-1)).toMatchObject({ type: 'done', reason: 'final' })
+  } finally { delete process.env.LHB_SRV_RUN_API_KEY }
+})
+
+test('a throw that escapes the run is recorded with the key redacted', async () => {
+  const KEYV = 'sk-or-v1-' + '3'.repeat(32)
+  process.env.LHB_SRV_THROW_API_KEY = KEYV
+  const s = await startServer({ port: 0, runsDir, harnessesDir, backendFactory: () => ({ ...fake([]), buildPayload: () => { throw new Error(`boom ${KEYV}`) } }) })
+  try {
+    const cfg = config({ backend: { ...harness().backend, baseUrl: 'https://or.example/v1', apiKeyEnv: 'LHB_SRV_THROW_API_KEY' } })
+    const r = await postJson(`http://127.0.0.1:${s.port}/api/runs`, { config: cfg, task: 't', workdir: await tmp('lhb-wd-throw-') })
+    const { runId } = await r.json()
+    const events = await collectSSE(`http://127.0.0.1:${s.port}/api/runs/${runId}/events`)
+    expect(events.find(e => e.type === 'error')).toMatchObject({ message: 'boom [redacted: LHB_SRV_THROW_API_KEY]' })
+    expect(JSON.stringify(events)).not.toContain(KEYV)
+  } finally { await s.close(); delete process.env.LHB_SRV_THROW_API_KEY }
 })

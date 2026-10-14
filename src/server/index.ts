@@ -3,9 +3,10 @@ import { readFile, readdir, writeFile, mkdir } from 'node:fs/promises'
 import path from 'node:path'
 import { RunStore, WorkdirBusyError, safeName } from './runs.js'
 import { refusal } from './origin.js'
-import { validateConfig, type HarnessConfig, type RunParams } from '../core/config.js'
+import { validateConfig, backendErrors, keyProblem, apiKey, type HarnessConfig, type RunParams } from '../core/config.js'
 import { validateWorkdir } from '../core/tools/sandbox.js'
 import { createBackend, type Backend } from '../core/backends/index.js'
+import { redactor } from '../core/redact.js'
 import type { HarnessEvent } from '../core/events.js'
 
 export type ServerOpts = { port: number; runsDir: string; harnessesDir: string; staticDir?: string; backendFactory?: (b: HarnessConfig['backend']) => Backend }
@@ -50,10 +51,22 @@ export async function startServer(opts: ServerOpts) {
       const m = (method: string, re: RegExp) => req.method === method ? re.exec(url.pathname) : null
       let mm: RegExpExecArray | null
 
-      if (m('GET', /^\/api\/models$/)) {
-        const kind = url.searchParams.get('kind') as HarnessConfig['backend']['kind'], baseUrl = url.searchParams.get('baseUrl') ?? ''
-        try { return json(res, 200, await backendFactory({ kind, baseUrl, model: '', temperature: 0 }).listModels()) }
-        catch (e) { return json(res, 502, { error: (e as Error).message, body: (e as { body?: string }).body }) }
+      if (m('POST', /^\/api\/models$/)) {
+        // POST, not GET: a GET from another page carries no Origin, and this request may send a key.
+        const body = await readBody(req) as Record<string, unknown>
+        const b = { kind: body.kind, baseUrl: body.baseUrl, model: '', temperature: 0, ...(body.apiKeyEnv !== undefined ? { apiKeyEnv: body.apiKeyEnv } : {}) }
+        const errors = backendErrors(b)
+        // Past backendErrors the fields are what a backend config holds; the model is not asked for here.
+        const backend = b as unknown as HarnessConfig['backend']
+        const problem = errors.length ? undefined : keyProblem(backend, process.env)
+        if (problem) errors.push(`backend.apiKeyEnv: ${problem} in the environment serve was started from`)
+        if (errors.length) return json(res, 400, { errors })
+        const redact = redactor(apiKey(backend, process.env), backend.apiKeyEnv ?? '')
+        try { return json(res, 200, await backendFactory(backend).listModels()) }
+        catch (e) {
+          const text = (e as { body?: string }).body
+          return json(res, 502, { error: redact.text((e as Error).message), body: text === undefined ? undefined : redact.text(text) })
+        }
       }
       if (m('GET', /^\/api\/harnesses$/)) {
         const names = (await readdir(opts.harnessesDir)).filter(f => f.endsWith('.json')).map(f => ({ name: f.slice(0, -5) }))
@@ -83,6 +96,10 @@ export async function startServer(opts: ServerOpts) {
       if (m('POST', /^\/api\/runs$/)) {
         const body = await readBody(req) as Partial<RunParams>
         const errs = validateConfig(body.config)
+        if (!errs.length) {
+          const problem = keyProblem((body.config as HarnessConfig).backend, process.env)
+          if (problem) errs.push(`backend.apiKeyEnv: ${problem} in the environment serve was started from`)
+        }
         if (typeof body.task !== 'string' || !body.task.trim()) errs.push('task is required')
         if (typeof body.workdir !== 'string') errs.push('workdir is required')
         else { const w = await validateWorkdir(body.workdir); if (w) errs.push(w) }
