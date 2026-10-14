@@ -65,15 +65,69 @@ did, carry none.
   Ollama's OpenAI-compatible `/v1` ignores `num_ctx` and silently truncates the prompt.
 - `kind: "openai"` works with llama-server (`--jinja` required for native tool calls), LM Studio, vLLM,
   and anything else serving `/v1/chat/completions`.
+- With `backend.apiKeyEnv`, `kind: "openai"` talks to a hosted API such as OpenRouter: see
+  [Cloud](#cloud).
+
+## Cloud
+
+A harness talks to a hosted OpenAI-compatible API when its backend names the environment variable
+that holds the key:
+
+    "backend": { "kind": "openai", "baseUrl": "https://openrouter.ai/api/v1",
+                 "apiKeyEnv": "OPENROUTER_API_KEY", "model": "qwen/qwen3-32b", "temperature": 0.2 }
+
+The key itself is never in a harness file, a trace or a bench JSON. It is read from the variable
+when a command starts and sent as `Authorization: Bearer` to `baseUrl/models` and
+`baseUrl/chat/completions`, nowhere else, and requests that carry it follow no redirect. The name
+must be upper-case and end in `_API_KEY`, so a harness file from someone else cannot send your
+`GITHUB_TOKEN` or `AWS_*` along, and `baseUrl` must be `https` (plain `http` only on `localhost`,
+`127.0.0.1` or `[::1]`). `run`, `demo`, `bench` and `replay` say on stderr where the key goes —
+`the key in OPENROUTER_API_KEY goes to openrouter.ai` — before the first request. That is a
+notice, not a question: the key leaves with that request (with `bench`, with its preflight). A
+variable that is not set, is empty or holds what a key cannot (spaces, control characters,
+non-ASCII) stops the command with exit code 2 before anything is sent.
+
+A key means a hosted API, and the harness sends it only what the OpenAI API defines: no
+`/apply-template` and `/tokenize`, so token counts are the estimate next to the `usage` each reply
+reports; no `/props`; no `chat_template_kwargs`, so `backend.think` with a key is an error — a
+hosted API has its own switch. `bench`'s preflight checks the model against `baseUrl/models` (an
+OpenRouter routing suffix such as `:nitro` is matched without it) and takes the window from that
+list: the smaller of the model's `context_length` and its top provider's. OpenRouter's list is
+public, so a wrong key passes the preflight and shows up as a 401 on the first request. A stream
+that fails after its 200 (OpenRouter's `finish_reason: "error"`) is a `backend_error` with the
+provider's message, not an empty reply; a 429 or a 5xx ends the run the same way, and nothing is
+retried.
+
+The demo on the cloud, no GPU needed — better with a key of its own and a credit limit, as
+OpenRouter advises:
+
+    export OPENROUTER_API_KEY=...
+    npx llm-harness-builder demo --kind openai --base-url https://openrouter.ai/api/v1 \
+      --api-key-env OPENROUTER_API_KEY --model qwen/qwen3-32b
+
+`harnesses/tuned-openrouter.json` is `tuned` on that backend. `serve` copies `harnesses/` into its
+working directory only when there is none there yet, so an older copy lacks it: copy it by hand. In
+the UI, `serve` reads the variable from the environment it was started in; the form takes a loaded
+harness's backend only while no model is picked, so set kind, base URL, key env and model there. The
+form picks a model from the list by itself only when there is no key and the server is on this
+machine (`localhost`, `127.0.0.1`, `[::1]`): OpenRouter lists hundreds, at every price, and its list
+is public, so it arrives before the key is typed. `replay --api-key-env` sends the recorded request
+to a hosted API as it was recorded.
+
+The value of the key is taken out of tool output, `loop.untilBash` output and every event: the
+history, the trace, the terminal and the UI see `[redacted: OPENROUTER_API_KEY]` instead, and MCP
+servers start without the variable. What that does not cover — an encoded key, one shorter than 20
+characters, a command that sends it somewhere itself — is in the
+[honest notes](docs/honest-notes.md).
 
 ## CLI
 
     llm-harness-builder --help | --version | help <command>
     llm-harness-builder serve [--port 7331] [--no-open]
-    llm-harness-builder run <harness.json> --workdir <dir> "task" [--yes] [--json] [--answer-schema file.json] [--model m] [--base-url u] [--kind k]
-    llm-harness-builder demo [--model m] [--base-url u] [--kind k]
-    llm-harness-builder bench [harness.json ...] [--n 3] [--timeout 1800] [--out runs/bench-<ts>.json] [--task slug|pool|pool2|pool3|sift|triage|judge] [--size N] [--max-turns N] [--model m] [--base-url u] [--kind k]
-    llm-harness-builder replay <run-id | trace.jsonl> --turn N --base-url u --kind k [--n 5] [--temperature t] [--max-tokens m] [--json]
+    llm-harness-builder run <harness.json> --workdir <dir> "task" [--yes] [--json] [--answer-schema file.json] [--model m] [--base-url u] [--kind k] [--api-key-env NAME]
+    llm-harness-builder demo [--model m] [--base-url u] [--kind k] [--api-key-env NAME]
+    llm-harness-builder bench [harness.json ...] [--n 3] [--timeout 1800] [--out runs/bench-<ts>.json] [--task slug|pool|pool2|pool3|sift|triage|judge] [--size N] [--max-turns N] [--model m] [--base-url u] [--kind k] [--api-key-env NAME]
+    llm-harness-builder replay <run-id | trace.jsonl> --turn N --base-url u --kind k [--api-key-env NAME] [--n 5] [--temperature t] [--max-tokens m] [--json]
     llm-harness-builder analyze <bench.json | run-id | trace.jsonl> ... [--json]
     llm-harness-builder proxy [--upstream http://127.0.0.1:8080] [--port 8090] [--name label]
 
@@ -84,8 +138,9 @@ stream as JSONL to stdout; human-readable progress goes to stderr.
 `--version` prints the installed version. Exit codes: 0 for help; `run` exits 0 when the model
 ended with a final answer (with `--answer-schema`, one that parses as JSON) and 1 when it did not,
 while `demo` and `bench` exit 0 whatever the verdicts; 2 for an argument a command cannot take (the
-message names it and the usage follows), for a file it cannot read, and for the refusal below; 130
-for Ctrl-C in `run`, `demo` and `bench`, which keeps the trace — `proxy` exits 0 when stopped.
+message names it and the usage follows), for a file it cannot read, for a key variable that is not
+set (see [Cloud](#cloud)), and for the refusal below; 130 for Ctrl-C in `run`, `demo` and `bench`,
+which keeps the trace — `proxy` exits 0 when stopped.
 
 `run` without `--yes` asks before each command it may run. When stdin is not a terminal — a pipe,
 `/dev/null`, CI — nobody can answer, so a harness that may ask (`approveBash` with `bash` on,
@@ -111,7 +166,8 @@ A one-model llama-server answers to any name. On llama-server the window and bui
 loaded yet. On Ollama the window is the harness's `numCtx`. Both go into the JSON as each harness's
 `server`, and a `budgetTokens` that with `maxTokens` on top is over the window gets a warning — the
 budget cannot keep such a run inside it. LM Studio and vLLM have no `/props`: window unknown, no
-warning.
+warning. With a key the model is always checked, against the hosted API's list, and the window comes
+from that list — see [Cloud](#cloud).
 
 `--task` picks another task, and every task but `slug` needs a `--size`. `pool` and `pool2` are
 described with their measurements in [The pool task](docs/findings.md#the-pool-task). `pool3` is
@@ -131,14 +187,16 @@ sends it again, as it was sent, `--n` times; `--temperature` and `--max-tokens` 
 it can change. It prints how many distinct replies came back and which of them is the recorded one.
 Replies are compared by content and native tool calls, not by thinking text or call ids. No tool
 runs, so a replay says where the next call goes on that turn and nothing about how a run would end.
-The trace does not record where the run was sent, hence `--base-url` and `--kind`; the server has
-to have the window the run had, and one that is too small refuses the request. Of the checks this
-README calls replays, the command repeats the ones that sent a recorded request unchanged: the
-`pool2` loop turn and the harmless turn under `repeatTemperature` (`replay 153d3718 --turn 8
---temperature 1 --n 10`, and `411812a4 --turn 6` likewise). It does not repeat the ones that edited
-the recorded history first (the stub text, the notes of a counter the run did not have), and the
-"replayed against 5120" passages are arithmetic over traces, with no model in them. The traces
-named here are not in the repository; the command is for yours.
+The trace does not record where the run was sent, hence `--base-url` and `--kind`, and
+`--api-key-env` for a hosted API, which gets the recorded request as it was recorded: a run with a
+key recorded only OpenAI fields, while a local trace sent there keeps its model name and any
+`chat_template_kwargs`; the server has to have the window the run had, and one that is too small
+refuses the request. Of the checks this README calls replays, the command repeats the ones that sent
+a recorded request unchanged: the `pool2` loop turn and the harmless turn under `repeatTemperature`
+(`replay 153d3718 --turn 8 --temperature 1 --n 10`, and `411812a4 --turn 6` likewise). It does not
+repeat the ones that edited the recorded history first (the stub text, the notes of a counter the
+run did not have), and the "replayed against 5120" passages are arithmetic over traces, with no
+model in them. The traces named here are not in the repository; the command is for yours.
 
 `analyze` reads traces and prints, per run, what the model never saw again: the turn the budget
 first stubbed and which tool results that stub removed, the turn of the first successful edit, the
@@ -256,6 +314,9 @@ for a model that thinks unless told otherwise through the template; the `/no_thi
 shipped harnesses is a Qwen3 convention and another family does not read it. With
 `loop.repeatThinkTokens` the thinking turn goes out with the switch on, whatever `think` says.
 
+`backend.apiKeyEnv` names the environment variable that holds a hosted API's key — see
+[Cloud](#cloud).
+
 `toolCalls.format` picks how a `prompted` run talks: `json` (the shape above) or `hermes`
 (`<tool_call>{"name":…,"arguments":…}</tool_call>` blocks, results in `<tool_response>`, and a
 plain-text reply means "done"). `enforceSchema` only applies to `json`.
@@ -289,10 +350,12 @@ the task checks of `bench` and `demo` get from yours — names only; a harness f
 value. Without it they get `PATH`, `HOME`, `LANG`, `LC_ALL`, `LC_CTYPE`, `LC_COLLATE`,
 `LC_MESSAGES`, `LC_MONETARY`, `LC_NUMERIC`, `LC_TIME`, `TERM` and `TMPDIR`, and nothing else: `TZ`,
 `HTTPS_PROXY`, `NODE_EXTRA_CA_CERTS`, `CI` and every key are gone unless named. MCP servers are not
-covered: they start with this process's whole environment. `run`, `demo` and `bench` print the
-names on stderr when they start, and the UI shows them under the tools. A value a command prints
-lands in `runs/` and in the next request to the backend. This keeps keys out of what a command
-prints by accident; it is not a sandbox — see the [honest notes](docs/honest-notes.md).
+covered: they start with this process's whole environment, except the variable `backend.apiKeyEnv`
+names. `run`, `demo` and `bench` print the names on stderr when they start, and the UI shows them
+under the tools. A value a command prints lands in `runs/` and in the next request to the
+backend — the backend key's own value excepted, which is redacted ([Cloud](#cloud)). This keeps
+keys out of what a command prints by accident; it is not a sandbox — see the
+[honest notes](docs/honest-notes.md).
 
 ## Model families
 

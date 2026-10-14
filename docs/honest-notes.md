@@ -8,20 +8,43 @@ Limits of [llm-harness-builder](../README.md) and of what its [findings](finding
   p = 0.21 — suggestive, not proof. `toolChars` is measured rather than sampled — it is the same in
   every run — which is why the MCP pair reports it. The tool-error count is exact within a run, but
   it is what the model did, so it varies from run to run; the table shows its median.
-- Traces are raw. Anything the model reads (including `.env`) ends up in `runs/`. `run` without
-  `--workdir` works in the current directory, so `runs/` lands inside the project the agent reads;
-  pass `--workdir`. Point `workdir` at a scratch copy or a git repo. `run` asks before each `bash`
-  command when `tools.approveBash` is on (every shipped harness has it on), before starting each
-  MCP server and before `loop.untilBash`, unless `--yes`; other tools and MCP tool calls never ask;
-  `demo` and `bench` approve everything, the harness files' `mcpServers` and `loop.untilBash`
-  included.
+- Traces are raw. Anything the model reads (including `.env`) ends up in `runs/` — except the
+  value of the backend key (`backend.apiKeyEnv`), which every run redacts; what that misses is three
+  bullets down. `run` without `--workdir` works in the current directory, so `runs/` lands inside
+  the project the agent reads; pass `--workdir`. Point `workdir` at a scratch copy or a git repo.
+  `run` asks before each `bash` command when `tools.approveBash` is on (every shipped harness has it
+  on), before starting each MCP server and before `loop.untilBash`, unless `--yes`; other tools and
+  MCP tool calls never ask; `demo` and `bench` approve everything, the harness files' `mcpServers`
+  and `loop.untilBash` included.
 - The environment of what the model runs — `bash`, `loop.untilBash`, and the task checks, which
   execute the model's code — is `PATH`, `HOME`, `LANG`, `LC_ALL`, `LC_CTYPE`, `LC_COLLATE`,
   `LC_MESSAGES`, `LC_MONETARY`, `LC_NUMERIC`, `LC_TIME`, `TERM`, `TMPDIR` and the names in
   `tools.bashEnv`. That keeps keys out of what a command prints by accident and out of tools that
   read `*_API_KEY` by themselves. It is not a boundary: a command runs as you and can read this
   process's environment (`ps -E` on macOS, `/proc/<pid>/environ` on Linux) and any of your files.
-- MCP servers start with the whole environment of this process; `mcpServers` has no `env`.
+  With `backend.apiKeyEnv` the key is in this process's environment as well: a command can read it
+  there, or from the file you keep it in, and send it anywhere. Only approving each command
+  (`tools.approveBash`) or a container stops that, and `demo` and `bench` approve everything.
+- MCP servers start with the whole environment of this process, except the variable
+  `backend.apiKeyEnv` names; `mcpServers` has no `env`.
+- The backend key is redacted by value: tool output, `loop.untilBash` output and every event carry
+  `[redacted: <NAME>]` instead, before the history, the trace, the terminal or the UI see them. It
+  is not found encoded (base64, split in parts), when the value is shorter than 20 characters (the
+  start line says so), or in the live text of a turn on the terminal and in the UI, where it can
+  arrive split between chunks — the model never sees the key while all its inputs are clean, and
+  the live text is not saved. A file the model rewrites from what it read gets the mark instead of
+  the key. The rest of `.env` and the values of `tools.bashEnv` stay as they are, and `replay`
+  prints the server's replies as they come. So does the model list in the UI, and the approval
+  question in the terminal shows a command as the model wrote it. A trace's first line keeps the
+  task text as you typed it.
+- A harness file from someone else is code. It decides where requests go and, with `apiKeyEnv`,
+  which of your `*_API_KEY` variables goes along; the start line (`the key in … goes to …`)
+  names the host, but the key has left with the first request by the time you read it (with `bench`,
+  with its preflight).
+- `serve` listens on 127.0.0.1 and refuses other hosts and any page from another origin, other ports
+  of localhost included, but trusts every local process: whatever can connect to its port can start
+  runs, answer approvals and, with `apiKeyEnv`, make it send one of its `*_API_KEY` variables to a
+  host it names. The recording proxy refuses other hosts and pages from another origin the same way.
 - `run` without `--yes` refuses to start when stdin is not a terminal and the harness may ask
   (`approveBash` with `bash` on, `loop.untilBash`, `mcpServers`): nobody could answer.
 - A CLI run writes `runs/<id>.jsonl.part` and renames it when done, on Ctrl-C included (at the
@@ -43,7 +66,8 @@ Limits of [llm-harness-builder](../README.md) and of what its [findings](finding
   text but the run still completes.
 - Token counts are exact on llama-server (`/apply-template` + `/tokenize`: chat template and
   `tools[]` included) and a `chars / 4` estimate of the messages elsewhere; the budget trims by
-  the estimate in both cases; the backend's `usage` is shown after each response.
+  the estimate in both cases; the backend's `usage` is shown after each response. With a key (a
+  hosted API) they are always the estimate, next to the `usage` each reply reports.
 - `/no_think` is a Qwen3 convention. Applying another family removes it; on a model this tool has
   no family for, delete the line by hand.
 - In `hermes` format a reply with no `<tool_call>` block is the final answer — that is how these
