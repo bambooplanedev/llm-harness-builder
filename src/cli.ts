@@ -8,7 +8,7 @@ import { createInterface } from 'node:readline/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { runAgent, mayAsk, type RunOpts } from './core/run.js'
-import { validateConfig, sendsAnswerSchema, type HarnessConfig, type BackendKind } from './core/config.js'
+import { validateConfig, sendsAnswerSchema, KEY_ENV, keyNameMessage, keyProblem, keyNote, apiKey, type HarnessConfig, type BackendKind } from './core/config.js'
 import { validateWorkdir } from './core/tools/sandbox.js'
 import type { Backend, Delta, NormalizedResponse } from './core/backends/types.js'
 import { approvalPrompt, mcpCounts, quitWithoutWork, showable, showableText, type HarnessEvent, type ToolCall } from './core/events.js'
@@ -19,6 +19,7 @@ import { childEnv, bashEnvNote } from './core/tools/env.js'
 import { median, formatTable, type BenchRun, type BenchHarness, type BenchResult } from './core/bench.js'
 import { GUARD_BLOCKED, EDIT_MISS } from './core/tools/fs.js'
 import { createBackend } from './core/backends/index.js'
+import { redactor } from './core/redact.js'
 import { replayPayload, replySignature, recordedTurn } from './core/replay.js'
 import { analyzeTrace, formatAnalysisTable, type AnalyzedRun } from './core/analyze.js'
 import { preflight, windowWarning, type PreflightResult } from './core/preflight.js'
@@ -32,6 +33,10 @@ const PKG = JSON.parse(readFileSync(path.join(PKG_ROOT, 'package.json'), 'utf8')
 const printHelp = (name: CommandName): void => { console.log(commandHelp(name)) }
 /** An argument the command cannot take: what is wrong on one line (Node's own messages can run over several), then the command's usage; exit 2 like every other refusal. */
 function argError(name: CommandName, msg: string): never { return die(`error: ${msg.replace(/\s*\n\s*/g, ' ')}\n${usage(name)}`) }
+/** The name --api-key-env gives, checked before any harness is read: the message names the flag the user typed. */
+function keyFlag(cmd: CommandName, v: string | undefined): void {
+  if (v !== undefined && !KEY_ENV.test(v)) argError(cmd, keyNameMessage('--api-key-env'))
+}
 const PORT = (s: string) => /^\d+$/.test(s) && Number(s) <= 65535
 
 const DEMO_HARNESSES = ['bare', 'tuned', 'tuned-hermes']
@@ -56,7 +61,7 @@ function fakeBackendFromEnv(): Promise<Backend | undefined> {
   })())
 }
 
-async function loadHarness(file: string, over: { model?: string; baseUrl?: string; kind?: string; maxTurns?: number }): Promise<HarnessConfig> {
+async function loadHarness(file: string, over: { model?: string; baseUrl?: string; kind?: string; apiKeyEnv?: string; maxTurns?: number }): Promise<HarnessConfig> {
   // One catch for the whole read: a missing file, a directory and malformed JSON all used to reach
   // the top-level handler and print a stack at someone who mistyped a path.
   let cfg: any
@@ -66,10 +71,14 @@ async function loadHarness(file: string, over: { model?: string; baseUrl?: strin
   if (over.model) cfg.backend.model = over.model
   if (over.baseUrl) cfg.backend.baseUrl = over.baseUrl
   if (over.kind) cfg.backend.kind = over.kind
+  if (over.apiKeyEnv !== undefined) cfg.backend.apiKeyEnv = over.apiKeyEnv
   // Only onto a loop object that is there: a harness without one is validateConfig's to report.
   if (over.maxTurns && cfg.loop && typeof cfg.loop === 'object') cfg.loop.maxTurns = over.maxTurns
   const errs = validateConfig(cfg)
   if (errs.length) die(`invalid harness ${file}:\n  ${errs.join('\n  ')}`)
+  // The value the name points at: missing, empty or unsendable, nothing can run — and the message says where the name came from.
+  const problem = keyProblem(cfg.backend, process.env)
+  if (problem) die(`${problem}: ${over.apiKeyEnv !== undefined ? '--api-key-env names it as the API key' : `${file} sends its value as the API key (backend.apiKeyEnv)`}`)
   return cfg
 }
 
@@ -160,11 +169,12 @@ const autoApproves = (cmd: 'demo' | 'bench') => `${cmd} approves everything with
 async function cmdRun(argv: string[]) {
   const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: COMMANDS.run.options })
   if (values.help) return printHelp('run')
+  keyFlag('run', values['api-key-env'])
   const [file, ...taskParts] = positionals
   if (!file || !taskParts.length) argError('run', 'run needs a harness file and a task')
   const workdir = path.resolve(values.workdir ?? '.')
   const werr = await validateWorkdir(workdir); if (werr) die(werr)
-  const config = await loadHarness(file, { model: values.model, baseUrl: values['base-url'], kind: values.kind })
+  const config = await loadHarness(file, { model: values.model, baseUrl: values['base-url'], kind: values.kind, apiKeyEnv: values['api-key-env'] })
   // A schema the harness would not send is a run whose answer nothing holds to a form, and it would look like any other: refuse it here.
   let answerSchema: Record<string, unknown> | undefined
   const schemaFile = values['answer-schema']
@@ -178,6 +188,8 @@ async function cmdRun(argv: string[]) {
   if (!values.yes && process.stdin.isTTY !== true && mayAsk(config)) die(NO_TTY)
   const note = bashEnvNote(config.tools.bashEnv)
   if (note) console.error(note)
+  const key = keyNote(config.backend, process.env)
+  if (key) console.error(key)
   const { last } = await execRun(config, taskParts.join(' '), workdir, { yes: values.yes, json: values.json, answerSchema })
   const final = last.type === 'done' && last.reason === 'final' ? last : undefined
   let ok = final !== undefined
@@ -189,12 +201,15 @@ async function cmdRun(argv: string[]) {
 async function cmdDemo(argv: string[]) {
   const { values } = parseArgs({ args: argv, options: COMMANDS.demo.options })
   if (values.help) return printHelp('demo')
+  keyFlag('demo', values['api-key-env'])
   console.error(autoApproves('demo'))
   const rows: string[] = []
   for (const name of DEMO_HARNESSES) {
-    const config = await loadHarness(path.join(PKG_ROOT, 'harnesses', `${name}.json`), { model: values.model, baseUrl: values['base-url'], kind: values.kind })
+    const config = await loadHarness(path.join(PKG_ROOT, 'harnesses', `${name}.json`), { model: values.model, baseUrl: values['base-url'], kind: values.kind, apiKeyEnv: values['api-key-env'] })
     const note = bashEnvNote(config.tools.bashEnv)
     if (note) console.error(`${name}: ${note}`)
+    const key = keyNote(config.backend, process.env)
+    if (key) console.error(`${name}: ${key}`)
     const workdir = await TASKS.slug.prepare()
     console.error(`\n=== ${name} (${config.backend.model}) in ${workdir}`)
     const { id, last } = await execRun(config, TASKS.slug.prompt, workdir, { yes: true, json: values.json })
@@ -254,6 +269,7 @@ function rollup(h: BenchHarness) {
 async function cmdBench(argv: string[]) {
   const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: COMMANDS.bench.options })
   if (values.help) return printHelp('bench')
+  keyFlag('bench', values['api-key-env'])
   if (!INT.test(values.n)) argError('bench', '--n must be a positive integer')
   if (!INT.test(values.timeout)) argError('bench', '--timeout must be a positive integer')
   const task: Task | undefined = Object.hasOwn(TASKS, values.task) ? TASKS[values.task as keyof typeof TASKS] : undefined
@@ -268,7 +284,7 @@ async function cmdBench(argv: string[]) {
   const out = values.out ?? path.join('runs', `bench-${stamp(started)}.json`)
   const localDir = path.join(process.cwd(), 'harnesses')
   const files = positionals.length ? positionals : DEMO_HARNESSES.map(h => path.join(existsSync(localDir) ? localDir : path.join(PKG_ROOT, 'harnesses'), `${h}.json`))
-  const over = { model: values.model, baseUrl: values['base-url'], kind: values.kind, maxTurns: values['max-turns'] === undefined ? undefined : Number(values['max-turns']) }
+  const over = { model: values.model, baseUrl: values['base-url'], kind: values.kind, apiKeyEnv: values['api-key-env'], maxTurns: values['max-turns'] === undefined ? undefined : Number(values['max-turns']) }
   console.error(autoApproves('bench'))
   const harnesses: BenchHarness[] = []
   for (const f of files) {
@@ -278,19 +294,21 @@ async function cmdBench(argv: string[]) {
   for (const h of harnesses) {
     const note = bashEnvNote(h.config.tools.bashEnv)
     if (note) console.error(`${h.name}: ${note}`)
+    const key = keyNote(h.config.backend, process.env)
+    if (key) console.error(`${h.name}: ${key}`)
   }
   // Before any JSON exists: a server that is down, or lacks the model, is a typo to report, not 90 minutes of 'error' rows.
   // The test backend is the network itself; there is no server behind it to ask.
   if (!(await fakeBackendFromEnv())) {
     const asked = new Map<string, PreflightResult>()
     for (const h of harnesses) {
-      const b = h.config.backend, key = `${b.kind} ${b.baseUrl} ${b.model} ${b.numCtx ?? ''}`
+      const b = h.config.backend, key = `${b.kind} ${b.baseUrl} ${b.model} ${b.numCtx ?? ''} ${b.apiKeyEnv ?? ''}`
       let r = asked.get(key)
       if (!r) {
         asked.set(key, r = await preflight(createBackend(b), b))
         if (r.ok) console.error(`preflight: ${b.baseUrl} ${b.model}: window ${r.server.nCtx ?? 'unknown'}${r.server.build ? `, build ${r.server.build}` : ''}`)
       }
-      if (!r.ok) die(r.message)
+      if (!r.ok) die(redactor(apiKey(b, process.env), b.apiKeyEnv ?? '').text(r.message))
       else {
         h.server = r.server
         const w = windowWarning(h.config, r.server.nCtx)

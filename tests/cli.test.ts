@@ -1,12 +1,13 @@
 import { test, expect } from 'vitest'
 import { spawn, spawnSync, execSync } from 'node:child_process'
 import { writeFile, readFile, readdir, stat, cp } from 'node:fs/promises'
-import { mkdtempSync, existsSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs'
+import { mkdtempSync, existsSync, writeFileSync, mkdirSync, readFileSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmp } from './helpers.js'
+import { fakeOpenAI, toolTurn, textTurn } from './fake-openai.js'
 import { RunStore } from '../src/server/runs'
 
 const ROOT = process.cwd()
@@ -942,4 +943,148 @@ test('run without a terminal goes on when the harness cannot ask (curator-judge:
   const r = cli(['run', harness('curator-judge'), '--workdir', wd, 'judge'], { LHB_FAKE_BACKEND: fake })
   expect(r.status).toBe(0)
   expect(r.stderr).not.toContain('stdin is not a terminal')
+}, 30_000)
+
+/** cli() for a test whose server lives in this process: spawnSync would block the server the CLI talks to. */
+const cliAsync = (args: string[], env: Record<string, string> = {}, cwd = mkdtempSync(join(tmpdir(), 'lhb-cwd-'))) =>
+  new Promise<{ status: number | null; stdout: string; stderr: string; cwd: string }>(resolve => {
+    const p = spawn(join(ROOT, 'node_modules', '.bin', 'tsx'), [join(ROOT, 'src', 'cli.ts'), ...args], { cwd, env: { ...process.env, ...env } })
+    let stdout = '', stderr = ''
+    p.stdout.on('data', d => (stdout += d)); p.stderr.on('data', d => (stderr += d))
+    p.on('close', status => resolve({ status, stdout, stderr, cwd }))
+  })
+const KEY_NAME = 'LHB_CLI_TEST_API_KEY', KEY = 'sk-or-v1-' + 'c4'.repeat(16), MARK = `[redacted: ${KEY_NAME}]`
+/** `bare` on a hosted backend whose bash gets the key: the run the key could leak from. */
+async function keyedHarness(dir: string, baseUrl: string) {
+  const plain = JSON.parse(await readFile(harness('bare'), 'utf8'))
+  const file = join(dir, 'keyed.json')
+  await writeFile(file, JSON.stringify({ ...plain, backend: { kind: 'openai', baseUrl, model: 'fake/model', temperature: 0, apiKeyEnv: KEY_NAME }, tools: { ...plain.tools, approveBash: false, bashEnv: [KEY_NAME] } }))
+  return file
+}
+/** Every file under `dir`, as one string: what a search of the run files for the key would see. */
+function allText(dir: string): string {
+  if (!existsSync(dir)) return ''
+  return readdirSync(dir, { recursive: true, withFileTypes: true }).filter(d => d.isFile()).map(d => readFileSync(join(d.parentPath, d.name), 'utf8')).join('\n')
+}
+
+test('run against a hosted API: the bearer token reaches it, nothing else is asked, the key goes back nowhere and sits in no file', async () => {
+  const api = await fakeOpenAI([toolTurn('bash', { command: `printf %s "$${KEY_NAME}"` }), textTurn('done')])
+  try {
+    const wd = await tmp('lhb-cli-'), file = await keyedHarness(wd, api.baseUrl)
+    const r = await cliAsync(['run', file, '--workdir', wd, '--yes', 'go'], { [KEY_NAME]: KEY })
+    expect(r.status).toBe(0)
+    expect(r.stderr).toContain(`the key in ${KEY_NAME} goes to ${new URL(api.baseUrl).host}`)
+    expect(api.seen.map(s => `${s.method} ${s.path}`)).toEqual(['POST /v1/chat/completions', 'POST /v1/chat/completions'])
+    expect(api.seen.every(s => s.headers.authorization === `Bearer ${KEY}`)).toBe(true)
+    expect(api.seen[1].body).toContain(MARK); expect(api.seen[1].body).not.toContain(KEY)
+    const runs = allText(join(r.cwd, 'runs'))
+    expect(runs).toContain(MARK); expect(runs).not.toContain(KEY)
+    expect(r.stderr).not.toContain(KEY)
+  } finally { await api.close() }
+}, 30_000)
+
+test('bench against a hosted API: the start line before preflight, /models asked with the key, the window the smaller one, no key in any file', async () => {
+  const api = await fakeOpenAI([textTurn('done')], [{ id: 'fake/model', context_length: 50000, top_provider: { context_length: 40000 } }])
+  try {
+    const wd = await tmp('lhb-cli-'), file = await keyedHarness(wd, api.baseUrl), out = join(wd, 'b.json')
+    const r = await cliAsync(['bench', '--n', '1', '--out', out, file], { [KEY_NAME]: KEY })
+    expect(r.status).toBe(0)
+    const note = r.stderr.indexOf(`the key in ${KEY_NAME} goes to`), pre = r.stderr.indexOf('preflight: ')
+    expect(note).toBeGreaterThanOrEqual(0); expect(pre).toBeGreaterThan(note)
+    expect(r.stderr).toContain('window 40000')
+    expect(api.seen[0]).toMatchObject({ method: 'GET', path: '/v1/models' })
+    expect(api.seen.every(s => s.headers.authorization === `Bearer ${KEY}`)).toBe(true)
+    expect(allText(wd) + allText(join(r.cwd, 'runs'))).not.toContain(KEY)
+  } finally { await api.close() }
+}, 60_000)
+
+test('bench with a keyed and an unkeyed harness on one URL and model preflights them apart: the unkeyed one gets no hosted-API window', async () => {
+  const api = await fakeOpenAI([textTurn('done'), textTurn('done')], [{ id: 'fake/model', context_length: 50000, top_provider: { context_length: 40000 } }])
+  try {
+    const wd = await tmp('lhb-cli-'), keyed = await keyedHarness(wd, api.baseUrl), plain = join(wd, 'plain.json')
+    const k = JSON.parse(await readFile(keyed, 'utf8')), { apiKeyEnv: _, ...backend } = k.backend
+    await writeFile(plain, JSON.stringify({ ...k, name: 'plain', backend }))
+    const r = await cliAsync(['bench', '--n', '1', '--out', join(wd, 'b.json'), keyed, plain], { [KEY_NAME]: KEY })
+    expect(r.status).toBe(0)
+    // With the variable missing from the cache key the second harness would reuse the first one's answer, and one line would print.
+    const lines = r.stderr.match(/^preflight: .*$/gm) ?? []
+    expect(lines).toEqual([expect.stringContaining('window 40000'), expect.stringContaining('window unknown')])
+  } finally { await api.close() }
+}, 60_000)
+
+test('a keyed harness sent elsewhere with --base-url: the start line names the new host, and the key goes there', async () => {
+  const api = await fakeOpenAI([textTurn('done')])
+  try {
+    const wd = await tmp('lhb-cli-'), file = await keyedHarness(wd, 'https://api.example/v1')
+    const r = await cliAsync(['run', file, '--workdir', wd, '--yes', '--base-url', api.baseUrl, 'x'], { [KEY_NAME]: KEY })
+    expect(r.status).toBe(0)
+    expect(r.stderr).toContain(`the key in ${KEY_NAME} goes to ${new URL(api.baseUrl).host}`)
+    expect(r.stderr).not.toContain('api.example')
+    expect(api.seen[0].headers.authorization).toBe(`Bearer ${KEY}`)
+  } finally { await api.close() }
+}, 30_000)
+
+test('demo on a hosted API: the start line per harness on stderr, stdout pure JSONL, and nothing of Ollama or llama-server in a request', async () => {
+  const api = await fakeOpenAI([textTurn('done'), textTurn('{"calls":[],"final":"done"}'), textTurn('done')])
+  try {
+    const r = await cliAsync(['demo', '--json', '--kind', 'openai', '--base-url', api.baseUrl, '--api-key-env', KEY_NAME, '--model', 'fake/model'], { [KEY_NAME]: KEY })
+    expect(r.status).toBe(0)
+    expect(r.stderr).toContain(`bare: the key in ${KEY_NAME} goes to`)
+    expect(r.stdout).not.toContain('the key in')
+    for (const line of r.stdout.trim().split('\n')) expect(() => JSON.parse(line)).not.toThrow()
+    const chats = api.seen.filter(s => s.path === '/v1/chat/completions')
+    expect(chats).toHaveLength(3)
+    for (const s of chats) {
+      const body = JSON.parse(s.body)
+      for (const k of ['options', 'num_ctx', 'chat_template_kwargs', 'think']) expect([k, k in body]).toEqual([k, false])
+      expect(s.headers.authorization).toBe(`Bearer ${KEY}`)
+    }
+  } finally { await api.close() }
+}, 90_000)
+
+test('--api-key-env with a name that is not *_API_KEY is an argument error in run, demo and bench', () => {
+  const msg = 'error: --api-key-env must be an upper-case variable name ending in _API_KEY (like OPENROUTER_API_KEY)'
+  for (const args of [['run', harness('bare'), 'x'], ['demo'], ['bench', '--n', '1']]) {
+    const r = cli([...args, '--api-key-env', 'GITHUB_TOKEN'])
+    expect([args[0], r.status]).toEqual([args[0], 2])
+    expect(r.stderr).toContain(msg); expect(r.stderr).toMatch(/usage: llm-harness-builder/)
+  }
+}, 60_000)
+
+test('a key with --kind ollama is an invalid harness, named so', async () => {
+  const r = cli(['run', harness('bare'), '--workdir', await tmp('lhb-cli-'), '--yes', '--kind', 'ollama', '--api-key-env', KEY_NAME, 'x'], { [KEY_NAME]: KEY })
+  expect(r.status).toBe(2)
+  expect(r.stderr).toContain('invalid harness')
+  expect(r.stderr).toContain('backend.apiKeyEnv needs kind openai: a key goes only to an OpenAI-compatible API')
+}, 30_000)
+
+test('a key variable that is not set or is empty stops run and demo before the trace, and says where the name came from', async () => {
+  const wd = await tmp('lhb-cli-'), file = await keyedHarness(wd, 'https://api.example/v1')
+  const unset = cli(['run', file, '--workdir', wd, '--yes', 'x'])
+  expect(unset.status).toBe(2)
+  expect(unset.stderr).toContain(`${KEY_NAME} is not set: ${file} sends its value as the API key (backend.apiKeyEnv)`)
+  expect(existsSync(join(unset.cwd, 'runs'))).toBe(false)
+  const empty = cli(['run', file, '--workdir', wd, '--yes', 'x'], { [KEY_NAME]: '  ' })
+  expect(empty.status).toBe(2)
+  expect(empty.stderr).toContain(`${KEY_NAME} is empty: ${file} sends its value as the API key (backend.apiKeyEnv)`)
+  const flag = cli(['demo', '--kind', 'openai', '--base-url', 'https://api.example/v1', '--api-key-env', KEY_NAME])
+  expect(flag.status).toBe(2)
+  expect(flag.stderr).toContain(`${KEY_NAME} is not set: --api-key-env names it as the API key`)
+  expect(existsSync(join(flag.cwd, 'runs'))).toBe(false)
+}, 60_000)
+
+test('a server\'s junk — escape codes as token counts, a number as a tool name — never reaches the terminal raw and does not crash the run', async () => {
+  const esc = '\u001b[?7l'
+  const api = await fakeOpenAI([
+    [{ choices: [{ index: 0, delta: { reasoning: { x: 1 }, tool_calls: [{ index: 0, id: 'c1', function: { name: 42, arguments: '{}' } }] }, finish_reason: null }] },
+     { choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }], usage: { prompt_tokens: esc, completion_tokens: 1 } }],
+    textTurn('done'),
+  ])
+  try {
+    const wd = await tmp('lhb-cli-'), file = await keyedHarness(wd, api.baseUrl)
+    const r = await cliAsync(['run', file, '--workdir', wd, '--yes', 'x'], { [KEY_NAME]: KEY })
+    expect(r.status).toBe(0)
+    expect(r.stderr).not.toContain('\u001b')
+    expect(r.stderr).toContain('tool_call 42 {}')
+  } finally { await api.close() }
 }, 30_000)

@@ -9,11 +9,12 @@ type Command<O extends Options> = { summary: string; args: string; options: O; d
 const command = <O extends Options>(c: Command<O>): Command<O> => c
 
 const help = { type: 'boolean', short: 'h' } as const
-const backend = { model: { type: 'string' }, 'base-url': { type: 'string' }, kind: { type: 'string' } } as const
+const backend = { model: { type: 'string' }, 'base-url': { type: 'string' }, kind: { type: 'string' }, 'api-key-env': { type: 'string' } } as const
 const backendDocs = {
   model: ['<m>', 'model name, overriding the harness file'],
   'base-url': ['<u>', 'server URL, overriding the harness file'],
   kind: ['<k>', 'openai or ollama, overriding the harness file'],
+  'api-key-env': ['<NAME>', 'environment variable that holds the API key, overriding the harness file'],
 } as const
 
 export const COMMANDS = {
