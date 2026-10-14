@@ -3,6 +3,11 @@
   "version": "0.3.0",
   "description": "See what your agent harness really sends to a local LLM, and why it fails",
   "license": "MIT",
+  "author": "bambooplanedev <vk@bambooplane.dev>",
+  "repository": { "type": "git", "url": "git+https://github.com/bambooplanedev/llm-harness-builder.git" },
+  "homepage": "https://github.com/bambooplanedev/llm-harness-builder#readme",
+  "bugs": { "url": "https://github.com/bambooplanedev/llm-harness-builder/issues" },
+  "keywords": ["llm", "agent", "harness", "local-llm", "llama.cpp", "ollama", "tool-calling", "tracing", "benchmark"],
   "type": "module",
   "bin": {
     "llm-harness-builder": "dist/cli.js"
@@ -23,14 +28,13 @@
     "dev:web": "vite --config web/vite.config.ts",
     "build": "tsc -p tsconfig.json && vite build --config web/vite.config.ts",
     "cli": "tsx src/cli.ts",
-    "prepublishOnly": "npm run build"
+    "prepack": "npm run build"
   },
   "engines": {
-    "node": ">=20.18.1"
+    "node": ">=22.12"
   },
   "dependencies": {
-    "undici": "^7.29.1",
-    "vue": "^3.5.42"
+    "undici": "^7.29.1"
   },
   "devDependencies": {
     "@types/node": "^22.20.2",
@@ -40,6 +44,7 @@
     "typescript5": "npm:typescript@5.9",
     "vite": "^8.3.0",
     "vitest": "^5.0.0",
+    "vue": "^3.5.42",
     "vue-tsc": "^3.3.11"
   }
 }
