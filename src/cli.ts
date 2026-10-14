@@ -15,7 +15,7 @@ import { approvalPrompt, mcpCounts, quitWithoutWork, showable, type HarnessEvent
 import { startServer } from './server/index.js'
 import { TraceWriter, type Meta } from './server/runs.js'
 import { TASKS, type Task } from './core/tasks.js'
-import { childEnv } from './core/tools/env.js'
+import { childEnv, bashEnvNote } from './core/tools/env.js'
 import { median, formatTable, type BenchRun, type BenchHarness, type BenchResult } from './core/bench.js'
 import { GUARD_BLOCKED, EDIT_MISS } from './core/tools/fs.js'
 import { createBackend } from './core/backends/index.js'
@@ -134,6 +134,8 @@ async function execRun(config: HarnessConfig, task: string, workdir: string, o: 
 }
 
 const NO_TTY = 'stdin is not a terminal, so nothing can answer an approval prompt: pass --yes to approve every command, or run in a terminal'
+/** demo and bench pass yes: true — that approves the harness files' mcpServers and loop.untilBash too, not only the model's commands. */
+const autoApproves = (cmd: 'demo' | 'bench') => `${cmd} approves everything without asking: the model's commands and the harness files' mcpServers and loop.untilBash, in fresh temp workdirs`
 
 async function cmdRun(argv: string[]) {
   const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: COMMANDS.run.options })
@@ -154,6 +156,8 @@ async function cmdRun(argv: string[]) {
   }
   // On a pipe or /dev/null nobody can answer: the run would end at its first question as if interrupted (exit 130, input at EOF) or wait for it forever (input open).
   if (!values.yes && process.stdin.isTTY !== true && mayAsk(config)) die(NO_TTY)
+  const note = bashEnvNote(config.tools.bashEnv)
+  if (note) console.error(note)
   const { last } = await execRun(config, taskParts.join(' '), workdir, { yes: values.yes, json: values.json, answerSchema })
   const final = last.type === 'done' && last.reason === 'final' ? last : undefined
   let ok = final !== undefined
@@ -165,9 +169,12 @@ async function cmdRun(argv: string[]) {
 async function cmdDemo(argv: string[]) {
   const { values } = parseArgs({ args: argv, options: COMMANDS.demo.options })
   if (values.help) return printHelp('demo')
+  console.error(autoApproves('demo'))
   const rows: string[] = []
   for (const name of DEMO_HARNESSES) {
     const config = await loadHarness(path.join(PKG_ROOT, 'harnesses', `${name}.json`), { model: values.model, baseUrl: values['base-url'], kind: values.kind })
+    const note = bashEnvNote(config.tools.bashEnv)
+    if (note) console.error(`${name}: ${note}`)
     const workdir = await TASKS.slug.prepare()
     console.error(`\n=== ${name} (${config.backend.model}) in ${workdir}`)
     const { id, last } = await execRun(config, TASKS.slug.prompt, workdir, { yes: true, json: values.json })
@@ -242,10 +249,15 @@ async function cmdBench(argv: string[]) {
   const localDir = path.join(process.cwd(), 'harnesses')
   const files = positionals.length ? positionals : DEMO_HARNESSES.map(h => path.join(existsSync(localDir) ? localDir : path.join(PKG_ROOT, 'harnesses'), `${h}.json`))
   const over = { model: values.model, baseUrl: values['base-url'], kind: values.kind, maxTurns: values['max-turns'] === undefined ? undefined : Number(values['max-turns']) }
+  console.error(autoApproves('bench'))
   const harnesses: BenchHarness[] = []
   for (const f of files) {
     const config = await loadHarness(f, over)
     harnesses.push({ name: config.name, config, pass: 0, reasons: {}, median: { turns: 0, toolCalls: 0, ms: 0 }, runs: [] })
+  }
+  for (const h of harnesses) {
+    const note = bashEnvNote(h.config.tools.bashEnv)
+    if (note) console.error(`${h.name}: ${note}`)
   }
   // Before any JSON exists: a server that is down, or lacks the model, is a typo to report, not 90 minutes of 'error' rows.
   // The test backend is the network itself; there is no server behind it to ask.

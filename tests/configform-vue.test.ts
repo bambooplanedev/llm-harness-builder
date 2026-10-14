@@ -104,3 +104,9 @@ test('the edit-miss escalation box shows the value, and an empty box for a harne
   const off = await render(base)
   expect(off).toMatch(/edit misses before a re-read note<\/span><input type="number" min="1" value=""/)
 })
+
+test('tools.bashEnv shows as a read-only line with the names, and not at all when absent', async () => {
+  const html = await render({ ...base, tools: { ...base.tools, bashEnv: ['GITHUB_TOKEN', 'TZ'] } })
+  expect(html).toContain('bash gets from your environment: GITHUB_TOKEN, TZ')
+  expect(await render(base)).not.toContain('bash gets from your environment')
+})

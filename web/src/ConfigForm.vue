@@ -118,6 +118,7 @@ function editMcp(text: string) {
       <span v-for="n in TOOL_NAMES" :key="n"><input type="checkbox" :checked="config.tools.enabled.includes(n)" @change="toggleTool(n)"> {{ n }}</span>
     </div>
     <div><input type="checkbox" v-model="config.tools.approveBash"> ask before running bash</div>
+    <div v-if="config.tools.bashEnv?.length" class="hint">bash gets from your environment: {{ config.tools.bashEnv.join(', ') }}</div>
     <div><input type="checkbox" :checked="!!config.tools.requireReadBeforeEdit" @change="toggleGuard(($event.target as HTMLInputElement).checked)"> refuse to edit a file that has not been read</div>
     <div class="row"><span title="after this many failed edits of one file, each further failed edit tells the model to read the file again; a read or a change of the file starts the count over; empty = off">edit misses before a re-read note</span><input type="number" min="1" :value="config.tools.editMissEscalation ?? ''" @change="setEscalation(($event.target as HTMLInputElement).value)"></div>
     <details><summary>MCP servers ({{ mcpCount() }})</summary>

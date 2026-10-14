@@ -59,6 +59,8 @@ test('demo prints PASS/FAIL per harness', async () => {
   expect(r.stdout).toMatch(/bare\s+FAIL/)
   expect(r.stdout).toMatch(/tuned\s+PASS/)
   expect(r.stdout).toMatch(/tuned-hermes\s+PASS/)
+  expect(r.stderr).toContain("demo approves everything without asking: the model's commands and the harness files' mcpServers and loop.untilBash, in fresh temp workdirs")
+  expect(r.stdout).not.toContain('approves everything')
 }, 60_000)
 
 test('demo --json keeps stdout pure JSONL and prints the summary on stderr', async () => {
@@ -78,6 +80,8 @@ test('demo --json keeps stdout pure JSONL and prints the summary on stderr', asy
   expect(r.stderr).toMatch(/bare\s+FAIL/)
   expect(r.stderr).toMatch(/tuned\s+PASS/)
   expect(r.stderr).toMatch(/tuned-hermes\s+PASS/)
+  expect(r.stderr).toContain('demo approves everything without asking')
+  for (const l of r.stdout.trim().split('\n')) expect(() => JSON.parse(l)).not.toThrow()
 }, 60_000)
 
 test('run flags a final answer with zero tool calls', async () => {
@@ -164,6 +168,8 @@ test('bench without files uses ./harnesses in demo order, round-robin', async ()
   const j = JSON.parse(await readFile(out, 'utf8'))
   expect(j.harnesses.map((h: any) => h.name)).toEqual(['bare', 'tuned', 'tuned-hermes'])
   expect(j.harnesses.flatMap((h: any) => h.runs.map((x: any) => x.reason))).toEqual(['final', 'final', 'final'])
+  expect(r.stderr).toContain("bench approves everything without asking: the model's commands and the harness files' mcpServers and loop.untilBash, in fresh temp workdirs")
+  expect(r.stdout).not.toContain('approves everything')
 }, 90_000)
 
 test('bench against a server that does not answer stops before the first run, with no JSON written', async () => {
@@ -365,6 +371,10 @@ test('bench: the check gets the base environment and the names in the harness\'s
   expect(r.status).toBe(0)
   expect(await readFile(seen.named, 'utf8')).toBe('[named-value][]')
   expect(await readFile(seen.plain, 'utf8')).toBe('[][]')
+  // bench names the variables per harness, before any run, and never a value
+  expect(r.stderr).toContain('named: bash gets from your environment: LHB_CHECK_NAMED')
+  expect(r.stderr).not.toContain('plain: bash gets')
+  expect(r.stderr).not.toContain('named-value')
 }, 60_000)
 
 test('demo: the check runs with the base environment, not ours', async () => {
@@ -377,6 +387,20 @@ test('demo: the check runs with the base environment, not ours', async () => {
   expect(r.stdout).toMatch(/bare\s+PASS/)
   expect(await readFile(seen, 'utf8')).toBe('[][]')
 }, 60_000)
+
+test('a harness with tools.bashEnv says on stderr which names bash gets, never the values', async () => {
+  const wd = await tmp('lhb-cli-'), fake = join(wd, 'fake.json')
+  await writeFile(fake, JSON.stringify([{ content: 'fin' }]))
+  const plain = JSON.parse(await readFile(harness('bare'), 'utf8'))
+  const file = join(wd, 'env.json')
+  await writeFile(file, JSON.stringify({ ...plain, tools: { ...plain.tools, bashEnv: ['LHB_NOTE_SET', 'LHB_NOTE_UNSET'] } }))
+  const r = cli(['run', file, '--workdir', wd, '--yes', 'x'], { LHB_FAKE_BACKEND: fake, LHB_NOTE_SET: 'v4lue' })
+  expect(r.status).toBe(0)
+  expect(r.stderr).toContain('bash gets from your environment: LHB_NOTE_SET, LHB_NOTE_UNSET (not set)')
+  expect(r.stderr).not.toContain('v4lue')
+  const without = cli(['run', harness('bare'), '--workdir', wd, '--yes', 'x'], { LHB_FAKE_BACKEND: fake })
+  expect(without.stderr).not.toContain('bash gets from your environment')
+}, 30_000)
 
 test('bench rejects a task/size/max-turns combination that means nothing, with usage', () => {
   for (const extra of [['--task', 'nope'], ['--size', '3'], ['--task', 'slug', '--size', '3'], ['--task', 'pool'],
