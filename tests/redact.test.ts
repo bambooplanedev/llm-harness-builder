@@ -32,7 +32,8 @@ test('20 characters is redacted; 19, 19 left after the trim apiKey does, and no 
   expect(redactor(twenty, 'K_API_KEY').text(`<${twenty}>`)).toBe('<[redacted: K_API_KEY]>')
   expect(redactor(nineteen, 'K_API_KEY').text(`<${nineteen}>`)).toBe(`<${nineteen}>`)
   const padded = apiKey({ apiKeyEnv: 'K_API_KEY' }, { K_API_KEY: `  ${nineteen}  ` })
-  expect(redactor(padded, 'K_API_KEY').text(nineteen)).toBe(nineteen)
+  expect(padded).toBe(nineteen)
+  expect(redactor(padded, 'K_API_KEY').text(`  ${nineteen}  `)).toBe(`  ${nineteen}  `)
   const none = { a: 'x' }
   expect(redactor(undefined, 'K_API_KEY').deep(none)).toBe(none)
 })
