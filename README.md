@@ -81,9 +81,11 @@ did, carry none.
 stream as JSONL to stdout; human-readable progress goes to stderr.
 
 `--help` lists the commands, `<command> --help` (or `help <command>`) the options of one, and
-`--version` prints the installed version. Exit codes: 0 for help and for a run that ended with a
-final answer, 1 for a run that did not, 2 for an argument a command cannot take (the message names
-it and the usage follows), 130 for Ctrl-C, which keeps the trace.
+`--version` prints the installed version. Exit codes: 0 for help; `run` exits 0 when the model
+ended with a final answer and 1 when it did not, while `demo` and `bench` exit 0 whatever the
+verdicts; 2 for an argument a command cannot take (the message names it and the usage follows) and
+for the refusal below; 130 for Ctrl-C in `run`, `demo` and `bench`, which keeps the trace —
+`proxy` exits 0 when stopped.
 
 `run` without `--yes` asks before each command it may run. When stdin is not a terminal — a pipe,
 `/dev/null`, CI — nobody can answer, so a harness that may ask (`approveBash` with `bash` on,
@@ -284,12 +286,13 @@ what the model would then have done, only a run can say.
 
 `tools.bashEnv: ["NAME", ...]` names the environment variables that `bash`, `loop.untilBash` and
 the task checks of `bench` and `demo` get from yours — names only; a harness file never sets a
-value. Without it they get `PATH`, `HOME`, `LANG`, the `LC_*` locale variables, `TERM` and
-`TMPDIR`, and nothing else: `TZ`, `HTTPS_PROXY`, `NODE_EXTRA_CA_CERTS`, `CI` and every key are gone
-unless named. `run`, `demo` and `bench` print the names on stderr when they start, and the UI shows
-them under the tools. A value a command prints lands in `runs/` and in the next request to the
-backend. This keeps keys out of what a command prints by accident; it is not a sandbox — see the
-[honest notes](docs/honest-notes.md).
+value. Without it they get `PATH`, `HOME`, `LANG`, `LC_ALL`, `LC_CTYPE`, `LC_COLLATE`,
+`LC_MESSAGES`, `LC_MONETARY`, `LC_NUMERIC`, `LC_TIME`, `TERM` and `TMPDIR`, and nothing else: `TZ`,
+`HTTPS_PROXY`, `NODE_EXTRA_CA_CERTS`, `CI` and every key are gone unless named. MCP servers are not
+covered: they start with this process's whole environment. `run`, `demo` and `bench` print the
+names on stderr when they start, and the UI shows them under the tools. A value a command prints
+lands in `runs/` and in the next request to the backend. This keeps keys out of what a command
+prints by accident; it is not a sandbox — see the [honest notes](docs/honest-notes.md).
 
 ## Model families
 
