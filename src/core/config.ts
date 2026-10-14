@@ -11,11 +11,92 @@ export const TOOL_CALL_FORMATS: ToolCallFormat[] = ['json', 'hermes']
 /** A name `tools.bashEnv` may hold: a shell variable name. The value always comes from the user's environment. */
 export const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
 
-export type McpServerConfig = { command: string; args?: string[]; tools?: string[] }
+/** What `backend.apiKeyEnv` may name: an upper-case variable whose name says it holds an API key. A harness file from
+ *  someone else picks the variable and the host it goes to; this keeps GITHUB_TOKEN and AWS_* out of its reach, and a
+ *  key pasted in place of the name never matches, so it is never printed back. */
+export const KEY_ENV = /^[A-Z][A-Z0-9_]*_API_KEY$/
+/** A key shorter than this is not redacted: replacing a short value would rewrite ordinary words in what a model reads. */
+export const REDACT_MIN = 20
+/** The hosts a key may reach over plain http: this machine. Compared with URL's normalised hostname, never the string. */
+const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]'])
+
+/** How the key's rules name the fields: the harness file's names, or replay's flags. */
+export type KeyWords = { key: string; kind: string; url: string }
+export const FILE_WORDS: KeyWords = { key: 'backend.apiKeyEnv', kind: 'kind openai', url: 'an https baseUrl' }
+export const FLAG_WORDS: KeyWords = { key: '--api-key-env', kind: '--kind openai', url: 'an https --base-url' }
+export const keyNameMessage = (field: string) => `${field} must be an upper-case variable name ending in _API_KEY (like OPENROUTER_API_KEY)`
+
+/** An http(s) URL that URL can parse: the prefix alone lets `https://` and `http://[::1` through, to fail later with a stack. */
+export function isHttpUrl(s: unknown): s is string {
+  if (typeof s !== 'string' || !/^https?:\/\//.test(s)) return false
+  try { new URL(s); return true } catch { return false }
+}
+
+type KeyFields = { kind?: unknown; baseUrl?: unknown; apiKeyEnv?: unknown; think?: unknown }
+
+/** The rules a key brings: its name, the kind it goes to, a URL it may cross the network to, and no `think`. A backend
+ *  with a key is a hosted API, and gets only what the OpenAI API defines. An unparsable URL is backendErrors' to say. */
+export function keyErrors(b: KeyFields, w: KeyWords = FILE_WORDS): string[] {
+  if (b.apiKeyEnv === undefined) return []
+  const e: string[] = []
+  if (typeof b.apiKeyEnv !== 'string' || !KEY_ENV.test(b.apiKeyEnv)) e.push(keyNameMessage(w.key))
+  if (b.kind !== 'openai') e.push(`${w.key} needs ${w.kind}: a key goes only to an OpenAI-compatible API`)
+  if (isHttpUrl(b.baseUrl)) {
+    const u = new URL(b.baseUrl)
+    if (u.protocol !== 'https:' && !LOOPBACK.has(u.hostname))
+      e.push(`${w.key} needs ${w.url} (http only on localhost, 127.0.0.1 or [::1]): the key would cross the network in clear text`)
+  }
+  if (b.think !== undefined) e.push(`backend.think cannot go with ${w.key}: a hosted API gets only what the OpenAI API defines`)
+  return e
+}
+
+/** The checks of `backend` that need no model: kind, URL and the key's rules. POST /api/models runs these alone. */
+export function backendErrors(b: Record<string, unknown>): string[] {
+  const e: string[] = []
+  if (b.kind !== 'openai' && b.kind !== 'ollama') e.push('backend.kind must be openai|ollama')
+  if (!isHttpUrl(b.baseUrl)) e.push('backend.baseUrl must be an http(s) URL')
+  return [...e, ...keyErrors(b)]
+}
+
+/** The value of a variable the environment itself holds: `toString` and the other names every object inherits are not
+ *  variables, though a name pattern may let them through. */
+const own = (env: Record<string, string | undefined>, name: string): string | undefined =>
+  Object.hasOwn(env, name) && typeof env[name] === 'string' ? env[name] : undefined
+
+/** What is wrong with the value `apiKeyEnv` names, if anything — never the value itself. Called once keyErrors is clean. */
+export function keyProblem(b: { apiKeyEnv?: string }, env: Record<string, string | undefined>): string | undefined {
+  const name = b.apiKeyEnv
+  if (name === undefined) return undefined
+  const raw = own(env, name)
+  if (raw === undefined) return `${name} is not set`
+  const v = raw.trim()
+  if (!v) return `${name} is empty`
+  // undici repeats a header value it refuses, whole, in its error message: such a value must never reach a request.
+  if (!/^[\x21-\x7e]+$/.test(v)) return `${name} holds characters an API key cannot have (spaces, control characters or non-ASCII)`
+  return undefined
+}
+
+/** The key itself: the trimmed value, once keyProblem has nothing to say. */
+export function apiKey(b: { apiKeyEnv?: string }, env: Record<string, string | undefined>): string | undefined {
+  if (b.apiKeyEnv === undefined || keyProblem(b, env)) return undefined
+  return own(env, b.apiKeyEnv)!.trim()
+}
+
+/** The line run, demo, bench and replay print before the first request, and the UI shows under the backend: which
+ *  variable goes to which host. Nothing without a key, or for a name or URL validation would refuse — a key pasted in
+ *  place of the name is never printed back. With `env`, a value too short to redact says so. */
+export function keyNote(b: { apiKeyEnv?: unknown; baseUrl?: unknown }, env?: Record<string, string | undefined>): string | undefined {
+  if (typeof b.apiKeyEnv !== 'string' || !KEY_ENV.test(b.apiKeyEnv) || !isHttpUrl(b.baseUrl)) return undefined
+  const v = env ? own(env, b.apiKeyEnv)?.trim() : undefined
+  const short = v && v.length < REDACT_MIN ? ' (shorter than 20 characters, so it is not redacted)' : ''
+  return `the key in ${b.apiKeyEnv} goes to ${new URL(b.baseUrl).host}${short}`
+}
+
+export type McpServerConfig ={ command: string; args?: string[]; tools?: string[] }
 
 export type HarnessConfig = {
   name: string
-  backend: { kind: BackendKind; baseUrl: string; model: string; numCtx?: number; maxTokens?: number; think?: boolean; temperature: number }
+  backend: { kind: BackendKind; baseUrl: string; model: string; numCtx?: number; maxTokens?: number; think?: boolean; temperature: number; apiKeyEnv?: string }
   systemPrompt: string
   tools: { enabled: ToolName[]; approveBash: boolean; requireReadBeforeEdit?: boolean; explainEditMiss?: boolean; editMissEscalation?: number; bashEnv?: string[] }
   toolCalls: { mode: 'native' | 'prompted'; format?: ToolCallFormat; enforceSchema: boolean; promptedTemplate: string; parseErrorHint: string }
@@ -34,7 +115,7 @@ export const sendsAnswerSchema = (c: HarnessConfig): boolean =>
 // A misspelt key would be silently off, and every optional knob is off when absent. '' is the top level.
 const KEYS: Record<string, string[]> = {
   '': ['name', 'backend', 'systemPrompt', 'tools', 'toolCalls', 'context', 'loop', 'mcpServers'],
-  backend: ['kind', 'baseUrl', 'model', 'numCtx', 'maxTokens', 'think', 'temperature'],
+  backend: ['kind', 'baseUrl', 'model', 'numCtx', 'maxTokens', 'think', 'temperature', 'apiKeyEnv'],
   tools: ['enabled', 'approveBash', 'requireReadBeforeEdit', 'explainEditMiss', 'editMissEscalation', 'bashEnv'],
   toolCalls: ['mode', 'format', 'enforceSchema', 'promptedTemplate', 'parseErrorHint'],
   context: ['maxToolOutputChars', 'budgetTokens'],
@@ -57,8 +138,7 @@ export function validateConfig(c: unknown): string[] {
   const b = c.backend
   if (!isObj(b)) e.push('backend is required')
   else {
-    if (b.kind !== 'openai' && b.kind !== 'ollama') e.push('backend.kind must be openai|ollama')
-    if (typeof b.baseUrl !== 'string' || !/^https?:\/\//.test(b.baseUrl)) e.push('backend.baseUrl must be an http(s) URL')
+    e.push(...backendErrors(b))
     if (typeof b.model !== 'string' || !b.model) e.push('backend.model is required')
     if (typeof b.temperature !== 'number') e.push('backend.temperature must be a number')
     if (b.numCtx !== undefined && !(Number.isInteger(b.numCtx) && b.numCtx > 0)) e.push('backend.numCtx must be a positive integer')

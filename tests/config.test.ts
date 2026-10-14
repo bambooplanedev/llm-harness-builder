@@ -2,7 +2,7 @@ import { test, expect } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { validateConfig, sendsAnswerSchema, ENV_NAME } from '../src/core/config.js'
+import { validateConfig, sendsAnswerSchema, ENV_NAME, keyErrors, keyProblem, apiKey, keyNote, FLAG_WORDS, backendErrors } from '../src/core/config.js'
 import { harness } from './helpers.js'
 
 const validConfig = harness()
@@ -283,4 +283,71 @@ test('every shipped harness still validates', () => {
   const files = readdirSync(dir).filter(f => f.endsWith('.json'))
   expect(files.length).toBeGreaterThan(10)
   for (const f of files) expect([f, validateConfig(JSON.parse(readFileSync(join(dir, f), 'utf8')))]).toEqual([f, []])
+})
+
+const keyed = (b: Record<string, unknown>) =>
+  validateConfig({ ...validConfig, backend: { ...validConfig.backend, apiKeyEnv: 'OPENROUTER_API_KEY', baseUrl: 'https://openrouter.ai/api/v1', ...b } })
+
+test('backend.apiKeyEnv: https anywhere, plain http only to this machine, judged on the parsed hostname', () => {
+  for (const baseUrl of ['https://openrouter.ai/api/v1', 'http://localhost:8080/v1', 'http://127.0.0.1:8080/v1', 'http://[::1]:8080/v1', 'http://127.1:8080/v1'])
+    expect([baseUrl, keyed({ baseUrl })]).toEqual([baseUrl, []])
+  const clear = 'backend.apiKeyEnv needs an https baseUrl (http only on localhost, 127.0.0.1 or [::1]): the key would cross the network in clear text'
+  for (const baseUrl of ['http://192.168.1.5/v1', 'http://localhost.evil.com/v1', 'http://localhost@evil.com/v1', 'http://127.0.0.1.nip.io/v1', 'http://[::1]:80@evil.com/v1', 'http://localhost./v1'])
+    expect([baseUrl, keyed({ baseUrl })]).toEqual([baseUrl, [clear]])
+  // What URL cannot parse is the URL's own error, for every harness, with a key or without one.
+  for (const baseUrl of ['https://', 'http://[::1']) {
+    expect([baseUrl, keyed({ baseUrl })]).toEqual([baseUrl, ['backend.baseUrl must be an http(s) URL']])
+    expect([baseUrl, validateConfig({ ...validConfig, backend: { ...validConfig.backend, baseUrl } })]).toEqual([baseUrl, ['backend.baseUrl must be an http(s) URL']])
+  }
+})
+
+test('backend.apiKeyEnv names an upper-case *_API_KEY variable: nothing else, and never a pasted key', () => {
+  const msg = 'backend.apiKeyEnv must be an upper-case variable name ending in _API_KEY (like OPENROUTER_API_KEY)'
+  for (const apiKeyEnv of ['openrouter_api_key', 'GITHUB_TOKEN', 'AWS_SECRET_ACCESS_KEY', 'toString', '_API_KEY', 'sk-or-v1-0123456789abcdef', 'A B_API_KEY', '', 7])
+    expect([apiKeyEnv, keyed({ apiKeyEnv })]).toEqual([apiKeyEnv, [msg]])
+  expect(keyed({ apiKeyEnv: 'GOOGLE_GENERATIVE_AI_API_KEY' })).toEqual([])
+})
+
+test('backend.apiKeyEnv goes only with kind openai, and never with think', () => {
+  expect(keyed({ kind: 'ollama' })).toEqual(['backend.apiKeyEnv needs kind openai: a key goes only to an OpenAI-compatible API'])
+  expect(keyed({ think: false })).toEqual(['backend.think cannot go with backend.apiKeyEnv: a hosted API gets only what the OpenAI API defines'])
+})
+
+test('keyErrors with the flags\' words is what replay says; backendErrors checks kind, URL and key without a model', () => {
+  expect(keyErrors({ kind: 'ollama', baseUrl: 'http://10.0.0.2/v1', apiKeyEnv: 'X_API_KEY' }, FLAG_WORDS)).toEqual([
+    '--api-key-env needs --kind openai: a key goes only to an OpenAI-compatible API',
+    '--api-key-env needs an https --base-url (http only on localhost, 127.0.0.1 or [::1]): the key would cross the network in clear text',
+  ])
+  expect(keyErrors({ kind: 'openai', baseUrl: 'https://x.example/v1' })).toEqual([])
+  expect(backendErrors({ kind: 'openai', baseUrl: 'https://x.example/v1', apiKeyEnv: 'X_API_KEY' })).toEqual([])
+  expect(backendErrors({ kind: 'nope', baseUrl: 'ftp://x' })).toEqual(['backend.kind must be openai|ollama', 'backend.baseUrl must be an http(s) URL'])
+})
+
+test('keyProblem names what is wrong with the value and never prints it', () => {
+  const b = { apiKeyEnv: 'LHB_TEST_API_KEY' }
+  expect(keyProblem(b, {})).toBe('LHB_TEST_API_KEY is not set')
+  expect(keyProblem(b, { LHB_TEST_API_KEY: '' })).toBe('LHB_TEST_API_KEY is empty')
+  expect(keyProblem(b, { LHB_TEST_API_KEY: '   ' })).toBe('LHB_TEST_API_KEY is empty')
+  const bad = 'LHB_TEST_API_KEY holds characters an API key cannot have (spaces, control characters or non-ASCII)'
+  expect(keyProblem(b, { LHB_TEST_API_KEY: 'sk-or-v1-AAAA\nBBBB' })).toBe(bad)
+  expect(keyProblem(b, { LHB_TEST_API_KEY: 'sk-or-v1-AAAA BBBB' })).toBe(bad)
+  expect(keyProblem(b, { LHB_TEST_API_KEY: 'sk-or-v1-abc\u0456' })).toBe(bad) // a Cyrillic i (U+0456) pasted for a Latin one
+  expect(keyProblem(b, { LHB_TEST_API_KEY: '  sk-or-v1-abc\n' })).toBeUndefined()
+  expect(apiKey(b, { LHB_TEST_API_KEY: '  sk-or-v1-abc\n' })).toBe('sk-or-v1-abc')
+  expect(apiKey(b, {})).toBeUndefined()
+  // A name every object inherits is not a variable: no function source as a key.
+  expect(keyProblem({ apiKeyEnv: 'toString' }, {})).toBe('toString is not set')
+  expect(keyProblem({ apiKeyEnv: 'constructor' }, process.env)).toBe('constructor is not set')
+  expect(keyProblem({}, {})).toBeUndefined()
+})
+
+test('keyNote: the variable and the host it goes to, port included; nothing for a name or a URL validation would refuse', () => {
+  expect(keyNote({ apiKeyEnv: 'OPENROUTER_API_KEY', baseUrl: 'https://openrouter.ai/api/v1' })).toBe('the key in OPENROUTER_API_KEY goes to openrouter.ai')
+  expect(keyNote({ apiKeyEnv: 'X_API_KEY', baseUrl: 'http://127.0.0.1:8080/v1' })).toBe('the key in X_API_KEY goes to 127.0.0.1:8080')
+  expect(keyNote({ apiKeyEnv: 'X_API_KEY', baseUrl: 'http://127.0.0.1:8080/v1' }, { X_API_KEY: 'short-key' }))
+    .toBe('the key in X_API_KEY goes to 127.0.0.1:8080 (shorter than 20 characters, so it is not redacted)')
+  expect(keyNote({ apiKeyEnv: 'X_API_KEY', baseUrl: 'http://127.0.0.1:8080/v1' }, { X_API_KEY: 'k'.repeat(20) })).toBe('the key in X_API_KEY goes to 127.0.0.1:8080')
+  expect(keyNote({ apiKeyEnv: 'sk-or-v1-pasted', baseUrl: 'https://openrouter.ai/api/v1' })).toBeUndefined()
+  expect(keyNote({ apiKeyEnv: 'X_API_KEY', baseUrl: '' })).toBeUndefined()
+  expect(keyNote({ baseUrl: 'https://openrouter.ai/api/v1' })).toBeUndefined()
 })
