@@ -30,8 +30,8 @@ const die = (msg: string): never => { console.error(msg); process.exit(2) }
 const PKG = JSON.parse(readFileSync(path.join(PKG_ROOT, 'package.json'), 'utf8')) as { version: string; description: string }
 /** A command's --help: printed before the command does anything, so `serve --help` copies nothing. */
 const printHelp = (name: CommandName): void => { console.log(commandHelp(name)) }
-/** An argument the command cannot take: what is wrong, then the command's usage; exit 2 like every other refusal. */
-function argError(name: CommandName, msg: string): never { return die(`error: ${msg}\n${usage(name)}`) }
+/** An argument the command cannot take: what is wrong on one line (Node's own messages can run over several), then the command's usage; exit 2 like every other refusal. */
+function argError(name: CommandName, msg: string): never { return die(`error: ${msg.replace(/\s*\n\s*/g, ' ')}\n${usage(name)}`) }
 const PORT = (s: string) => /^\d+$/.test(s) && Number(s) <= 65535
 
 const DEMO_HARNESSES = ['bare', 'tuned', 'tuned-hermes']

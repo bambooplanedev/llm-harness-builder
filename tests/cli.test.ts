@@ -672,6 +672,8 @@ test('argument errors name the option, show the usage, exit 2 and print no stack
     [['demo', 'foo'], /^error: Unexpected argument 'foo'/m],
     [['serve', '--port', 'abc'], /^error: --port must be an integer from 0 to 65535$/m],
     [['serve', '--port', '70000'], /^error: --port must be an integer from 0 to 65535$/m],
+    // Node's own message for a value that starts with a dash runs over three lines; it is still one line here
+    [['serve', '--port', '-1'], /^error: Option '--port' argument is ambiguous\./m],
     [['bench', '--n', 'x'], /^error: --n must be a positive integer$/m],
     [['bench', '--timeout', '0'], /^error: --timeout must be a positive integer$/m],
     [['bench', '--task', 'nope'], /^error: --task must be one of slug\|pool\|pool2\|pool3\|sift\|triage\|judge$/m],
@@ -688,7 +690,8 @@ test('argument errors name the option, show the usage, exit 2 and print no stack
     const r = cli(args)
     expect([args, r.status]).toEqual([args, 2])
     expect([args, r.stderr]).toEqual([args, expect.stringMatching(message)])
-    expect(r.stderr).toMatch(new RegExp(`^usage: llm-harness-builder ${args[0]}\\b`, 'm'))
+    // the message is one line and the usage is the very next one: a message that runs over several lines does not pass
+    expect([args, r.stderr]).toEqual([args, expect.stringMatching(new RegExp(`^error: [^\n]+\nusage: llm-harness-builder ${args[0]}\\b`, 'm'))])
     expect(r.stderr).not.toMatch(/^\s+at /m)
   }
 }, 120_000)
