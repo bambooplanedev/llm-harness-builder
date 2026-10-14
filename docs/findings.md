@@ -158,7 +158,9 @@ carried it. Two runs isolate them:
 - **`tuned` minus the `/no_think` line**, everything else identical: **FAIL**, `parse_failed`
   after 5 turns. Two responses in a row spent 4600+ completion tokens inside `<think>`, hit the
   8192-token ceiling and never emitted the JSON object at all. `enforceSchema` was on and did
-  nothing — llama.cpp disables the grammar in thinking mode.
+  nothing — llama.cpp disables the grammar in thinking mode. (2026-10-14: a later replay on
+  llama.cpp b10826 found the grammar and thinking coexisting; see the
+  [honest notes](honest-notes.md).)
 - **`bare` plus that one line** and nothing else: **FAIL**, but in a new way. It stopped rambling
   and on turn 3 read the whole log with `read_file`. The next request was 128392 tokens against
   an 8192-token window: `400 exceed_context_size_error`. `bare` has no `maxToolOutputChars`, so

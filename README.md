@@ -82,10 +82,10 @@ stream as JSONL to stdout; human-readable progress goes to stderr.
 
 `--help` lists the commands, `<command> --help` (or `help <command>`) the options of one, and
 `--version` prints the installed version. Exit codes: 0 for help; `run` exits 0 when the model
-ended with a final answer and 1 when it did not, while `demo` and `bench` exit 0 whatever the
-verdicts; 2 for an argument a command cannot take (the message names it and the usage follows) and
-for the refusal below; 130 for Ctrl-C in `run`, `demo` and `bench`, which keeps the trace —
-`proxy` exits 0 when stopped.
+ended with a final answer (with `--answer-schema`, one that parses as JSON) and 1 when it did not,
+while `demo` and `bench` exit 0 whatever the verdicts; 2 for an argument a command cannot take (the
+message names it and the usage follows), for a file it cannot read, and for the refusal below; 130
+for Ctrl-C in `run`, `demo` and `bench`, which keeps the trace — `proxy` exits 0 when stopped.
 
 `run` without `--yes` asks before each command it may run. When stdin is not a terminal — a pipe,
 `/dev/null`, CI — nobody can answer, so a harness that may ask (`approveBash` with `bash` on,
@@ -355,8 +355,9 @@ run them by name:
     llm-harness-builder bench harnesses/mcp-off.json harnesses/mcp-on.json --n 5
 
 The table then grows two columns: `toolChars`, what the servers put in front of the model, and
-`med errs`, tool results that came back as errors. Unlike the PASS rate, neither depends on the
-sample size.
+`med errs`, tool results that came back as errors. Unlike the PASS rate, `toolChars` does not
+depend on the sample size: it is the same in every run. `med errs` is a median over the runs, and
+the count itself varies from run to run, because it is what the model did.
 
 Five runs per arm, on the same setup as [Bench results](docs/findings.md#bench-results), on
 2026-09-13:

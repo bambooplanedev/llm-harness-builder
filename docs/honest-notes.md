@@ -10,9 +10,11 @@ Limits of [llm-harness-builder](../README.md) and of what its [findings](finding
   it is what the model did, so it varies from run to run; the table shows its median.
 - Traces are raw. Anything the model reads (including `.env`) ends up in `runs/`. `run` without
   `--workdir` works in the current directory, so `runs/` lands inside the project the agent reads;
-  pass `--workdir`. Point `workdir` at a scratch copy or a git repo. `run` asks before each command
-  unless `--yes`; `demo` and `bench` approve everything, the harness files' `mcpServers` and
-  `loop.untilBash` included; `write_file` never asks.
+  pass `--workdir`. Point `workdir` at a scratch copy or a git repo. `run` asks before each `bash`
+  command when `tools.approveBash` is on (every shipped harness has it on), before starting each
+  MCP server and before `loop.untilBash`, unless `--yes`; other tools and MCP tool calls never ask;
+  `demo` and `bench` approve everything, the harness files' `mcpServers` and `loop.untilBash`
+  included.
 - The environment of what the model runs — `bash`, `loop.untilBash`, and the task checks, which
   execute the model's code — is `PATH`, `HOME`, `LANG`, `LC_ALL`, `LC_CTYPE`, `LC_COLLATE`,
   `LC_MESSAGES`, `LC_MONETARY`, `LC_NUMERIC`, `LC_TIME`, `TERM`, `TMPDIR` and the names in
@@ -66,15 +68,16 @@ Limits of [llm-harness-builder](../README.md) and of what its [findings](finding
   included. Every shipped harness carries 1024 since 2026-09-19, except `bare` (no cap) and
   `curator` and `curator-judge` (4096). On the old task and in the MCP pair the `/no_think`
   harnesses never needed more than 162 tokens for a response, and that does not carry over: a
-  healthy batch of edits on `pool` is 486 tokens at size 7 and up to 598 at size 8, and on Bonsai 2
-  it is 933 to 1004, so close to the cap that in 2 of 9 runs the first try was cut off at 1024.
-  `bare` has no cap because it thinks: the largest finished response of each of its two recorded
-  runs was 592 and 1317 tokens (the median of all eight is 493), and another `bare` run has one of
-  3046. There a runaway costs 169 to 363 s in the four recorded (the 295 s under
-  [MCP](../README.md#mcp) is `mcp-on`'s) before anything can react, and a second one after the
-  clipped retry makes a ten-minute run that ends as `parse_failed`, or as `aborted` if the bench
-  timeout comes first. A cap set below what a model needs to think turns every response into a
-  parse error; the run then ends as `parse_failed` after two.
+  healthy batch of edits on `pool` is 486 tokens at size 7 and up to 598 at size 8 (local traces,
+  not in the repository), and on Bonsai 2, which ran `pool2` and not `pool`, it is 933 to 1004, so
+  close to the cap that in 2 of 9 runs the first try was cut off at 1024. `bare` has no cap because
+  it thinks: the largest finished response of each of its two recorded runs was 592 and 1317 tokens
+  (the median of all eight is 493), and another `bare` run has one of 3046. There a runaway costs
+  169 to 363 s in the four recorded (the 295 s under [MCP](../README.md#mcp) is `mcp-on`'s) before
+  anything can react, and a second one after the clipped retry makes a ten-minute run that ends as
+  `parse_failed`, or as `aborted` if the bench timeout comes first. The Bonsai 2 and `bare` figures
+  above are from those traces as well, the 295 s excepted. A cap set below what a model needs to
+  think turns every response into a parse error; the run then ends as `parse_failed` after two.
 - Abort cannot interrupt a `bash` command that is already running (nor the `loop.untilBash` check,
   which runs the same way); the command returns within its 30 s timeout, then the run ends. An MCP
   call in flight is interrupted: abort closes the server, and the call comes back as an error.
