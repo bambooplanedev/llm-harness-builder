@@ -3,7 +3,7 @@ import { fetch as undiciFetch, Agent } from 'undici'
 /** The subset of fetch the adapters use; lets tests pass a fake and keeps undici's types out of the public surface. */
 export type FetchLike = (
   url: string,
-  init?: { method?: string; headers?: Record<string, string>; body?: string; signal?: AbortSignal },
+  init?: { method?: string; headers?: Record<string, string>; body?: string; signal?: AbortSignal; redirect?: 'follow' | 'error' | 'manual' },
 ) => Promise<{ ok: boolean; status: number; text(): Promise<string>; body?: AsyncIterable<Uint8Array> | null; headers?: { get(name: string): string | null } }>
 // `body` is typed as AsyncIterable, not ReadableStream: undici's stream is the stream/web one, the global type
 // without `lib` is the DOM one, and the two do not unify; AsyncIterable covers both and `new Response` in tests.
@@ -84,6 +84,9 @@ export interface Backend {
   countTokens?(payload: unknown, signal?: AbortSignal): Promise<number | undefined>
   /** The server's window and build for `model`; undefined when the server does not say. Never throws. */
   serverInfo?(model: string): Promise<ServerInfo | undefined>
+  /** Set by listModels when the server said its list goes on past what it sent (OpenRouter's total_count): then a model
+   *  missing from it may still be there, and preflight gives no verdict. */
+  partialList?: boolean
 }
 
 export class BackendError extends Error {

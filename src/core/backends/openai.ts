@@ -72,14 +72,42 @@ export function fromJson(body: any): NormalizedResponse {
   }
 }
 
+/** OpenRouter's routing shortcuts (`:nitro`, `:floor`, …) are not in its model list; the model they route to is. */
+export const withoutVariant = (id: string): string => id.replace(/:[a-z]+$/, '')
+
 export class OpenAIBackend implements Backend {
-  constructor(private baseUrl: string, private fetchFn: FetchLike = defaultFetch) { this.baseUrl = baseUrl.replace(/\/+$/, '') }
+  partialList?: boolean
+  private models?: Promise<any[]>
+
+  /** `key`: a hosted API (backend.apiKeyEnv). It goes as a bearer token to /models and /chat/completions, the only
+   *  requests made then — none of llama-server's — and those requests follow no redirect: undici would drop the key on
+   *  another origin, but a 307 would send the whole conversation again, and nothing about a hosted API redirects. */
+  constructor(private baseUrl: string, private fetchFn: FetchLike = defaultFetch, private key?: string) { this.baseUrl = baseUrl.replace(/\/+$/, '') }
+
+  private keyed(init: { method?: string; headers?: Record<string, string>; body?: string; signal?: AbortSignal } = {}) {
+    return this.key ? { ...init, headers: { ...init.headers, authorization: `Bearer ${this.key}` }, redirect: 'manual' as const } : init
+  }
+
+  /** A non-2xx in words a person can act on: a redirect a keyed request does not follow, a 401 to a request with no key. */
+  private failed(what: string, status: number): string {
+    if (this.key && status >= 300 && status < 400) return `${what}: ${status} (redirect not followed: with a key, requests go only to baseUrl)`
+    if (!this.key && status === 401) return `${what}: 401 (no key was sent: set backend.apiKeyEnv or --api-key-env)`
+    return `${what}: ${status}`
+  }
+
+  /** GET /models, once per backend: preflight asks for the list, then for one model's window. */
+  private modelList(): Promise<any[]> {
+    return (this.models ??= (async () => {
+      const r = await (this.key ? this.fetchFn(`${this.baseUrl}/models`, this.keyed()) : this.fetchFn(`${this.baseUrl}/models`))
+      if (!r.ok) throw new BackendError(this.failed('GET /models', r.status), await r.text())
+      const j = (await readJson(r, 'GET /models')) as { data: any[]; total_count?: unknown }
+      this.partialList = typeof j.total_count === 'number' && j.total_count > j.data.length
+      return j.data
+    })())
+  }
 
   async listModels(): Promise<string[]> {
-    const r = await this.fetchFn(`${this.baseUrl}/models`)
-    if (!r.ok) throw new BackendError(`GET /models: ${r.status}`, await r.text())
-    const j = (await readJson(r, 'GET /models')) as { data: { id: string }[] }
-    return j.data.map(m => m.id)
+    return (await this.modelList()).map(m => m.id)
   }
 
   buildPayload(req: ChatRequest): unknown {
@@ -102,6 +130,7 @@ export class OpenAIBackend implements Backend {
 
   /** llama-server only: /apply-template renders the chat template (tools included), /tokenize counts it. Both live at the server root, not under /v1. */
   async countTokens(payload: unknown, signal?: AbortSignal): Promise<number | undefined> {
+    if (this.key) return undefined // a hosted API has no /apply-template or /tokenize; the estimate and usage remain
     const root = this.baseUrl.replace(/\/v1$/, '')
     const post = async (path: string, body: unknown) => {
       const r = await this.fetchFn(`${root}${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal })
@@ -121,6 +150,7 @@ export class OpenAIBackend implements Backend {
    * for one of its models at /props?model= — which loads that model if it is not loaded yet.
    */
   async serverInfo(model: string): Promise<ServerInfo | undefined> {
+    if (this.key) return this.listedInfo(model)
     const root = this.baseUrl.replace(/\/v1$/, '')
     const props = async (q = '') => {
       const r = await this.fetchFn(`${root}/props${q}`)
@@ -139,9 +169,20 @@ export class OpenAIBackend implements Backend {
     } catch { return undefined }
   }
 
+  /** A hosted API's window for `model`, from its /models entry (the id, else the id without a routing suffix): the smaller
+   *  of `context_length`, the most any provider takes, and `top_provider.context_length`, where requests go first. */
+  private async listedInfo(model: string): Promise<ServerInfo | undefined> {
+    try {
+      const list = await this.modelList()
+      const m = list.find(x => x?.id === model) ?? list.find(x => x?.id === withoutVariant(model))
+      const ns = [m?.context_length, m?.top_provider?.context_length].filter((n): n is number => Number.isInteger(n) && n > 0)
+      return { ...(ns.length ? { nCtx: Math.min(...ns) } : {}), router: false }
+    } catch { return undefined }
+  }
+
   async send(payload: unknown, signal?: AbortSignal, onDelta?: (d: Delta) => void): Promise<NormalizedResponse> {
-    const r = await this.fetchFn(`${this.baseUrl}/chat/completions`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload), signal })
-    if (!r.ok) throw new BackendError(`POST /chat/completions: ${r.status}`, await r.text())
+    const r = await this.fetchFn(`${this.baseUrl}/chat/completions`, this.keyed({ method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload), signal }))
+    if (!r.ok) throw new BackendError(this.failed('POST /chat/completions', r.status), await r.text())
     // A recorded `stream: false` turn (a proxy trace) comes back as one JSON body; everything else is read as a stream.
     if (/^application\/json/i.test(r.headers?.get('content-type') ?? '')) return fromJson(await readJson(r, 'POST /chat/completions'))
     return collect(jsonChunks(r, 'POST /chat/completions', 'data:'), onDelta)

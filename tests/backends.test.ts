@@ -3,7 +3,8 @@ import { readFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { OpenAIBackend, collect, fromJson } from '../src/core/backends/openai.js'
 import { OllamaBackend } from '../src/core/backends/ollama.js'
-import { BackendError, defaultFetch, jsonChunks, type ChatRequest, type Delta } from '../src/core/backends/types.js'
+import { BackendError, defaultFetch, jsonChunks, type ChatRequest, type Delta, type FetchLike } from '../src/core/backends/types.js'
+import { createBackend } from '../src/core/backends/index.js'
 
 const fx = (n: string) => JSON.parse(readFileSync(new URL(`./fixtures/${n}.json`, import.meta.url), 'utf8'))
 const fakeFetch = (status: number, body: unknown) => (async (_url: string, init?: RequestInit) => {
@@ -323,4 +324,96 @@ test('OpenRouter\'s keep-alive comments and the usage chunk that repeats finish_
 
 test('fromJson: finish_reason "error" in a stream:false body throws with the provider\'s text', () => {
   expect(() => fromJson({ error: { message: 'boom' }, choices: [{ message: { content: '' }, finish_reason: 'error' }] })).toThrow('POST /chat/completions: boom')
+})
+
+const KEY = 'sk-or-v1-' + '0'.repeat(32)
+type Logged = { url: string; init?: any }
+/** A fetch that answers from `respond` and logs every request: method and path, headers, the redirect mode. */
+function recorder(respond: (url: string) => Response) {
+  const log: Logged[] = []
+  const f = (async (url: string, init?: any) => { log.push({ url, init }); return respond(url) }) as unknown as FetchLike
+  return { f, log, paths: () => log.map(r => `${r.init?.method ?? 'GET'} ${new URL(r.url).pathname}`) }
+}
+const modelsBody = { data: [
+  { id: 'qwen/qwen3-32b', context_length: 131072, top_provider: { context_length: 40960 } },
+  { id: 'qwen/qwen3-coder', context_length: 262144, top_provider: { context_length: 262144 } },
+  { id: 'no/window' },
+], total_count: 3 }
+const jsonRes = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status, headers: { 'content-type': 'application/json' } })
+const sseRes = (chunks: unknown[]) => new Response(sseBody(chunks), { status: 200, headers: { 'content-type': 'text/event-stream' } })
+const listen = async (s: ReturnType<typeof createServer>) => { await new Promise<void>(r => s.listen(0, '127.0.0.1', r)); return (s.address() as { port: number }).port }
+
+test('with a key: the bearer token and no redirects on /models and /chat/completions, and nothing else is asked', async () => {
+  const rec = recorder(url => url.endsWith('/models') ? jsonRes(modelsBody) : sseRes([{ choices: [{ index: 0, delta: { content: 'hi' }, finish_reason: 'stop' }] }]))
+  const be = new OpenAIBackend('https://openrouter.ai/api/v1/', rec.f, KEY)
+  const payload = be.buildPayload(req)
+  expect(await be.countTokens(payload)).toBeUndefined()
+  await be.send(payload)
+  expect(rec.paths()).toEqual(['POST /api/v1/chat/completions'])
+  expect(await be.listModels()).toEqual(['qwen/qwen3-32b', 'qwen/qwen3-coder', 'no/window'])
+  expect(await be.serverInfo('qwen/qwen3-32b')).toEqual({ nCtx: 40960, router: false })
+  expect(rec.paths()).toEqual(['POST /api/v1/chat/completions', 'GET /api/v1/models'])
+  for (const r of rec.log) { expect(r.init.headers.authorization).toBe(`Bearer ${KEY}`); expect(r.init.redirect).toBe('manual') }
+  expect(be.partialList).toBe(false)
+})
+
+test('serverInfo with a key: by id or by id without a routing suffix, with no listModels first; /models read once', async () => {
+  const rec = recorder(() => jsonRes(modelsBody))
+  const be = new OpenAIBackend('https://or.example/api/v1', rec.f, KEY)
+  expect(await be.serverInfo('qwen/qwen3-coder:nitro')).toEqual({ nCtx: 262144, router: false })
+  expect(await be.serverInfo('no/window')).toEqual({ router: false })
+  expect(await be.serverInfo('absent/model')).toEqual({ router: false })
+  expect(rec.paths()).toEqual(['GET /api/v1/models'])
+  const partial = recorder(() => jsonRes({ data: [{ id: 'a' }], total_count: 500 }))
+  const p = new OpenAIBackend('https://or.example/api/v1', partial.f, KEY)
+  await p.listModels()
+  expect(p.partialList).toBe(true)
+})
+
+test('createBackend: the key from env, trimmed, reaches the server; without a value it throws', async () => {
+  const seen: string[] = []
+  const srv = createServer((q, s) => { seen.push(String(q.headers.authorization)); s.writeHead(200, { 'content-type': 'application/json' }); s.end(JSON.stringify({ data: [{ id: 'm' }] })) })
+  const port = await listen(srv)
+  try {
+    const b = { kind: 'openai' as const, baseUrl: `http://127.0.0.1:${port}/v1`, model: 'm', temperature: 0, apiKeyEnv: 'LHB_T_API_KEY' }
+    expect(await createBackend(b, { LHB_T_API_KEY: `  ${KEY}\n` }).listModels()).toEqual(['m'])
+    expect(seen).toEqual([`Bearer ${KEY}`])
+    expect(() => createBackend(b, {})).toThrow('backend.apiKeyEnv: LHB_T_API_KEY is not set')
+    expect(() => createBackend({ ...b, baseUrl: 'http://10.0.0.2/v1' }, { LHB_T_API_KEY: KEY })).toThrow('backend.apiKeyEnv needs an https baseUrl (http only on localhost, 127.0.0.1 or [::1]): the key would cross the network in clear text')
+    expect(() => createBackend({ ...b, baseUrl: 'http://' }, { LHB_T_API_KEY: KEY })).toThrow('backend.baseUrl must be an http(s) URL')
+  } finally { srv.close() }
+})
+
+test('with a key a 3xx is an error, not a hop: the next server gets nothing', async () => {
+  const moved = recorder(() => new Response('moved', { status: 302, headers: { location: 'https://elsewhere.example/v1/models' } }))
+  await expect(new OpenAIBackend('https://or.example/v1', moved.f, KEY).listModels())
+    .rejects.toThrow('GET /models: 302 (redirect not followed: with a key, requests go only to baseUrl)')
+  const hits: string[] = []
+  const b = createServer((q, s) => { hits.push(String(q.url)); s.end('{}') })
+  const bPort = await listen(b)
+  const a = createServer((_q, s) => { s.writeHead(307, { location: `http://127.0.0.1:${bPort}/v1/chat/completions` }); s.end() })
+  const aPort = await listen(a)
+  try {
+    await expect(new OpenAIBackend(`http://127.0.0.1:${aPort}/v1`, defaultFetch, KEY).send({}))
+      .rejects.toThrow('POST /chat/completions: 307 (redirect not followed: with a key, requests go only to baseUrl)')
+    expect(hits).toEqual([])
+  } finally { a.close(); b.close() }
+})
+
+test('a 401 to a request that carried no key says how to send one; with a key the status stands alone', async () => {
+  const no = recorder(() => jsonRes({ error: { message: 'No auth credentials found', code: 401 } }, 401))
+  await expect(new OpenAIBackend('https://or.example/v1', no.f).listModels()).rejects.toThrow('GET /models: 401 (no key was sent: set backend.apiKeyEnv or --api-key-env)')
+  await expect(new OpenAIBackend('https://or.example/v1', no.f).send({})).rejects.toThrow('POST /chat/completions: 401 (no key was sent: set backend.apiKeyEnv or --api-key-env)')
+  expect(no.log.every(r => r.init?.headers?.authorization === undefined)).toBe(true)
+  await expect(new OpenAIBackend('https://or.example/v1', no.f, KEY).send({}))
+    .rejects.toSatisfy((e: unknown) => e instanceof BackendError && e.message === 'POST /chat/completions: 401')
+})
+
+test('without a key nothing changes: no authorization, no redirect mode, llama-server\'s extras still asked', async () => {
+  const rec = recorder(url => url.endsWith('/props') ? jsonRes({ default_generation_settings: { n_ctx: 4096 } }) : jsonRes({ prompt: 'p', tokens: [1, 2] }))
+  const be = new OpenAIBackend('http://127.0.0.1:8080/v1', rec.f)
+  expect(await be.countTokens({ model: 'm' })).toBe(2)
+  expect(await be.serverInfo('m')).toEqual({ nCtx: 4096, router: false })
+  expect(rec.paths()).toEqual(['POST /apply-template', 'POST /tokenize', 'GET /props'])
+  expect(rec.log.every(r => r.init?.headers?.authorization === undefined && r.init?.redirect === undefined)).toBe(true)
 })
