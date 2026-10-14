@@ -8,11 +8,22 @@ test('BASE_ENV is the list the spec names, in that order', () => {
 })
 
 test('childEnv: the base set only, and only what is set', () => {
-  expect(childEnv([], from)).toEqual({ PATH: '/bin', HOME: '/h', LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8', TMPDIR: '/t' })
+  expect(childEnv([], from)).toStrictEqual({ PATH: '/bin', HOME: '/h', LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8', TMPDIR: '/t' })
 })
 
 test('childEnv: a named variable comes through with its value; a name that is not set is left out', () => {
-  expect(childEnv(['GITHUB_TOKEN', 'NOT_SET'], from)).toEqual({ PATH: '/bin', HOME: '/h', LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8', TMPDIR: '/t', GITHUB_TOKEN: 'v4lue' })
+  expect(childEnv(['GITHUB_TOKEN', 'NOT_SET'], from)).toStrictEqual({ PATH: '/bin', HOME: '/h', LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8', TMPDIR: '/t', GITHUB_TOKEN: 'v4lue' })
+})
+
+test('childEnv and bashEnvNote count only what `from` holds itself: a name Object.prototype has is not a variable', () => {
+  const base = childEnv([], from)
+  expect(childEnv(['toString'], from)).toStrictEqual(base)
+  expect(bashEnvNote(['toString'], from)).toBe('bash gets from your environment: toString (not set)')
+  // ENV_NAME lets every one of these through; none may bring a function, or touch the prototype of the result
+  for (const name of ['constructor', 'valueOf', 'hasOwnProperty', '__proto__', '__defineGetter__']) {
+    expect([name, childEnv([name], from)]).toStrictEqual([name, base])
+    expect([name, bashEnvNote([name], from)]).toStrictEqual([name, `bash gets from your environment: ${name} (not set)`])
+  }
 })
 
 test('childEnv: reads process.env by default and never hands out the whole of it', () => {
