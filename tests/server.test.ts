@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import http from 'node:http'
 import { startServer } from '../src/server/index.js'
+import viteConfig from '../web/vite.config.js'
 import type { HarnessConfig } from '../src/core/config.js'
 import { fakeBackend, harness, tmp, type FakeResponse } from './helpers.js'
 
@@ -171,6 +172,12 @@ test('a page on another localhost port cannot PUT a harness or start a run, not 
   const headers = { host: `localhost:${srv.port}`, origin: 'http://localhost:9999', 'content-type': 'text/plain' }
   expect(await rawReq('PUT', '/api/harnesses/csrf', headers, JSON.stringify(config({ name: 'csrf' })))).toBe(403)
   expect(await rawReq('POST', '/api/runs', headers, JSON.stringify({ config: config(), task: 't', workdir }))).toBe(403)
+})
+
+// Vite's string form ('/api': url) sets changeOrigin and rewrites Host to the target, so the dev UI's Origin never
+// matched it and every POST from the dev UI was refused: the object form below keeps the browser's Host.
+test('the Vite dev proxy keeps the browser\'s Host, or serve would refuse every POST from the dev UI', () => {
+  expect(viteConfig.server?.proxy?.['/api']).toMatchObject({ target: 'http://127.0.0.1:7331', changeOrigin: false })
 })
 
 test('harnesses and models', async () => {
