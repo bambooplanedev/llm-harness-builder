@@ -169,12 +169,12 @@ test('bench rejects non-positive-integer --n and --timeout with usage', () => {
 test('Ctrl-C during run keeps the trace instead of an invisible .part', async () => {
   const wd = await tmp('lhb-cli-')
   const fake = join(wd, 'fake.json')
-  // no --yes: the run parks on the approval prompt, so the SIGINT lands mid-run
-  await writeFile(fake, JSON.stringify([{ toolCalls: [{ name: 'bash', args: { command: 'echo hi' } }] }]))
+  // --yes and a slow command: the SIGINT lands while bash runs, mid-run
+  await writeFile(fake, JSON.stringify([{ toolCalls: [{ name: 'bash', args: { command: 'sleep 5' } }] }]))
   const cwd = mkdtempSync(join(tmpdir(), 'lhb-cwd-'))
-  const p = spawn(join(ROOT, 'node_modules', '.bin', 'tsx'), [join(ROOT, 'src', 'cli.ts'), 'run', harness('bare'), '--workdir', wd, 'x'],
+  const p = spawn(join(ROOT, 'node_modules', '.bin', 'tsx'), [join(ROOT, 'src', 'cli.ts'), 'run', harness('bare'), '--workdir', wd, '--yes', 'x'],
     { cwd, env: { ...process.env, LHB_FAKE_BACKEND: fake } })
-  await new Promise<void>(done => p.stderr.on('data', (b: Buffer) => { if (b.toString().includes('run bash:')) done() }))
+  await new Promise<void>(done => p.stderr.on('data', (b: Buffer) => { if (b.toString().includes('tool_call bash')) done() }))
   const code = await new Promise(done => { p.on('exit', done); p.kill('SIGINT') })
   expect(code).toBe(130)
   const files = await readdir(join(cwd, 'runs'))
@@ -211,39 +211,6 @@ test('run starts an mcp server and reports its counts on stderr', async () => {
   expect(r.status).toBe(0)
   // server name, offered count, kept-tools count, description chars, schema chars
   expect(r.stderr).toMatch(/mcp test: 9 offered, 1 tools, 15 desc \+ 77 schema chars/)
-}, 30_000)
-
-test('run without --yes prompts "start mcp server", not "run bash", for an mcp approval', async () => {
-  const wd = await tmp('lhb-cli-')
-  const fake = join(wd, 'fake.json')
-  await writeFile(fake, JSON.stringify([])) // denial ends the run before any LLM request
-  const mcpFixture = join(ROOT, 'tests', 'fixtures', 'mcp-server.mjs')
-  const harnessFile = join(wd, 'mcp-harness.json')
-  await writeFile(harnessFile, JSON.stringify({
-    name: 'mcp-test',
-    backend: { kind: 'openai', baseUrl: 'http://x/v1', model: 'm', temperature: 0 },
-    systemPrompt: 'sys',
-    tools: { enabled: [], approveBash: false },
-    toolCalls: { mode: 'native', enforceSchema: false, promptedTemplate: 'T:{{tools}}', parseErrorHint: 'HINT' },
-    context: { maxToolOutputChars: 1000, budgetTokens: 0 },
-    loop: { maxTurns: 5 },
-    mcpServers: { test: { command: process.execPath, args: [mcpFixture], tools: ['echo'] } },
-  }))
-  // spawnSync's `input` closes stdin (EOF) right after writing, which races readline's
-  // auto-close-on-end and can close the interface before .question() is ever called. A
-  // live spawn that writes to stdin only once the prompt is on screen avoids that race —
-  // same pattern as the SIGINT test above.
-  const cwd = mkdtempSync(join(tmpdir(), 'lhb-cwd-'))
-  const p = spawn(join(ROOT, 'node_modules', '.bin', 'tsx'), [join(ROOT, 'src', 'cli.ts'), 'run', harnessFile, '--workdir', wd, 'do'],
-    { cwd, env: { ...process.env, LHB_FAKE_BACKEND: fake } })
-  let stderr = ''
-  p.stderr.on('data', (b: Buffer) => { stderr += b.toString() })
-  await new Promise<void>(done => p.stderr.on('data', (b: Buffer) => { if (b.toString().includes('[y/N]')) done() }))
-  p.stdin.write('n\n')
-  const code = await new Promise(done => p.on('exit', done))
-  expect(stderr).toContain(`start mcp server "test": ${process.execPath} ${mcpFixture}`)
-  expect(stderr).not.toContain('run bash:')
-  expect(code).toBe(1) // denied -> mcp_error, not final
 }, 30_000)
 
 // Spec regression test 12: Ctrl-C during bench with a live mcp server must not corrupt the PASS
@@ -708,4 +675,33 @@ test('serve --port 0 listens on a free port and says which', async () => {
     expect(port).toBeGreaterThan(0)
     expect((await fetch(`http://127.0.0.1:${port}/api/harnesses`)).status).toBe(200)
   } finally { p.kill() }
+}, 30_000)
+
+const hasPython = spawnSync('python3', ['--version']).status === 0
+/** The CLI in a real terminal (a pty), with keystrokes played in; returns what it printed and its exit code. */
+function inTerminal(steps: object[], args: string[], env: Record<string, string>, cwd: string) {
+  const stepsFile = join(cwd, 'steps.json')
+  writeFileSync(stepsFile, JSON.stringify(steps))
+  const r = spawnSync('python3', [join(ROOT, 'tests', 'fixtures', 'pty-run.py'), stepsFile, join(ROOT, 'node_modules', '.bin', 'tsx'), join(ROOT, 'src', 'cli.ts'), ...args],
+    { cwd, encoding: 'utf8', env: { ...process.env, ...env } })
+  const m = /\nEXIT (-?\d+)\n$/.exec(r.stdout)
+  return { out: r.stdout, code: m ? Number(m[1]) : NaN }
+}
+
+test.skipIf(!hasPython)('in a terminal, Ctrl-C while the model works keeps the trace and exits 130', async () => {
+  const wd = await tmp('lhb-cli-'), cwd = mkdtempSync(join(tmpdir(), 'lhb-cwd-')), fake = join(wd, 'fake.json')
+  await writeFile(fake, JSON.stringify([{ toolCalls: [{ name: 'bash', args: { command: 'sleep 5' } }] }, { content: 'fin' }]))
+  const r = inTerminal([{ after: '[y/N]', send: 'y\r' }, { delay: 1, send: '\u0003' }], ['run', harness('bare'), '--workdir', wd, 'x'], { LHB_FAKE_BACKEND: fake }, cwd)
+  expect(r.code).toBe(130)
+  expect(r.out).not.toContain('done: final')
+  expect(await readdir(join(cwd, 'runs'))).toEqual([expect.stringMatching(/^[0-9a-f]{8}\.jsonl$/)])
+}, 30_000)
+
+test.skipIf(!hasPython)('in a terminal, Ctrl-C at the approval prompt exits 130 with no stack and keeps the trace', async () => {
+  const wd = await tmp('lhb-cli-'), cwd = mkdtempSync(join(tmpdir(), 'lhb-cwd-')), fake = join(wd, 'fake.json')
+  await writeFile(fake, JSON.stringify([{ toolCalls: [{ name: 'bash', args: { command: 'echo hi' } }] }]))
+  const r = inTerminal([{ after: '[y/N]', send: '\u0003' }], ['run', harness('bare'), '--workdir', wd, 'x'], { LHB_FAKE_BACKEND: fake }, cwd)
+  expect(r.code).toBe(130)
+  expect(r.out).not.toMatch(/AbortError|^\s+at /m)
+  expect(await readdir(join(cwd, 'runs'))).toEqual([expect.stringMatching(/^[0-9a-f]{8}\.jsonl$/)])
 }, 30_000)

@@ -40,3 +40,13 @@ export const mcpApprovalName = (server: string): string => MCP_PREFIX + server
 /** The server an approval call would start, or null when the call is an ordinary tool. */
 export const mcpApprovalServer = (callName: string): string | null =>
   callName.startsWith(MCP_PREFIX) ? callName.slice(MCP_PREFIX.length) : null
+
+/** The question the CLI asks before an approval call. The command and the server name go through JSON.stringify:
+ *  with control characters (`\r\u001b[2K`) either would otherwise redraw the line and show something else than what runs. */
+export function approvalPrompt(call: ToolCall): string {
+  const command = JSON.stringify(String(call.args.command ?? ''))
+  const server = mcpApprovalServer(call.name)
+  if (server !== null) return `start mcp server ${JSON.stringify(server)}: ${command}`
+  if (call.name === UNTIL_BASH) return `run each time the model says it is done, on files the model has written: ${command}`
+  return `run bash: ${command}`
+}

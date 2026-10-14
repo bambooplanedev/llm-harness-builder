@@ -11,7 +11,7 @@ import { runAgent, type RunOpts } from './core/run.js'
 import { validateConfig, sendsAnswerSchema, type HarnessConfig, type BackendKind } from './core/config.js'
 import { validateWorkdir } from './core/tools/sandbox.js'
 import type { Backend, NormalizedResponse } from './core/backends/types.js'
-import { mcpApprovalServer, mcpCounts, UNTIL_BASH, quitWithoutWork, type HarnessEvent, type ToolCall } from './core/events.js'
+import { approvalPrompt, mcpCounts, quitWithoutWork, type HarnessEvent, type ToolCall } from './core/events.js'
 import { startServer } from './server/index.js'
 import { TraceWriter, type Meta } from './server/runs.js'
 import { TASKS, type Task } from './core/tasks.js'
@@ -93,17 +93,18 @@ async function execRun(config: HarnessConfig, task: string, workdir: string, o: 
   // own handler before ours and exits from it, so its .part stays for the Bench page to finish.
   const onSigint = () => { trace.closeSync(); process.exit(130) }
   if (!o.bench) process.once('SIGINT', onSigint)
-  const rl = o.yes ? null : createInterface({ input: process.stdin, output: process.stderr })
+  // One readline per question, closed after the answer: while the model works the terminal is not
+  // in raw mode, so Ctrl-C is a SIGINT and onSigint keeps the trace. Ctrl-C or Ctrl-D at the
+  // question itself rejects with AbortError: the same exit, without a stack.
   const approve = async (call: ToolCall) => {
     if (o.yes) return true
-    const server = mcpApprovalServer(call.name)
-    const what = server
-      ? `start mcp server "${server}": ${call.args.command}`
-      : call.name === UNTIL_BASH
-        ? `run each time the model says it is done, on files the model has written: ${call.args.command}`
-        : `run bash: ${call.args.command}`
-    const a = await rl!.question(`${what}\n[y/N] `)
-    return /^y(es)?$/i.test(a.trim())
+    const rl = createInterface({ input: process.stdin, output: process.stderr })
+    try { return /^y(es)?$/i.test((await rl.question(`${approvalPrompt(call)}\n[y/N] `)).trim()) }
+    catch (e) {
+      if ((e as Error).name === 'AbortError') { trace.closeSync(); process.exit(130) }
+      throw e
+    }
+    finally { rl.close() }
   }
   const opts: RunOpts = { approve, backend: await fakeBackendFromEnv(), signal: o.signal }
   // Live text only on a terminal: reasoning dim, content plain; a pipe, bench (quiet) and --json see events only.
@@ -125,7 +126,6 @@ async function execRun(config: HarnessConfig, task: string, workdir: string, o: 
       o.onEvent?.(e)
     }
   } finally {
-    rl?.close()
     process.off('SIGINT', onSigint) // demo runs three harnesses in one process: a stale handler would rename the wrong run
   }
   await trace.close()
