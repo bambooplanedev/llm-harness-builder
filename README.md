@@ -407,9 +407,10 @@ the model then wrote `\"\"` again; given the marker alone it wrote `''`. This is
 on one recorded history, not a PASS rate. No run was repeated and the table above stands as
 measured; its `backend_error×2` would not happen the same way today.
 
-The other half is the 295 s. `mcp-on`, like every shipped harness but `bare`, now sends
-`"maxTokens": 1024`. The recorded turn-4 request that ran away, sent again with that cap — six times
-through the shipped adapter, three as plain non-streaming requests: nine tries, eight of them the healthy 162-token answer, and one ran away again —
+The other half is the 295 s. `mcp-on`, like every shipped harness but `bare` and the two curator
+ones (4096), now sends `"maxTokens": 1024`. The recorded turn-4 request that ran away, sent again
+with that cap — six times through the shipped adapter, three as plain non-streaming requests:
+nine tries, eight of them the healthy 162-token answer, and one ran away again —
 the same `` `** `` — and was cut at 1024 tokens after 55 s. With the cap the retry fits even
 without the marker (3130 + 1024 + 37), for as long as the prompt leaves that much room. One in
 nine here against two in five in the table is not a rate either; it says the runaway is sampling,

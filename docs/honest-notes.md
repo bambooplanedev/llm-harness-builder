@@ -5,26 +5,40 @@ Limits of [llm-harness-builder](../README.md) and of what its [findings](finding
 - Five runs per harness is a small sample. By Fisher's exact test only 5-against-1 or 4-against-0
   reaches p < 0.05: 4/5 against 2/5 is p = 0.52, and the `tuned` 4/5 against `bare` 1/5 under
   [Bench results](findings.md#bench-results) is
-  p = 0.21 — suggestive, not proof. `toolChars` and the tool-error counts are measured rather than
-  sampled, which is why the MCP pair reports them.
+  p = 0.21 — suggestive, not proof. `toolChars` is measured rather than sampled — it is the same in
+  every run — which is why the MCP pair reports it. The tool-error count is exact within a run, but
+  it is what the model did, so it varies from run to run; the table shows its median.
 - Traces are raw. Anything the model reads (including `.env`) ends up in `runs/`. `run` without
   `--workdir` works in the current directory, so `runs/` lands inside the project the agent reads;
-  pass `--workdir`. Point `workdir` at a scratch copy or a git repo. `bash` asks for approval by
-  default.
-- A CLI run writes `runs/<id>.jsonl.part` and renames it when done, on Ctrl-C included. Only a hard
-  kill (or Ctrl-C during `bench`, where the Bench page still reads the `.part`) leaves one behind:
-  rename it to `.jsonl` to open it in the UI.
-- `enforceSchema` is not a guarantee: llama.cpp's grammar can fail open in some cases and is
-  disabled in thinking mode. The parser is lenient regardless. In
-  [Isolating the knobs](findings.md#isolating-the-knobs-two-more-runs), `enforceSchema`
-  did nothing at all until thinking was off — the model kept spending its whole budget inside
-  `<think>` and never reached the JSON.
+  pass `--workdir`. Point `workdir` at a scratch copy or a git repo. `run` asks before each command
+  unless `--yes`; `demo` and `bench` approve everything, the harness files' `mcpServers` and
+  `loop.untilBash` included; `write_file` never asks.
+- The environment of what the model runs — `bash`, `loop.untilBash`, and the task checks, which
+  execute the model's code — is `PATH`, `HOME`, `LANG`, `LC_ALL`, `LC_CTYPE`, `LC_COLLATE`,
+  `LC_MESSAGES`, `LC_MONETARY`, `LC_NUMERIC`, `LC_TIME`, `TERM`, `TMPDIR` and the names in
+  `tools.bashEnv`. That keeps keys out of what a command prints by accident and out of tools that
+  read `*_API_KEY` by themselves. It is not a boundary: a command runs as you and can read this
+  process's environment (`ps -E` on macOS, `/proc/<pid>/environ` on Linux) and any of your files.
+- MCP servers start with the whole environment of this process; `mcpServers` has no `env`.
+- `run` without `--yes` refuses to start when stdin is not a terminal and the harness may ask
+  (`approveBash` with `bash` on, `loop.untilBash`, `mcpServers`): nobody could answer.
+- A CLI run writes `runs/<id>.jsonl.part` and renames it when done, on Ctrl-C included (at the
+  approval question too, where Ctrl-D does the same). Any other kill leaves one behind — SIGTERM
+  (exit 143), SIGHUP (a closed terminal; 129 in a shell), SIGKILL — and so does Ctrl-C during
+  `bench`, where the Bench page still reads the `.part`. Rename it to `.jsonl` to open it in the UI.
+- `enforceSchema` is not a guarantee: llama.cpp's grammar can fail open in some cases, and whether
+  it holds in thinking mode can depend on the build and the chat template. The parser is lenient
+  regardless. In [Isolating the knobs](findings.md#isolating-the-knobs-two-more-runs),
+  `enforceSchema` did nothing at all until thinking was off — the model kept spending its whole
+  budget inside `<think>` and never reached the JSON. On llama-server b10826 thinking and the
+  grammar coexisted and the content still parsed
+  ([a replay](findings.md#a-fourth-thinking-on-the-turn-after-a-repeat-2026-09-20)).
 - Streaming is always on. The raw response in the inspector is assembled from the stream (the last
-  chunk plus the collected message), not the chunk log. `<think>` shows as a separate grey block only
-  when the server separates it (llama-server `--jinja` with a reasoning format, Ollama `thinking`);
-  otherwise the tags arrive inside the text. Known failure path: llama-server builds before May 2025
-  answer 400 to `tools` together with `stream`; a buffering proxy delays the live text but the run
-  still completes.
+  chunk plus the collected message), not the chunk log. `<think>` shows as a separate grey block
+  only when the server separates it (llama-server `--jinja` with a reasoning format, Ollama
+  `thinking`); otherwise the tags arrive inside the text. Known failure path: llama-server builds
+  before May 2025 answer 400 to `tools` together with `stream`; a buffering proxy delays the live
+  text but the run still completes.
 - Token counts are exact on llama-server (`/apply-template` + `/tokenize`: chat template and
   `tools[]` included) and a `chars / 4` estimate of the messages elsewhere; the budget trims by
   the estimate in both cases; the backend's `usage` is shown after each response.
@@ -49,20 +63,30 @@ Limits of [llm-harness-builder](../README.md) and of what its [findings](finding
   the window with `budgetTokens` at 0. All of this is llama-server behaviour; Ollama shifts the
   context instead of answering 400, and nothing here was measured on it.
 - `backend.maxTokens` caps what one response may generate (`max_tokens` / `num_predict`), thinking
-  included. Every shipped harness except `bare` carries 1024 since 2026-09-19: across the recorded
-  runs — one model, the tasks of this README — the `/no_think` harnesses never needed more than 162 tokens for a response. `bare` has no cap
-  because it thinks — 592 tokens at the median and 1317 at most in its two recorded runs — so there a runaway still costs about
-  295 s before anything can react, and a second one after the clipped retry makes a ten-minute run
-  that ends as `parse_failed`, or as `aborted` if the bench timeout comes first. A cap set below
-  what a model needs to think turns every response into a parse error; the run then ends as
-  `parse_failed` after two.
-- Abort cannot interrupt a tool that is already running; `bash` returns within its 30 s
-  timeout, then the run ends.
+  included. Every shipped harness carries 1024 since 2026-09-19, except `bare` (no cap) and
+  `curator` and `curator-judge` (4096). On the old task and in the MCP pair the `/no_think`
+  harnesses never needed more than 162 tokens for a response, and that does not carry over: a
+  healthy batch of edits on `pool` is 486 tokens at size 7 and up to 598 at size 8, and on Bonsai 2
+  it is 933 to 1004, so close to the cap that in 2 of 9 runs the first try was cut off at 1024.
+  `bare` has no cap because it thinks: the largest finished response of each of its two recorded
+  runs was 592 and 1317 tokens (the median of all eight is 493), and another `bare` run has one of
+  3046. There a runaway costs 169 to 363 s in the four recorded (the 295 s under
+  [MCP](../README.md#mcp) is `mcp-on`'s) before anything can react, and a second one after the
+  clipped retry makes a ten-minute run that ends as `parse_failed`, or as `aborted` if the bench
+  timeout comes first. A cap set below what a model needs to think turns every response into a
+  parse error; the run then ends as `parse_failed` after two.
+- Abort cannot interrupt a `bash` command that is already running (nor the `loop.untilBash` check,
+  which runs the same way); the command returns within its 30 s timeout, then the run ends. An MCP
+  call in flight is interrupted: abort closes the server, and the call comes back as an error.
 - `demo --kind openai` needs `--base-url` (the default URL is Ollama's port).
-- The UI has no built-in workdir: run `demo` once and point the UI's workdir at the temp directory it prints (or at any `workdir` from a bench JSON), or at any scratch project.
-- `bench` PASS means `node --test` came back green (for `pool`: green on pristine tests the model
-  cannot reach), not that the bug was fixed the right way: the model has `write_file` and could edit
-  the test instead, and a fix can satisfy the tests while missing the report (see the note under
+- The UI has no built-in workdir: run `demo` once and point the UI's workdir at the temp directory
+  it prints (or at any `workdir` from a bench JSON), or at any scratch project.
+- `bench` PASS means `node --test` came back green on `slug` and in the pool family (`pool`,
+  `pool2`, `pool3`), and that the output agrees with the fixture's key on `sift`, `triage` and
+  `judge`. It does not mean a bug was fixed the right way: on `slug` the model has `write_file` and
+  could edit the test instead (the pool family restores the pristine tests from the package before
+  the check, so edits to `test/` do not count, but `bash` is not sandboxed), and a fix can satisfy
+  the tests while missing the report (see the note under
   [Bench results](findings.md#bench-results): 11 of 14 did). Open the run's trace (`runs[].trace` in
   the JSON, or the run list in the UI) to see what it changed.
 - `explainEditMiss` compares lines with everything but letters, digits and `_` removed, so it also
@@ -79,8 +103,9 @@ Limits of [llm-harness-builder](../README.md) and of what its [findings](finding
   replay that tried it.
 - In `pool`, "N = 7" means "these seven units", not seven equal ones: the order is fixed and the
   units differ in difficulty. The size at which a healthy run fills the window belongs to this
-  machine and this Node: about 200 of each failure's 900 characters are the absolute tmp path, and
-  the default test reporter differs between Node majors. The JSON records `node`.
+  machine and this Node: about 120 of each failure's 870 characters are the absolute tmp path (Node
+  24.18 prints it in the stack line), and the default test reporter differs between Node majors.
+  The JSON records `node`.
 - `context.budgetTokens` is in `chars / 4` units. On `pool` that is 0.69–0.83 of the real count, on
   the old task 0.55–0.72; where a budget of 4691 would fire it is 0.74–0.79, so 4691 means about
   5900–6300 real tokens. `applyBudget` stubs the oldest tool results first and whole messages only —
@@ -89,15 +114,16 @@ Limits of [llm-harness-builder](../README.md) and of what its [findings](finding
   what this model did on `pool2` and held the history down worse: "The stub that says what it was"
   under [The measurement, on `pool2`](findings.md#the-measurement-on-pool2)), and cannot touch the
   system prompt, the task, the assistant's own messages or the newest results. Since 2026-09-19 it
-  stubs down to three quarters of the budget once over it. Measured once: [The measurement, on
-  `pool2`](findings.md#the-measurement-on-pool2).
+  stubs down to three quarters of the budget once over it. Measured on `pool2` only, with two
+  models: Qwen3-8B in [The measurement, on `pool2`](findings.md#the-measurement-on-pool2) and
+  Bonsai 2 in [A second model](findings.md#a-second-model-2026-10-09).
 - In `pool2`, "N = 7" means those seven units; `formatBytes` was new to the model when it was
   measured. Two oracles have holes that were left alone: `parseDuration` passes a fix that
   special-cases the test's literal (it is in published rows), and `median` passes a sort in place
   (it is outside size 7). `pool3` closes both and leaves `pool2` as it was measured.
 - `bench --max-turns` overrides the harness the way `--model` does and is recorded in
   `harnesses[].config`; `demo` runs the old task only.
-- `demo` runs `check.sh` without a timeout; `bench` gives it 60 s.
+- `demo` and `bench` give the task's check 60 s.
 - Aborting a run (`--timeout`) closes our side of the connection; llama-server keeps generating
   until it notices, so the next run can start against a busy server and fail with
   `backend_error`. The bench in [Bench results](findings.md#bench-results) has one

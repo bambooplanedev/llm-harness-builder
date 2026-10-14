@@ -125,7 +125,8 @@ test('tuned-budget is tuned-repeat plus context.budgetTokens and nothing else', 
   expect(bud).toEqual({ ...rep, name: 'tuned-budget', context: { ...rep.context, budgetTokens: 2670 } })
 })
 
-// Every /no_think harness answers in under 200 tokens; bare thinks, and <think> counts against the cap.
+// A /no_think harness answers in under 200 tokens on the old task and the MCP pair, but a batch of edits is 486 tokens on pool at size 7
+// (598 at size 8) and 933 to 1004 on Bonsai 2, where 2 of 9 first tries were cut at 1024. bare thinks, and <think> counts against the cap.
 // curator writes a verdict per post in one call: 29 of them did not fit 1024 tokens (a window of the real feed, 2026-09-20), 19 did.
 test('every shipped harness caps generation at 1024 tokens, except bare (no cap) and the two curator ones (4096)', async () => {
   const { readdir } = await import('node:fs/promises')
