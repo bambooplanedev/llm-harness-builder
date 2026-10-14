@@ -662,3 +662,47 @@ test('an unknown command, Object.prototype names included, is an error with the 
   expect(h.status).toBe(2)
   expect(h.stderr).toContain('error: unknown command "foo"')
 }, 60_000)
+
+test('argument errors name the option, show the usage, exit 2 and print no stack', () => {
+  const cases: [string[], RegExp][] = [
+    // every command goes through the same catch; each one is still tried
+    ...COMMAND_NAMES.map((n): [string[], RegExp] => [[n, '--nope'], /^error: Unknown option '--nope'/m]),
+    [['run'], /^error: run needs a harness file and a task$/m],
+    [['serve', 'foo'], /^error: Unexpected argument 'foo'/m],
+    [['demo', 'foo'], /^error: Unexpected argument 'foo'/m],
+    [['serve', '--port', 'abc'], /^error: --port must be an integer from 0 to 65535$/m],
+    [['serve', '--port', '70000'], /^error: --port must be an integer from 0 to 65535$/m],
+    [['bench', '--n', 'x'], /^error: --n must be a positive integer$/m],
+    [['bench', '--timeout', '0'], /^error: --timeout must be a positive integer$/m],
+    [['bench', '--task', 'nope'], /^error: --task must be one of slug\|pool\|pool2\|pool3\|sift\|triage\|judge$/m],
+    [['bench', '--task', 'slug', '--size', '3'], /^error: --size: slug has no sizes$/m],
+    [['bench', '--max-turns', '1.5'], /^error: --max-turns must be a positive integer$/m],
+    [['replay', 'x.jsonl', '--turn', '0', '--kind', 'openai', '--base-url', 'http://x'], /^error: --turn must be a positive integer$/m],
+    [['replay', 'x.jsonl', '--turn', '1', '--kind', 'vllm', '--base-url', 'http://x'], /^error: --kind must be openai or ollama$/m],
+    [['replay', 'x.jsonl', '--turn', '1', '--kind', 'openai', '--base-url', 'x'], /^error: --base-url must be an http\(s\) URL$/m],
+    [['analyze'], /^error: analyze needs at least one bench JSON, run id or trace file$/m],
+    [['proxy', 'extra'], /^error: proxy takes no positional arguments$/m],
+    [['proxy', '--port', 'x'], /^error: --port must be an integer from 0 to 65535$/m],
+  ]
+  for (const [args, message] of cases) {
+    const r = cli(args)
+    expect([args, r.status]).toEqual([args, 2])
+    expect([args, r.stderr]).toEqual([args, expect.stringMatching(message)])
+    expect(r.stderr).toMatch(new RegExp(`^usage: llm-harness-builder ${args[0]}\\b`, 'm'))
+    expect(r.stderr).not.toMatch(/^\s+at /m)
+  }
+}, 120_000)
+
+test('serve --port 0 listens on a free port and says which', async () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'lhb-cwd-'))
+  const p = spawn(join(ROOT, 'node_modules', '.bin', 'tsx'), [join(ROOT, 'src', 'cli.ts'), 'serve', '--no-open', '--port', '0'], { cwd })
+  try {
+    const port = await new Promise<number>((done, fail) => {
+      let err = ''
+      p.stderr.on('data', (b: Buffer) => { err += b; const m = /serving on http:\/\/localhost:(\d+)/.exec(err); if (m) done(Number(m[1])) })
+      p.on('exit', code => fail(new Error(`serve exited ${code}: ${err}`)))
+    })
+    expect(port).toBeGreaterThan(0)
+    expect((await fetch(`http://127.0.0.1:${port}/api/harnesses`)).status).toBe(200)
+  } finally { p.kill() }
+}, 30_000)

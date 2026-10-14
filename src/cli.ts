@@ -30,6 +30,9 @@ const die = (msg: string): never => { console.error(msg); process.exit(2) }
 const PKG = JSON.parse(readFileSync(path.join(PKG_ROOT, 'package.json'), 'utf8')) as { version: string; description: string }
 /** A command's --help: printed before the command does anything, so `serve --help` copies nothing. */
 const printHelp = (name: CommandName): void => { console.log(commandHelp(name)) }
+/** An argument the command cannot take: what is wrong, then the command's usage; exit 2 like every other refusal. */
+function argError(name: CommandName, msg: string): never { return die(`error: ${msg}\n${usage(name)}`) }
+const PORT = (s: string) => /^\d+$/.test(s) && Number(s) <= 65535
 
 const DEMO_HARNESSES = ['bare', 'tuned', 'tuned-hermes']
 
@@ -134,7 +137,7 @@ async function cmdRun(argv: string[]) {
   const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: COMMANDS.run.options })
   if (values.help) return printHelp('run')
   const [file, ...taskParts] = positionals
-  if (!file || !taskParts.length) die(usage('run'))
+  if (!file || !taskParts.length) argError('run', 'run needs a harness file and a task')
   const workdir = path.resolve(values.workdir ?? '.')
   const werr = await validateWorkdir(workdir); if (werr) die(werr)
   const config = await loadHarness(file, { model: values.model, baseUrl: values['base-url'], kind: values.kind })
@@ -220,12 +223,15 @@ function rollup(h: BenchHarness) {
 async function cmdBench(argv: string[]) {
   const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: COMMANDS.bench.options })
   if (values.help) return printHelp('bench')
-  if (!INT.test(values.n) || !INT.test(values.timeout)) die(usage('bench'))
+  if (!INT.test(values.n)) argError('bench', '--n must be a positive integer')
+  if (!INT.test(values.timeout)) argError('bench', '--timeout must be a positive integer')
   const task: Task | undefined = Object.hasOwn(TASKS, values.task) ? TASKS[values.task as keyof typeof TASKS] : undefined
+  if (!task) argError('bench', `--task must be one of ${Object.keys(TASKS).join('|')}`)
   const size = values.size === undefined ? undefined : Number(values.size)
   // A task with sizes needs one in range; a task without sizes takes none.
-  const sizeOk = task?.max === undefined ? size === undefined : values.size !== undefined && INT.test(values.size) && size! <= task.max
-  if (!task || !sizeOk || (values['max-turns'] !== undefined && !INT.test(values['max-turns']))) die(usage('bench'))
+  const sizeOk = task.max === undefined ? size === undefined : values.size !== undefined && INT.test(values.size) && size! <= task.max
+  if (!sizeOk) argError('bench', task.max === undefined ? `--size: ${values.task} has no sizes` : `--size must be an integer from 1 to ${task.max} for ${values.task}`)
+  if (values['max-turns'] !== undefined && !INT.test(values['max-turns'])) argError('bench', '--max-turns must be a positive integer')
   const n = Number(values.n), timeoutS = Number(values.timeout)
   const started = new Date()
   const out = values.out ?? path.join('runs', `bench-${stamp(started)}.json`)
@@ -257,7 +263,7 @@ async function cmdBench(argv: string[]) {
     }
   }
   await mkdir(path.dirname(out), { recursive: true })
-  const result: BenchResult = { version: 1, date: started.toISOString(), task: task!.prompt, taskName: values.task, size, node: process.version, n, timeoutS, complete: false, harnesses }
+  const result: BenchResult = { version: 1, date: started.toISOString(), task: task.prompt, taskName: values.task, size, node: process.version, n, timeoutS, complete: false, harnesses }
   // tmp + rename in the same directory: the SIGINT handler exits immediately, and a half-written
   // JSON would be the only thing left of a 90-minute run. `.tmp`, not `.json`, so /api/bench skips it.
   const tmpOut = `${out}.${process.pid}.tmp`
@@ -277,7 +283,7 @@ async function cmdBench(argv: string[]) {
   for (let round = 1; round <= n; round++) {
     console.error(`--- round ${round}/${n}`)
     for (const h of harnesses) {
-      h.runs.push(await benchOnce(h.config, round, timeoutS, out, task!, size))
+      h.runs.push(await benchOnce(h.config, round, timeoutS, out, task, size))
       rollup(h)
       await save()
     }
@@ -294,9 +300,13 @@ async function cmdReplay(argv: string[]) {
   const [run] = positionals, kind = values.kind, baseUrl = values['base-url']
   const temperature = values.temperature === undefined ? undefined : Number(values.temperature)
   const INT = /^[1-9]\d*$/
-  if (!run || positionals.length > 1 || !INT.test(values.turn ?? '') || !INT.test(values.n) || (values['max-tokens'] !== undefined && !INT.test(values['max-tokens']))) die(usage('replay'))
-  if ((kind !== 'openai' && kind !== 'ollama') || !baseUrl || !/^https?:\/\//.test(baseUrl)) die(usage('replay'))
-  if (temperature !== undefined && !(values.temperature!.trim() && temperature >= 0 && temperature <= 2)) die('--temperature must be a number from 0 to 2')
+  if (!run || positionals.length > 1) argError('replay', 'replay needs one run id or trace file')
+  if (!INT.test(values.turn ?? '')) argError('replay', '--turn must be a positive integer')
+  if (!INT.test(values.n)) argError('replay', '--n must be a positive integer')
+  if (values['max-tokens'] !== undefined && !INT.test(values['max-tokens'])) argError('replay', '--max-tokens must be a positive integer')
+  if (kind !== 'openai' && kind !== 'ollama') argError('replay', '--kind must be openai or ollama')
+  if (!baseUrl || !/^https?:\/\//.test(baseUrl)) argError('replay', '--base-url must be an http(s) URL')
+  if (temperature !== undefined && !(values.temperature!.trim() && temperature >= 0 && temperature <= 2)) argError('replay', '--temperature must be a number from 0 to 2')
   const file = run!.endsWith('.jsonl') ? run! : path.join('runs', `${run}.jsonl`)
   let rec: ReturnType<typeof recordedTurn>
   try {
@@ -354,7 +364,7 @@ async function analyzeArg(arg: string): Promise<AnalyzedRun[]> {
 async function cmdAnalyze(argv: string[]) {
   const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: COMMANDS.analyze.options })
   if (values.help) return printHelp('analyze')
-  if (!positionals.length) die(usage('analyze'))
+  if (!positionals.length) argError('analyze', 'analyze needs at least one bench JSON, run id or trace file')
   const rows: AnalyzedRun[] = []
   for (const arg of positionals) {
     try { rows.push(...await analyzeArg(arg)) }
@@ -366,6 +376,7 @@ async function cmdAnalyze(argv: string[]) {
 async function cmdServe(argv: string[]) {
   const { values } = parseArgs({ args: argv, options: COMMANDS.serve.options })
   if (values.help) return printHelp('serve')
+  if (!PORT(values.port)) argError('serve', '--port must be an integer from 0 to 65535')
   const cwd = process.cwd()
   const harnessesDir = path.join(cwd, 'harnesses')
   try { await access(harnessesDir) } catch { await cp(path.join(PKG_ROOT, 'harnesses'), harnessesDir, { recursive: true }) }
@@ -383,7 +394,9 @@ async function cmdServe(argv: string[]) {
 async function cmdProxy(argv: string[]) {
   const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: COMMANDS.proxy.options })
   if (values.help) return printHelp('proxy')
-  if (positionals.length || !/^https?:\/\/[^/]/.test(values.upstream) || !/^\d+$/.test(values.port)) die(usage('proxy'))
+  if (positionals.length) argError('proxy', 'proxy takes no positional arguments')
+  if (!/^https?:\/\/[^/]/.test(values.upstream)) argError('proxy', '--upstream must be an http(s) URL')
+  if (!PORT(values.port)) argError('proxy', '--port must be an integer from 0 to 65535')
   const upstream = values.upstream.replace(/\/+$/, '')
   if (/\/v1$/.test(upstream)) die(`--upstream is the server root, not its /v1: try ${upstream.slice(0, -3)}`)
   const runsDir = path.join(process.cwd(), 'runs')
@@ -414,4 +427,8 @@ else if (cmd === '--help' || cmd === '-h' || cmd === 'help') {
   else unknownCommand(about)
 }
 else if (!isCommand(cmd)) unknownCommand(cmd)
-else commands[cmd](rest).catch(e => die(String(e?.stack ?? e)))
+else commands[cmd](rest).catch(e => {
+  // A flag the command does not take, a positional it has no place for: Node's message names it.
+  if (typeof e?.code === 'string' && e.code.startsWith('ERR_PARSE_ARGS_')) argError(cmd, e.message)
+  die(String(e?.stack ?? e))
+})
