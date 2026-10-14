@@ -11,7 +11,7 @@ import { runAgent, type RunOpts } from './core/run.js'
 import { validateConfig, sendsAnswerSchema, type HarnessConfig, type BackendKind } from './core/config.js'
 import { validateWorkdir } from './core/tools/sandbox.js'
 import type { Backend, NormalizedResponse } from './core/backends/types.js'
-import { approvalPrompt, mcpCounts, quitWithoutWork, type HarnessEvent, type ToolCall } from './core/events.js'
+import { approvalPrompt, mcpCounts, quitWithoutWork, showable, type HarnessEvent, type ToolCall } from './core/events.js'
 import { startServer } from './server/index.js'
 import { TraceWriter, type Meta } from './server/runs.js'
 import { TASKS, type Task } from './core/tasks.js'
@@ -71,7 +71,7 @@ function describe(e: HarnessEvent, streamed = false): string {
     case 'llm_request': return `[t${e.turn}] llm_request`
     case 'llm_response': return `[t${e.turn}] llm_response ${e.latencyMs}ms${e.usage ? ` (${e.usage.promptTokens}+${e.usage.completionTokens} tok)` : ''}${e.content && !streamed ? `\n    ${e.content.slice(0, 200).replace(/\n/g, ' ')}` : ''}`
     case 'parse_error': return `[t${e.turn}] parse_error: ${e.message}${e.droppedChars ? ` (${e.droppedChars} chars kept out of the history)` : ''}`
-    case 'tool_call': return `[t${e.turn}] tool_call ${e.call.name} ${JSON.stringify(e.call.args).slice(0, 200)}`
+    case 'tool_call': return `[t${e.turn}] tool_call ${e.call.name} ${showable(JSON.stringify(e.call.args)).slice(0, 200)}`
     case 'mcp_server_start': return `mcp ${e.server}: ${mcpCounts(e)}`
     case 'final_check': return `[t${e.turn}] final_check ${e.passed ? 'passed' : 'failed'}: ${e.command}${e.passed ? '' : `\n    ${e.output.slice(0, 200).replace(/\n/g, ' ')}`}`
     case 'context_reset': return `[t${e.turn}] context_reset: ${e.chars} chars of history cleared, the next request is the task again`
@@ -91,20 +91,19 @@ async function execRun(config: HarnessConfig, task: string, workdir: string, o: 
   // Ctrl-C: keep what the run has written instead of leaving a .part nothing ever lists again
   // (serve appends the synthetic done for any trace that ends without one). bench registers its
   // own handler before ours and exits from it, so its .part stays for the Bench page to finish.
-  const onSigint = () => { trace.closeSync(); process.exit(130) }
+  const onSigint = (): never => { trace.closeSync(); process.exit(130) }
   if (!o.bench) process.once('SIGINT', onSigint)
-  // One readline per question, closed after the answer: while the model works the terminal is not
-  // in raw mode, so Ctrl-C is a SIGINT and onSigint keeps the trace. Ctrl-C or Ctrl-D at the
-  // question itself rejects with AbortError: the same exit, without a stack.
+  // One readline for the whole run, and not a terminal one: it never puts the tty in raw mode, so Ctrl-C is a
+  // SIGINT that onSigint answers, at the question as well as mid-run. A line typed while the model works is read at
+  // once and dropped (no question is pending, so nobody listens to it): it cannot answer a question its typist has
+  // not seen. Ctrl-D (EOF) at the question, or an input that is already closed, ends the run the way Ctrl-C does.
+  const rl = o.yes ? null : createInterface({ input: process.stdin, output: process.stderr, terminal: false })
+  let inputClosed = false
+  const closed = new Promise<null>(resolve => rl?.once('close', () => { inputClosed = true; resolve(null) }))
   const approve = async (call: ToolCall) => {
-    if (o.yes) return true
-    const rl = createInterface({ input: process.stdin, output: process.stderr })
-    try { return /^y(es)?$/i.test((await rl.question(`${approvalPrompt(call)}\n[y/N] `)).trim()) }
-    catch (e) {
-      if ((e as Error).name === 'AbortError') { trace.closeSync(); process.exit(130) }
-      throw e
-    }
-    finally { rl.close() }
+    if (!rl) return true
+    const answer = inputClosed ? null : await Promise.race([closed, rl.question(`${approvalPrompt(call)}\n[y/N] `)])
+    return answer === null ? onSigint() : /^y(es)?$/i.test(answer.trim())
   }
   const opts: RunOpts = { approve, backend: await fakeBackendFromEnv(), signal: o.signal }
   // Live text only on a terminal: reasoning dim, content plain; a pipe, bench (quiet) and --json see events only.
@@ -126,6 +125,7 @@ async function execRun(config: HarnessConfig, task: string, workdir: string, o: 
       o.onEvent?.(e)
     }
   } finally {
+    rl?.close()
     process.off('SIGINT', onSigint) // demo runs three harnesses in one process: a stale handler would rename the wrong run
   }
   await trace.close()

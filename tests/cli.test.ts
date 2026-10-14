@@ -89,6 +89,23 @@ test('run flags a final answer with zero tool calls', async () => {
   expect(r.stderr).toMatch(/! final after 0 tool calls/)
 }, 30_000)
 
+test('the tool_call line shows control and format characters of the arguments escaped, so a command cannot redraw the terminal', async () => {
+  const wd = await tmp('lhb-cli-')
+  const fake = join(wd, 'fake.json')
+  await writeFile(fake, JSON.stringify([
+    { toolCalls: [{ name: 'bash', args: { command: 'true \u009b1G \u202e \u007f' } }] },
+    { toolCalls: [{ name: 'bash', args: { command: 'true ' + '\u009b'.repeat(100) } }] }, // 114 characters raw, 614 escaped
+    { content: 'fin' },
+  ]))
+  const r = cli(['run', harness('bare'), '--workdir', wd, '--yes', 'x'], { LHB_FAKE_BACKEND: fake })
+  expect(r.status).toBe(0)
+  expect(r.stderr).toContain('[t1] tool_call bash {"command":"true \\u009b1G \\u202e \\u007f"}')
+  // escaped first, then cut at 200: the cut keeps the line's length, it does not let the escapes through
+  const long = r.stderr.split('\n').find(l => l.startsWith('[t2] tool_call bash '))!.slice('[t2] tool_call bash '.length)
+  expect(long).toBe(('{"command":"true ' + '\\u009b'.repeat(100) + '"}').slice(0, 200))
+  expect(r.stderr).not.toMatch(/[\u007f-\u009f\u202e]/)
+}, 30_000)
+
 test('run dies with a clear message when the harness has no backend object and an override is given', async () => {
   const wd = await tmp('lhb-cli-')
   const bad = join(wd, 'bad.json')
@@ -692,7 +709,7 @@ test.skipIf(!hasPython)('in a terminal, Ctrl-C while the model works keeps the t
   const wd = await tmp('lhb-cli-'), cwd = mkdtempSync(join(tmpdir(), 'lhb-cwd-')), fake = join(wd, 'fake.json')
   await writeFile(fake, JSON.stringify([{ toolCalls: [{ name: 'bash', args: { command: 'sleep 5' } }] }, { content: 'fin' }]))
   const r = inTerminal([{ after: '[y/N]', send: 'y\r' }, { delay: 1, send: '\u0003' }], ['run', harness('bare'), '--workdir', wd, 'x'], { LHB_FAKE_BACKEND: fake }, cwd)
-  expect(r.code).toBe(130)
+  expect(r.code, r.out).toBe(130)
   expect(r.out).not.toContain('done: final')
   expect(await readdir(join(cwd, 'runs'))).toEqual([expect.stringMatching(/^[0-9a-f]{8}\.jsonl$/)])
 }, 30_000)
@@ -701,7 +718,62 @@ test.skipIf(!hasPython)('in a terminal, Ctrl-C at the approval prompt exits 130 
   const wd = await tmp('lhb-cli-'), cwd = mkdtempSync(join(tmpdir(), 'lhb-cwd-')), fake = join(wd, 'fake.json')
   await writeFile(fake, JSON.stringify([{ toolCalls: [{ name: 'bash', args: { command: 'echo hi' } }] }]))
   const r = inTerminal([{ after: '[y/N]', send: '\u0003' }], ['run', harness('bare'), '--workdir', wd, 'x'], { LHB_FAKE_BACKEND: fake }, cwd)
-  expect(r.code).toBe(130)
+  expect(r.code, r.out).toBe(130)
+  expect(r.out).toContain('run bash: "echo hi"')
   expect(r.out).not.toMatch(/AbortError|^\s+at /m)
+  expect(await readdir(join(cwd, 'runs'))).toEqual([expect.stringMatching(/^[0-9a-f]{8}\.jsonl$/)])
+}, 30_000)
+
+test.skipIf(!hasPython)('in a terminal, answering n denies the call: it does not run, and the run goes on to its end', async () => {
+  const wd = await tmp('lhb-cli-'), cwd = mkdtempSync(join(tmpdir(), 'lhb-cwd-')), fake = join(wd, 'fake.json')
+  await writeFile(fake, JSON.stringify([{ toolCalls: [{ name: 'bash', args: { command: 'touch ran.txt' } }] }, { content: 'fin' }]))
+  const r = inTerminal([{ after: '[y/N]', send: 'n\r' }], ['run', harness('bare'), '--workdir', wd, 'x'], { LHB_FAKE_BACKEND: fake }, cwd)
+  expect(r.code, r.out).toBe(0)
+  expect(r.out).toContain('denied by user')
+  expect(r.out).toContain('done: final')
+  expect(existsSync(join(wd, 'ran.txt'))).toBe(false)
+  expect(await readdir(join(cwd, 'runs'))).toEqual([expect.stringMatching(/^[0-9a-f]{8}\.jsonl$/)])
+}, 30_000)
+
+// Why one readline for the whole run: with one per question, a line typed while the model works waits in the
+// terminal and answers the next question, which its typist has not seen yet.
+test.skipIf(!hasPython)('in a terminal, a line typed while the model works does not answer the next question', async () => {
+  const wd = await tmp('lhb-cli-'), cwd = mkdtempSync(join(tmpdir(), 'lhb-cwd-')), fake = join(wd, 'fake.json')
+  await writeFile(fake, JSON.stringify([
+    { toolCalls: [{ name: 'bash', args: { command: 'sleep 2' } }] },
+    { toolCalls: [{ name: 'bash', args: { command: 'touch second.txt' } }] },
+    { content: 'fin' },
+  ]))
+  const r = inTerminal([
+    { after: '[y/N]', send: 'y\r' },                            // the first question: run sleep 2
+    { delay: 0.7, send: 'y\r' },                                // typed ahead, while it runs
+    { after: 'run bash: "touch second.txt"', send: 'n\r' },     // the second question, answered once it is on the screen
+  ], ['run', harness('bare'), '--workdir', wd, 'x'], { LHB_FAKE_BACKEND: fake }, cwd)
+  expect(r.code, r.out).toBe(0)
+  expect(r.out).toContain('denied by user')
+  expect(existsSync(join(wd, 'second.txt'))).toBe(false)
+}, 30_000)
+
+test.skipIf(!hasPython)('in a terminal, Ctrl-D at the approval prompt ends the run like Ctrl-C: exit 130, the trace kept, no stack', async () => {
+  const wd = await tmp('lhb-cli-'), cwd = mkdtempSync(join(tmpdir(), 'lhb-cwd-')), fake = join(wd, 'fake.json')
+  await writeFile(fake, JSON.stringify([{ toolCalls: [{ name: 'bash', args: { command: 'touch ran.txt' } }] }]))
+  const r = inTerminal([{ after: '[y/N]', send: '\u0004' }], ['run', harness('bare'), '--workdir', wd, 'x'], { LHB_FAKE_BACKEND: fake }, cwd)
+  expect(r.code, r.out).toBe(130)
+  expect(r.out).not.toMatch(/AbortError|ERR_USE_AFTER_CLOSE|^\s+at /m)
+  expect(existsSync(join(wd, 'ran.txt'))).toBe(false)
+  expect(await readdir(join(cwd, 'runs'))).toEqual([expect.stringMatching(/^[0-9a-f]{8}\.jsonl$/)])
+}, 30_000)
+
+test.skipIf(!hasPython)('in a terminal, Ctrl-D while the model works closes the input: the next question ends the run like Ctrl-C', async () => {
+  const wd = await tmp('lhb-cli-'), cwd = mkdtempSync(join(tmpdir(), 'lhb-cwd-')), fake = join(wd, 'fake.json')
+  await writeFile(fake, JSON.stringify([
+    { toolCalls: [{ name: 'bash', args: { command: 'sleep 2' } }] },
+    { toolCalls: [{ name: 'bash', args: { command: 'touch second.txt' } }] },
+    { content: 'fin' },
+  ]))
+  const r = inTerminal([{ after: '[y/N]', send: 'y\r' }, { delay: 0.7, send: '\u0004' }], ['run', harness('bare'), '--workdir', wd, 'x'], { LHB_FAKE_BACKEND: fake }, cwd)
+  expect(r.code, r.out).toBe(130)
+  expect(r.out).not.toMatch(/AbortError|ERR_USE_AFTER_CLOSE|^\s+at /m)
+  expect(existsSync(join(wd, 'second.txt'))).toBe(false)
   expect(await readdir(join(cwd, 'runs'))).toEqual([expect.stringMatching(/^[0-9a-f]{8}\.jsonl$/)])
 }, 30_000)

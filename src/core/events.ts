@@ -41,12 +41,22 @@ export const mcpApprovalName = (server: string): string => MCP_PREFIX + server
 export const mcpApprovalServer = (callName: string): string | null =>
   callName.startsWith(MCP_PREFIX) ? callName.slice(MCP_PREFIX.length) : null
 
-/** The question the CLI asks before an approval call. The command and the server name go through JSON.stringify:
- *  with control characters (`\r\u001b[2K`) either would otherwise redraw the line and show something else than what runs. */
+/** `s` as a terminal can show it without acting on it: every control character (C0, DEL, C1), format character (bidi
+ *  marks and overrides, zero-width characters and joiners, soft hyphen, BOM, tag characters) and line or paragraph
+ *  separator is written as `\uXXXX`, one escape per UTF-16 code unit. JSON.stringify escapes the C0 controls only;
+ *  a terminal acts on U+009B (an 8-bit CSI: it redraws the line on xterm.js and others) and reorders the text after U+202E.
+ *  Letters, combining marks and emoji stay as they are, except the joiner U+200D between emoji. */
+export function showable(s: string): string {
+  return s.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, ch => ch.split('').map(u => '\\u' + u.charCodeAt(0).toString(16).padStart(4, '0')).join(''))
+}
+
+/** The question the CLI asks before an approval call. The command and the server name go through JSON.stringify and
+ *  showable: with control characters (`\r\u001b[2K`, or the single character U+009B) either would otherwise redraw
+ *  the line and show something else than what runs. */
 export function approvalPrompt(call: ToolCall): string {
-  const command = JSON.stringify(String(call.args.command ?? ''))
+  const command = showable(JSON.stringify(String(call.args.command ?? '')))
   const server = mcpApprovalServer(call.name)
-  if (server !== null) return `start mcp server ${JSON.stringify(server)}: ${command}`
+  if (server !== null) return `start mcp server ${showable(JSON.stringify(server))}: ${command}`
   if (call.name === UNTIL_BASH) return `run each time the model says it is done, on files the model has written: ${command}`
   return `run bash: ${command}`
 }

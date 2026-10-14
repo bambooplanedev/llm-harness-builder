@@ -15,7 +15,11 @@ if pid == 0:
 out, step, since, deadline = b'', 0, time.time(), time.time() + 30
 while True:
     if time.time() > deadline:
-        os.kill(pid, 9)
+        # pty.fork makes the child a session leader, so its pid is its process group: the CLI behind a launcher dies with it
+        try:
+            os.killpg(pid, 9)
+        except ProcessLookupError:
+            pass
         break
     if step < len(steps):
         s = steps[step]
