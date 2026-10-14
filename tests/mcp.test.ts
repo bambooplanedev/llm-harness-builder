@@ -34,7 +34,7 @@ test('the allow-list filters; absent or empty means every tool', async () => {
   const few = await startServers({ fs: { ...fake().fs, tools: ['echo', 'boom'] } }, await wd())
   try { expect(few.tools.map(t => t.name).sort()).toEqual(['boom', 'echo']) } finally { few.close() }
   const all = await startServers({ fs: { ...fake().fs, tools: [] } }, await wd())
-  try { expect(all.tools.length).toBe(9) } finally { all.close() }
+  try { expect(all.tools.length).toBe(10) } finally { all.close() }
 })
 
 test('servers info reports what was offered, what survived, and what it costs', async () => {
@@ -42,7 +42,7 @@ test('servers info reports what was offered, what survived, and what it costs', 
   try {
     expect(s.servers).toHaveLength(1)
     const i = s.servers[0]
-    expect(i).toMatchObject({ server: 'fs', offered: 9, tools: ['echo'] })
+    expect(i).toMatchObject({ server: 'fs', offered: 10, tools: ['echo'] })
     expect(i.descriptionChars).toBe('Echo text back.'.length)
     expect(i.schemaChars).toBeGreaterThan(0)
     expect(JSON.stringify(s.tools[0].parameters).length).toBe(i.schemaChars)
@@ -275,4 +275,17 @@ test('the oversize-line guard trips and actually kills the server, not just mark
     vi.doUnmock('../src/core/procs.js')
     vi.resetModules()
   }
+})
+
+test('a server starts with this process\'s environment except the variable named in dropEnv', async () => {
+  process.env.LHB_MCP_KEEP = 'kept'; process.env.LHB_MCP_TEST_API_KEY = 'secret-value-0123456789'
+  try {
+    const s = await startServers(fake(), await wd(), { dropEnv: 'LHB_MCP_TEST_API_KEY' })
+    try {
+      expect(await s.call('getenv', { name: 'LHB_MCP_KEEP' })).toEqual({ output: 'kept', error: false })
+      expect(await s.call('getenv', { name: 'LHB_MCP_TEST_API_KEY' })).toEqual({ output: '(unset)', error: false })
+    } finally { s.close() }
+    const plain = await startServers(fake(), await wd())
+    try { expect(await plain.call('getenv', { name: 'LHB_MCP_TEST_API_KEY' })).toEqual({ output: 'secret-value-0123456789', error: false }) } finally { plain.close() }
+  } finally { delete process.env.LHB_MCP_KEEP; delete process.env.LHB_MCP_TEST_API_KEY }
 })

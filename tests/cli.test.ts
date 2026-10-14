@@ -289,7 +289,7 @@ test('run starts an mcp server and reports its counts on stderr', async () => {
   const r = cli(['run', harnessFile, '--workdir', wd, '--yes', 'do'], { LHB_FAKE_BACKEND: fake })
   expect(r.status).toBe(0)
   // server name, offered count, kept-tools count, description chars, schema chars
-  expect(r.stderr).toMatch(/mcp test: 9 offered, 1 tools, 15 desc \+ 77 schema chars/)
+  expect(r.stderr).toMatch(/mcp test: 10 offered, 1 tools, 15 desc \+ 77 schema chars/)
 }, 30_000)
 
 // Spec regression test 12: Ctrl-C during bench with a live mcp server must not corrupt the PASS

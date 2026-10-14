@@ -18,6 +18,7 @@ const TOOLS = [
   { name: 'weird', description: 'Its schema is not an object.', inputSchema: { type: 'string' } },
   { name: 'stall', description: 'Never answers.', inputSchema: { type: 'object', properties: {}, required: [] } },
   { name: 'flood', description: 'Writes stdout with no newline, forever, and never answers.', inputSchema: { type: 'object', properties: {}, required: [] } },
+  { name: 'getenv', description: 'Returns the value of one environment variable of this server.', inputSchema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] } },
 ]
 
 const out = o => process.stdout.write(JSON.stringify(o) + '\n')
@@ -43,6 +44,7 @@ createInterface({ input: process.stdin }).on('line', line => {
     if (n === 'noisy') { process.stdout.write('this is not json\n'); return text(m.id, 'noisy ok') }
     if (n === 'stall') return   // never answer
     if (n === 'flood') { setInterval(() => process.stdout.write('x'.repeat(1 << 18)), 5); return }
+    if (n === 'getenv') return text(m.id, process.env[m.params?.arguments?.name] ?? '(unset)')
     return text(m.id, `echo: ${m.params?.arguments?.text ?? ''}`)
   }
 })

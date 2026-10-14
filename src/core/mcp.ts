@@ -35,8 +35,8 @@ class Conn {
   private stderr = ''
   dead = false
 
-  constructor(readonly name: string, readonly command: string, readonly args: string[], cwd: string) {
-    this.child = spawn(command, args, { cwd, detached: true, stdio: ['pipe', 'pipe', 'pipe'] })
+  constructor(readonly name: string, readonly command: string, readonly args: string[], cwd: string, env?: NodeJS.ProcessEnv) {
+    this.child = spawn(command, args, { cwd, detached: true, stdio: ['pipe', 'pipe', 'pipe'], ...(env ? { env } : {}) })
     this.pid = this.child.pid
     if (this.pid) track(this.pid)
     this.child.stdout!.on('data', (d: Buffer) => this.onData(d))
@@ -128,8 +128,12 @@ function flatten(content: unknown): string {
 export async function startServers(
   servers: Record<string, McpServerConfig>,
   workdir: string,
-  opts: { signal?: AbortSignal; taken?: Set<string>; timeoutMs?: number } = {},
+  opts: { signal?: AbortSignal; taken?: Set<string>; timeoutMs?: number; dropEnv?: string } = {},
 ): Promise<McpSession> {
+  // An MCP server gets this process's whole environment (see the honest notes), except the variable named here: the
+  // backend key, which nothing the harness starts needs.
+  let env: NodeJS.ProcessEnv | undefined
+  if (opts.dropEnv) { env = { ...process.env }; delete env[opts.dropEnv] }
   const handshake = opts.timeoutMs ?? MCP_HANDSHAKE_TIMEOUT_MS
   const conns: Conn[] = []
   const byTool = new Map<string, Conn>()
@@ -141,7 +145,7 @@ export async function startServers(
     for (const [name, cfg] of Object.entries(servers)) {
       if (opts.signal?.aborted) throw new Error('aborted')
       const args = cfg.args ?? []
-      const conn = new Conn(name, cfg.command, args, workdir)
+      const conn = new Conn(name, cfg.command, args, workdir, env)
       opts.signal?.addEventListener('abort', () => conn.close(), { once: true })
       conns.push(conn)
       try {

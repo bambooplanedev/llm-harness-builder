@@ -1,4 +1,4 @@
-import { NO_THINK_LINE, type HarnessConfig, type RunParams } from './config.js'
+import { NO_THINK_LINE, apiKey, type HarnessConfig, type RunParams } from './config.js'
 import { mcpApprovalName, UNTIL_BASH, type HarnessEvent, type ToolCall, type DoneReason } from './events.js'
 import { createBackend, type Backend, type ChatMessage, type ChatRequest, type Delta, type NormalizedResponse, type Usage } from './backends/index.js'
 import { TOOL_SCHEMAS, runTool } from './tools/index.js'
@@ -9,6 +9,7 @@ import { parsePrompted, parseHermes } from './parse.js'
 import { estimateTokens, applyBudget } from './tokens.js'
 import { normPath } from './analyze.js'
 import { startServers, type McpSession } from './mcp.js'
+import { redactor } from './redact.js'
 
 export type RunOpts = {
   signal?: AbortSignal
@@ -37,12 +38,16 @@ export const mayAsk = (c: HarnessConfig): boolean =>
 export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGenerator<HarnessEvent> {
   const { config, task, workdir, answerSchema } = params
   const backend = opts.backend ?? createBackend(config.backend)
+  // The backend key's value never reaches the history or an event: tool and check output is cleaned before either sees
+  // it, every event is a cleaned copy, and what goes to the server or to a tool is left as it is.
+  const keyName = config.backend.apiKeyEnv
+  const redact = redactor(keyName === undefined ? undefined : apiKey(config.backend, process.env), keyName ?? '')
   const prompted = config.toolCalls.mode === 'prompted'
   const hermes = prompted && config.toolCalls.format === 'hermes'
 
   let seq = 0, turn = 0, toolCallCount = 0, parseFails = 0, callSeq = 0
   let lastUsage: Usage | undefined
-  const ev = (e: Ev): HarnessEvent => ({ seq: seq++, turn, ts: Date.now(), ...e } as HarnessEvent)
+  const ev = (e: Ev): HarnessEvent => redact.deep({ seq: seq++, turn, ts: Date.now(), ...e } as HarnessEvent)
   const done = (reason: DoneReason, text?: string) => ev({ type: 'done', reason, text, turns: turn, toolCallCount })
 
   let mcp: McpSession | undefined
@@ -85,7 +90,7 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
   if (mcpNames.length) {
     try {
       mcp = await (opts.mcp ?? startServers)(config.mcpServers!, workdir, {
-        signal: opts.signal, taken: new Set(config.tools.enabled),
+        signal: opts.signal, taken: new Set(config.tools.enabled), dropEnv: keyName,
       })
     } catch (e) {
       if (opts.signal?.aborted) { yield done('aborted'); return }
@@ -223,7 +228,8 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
         if (opts.signal?.aborted) { yield done('aborted'); return }
         // bash() writes the exit tail last, so output cannot forge it; read it before the cut, which takes the tail away.
         const passed = raw.endsWith('\n[exit 0]')
-        yield ev({ type: 'final_check', command, passed, output: cut(raw) })
+        const out = redact.text(raw)
+        yield ev({ type: 'final_check', command, passed, output: cut(out) })
         if (passed) { yield done('final', final ?? res.content); return }
         // loop.maxRepeats: a failed check is counted like a call, under its own key. What the claim said is not compared:
         // with no file change in between, the check had nothing new to find. loop.freshContext does not fire here.
@@ -231,7 +237,7 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
         const n = config.loop.maxRepeats === undefined ? 1 : (seen.get(key) ?? 0) + 1
         seen.set(key, n)
         hot = n > 1 && (config.loop.repeatTemperature !== undefined || thinkTokens !== undefined)
-        messages.push({ role: 'user', content: `not finished: \`${command}\` did not exit 0\n${cut(raw)}${n > 1 ? `\nnote: check #${n} with no file change since the last one` : ''}`, isToolResult: true })
+        messages.push({ role: 'user', content: `not finished: \`${command}\` did not exit 0\n${cut(out)}${n > 1 ? `\nnote: check #${n} with no file change since the last one` : ''}`, isToolResult: true })
         if (n - 1 > (config.loop.maxRepeats ?? Infinity)) { yield done('repeat_loop'); return }
         continue
       }
@@ -258,6 +264,8 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
         if (!result) {
           result = await runTool(c.name, c.args, ctx, config.tools.enabled, mcp)
         }
+        // Before the cut: a key the cut split would leave its first half behind.
+        result = { ...result, output: redact.text(result.output) }
         const truncated = result.output.length > max
         let output = cut(result.output)
         let repeats = 0

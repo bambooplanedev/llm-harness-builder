@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { runAgent, mayAsk } from '../src/core/run.js'
 import type { HarnessConfig, RunParams } from '../src/core/config.js'
 import type { HarnessEvent } from '../src/core/events.js'
+import { BackendError } from '../src/core/backends/types.js'
 import { fakeBackend, harness, tmp, type FakeResponse } from './helpers.js'
 
 // The truncation assertions below depend on the 50-char cap; everything else is the shared default.
@@ -817,4 +818,82 @@ test('mayAsk: the three places a run can stop at an approval, and nothing else',
   expect(mayAsk(base({ tools: { enabled: [], approveBash: false }, loop: { maxTurns: 2, untilBash: 'true' } }))).toBe(true)
   expect(mayAsk(base({ tools: { enabled: [], approveBash: false }, mcpServers: { s: { command: 'x' } } }))).toBe(true)
   expect(mayAsk(base({ tools: { enabled: [], approveBash: false }, mcpServers: {} }))).toBe(false)
+})
+
+const KEY_NAME = 'LHB_RUN_TEST_API_KEY'
+const KEY = 'sk-or-v1-' + 'f3'.repeat(16)
+const MARK = `[redacted: ${KEY_NAME}]`
+const keyed = (over: Partial<HarnessConfig> = {}) => base({ backend: { ...harness().backend, baseUrl: 'https://or.example/v1', apiKeyEnv: KEY_NAME }, ...over })
+const withKey = async (f: () => Promise<void>) => { process.env[KEY_NAME] = KEY; try { await f() } finally { delete process.env[KEY_NAME] } }
+const leaked = (x: unknown) => JSON.stringify(x).includes(KEY)
+const keyTools: HarnessConfig['tools'] = { enabled: ['bash'], approveBash: false, bashEnv: [KEY_NAME] }
+
+test('bash output that holds the backend key reaches the history and the event as the mark', () => withKey(async () => {
+  const be = Fake([{ toolCalls: [{ name: 'bash', args: { command: `printf %s "$${KEY_NAME}"` } }] }, { content: 'fin' }])
+  const ev = await collect({ config: keyed({ tools: keyTools }), task: 'do', workdir: await wd() }, { backend: be })
+  expect((ev.find(e => e.type === 'tool_result') as any).output).toContain(MARK)
+  expect(leaked(ev)).toBe(false)
+  expect(JSON.stringify(be.requests[1].messages)).toContain(MARK); expect(leaked(be.requests[1].messages)).toBe(false)
+}))
+
+test('an until_bash check that prints the key: final_check and the next request carry the mark', () => withKey(async () => {
+  const be = Fake([{ content: 'done' }, { content: 'done again' }])
+  const config = keyed({ tools: keyTools, loop: { maxTurns: 2, untilBash: `printf %s "$${KEY_NAME}"; exit 1` } })
+  const ev = await collect({ config, task: 'do', workdir: await wd() }, { backend: be, ...yes })
+  expect(checks(ev)[0]).toMatchObject({ passed: false })
+  expect(checks(ev)[0].output).toContain(MARK)
+  expect(leaked(ev)).toBe(false)
+  expect(JSON.stringify(be.requests[1].messages)).toContain(MARK); expect(leaked(be.requests[1].messages)).toBe(false)
+}))
+
+test('an mcp result that holds the key: tool_result and the next request carry the mark; the servers start without it', () => withKey(async () => {
+  let opts: any
+  const be = Fake([{ toolCalls: [{ name: 'echo', args: {} }] }, { content: 'fin' }])
+  const ev = await collect({ config: keyed({ mcpServers: { fs: { command: 'npx', args: ['.'] } } }), task: 'do', workdir: await wd() }, {
+    backend: be, approve: async () => true,
+    mcp: async (_s: unknown, _w: unknown, o: unknown) => { opts = o; return fakeMcp({ call: async () => ({ output: `token=${KEY}`, error: false }) }) },
+  })
+  expect((ev.find(e => e.type === 'tool_result') as any).output).toBe(`token=${MARK}`)
+  expect(leaked(ev)).toBe(false); expect(leaked(be.requests[1].messages)).toBe(false)
+  expect(opts.dropEnv).toBe(KEY_NAME)
+}))
+
+test('a key the cut would split is taken out first: no part of it is left, and the truncation counts the redacted text', () => withKey(async () => {
+  const dir = await wd(); await writeFile(join(dir, 'k.txt'), 'x'.repeat(30) + KEY)
+  const be = Fake([{ toolCalls: [{ name: 'read_file', args: { path: 'k.txt' } }] }, { content: 'fin' }])
+  const ev = await collect({ config: keyed(), task: 'do', workdir: dir }, { backend: be })
+  const tr = ev.find(e => e.type === 'tool_result') as Extract<HarnessEvent, { type: 'tool_result' }>
+  expect(tr.truncated).toBe(true)
+  expect(tr.output).toBe('x'.repeat(30) + MARK.slice(0, 20) + '\n[truncated: 12 more chars]') // 30 + the 32-char mark is 62, the cap is 50
+  expect(tr.output).not.toContain(KEY.slice(0, 9))
+}))
+
+test('what goes to the server is left as it is: the key in the task reaches the backend, the events carry the mark', () => withKey(async () => {
+  const sent: unknown[] = []
+  const be = Fake([{ content: `echo ${KEY}` }])
+  const send = be.send.bind(be)
+  be.send = async (p, s, d) => { sent.push(structuredClone(p)); return send(p, s, d) }
+  const ev = await collect({ config: keyed(), task: `use ${KEY}`, workdir: await wd() }, { backend: be })
+  expect(JSON.stringify(sent[0])).toContain(KEY)
+  const reqEv = ev.find(e => e.type === 'llm_request') as any
+  expect(JSON.stringify(reqEv.payload)).toContain(MARK)
+  expect((ev.find(e => e.type === 'llm_response') as any).content).toBe(`echo ${MARK}`)
+  expect(last(ev).text).toBe(`echo ${MARK}`)
+  expect(leaked(ev)).toBe(false)
+}))
+
+test('a backend error whose body holds the key: the error event carries the mark', () => withKey(async () => {
+  const be = Fake([])
+  be.send = async () => { throw new BackendError('POST /chat/completions: 400', `{"echo":"${KEY}"}`) }
+  const ev = await collect({ config: keyed(), task: 'do', workdir: await wd() }, { backend: be })
+  expect((ev.find(e => e.type === 'error') as any).body).toBe(`{"echo":"${MARK}"}`)
+}))
+
+test('a key under 20 characters is not looked for', async () => {
+  process.env[KEY_NAME] = 'k'.repeat(19)
+  try {
+    const be = Fake([{ content: `say ${'k'.repeat(19)}` }])
+    const ev = await collect({ config: keyed(), task: 'do', workdir: await wd() }, { backend: be })
+    expect(last(ev).text).toBe(`say ${'k'.repeat(19)}`)
+  } finally { delete process.env[KEY_NAME] }
 })
