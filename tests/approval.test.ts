@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest'
-import { approvalPrompt, mcpApprovalName, showable, UNTIL_BASH } from '../src/core/events.js'
+import { approvalPrompt, mcpApprovalName, showable, showableText, isShowable, UNTIL_BASH } from '../src/core/events.js'
 
 const bash = (args: Record<string, unknown>) => approvalPrompt({ callId: 'c1', name: 'bash', args })
 
@@ -50,4 +50,28 @@ test('letters, combining accents and emoji stay as they are; only the joiner bet
   // Cyrillic (as escapes: the repo keeps non-English text out of its sources), accented Latin, a combining accent, CJK, an emoji, an emoji with its variation selector
   for (const kept of ['\u043f\u0440\u0438\u0432\u0456\u0442, \u0441\u0432\u0456\u0442\u0435', 'résumé', 'e\u0301', 'a日本語b', '👍', '❤\ufe0f']) expect(bash({ command: kept })).toBe(`run bash: "${kept}"`)
   expect(bash({ command: '👨\u200d👩' })).toBe('run bash: "👨\\u200d👩"')
+})
+
+test('showableText keeps a newline and a tab and escapes everything else showable escapes', () => {
+  expect(showableText('one\n\ttwo\n')).toBe('one\n\ttwo\n')
+  // a carriage return puts the cursor at the start of the line, and what follows overwrites it
+  expect(showableText('a\r\nb')).toBe('a\\u000d\nb')
+  expect(showableText('ok\u001b[2K')).toBe('ok\\u001b[2K')
+  expect(showableText('a\u009b2Kb')).toBe('a\\u009b2Kb')
+  expect(showableText('a\u007fb')).toBe('a\\u007fb')
+  expect(showableText('a\u202eb')).toBe('a\\u202eb')
+  expect(showableText('a\u2028b\u2029c')).toBe('a\\u2028b\\u2029c')
+  expect(showableText('a\u{e0041}b')).toBe('a\\udb40\\udc41b')
+  // every other C0 control, DEL and every C1 control, by number: escaped exactly as showable escapes it
+  const codes = [...Array(0x20).keys(), ...Array.from({ length: 0x21 }, (_, i) => 0x7f + i)].filter(c => c !== 0x09 && c !== 0x0a)
+  for (const code of codes) expect(showableText(String.fromCharCode(code))).toBe(showable(String.fromCharCode(code)))
+})
+
+test('showableText leaves text that needs no escape as it is: Cyrillic (as escapes), accented Latin, CJK, emoji', () => {
+  for (const kept of ['\u043f\u0440\u0438\u0432\u0456\u0442\n\u0441\u0432\u0456\u0442', 'r\u00e9sum\u00e9\tr\u00e9sum\u00e9', 'e\u0301', 'a\u65e5\u672c\u8a9eb', '\u{1f44d}\n\u{1f44d}', '\u2764\ufe0f']) expect(showableText(kept)).toBe(kept)
+})
+
+test('isShowable: true when showable would change nothing, false at the first character it would escape', () => {
+  for (const ok of ['', 'plain', 'a b-c_d', 'caf\u00e9', '\u043f\u0440\u0438\u0432\u0456\u0442', 'a\u65e5\u672c\u8a9eb', '\u{1f44d}']) expect(isShowable(ok)).toBe(true)
+  for (const bad of ['\n', '\t', 'a\u001b[8mb', 'a\u009bb', 'a\u007fb', 'a\u202eb', 'a\u200bb', 'a\u2028b', 'a\u2029b', '\ufeff', '\u{e0041}']) expect(isShowable(bad)).toBe(false)
 })

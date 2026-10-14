@@ -1,4 +1,7 @@
 import { test, expect } from 'vitest'
+import { readFileSync, readdirSync } from 'node:fs'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { validateConfig, sendsAnswerSchema, ENV_NAME } from '../src/core/config.js'
 import { harness } from './helpers.js'
 
@@ -239,4 +242,45 @@ test('tools.bashEnv is optional: environment variable names, never values', () =
 test('ENV_NAME: shell variable names only', () => {
   for (const ok of ['A', '_x', 'http_proxy', 'GITHUB_TOKEN', 'X1']) expect(ENV_NAME.test(ok)).toBe(true)
   for (const bad of ['', '1A', 'A-B', 'A B', 'A=1', '$A']) expect(ENV_NAME.test(bad)).toBe(false)
+})
+
+const NAME_CONTROL = 'name must not contain control or format characters'
+const KEY_CONTROL = 'mcpServers keys must not contain control or format characters'
+
+test('name and every mcpServers key must be free of control and format characters: they are printed to a terminal', () => {
+  // a conceal attribute and an 8-bit CSI first, then one of each other kind
+  for (const bad of ['a\u001b[8mb', 'a\u009bb', 'a\u007fb', 'a\nb', 'a\rb', 'a\tb', 'a\u202eb', 'a\u200bb', 'a\u2028b', 'a\u2029b', '\ufeff', '\u{e0041}']) {
+    const named = structuredClone(validConfig) as any
+    named.name = bad
+    expect([bad, validateConfig(named)]).toEqual([bad, [NAME_CONTROL]])
+    const keyed = structuredClone(validConfig) as any
+    keyed.mcpServers = { fs: { command: 'npx' }, [bad]: { command: 'npx' } }
+    expect([bad, validateConfig(keyed)]).toEqual([bad, [KEY_CONTROL]])
+  }
+})
+
+test('the control-character errors do not echo the raw value, and a bad key gets no other message that would', () => {
+  const c = structuredClone(validConfig) as any
+  c.name = 'x\u001b[8m'
+  // the key is wrong in every other way too; its other messages would print it as it is
+  c.mcpServers = { 'a\u009b': { command: '', args: 'nope', tools: [1], extra: true }, 'b\u001b[2K': 'nope', ok: { command: '' } }
+  const errs = validateConfig(c)
+  expect(errs).toEqual([NAME_CONTROL, KEY_CONTROL, 'mcpServers.ok.command must be a non-empty string'])
+  expect(errs.join('\n')).not.toMatch(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/)
+})
+
+test('plain names and keys pass, letters of any script included', () => {
+  for (const name of ['h', 'tuned-hermes', 'my harness 2', 'caf\u00e9', '\u043f\u0440\u0438\u0432\u0456\u0442', 'a\u65e5\u672c\u8a9eb', '\u{1f44d}']) {
+    const c = structuredClone(validConfig) as any
+    c.name = name
+    c.mcpServers = { [name]: { command: 'npx' }, fs: { command: 'npx' } }
+    expect([name, validateConfig(c)]).toEqual([name, []])
+  }
+})
+
+test('every shipped harness still validates', () => {
+  const dir = fileURLToPath(new URL('../harnesses/', import.meta.url))
+  const files = readdirSync(dir).filter(f => f.endsWith('.json'))
+  expect(files.length).toBeGreaterThan(10)
+  for (const f of files) expect([f, validateConfig(JSON.parse(readFileSync(join(dir, f), 'utf8')))]).toEqual([f, []])
 })

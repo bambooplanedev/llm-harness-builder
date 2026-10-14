@@ -1,3 +1,5 @@
+import { isShowable } from './events.js'
+
 export type ToolName = 'list_dir' | 'read_file' | 'write_file' | 'edit_file' | 'bash'
 export const TOOL_NAMES: ToolName[] = ['list_dir', 'read_file', 'write_file', 'edit_file', 'bash']
 
@@ -50,6 +52,8 @@ export function validateConfig(c: unknown): string[] {
   const unknown = (o: unknown, known: string[], at: string) => { if (isObj(o) && !Array.isArray(o)) for (const k of Object.keys(o)) if (!known.includes(k)) e.push(`${at}${k} is not a known key`) }
   for (const [s, known] of Object.entries(KEYS)) unknown(s ? c[s] : c, known, s && s + '.')
   if (typeof c.name !== 'string' || !c.name) e.push('name is required')
+  // The name is printed on the terminal (bench's progress lines and table); this message does not print it back.
+  else if (!isShowable(c.name)) e.push('name must not contain control or format characters')
   const b = c.backend
   if (!isObj(b)) e.push('backend is required')
   else {
@@ -107,10 +111,14 @@ export function validateConfig(c: unknown): string[] {
     }
   }
   const ms = c.mcpServers
+  let unsafeKey = false // said once, whichever key is the first
   if (ms !== undefined) {
     if (!isObj(ms) || Array.isArray(ms)) e.push('mcpServers must be an object')
     else for (const [k, v] of Object.entries(ms)) {
       if (!k) { e.push('mcpServers key must be a non-empty string'); continue }
+      // A key is printed in the approval question and in the server's line. No message after this one names it: a key that
+      // redraws the line would do so in that message too.
+      if (!isShowable(k)) { if (!unsafeKey) e.push('mcpServers keys must not contain control or format characters'); unsafeKey = true; continue }
       if (!isObj(v) || Array.isArray(v)) { e.push(`mcpServers.${k} must be an object`); continue }
       unknown(v, MCP_SERVER_KEYS, `mcpServers.${k}.`)
       if (typeof v.command !== 'string' || !v.command) e.push(`mcpServers.${k}.command must be a non-empty string`)

@@ -5,6 +5,7 @@ import { mkdtempSync, existsSync, writeFileSync, mkdirSync, readFileSync } from 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import http from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { tmp } from './helpers.js'
 import { RunStore } from '../src/server/runs'
 
@@ -108,6 +109,61 @@ test('the tool_call line shows control and format characters of the arguments es
   const long = r.stderr.split('\n').find(l => l.startsWith('[t2] tool_call bash '))!.slice('[t2] tool_call bash '.length)
   expect(long).toBe(('{"command":"true ' + '\\u009b'.repeat(100) + '"}').slice(0, 200))
   expect(r.stderr).not.toMatch(/[\u007f-\u009f\u202e]/)
+}, 30_000)
+
+// stderr holds no control character but the newline and the tab: none of them is left for a terminal to act on
+const NO_RAW_CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u202e\u2028\u2029\u200b-\u200f\ufeff]/
+
+test('what the model says and what a tool returned reach stderr with control characters escaped, so a run cannot rewrite the terminal', async () => {
+  const wd = await tmp('lhb-cli-')
+  const fake = join(wd, 'fake.json')
+  await writeFile(join(wd, 'evil.txt'), 'seen\u001b[2K\u009b1G\nsecond\tline')
+  await writeFile(fake, JSON.stringify([
+    { content: 'looking\u001b[2K', toolCalls: [{ name: 'read_file', args: { path: 'evil.txt' } }, { name: 'rea\u001b[2Kd', args: {} }] },
+    { content: 'all done\u001b[2K\u202e\nsecond line\twith a tab\r' },
+  ]))
+  const r = cli(['run', harness('bare'), '--workdir', wd, '--yes', 'x'], { LHB_FAKE_BACKEND: fake })
+  expect(r.status).toBe(0)
+  // the model's words next to a call: one line, escaped
+  expect(r.stderr).toContain('\n    looking\\u001b[2K\n')
+  // the name of a call, and the result under that name
+  expect(r.stderr).toContain('tool_call rea\\u001b[2Kd {}\n')
+  expect(r.stderr).toContain('tool_result rea\\u001b[2Kd (error): unknown tool rea\\u001b[2Kd; available: ')
+  // what a tool returned: one line, the newline flattened to a space, the escapes shown (a tab is one too)
+  expect(r.stderr).toContain('tool_result read_file: seen\\u001b[2K\\u009b1G second\\u0009line\n')
+  // the final text keeps its lines and its tab; the carriage return and the rest are escaped
+  expect(r.stderr).toContain('done: final after 2 turns, 2 tool calls\nall done\\u001b[2K\\u202e\nsecond line\twith a tab\\u000d\ntrace runs/')
+  expect(r.stderr).not.toMatch(NO_RAW_CONTROL)
+}, 30_000)
+
+test('the output and the command of a failed loop.untilBash check reach stderr escaped', async () => {
+  const wd = await tmp('lhb-cli-')
+  const fake = join(wd, 'fake.json'), file = join(wd, 'until.json')
+  const plain = JSON.parse(await readFile(harness('bare'), 'utf8'))
+  // the command prints a clear-line and fails; a comment after it holds a raw escape of its own, which the shell ignores
+  await writeFile(file, JSON.stringify({ ...plain, loop: { maxTurns: 1, untilBash: "printf 'bad\\033[2K\\n'; exit 1 # \u001b[8m" } }))
+  await writeFile(fake, JSON.stringify([{ content: 'done' }]))
+  const r = cli(['run', file, '--workdir', wd, '--yes', 'x'], { LHB_FAKE_BACKEND: fake })
+  expect(r.status).toBe(1)
+  expect(r.stderr).toContain("final_check failed: printf 'bad\\033[2K\\n'; exit 1 # \\u001b[8m\n    bad\\u001b[2K  [exit 1]\n")
+  expect(r.stderr).not.toMatch(NO_RAW_CONTROL)
+}, 30_000)
+
+test('a backend error shows its message on one line and its body with the lines kept, both escaped: a server cannot rewrite the terminal either', async () => {
+  const wd = await tmp('lhb-cli-'), cwd = mkdtempSync(join(tmpdir(), 'lhb-cwd-'))
+  const up = http.createServer((req, res) => { req.resume(); res.statusCode = 500; res.end('oops\u001b[2K\u202e\nsecond line\ttab\u009b1G') })
+  await new Promise<void>(done => up.listen(0, '127.0.0.1', done))
+  try {
+    const url = `http://127.0.0.1:${(up.address() as AddressInfo).port}/v1`
+    // spawn, not spawnSync: this process has to answer while the CLI runs
+    const p = spawn(join(ROOT, 'node_modules', '.bin', 'tsx'), [join(ROOT, 'src', 'cli.ts'), 'run', harness('bare'), '--workdir', wd, '--yes', '--kind', 'openai', '--base-url', url, 'x'], { cwd })
+    let stderr = ''
+    p.stderr.on('data', (b: Buffer) => { stderr += b })
+    const status = await new Promise<number | null>(done => p.on('close', done))
+    expect(status).toBe(1)
+    expect(stderr).toContain('error: POST /chat/completions: 500\noops\\u001b[2K\\u202e\nsecond line\ttab\\u009b1G\n')
+    expect(stderr).not.toMatch(NO_RAW_CONTROL)
+  } finally { up.closeAllConnections(); up.close() }
 }, 30_000)
 
 test('run dies with a clear message when the harness has no backend object and an override is given', async () => {
@@ -800,6 +856,39 @@ test.skipIf(!hasPython)('in a terminal, Ctrl-D while the model works closes the 
   expect(r.out).not.toMatch(/AbortError|ERR_USE_AFTER_CLOSE|^\s+at /m)
   expect(existsSync(join(wd, 'second.txt'))).toBe(false)
   expect(await readdir(join(cwd, 'runs'))).toEqual([expect.stringMatching(/^[0-9a-f]{8}\.jsonl$/)])
+}, 30_000)
+
+// ESC [ 8 m hides everything after it until an attribute reset: if what the model read were printed as it is, the
+// question that follows could be written in the screen's own colour.
+test.skipIf(!hasPython)('in a terminal, a file the model read cannot hide the question: its escapes are shown as text, and the question starts with an attribute reset', async () => {
+  const wd = await tmp('lhb-cli-'), cwd = mkdtempSync(join(tmpdir(), 'lhb-cwd-')), fake = join(wd, 'fake.json')
+  await writeFile(join(wd, 'evil.txt'), '\u001b[8mhidden')
+  await writeFile(fake, JSON.stringify([
+    { toolCalls: [{ name: 'read_file', args: { path: 'evil.txt' } }] },
+    { toolCalls: [{ name: 'bash', args: { command: 'echo hi' } }] },
+    { content: 'fin' },
+  ]))
+  const r = inTerminal([{ after: '[y/N]', send: 'n\r' }], ['run', harness('bare'), '--workdir', wd, 'x'], { LHB_FAKE_BACKEND: fake }, cwd)
+  expect(r.code, r.out).toBe(0)
+  // the six characters of the escape and the rest of the sequence, as text
+  expect(r.out).toContain('tool_result read_file: \\u001b[8mhidden')
+  expect(r.out).not.toContain('\u001b[8m')
+  // the reset is the last thing written before the question
+  expect(r.out).toContain('\u001b[0mrun bash: "echo hi"')
+  expect(r.out).toContain('denied by user')
+}, 30_000)
+
+test.skipIf(!hasPython)('in a terminal, the live text is escaped too: a reply streamed in cannot send a control sequence', async () => {
+  const wd = await tmp('lhb-cli-'), cwd = mkdtempSync(join(tmpdir(), 'lhb-cwd-')), fake = join(wd, 'fake.json')
+  await writeFile(fake, JSON.stringify([{ content: 'fin', deltas: [{ reasoning: 'hm\u001b[8m' }, { content: 'fi\u001b[2K' }, { content: 'n\u009b1G\u202e\nline two\ttab' }] }]))
+  const r = inTerminal([], ['run', harness('bare'), '--workdir', wd, 'x'], { LHB_FAKE_BACKEND: fake }, cwd)
+  expect(r.code, r.out).toBe(0)
+  const out = r.out.replaceAll('\r\n', '\n') // the terminal turns every newline into a carriage return and a newline
+  // the reasoning is dim, with the dim and the reset the CLI writes itself around the escaped text
+  expect(out).toContain('\u001b[2mhm\\u001b[8m\u001b[0m')
+  // the content: escaped, its line and its tab kept
+  expect(out).toContain('fi\\u001b[2Kn\\u009b1G\\u202e\nline two\ttab')
+  for (const raw of ['\u001b[8m', '\u001b[2K', '\u009b', '\u202e']) expect(out).not.toContain(raw)
 }, 30_000)
 
 const NO_TTY = 'stdin is not a terminal, so nothing can answer an approval prompt: pass --yes to approve every command, or run in a terminal'

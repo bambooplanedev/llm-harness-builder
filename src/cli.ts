@@ -10,8 +10,8 @@ import { fileURLToPath } from 'node:url'
 import { runAgent, mayAsk, type RunOpts } from './core/run.js'
 import { validateConfig, sendsAnswerSchema, type HarnessConfig, type BackendKind } from './core/config.js'
 import { validateWorkdir } from './core/tools/sandbox.js'
-import type { Backend, NormalizedResponse } from './core/backends/types.js'
-import { approvalPrompt, mcpCounts, quitWithoutWork, showable, type HarnessEvent, type ToolCall } from './core/events.js'
+import type { Backend, Delta, NormalizedResponse } from './core/backends/types.js'
+import { approvalPrompt, mcpCounts, quitWithoutWork, showable, showableText, type HarnessEvent, type ToolCall } from './core/events.js'
 import { startServer } from './server/index.js'
 import { TraceWriter, type Meta } from './server/runs.js'
 import { TASKS, type Task } from './core/tasks.js'
@@ -37,13 +37,22 @@ const PORT = (s: string) => /^\d+$/.test(s) && Number(s) <= 65535
 const DEMO_HARNESSES = ['bare', 'tuned', 'tuned-hermes']
 
 let fakeCache: Promise<Backend | undefined> | undefined
-/** Test hook: LHB_FAKE_BACKEND=<file.json> with an array of Partial<NormalizedResponse>. One shared queue per process. */
+/** Test hook: LHB_FAKE_BACKEND=<file.json> with an array of Partial<NormalizedResponse>; an entry may carry `deltas` as well, which stream to the terminal before its reply returns. One shared queue per process. */
 function fakeBackendFromEnv(): Promise<Backend | undefined> {
   return (fakeCache ??= (async () => {
     const f = process.env.LHB_FAKE_BACKEND
     if (!f) return undefined
-    const queue: Partial<NormalizedResponse>[] = JSON.parse(await readFile(f, 'utf8'))
-    return { async listModels() { return ['fake'] }, buildPayload: r => r, async send() { const r = queue.shift(); if (!r) throw new Error('fake backend: no more responses'); return { content: '', toolCalls: [], raw: {}, ...r } } } as Backend
+    const queue: (Partial<NormalizedResponse> & { deltas?: Delta[] })[] = JSON.parse(await readFile(f, 'utf8'))
+    return {
+      async listModels() { return ['fake'] }, buildPayload: r => r,
+      async send(_payload: unknown, _signal?: AbortSignal, onDelta?: (d: Delta) => void) {
+        const r = queue.shift()
+        if (!r) throw new Error('fake backend: no more responses')
+        const { deltas, ...reply } = r
+        for (const d of deltas ?? []) onDelta?.(d)
+        return { content: '', toolCalls: [], raw: {}, ...reply }
+      },
+    } as Backend
   })())
 }
 
@@ -64,21 +73,28 @@ async function loadHarness(file: string, over: { model?: string; baseUrl?: strin
   return cfg
 }
 
-/** `streamed`: the turn's text was already written live to stderr, so llm_response skips its excerpt. */
+/** The first 200 characters of someone else's text as one line: newlines flattened, every character a terminal would act
+ *  on escaped (see showable), and the cut at 200 made after that, so the line cannot grow past 200 characters. */
+const excerpt = (s: string): string => showable(s.slice(0, 200).replace(/\n/g, ' ')).slice(0, 200)
+
+/** One line per event (a few for an error body or the final text). Text that the model, a file, a command's output or the
+ *  server wrote lands here, and the next thing on the screen may be the question whether to run a command: such text goes
+ *  through showable (one line) or showableText (lines), never as it is. `streamed`: the turn's text was already written
+ *  live to stderr, so llm_response skips its excerpt. */
 function describe(e: HarnessEvent, streamed = false): string {
   switch (e.type) {
     case 'context_stats': return `[t${e.turn}] context ${e.exactTokens !== undefined ? `${e.exactTokens} tok exact (~${e.estimatedTokens} est)` : `~${e.estimatedTokens} tok`}${e.droppedChars ? `, dropped ${e.droppedChars} chars` : ''}`
     case 'llm_request': return `[t${e.turn}] llm_request`
-    case 'llm_response': return `[t${e.turn}] llm_response ${e.latencyMs}ms${e.usage ? ` (${e.usage.promptTokens}+${e.usage.completionTokens} tok)` : ''}${e.content && !streamed ? `\n    ${e.content.slice(0, 200).replace(/\n/g, ' ')}` : ''}`
-    case 'parse_error': return `[t${e.turn}] parse_error: ${e.message}${e.droppedChars ? ` (${e.droppedChars} chars kept out of the history)` : ''}`
-    case 'tool_call': return `[t${e.turn}] tool_call ${e.call.name} ${showable(JSON.stringify(e.call.args)).slice(0, 200)}`
-    case 'mcp_server_start': return `mcp ${e.server}: ${mcpCounts(e)}`
-    case 'final_check': return `[t${e.turn}] final_check ${e.passed ? 'passed' : 'failed'}: ${e.command}${e.passed ? '' : `\n    ${e.output.slice(0, 200).replace(/\n/g, ' ')}`}`
+    case 'llm_response': return `[t${e.turn}] llm_response ${e.latencyMs}ms${e.usage ? ` (${e.usage.promptTokens}+${e.usage.completionTokens} tok)` : ''}${e.content && !streamed ? `\n    ${excerpt(e.content)}` : ''}`
+    case 'parse_error': return `[t${e.turn}] parse_error: ${showable(e.message)}${e.droppedChars ? ` (${e.droppedChars} chars kept out of the history)` : ''}`
+    case 'tool_call': return `[t${e.turn}] tool_call ${showable(e.call.name)} ${showable(JSON.stringify(e.call.args)).slice(0, 200)}`
+    case 'mcp_server_start': return `mcp ${showable(e.server)}: ${mcpCounts(e)}`
+    case 'final_check': return `[t${e.turn}] final_check ${e.passed ? 'passed' : 'failed'}: ${showable(e.command)}${e.passed ? '' : `\n    ${excerpt(e.output)}`}`
     case 'context_reset': return `[t${e.turn}] context_reset: ${e.chars} chars of history cleared, the next request is the task again`
-    case 'approval_required': return `[t${e.turn}] approval_required ${e.call.name}`
-    case 'tool_result': return `[t${e.turn}] tool_result ${e.name}${e.error ? ' (error)' : ''}${e.truncated ? ' (truncated)' : ''}: ${e.output.slice(0, 200).replace(/\n/g, ' ')}`
-    case 'error': return `error: ${e.message}${e.body ? `\n${e.body}` : ''}`
-    case 'done': return `done: ${e.reason} after ${e.turns} turns, ${e.toolCallCount} tool calls${quitWithoutWork(e) ? '  ! final after 0 tool calls' : ''}${e.text ? `\n${e.text}` : ''}`
+    case 'approval_required': return `[t${e.turn}] approval_required ${showable(e.call.name)}`
+    case 'tool_result': return `[t${e.turn}] tool_result ${showable(e.name)}${e.error ? ' (error)' : ''}${e.truncated ? ' (truncated)' : ''}: ${excerpt(e.output)}`
+    case 'error': return `error: ${showable(e.message)}${e.body ? `\n${showableText(e.body)}` : ''}`
+    case 'done': return `done: ${e.reason} after ${e.turns} turns, ${e.toolCallCount} tool calls${quitWithoutWork(e) ? '  ! final after 0 tool calls' : ''}${e.text ? `\n${showableText(e.text)}` : ''}`
   }
 }
 
@@ -100,17 +116,21 @@ async function execRun(config: HarnessConfig, task: string, workdir: string, o: 
   const rl = o.yes ? null : createInterface({ input: process.stdin, output: process.stderr, terminal: false })
   let inputClosed = false
   const closed = new Promise<null>(resolve => rl?.once('close', () => { inputClosed = true; resolve(null) }))
+  // On a terminal the question starts with an attribute reset: whatever was set before it (conceal, a colour that
+  // matches the background) cannot carry into the text the answer is decided by.
+  const reset = process.stderr.isTTY ? '\x1b[0m' : ''
   const approve = async (call: ToolCall) => {
     if (!rl) return true
-    const answer = inputClosed ? null : await Promise.race([closed, rl.question(`${approvalPrompt(call)}\n[y/N] `)])
+    const answer = inputClosed ? null : await Promise.race([closed, rl.question(`${reset}${approvalPrompt(call)}\n[y/N] `)])
     return answer === null ? onSigint() : /^y(es)?$/i.test(answer.trim())
   }
   const opts: RunOpts = { approve, backend: await fakeBackendFromEnv(), signal: o.signal }
   // Live text only on a terminal: reasoning dim, content plain; a pipe, bench (quiet) and --json see events only.
   let streamed = false
+  // The text is the model's own, so it goes through showableText: only the dim and the reset around the reasoning are ours.
   if (!o.quiet && process.stderr.isTTY) opts.onDelta = d => {
-    if (d.reasoning) process.stderr.write(`\x1b[2m${d.reasoning}\x1b[0m`)
-    if (d.content) process.stderr.write(d.content)
+    if (d.reasoning) process.stderr.write(`\x1b[2m${showableText(d.reasoning)}\x1b[0m`)
+    if (d.content) process.stderr.write(showableText(d.content))
     streamed = true
   }
   let last: HarnessEvent | undefined

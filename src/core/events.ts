@@ -41,14 +41,28 @@ export const mcpApprovalName = (server: string): string => MCP_PREFIX + server
 export const mcpApprovalServer = (callName: string): string | null =>
   callName.startsWith(MCP_PREFIX) ? callName.slice(MCP_PREFIX.length) : null
 
+const UNSHOWABLE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu
+/** One `\uXXXX` per UTF-16 code unit of `ch`. */
+const escapeChar = (ch: string): string => ch.split('').map(u => '\\u' + u.charCodeAt(0).toString(16).padStart(4, '0')).join('')
+
 /** `s` as a terminal can show it without acting on it: every control character (C0, DEL, C1), format character (bidi
  *  marks and overrides, zero-width characters and joiners, soft hyphen, BOM, tag characters) and line or paragraph
  *  separator is written as `\uXXXX`, one escape per UTF-16 code unit. JSON.stringify escapes the C0 controls only;
  *  a terminal acts on U+009B (an 8-bit CSI: it redraws the line on xterm.js and others) and reorders the text after U+202E.
  *  Letters, combining marks and emoji stay as they are, except the joiner U+200D between emoji. */
 export function showable(s: string): string {
-  return s.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, ch => ch.split('').map(u => '\\u' + u.charCodeAt(0).toString(16).padStart(4, '0')).join(''))
+  return s.replace(UNSHOWABLE, escapeChar)
 }
+
+/** `showable` for text that spans lines (a final answer, an error body, the reply as it streams in): a newline and a tab
+ *  stay what they are, and everything else `showable` escapes is escaped, the carriage return included, which puts the
+ *  cursor back to the start of the line so that what follows is written over it. */
+export function showableText(s: string): string {
+  return s.replace(UNSHOWABLE, ch => ch === '\n' || ch === '\t' ? ch : escapeChar(ch))
+}
+
+/** Whether `showable` would leave `s` as it is: nothing in it that a terminal would act on. For a name that is printed. */
+export const isShowable = (s: string): boolean => showable(s) === s
 
 /** The question the CLI asks before an approval call. The command and the server name go through JSON.stringify and
  *  showable: with control characters (`\r\u001b[2K`, or the single character U+009B) either would otherwise redraw
