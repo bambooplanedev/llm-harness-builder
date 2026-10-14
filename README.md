@@ -76,12 +76,13 @@ that holds the key:
     "backend": { "kind": "openai", "baseUrl": "https://openrouter.ai/api/v1",
                  "apiKeyEnv": "OPENROUTER_API_KEY", "model": "qwen/qwen3-32b", "temperature": 0.2 }
 
-The key itself is never in a harness file, a trace or a bench JSON. It is read from the variable
-when a command starts and sent as `Authorization: Bearer` to `baseUrl/models` and
-`baseUrl/chat/completions`, nowhere else, and requests that carry it follow no redirect. The name
-must be upper-case and end in `_API_KEY`, so a harness file from someone else cannot send your
-`GITHUB_TOKEN` or `AWS_*` along, and `baseUrl` must be `https` (plain `http` only on `localhost`,
-`127.0.0.1` or `[::1]`). `run`, `demo`, `bench` and `replay` say on stderr where the key goes —
+The key itself is never in a harness file, and a run takes its value out of what it records and
+shows; the honest notes list what that misses. It is read from the variable when a command starts
+and sent as `Authorization: Bearer` to `baseUrl/models` and `baseUrl/chat/completions`, nowhere
+else, and requests that carry it follow no redirect. The name must be upper-case and end in
+`_API_KEY`, so a harness file from someone else cannot send your `GITHUB_TOKEN` or `AWS_*` along,
+and `baseUrl` must be `https` (plain `http` only on `localhost`, `127.0.0.1` or `[::1]`). `run`,
+`demo`, `bench` and `replay` say on stderr where the key goes —
 `the key in OPENROUTER_API_KEY goes to openrouter.ai` — before the first request. That is a
 notice, not a question: the key leaves with that request (with `bench`, with its preflight). A
 variable that is not set, is empty or holds what a key cannot (spaces, control characters,
