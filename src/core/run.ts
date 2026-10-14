@@ -1,4 +1,4 @@
-import { NO_THINK_LINE, type RunParams } from './config.js'
+import { NO_THINK_LINE, type HarnessConfig, type RunParams } from './config.js'
 import { mcpApprovalName, UNTIL_BASH, type HarnessEvent, type ToolCall, type DoneReason } from './events.js'
 import { createBackend, type Backend, type ChatMessage, type ChatRequest, type Delta, type NormalizedResponse, type Usage } from './backends/index.js'
 import { TOOL_SCHEMAS, runTool } from './tools/index.js'
@@ -27,6 +27,12 @@ type Ev = DistributiveOmit<HarnessEvent, 'seq' | 'turn' | 'ts'>
 // loop.freshContext. Appended to the task, not sent as a second user message: no chat template sees two user turns in a row.
 // It does not name the call that looped: that would put the loop back into the new history.
 const FRESH_NOTE = 'Note: an earlier attempt at this task was cleared from this conversation. Files in the project may already have been changed. Look at their current state before editing.'
+
+/** Whether a run of this harness can stop at an approval: exactly the places below that call opts.approve —
+ *  an mcp server to start, loop.untilBash before the run, bash under approveBash. The CLI asks this before a
+ *  trace exists or a request goes out, so a run nobody can answer is refused instead of left waiting. */
+export const mayAsk = (c: HarnessConfig): boolean =>
+  (c.tools.approveBash && c.tools.enabled.includes('bash')) || c.loop.untilBash !== undefined || Object.keys(c.mcpServers ?? {}).length > 0
 
 export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGenerator<HarnessEvent> {
   const { config, task, workdir, answerSchema } = params

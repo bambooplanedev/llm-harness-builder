@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { runAgent, type RunOpts } from './core/run.js'
+import { runAgent, mayAsk, type RunOpts } from './core/run.js'
 import { validateConfig, sendsAnswerSchema, type HarnessConfig, type BackendKind } from './core/config.js'
 import { validateWorkdir } from './core/tools/sandbox.js'
 import type { Backend, NormalizedResponse } from './core/backends/types.js'
@@ -133,6 +133,8 @@ async function execRun(config: HarnessConfig, task: string, workdir: string, o: 
   return { id: trace.id, last: last! }
 }
 
+const NO_TTY = 'stdin is not a terminal, so nothing can answer an approval prompt: pass --yes to approve every command, or run in a terminal'
+
 async function cmdRun(argv: string[]) {
   const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: COMMANDS.run.options })
   if (values.help) return printHelp('run')
@@ -150,6 +152,8 @@ async function cmdRun(argv: string[]) {
     catch (e) { die(`cannot read answer schema ${schemaFile}:\n  ${(e as Error).message}`) }
     if (typeof answerSchema !== 'object' || answerSchema === null || Array.isArray(answerSchema)) die(`answer schema ${schemaFile} must hold a JSON object`)
   }
+  // On a pipe or /dev/null nobody can answer: the run would end at its first question as if interrupted (exit 130, input at EOF) or wait for it forever (input open).
+  if (!values.yes && process.stdin.isTTY !== true && mayAsk(config)) die(NO_TTY)
   const { last } = await execRun(config, taskParts.join(' '), workdir, { yes: values.yes, json: values.json, answerSchema })
   const final = last.type === 'done' && last.reason === 'final' ? last : undefined
   let ok = final !== undefined

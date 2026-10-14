@@ -1,7 +1,7 @@
 import { test, expect } from 'vitest'
 import { writeFile, access } from 'node:fs/promises'
 import { join } from 'node:path'
-import { runAgent } from '../src/core/run.js'
+import { runAgent, mayAsk } from '../src/core/run.js'
 import type { HarnessConfig, RunParams } from '../src/core/config.js'
 import type { HarnessEvent } from '../src/core/events.js'
 import { fakeBackend, harness, tmp, type FakeResponse } from './helpers.js'
@@ -808,4 +808,13 @@ test('the model\'s bash and loop.untilBash see a variable named in tools.bashEnv
     expect(checks(ev)).toMatchObject([{ passed: true }])
     expect(last(ev)).toMatchObject({ reason: 'final' })
   } finally { delete process.env.LHB_RUN_NAMED; delete process.env.LHB_RUN_SECRET }
+})
+
+test('mayAsk: the three places a run can stop at an approval, and nothing else', () => {
+  expect(mayAsk(base({ tools: { enabled: ['bash'], approveBash: true } }))).toBe(true)
+  expect(mayAsk(base({ tools: { enabled: [], approveBash: true } }))).toBe(false) // curator-judge: no bash to ask about
+  expect(mayAsk(base({ tools: { enabled: ['bash'], approveBash: false } }))).toBe(false)
+  expect(mayAsk(base({ tools: { enabled: [], approveBash: false }, loop: { maxTurns: 2, untilBash: 'true' } }))).toBe(true)
+  expect(mayAsk(base({ tools: { enabled: [], approveBash: false }, mcpServers: { s: { command: 'x' } } }))).toBe(true)
+  expect(mayAsk(base({ tools: { enabled: [], approveBash: false }, mcpServers: {} }))).toBe(false)
 })

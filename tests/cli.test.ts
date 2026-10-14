@@ -777,3 +777,49 @@ test.skipIf(!hasPython)('in a terminal, Ctrl-D while the model works closes the 
   expect(existsSync(join(wd, 'second.txt'))).toBe(false)
   expect(await readdir(join(cwd, 'runs'))).toEqual([expect.stringMatching(/^[0-9a-f]{8}\.jsonl$/)])
 }, 30_000)
+
+const NO_TTY = 'stdin is not a terminal, so nothing can answer an approval prompt: pass --yes to approve every command, or run in a terminal'
+function refusedCleanly(r: { status: number | null; stderr: string; cwd: string }) {
+  expect(r.status).toBe(2)
+  expect(r.stderr).toContain(NO_TTY)
+  expect(r.stderr).not.toContain('llm_request')
+  expect(r.stderr).not.toContain('no more responses')
+  expect(r.stderr).not.toMatch(/^\s+at /m)
+  expect(existsSync(join(r.cwd, 'runs'))).toBe(false)
+}
+
+test('run without --yes and without a terminal stops before the trace and the first request when it may ask', async () => {
+  const wd = await tmp('lhb-cli-'), fake = join(wd, 'fake.json')
+  await writeFile(fake, JSON.stringify([]))
+  const plain = JSON.parse(await readFile(harness('bare'), 'utf8'))
+  const untilOnly = join(wd, 'until.json'), mcpOnly = join(wd, 'mcp.json')
+  await writeFile(untilOnly, JSON.stringify({ ...plain, tools: { enabled: ['read_file'], approveBash: false }, loop: { ...plain.loop, untilBash: 'true' } }))
+  await writeFile(mcpOnly, JSON.stringify({ ...plain, tools: { enabled: ['read_file'], approveBash: false }, mcpServers: { s: { command: process.execPath, args: [join(ROOT, 'tests', 'fixtures', 'mcp-server.mjs')] } } }))
+  // stdin an empty pipe (EOF), as spawnSync gives it
+  for (const h of [harness('bare'), untilOnly, mcpOnly]) refusedCleanly(cli(['run', h, '--workdir', wd, 'x'], { LHB_FAKE_BACKEND: fake }))
+  // stdin /dev/null
+  const cwd = mkdtempSync(join(tmpdir(), 'lhb-cwd-'))
+  const ignored = spawnSync(join(ROOT, 'node_modules', '.bin', 'tsx'), [join(ROOT, 'src', 'cli.ts'), 'run', harness('bare'), '--workdir', wd, 'x'],
+    { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, LHB_FAKE_BACKEND: fake } })
+  refusedCleanly({ ...ignored, cwd })
+}, 60_000)
+
+test('run without a terminal whose stdin stays open does not wait for an answer that cannot come', async () => {
+  const wd = await tmp('lhb-cli-'), fake = join(wd, 'fake.json')
+  await writeFile(fake, JSON.stringify([]))
+  const cwd = mkdtempSync(join(tmpdir(), 'lhb-cwd-'))
+  const p = spawn(join(ROOT, 'node_modules', '.bin', 'tsx'), [join(ROOT, 'src', 'cli.ts'), 'run', harness('bare'), '--workdir', wd, 'x'],
+    { cwd, env: { ...process.env, LHB_FAKE_BACKEND: fake } })
+  let stderr = ''
+  p.stderr.on('data', (b: Buffer) => { stderr += b })
+  const status = await new Promise<number | null>(done => p.on('exit', done)) // stdin is never written nor closed
+  refusedCleanly({ status, stderr, cwd })
+}, 30_000)
+
+test('run without a terminal goes on when the harness cannot ask (curator-judge: approveBash without bash)', async () => {
+  const wd = await tmp('lhb-cli-'), fake = join(wd, 'fake.json')
+  await writeFile(fake, JSON.stringify([{ content: 'fin' }]))
+  const r = cli(['run', harness('curator-judge'), '--workdir', wd, 'judge'], { LHB_FAKE_BACKEND: fake })
+  expect(r.status).toBe(0)
+  expect(r.stderr).not.toContain('stdin is not a terminal')
+}, 30_000)
