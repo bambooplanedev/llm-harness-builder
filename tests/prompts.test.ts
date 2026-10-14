@@ -162,3 +162,14 @@ test('curator-judge: no tool at all, the answer held to the schema of the task, 
   expect([h.tools.enabled, h.mcpServers, h.toolCalls.mode, h.toolCalls.enforceSchema, h.loop]).toEqual([[], undefined, 'native', true, { maxTurns: 2 }])
   expect(h.systemPrompt).not.toMatch(/shell|grep|jq|python|working directory|no_think/)
 })
+
+test('tuned-openrouter is tuned with a hosted backend: the same file in every other field', async () => {
+  const load = async (n: string) => JSON.parse(await readFile(new URL(`../harnesses/${n}.json`, import.meta.url), 'utf8'))
+  const tuned = await load('tuned'), cloud = await load('tuned-openrouter')
+  expect(cloud.name).toBe('tuned-openrouter')
+  expect(cloud.backend).toEqual({ kind: 'openai', baseUrl: 'https://openrouter.ai/api/v1', apiKeyEnv: 'OPENROUTER_API_KEY', model: 'qwen/qwen3-32b', maxTokens: 1024, temperature: 0.2 })
+  const { name: _a, backend: _b, ...rest } = cloud
+  const { name: _c, backend: _d, ...tunedRest } = tuned
+  expect(rest).toEqual(tunedRest)
+  expect(validateConfig(cloud)).toEqual([])
+})
