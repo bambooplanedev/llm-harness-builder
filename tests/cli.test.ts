@@ -1065,7 +1065,7 @@ test('--api-key-env with a name that is not *_API_KEY is an argument error in ru
 }, 60_000)
 
 test('a key with --kind ollama is an invalid harness, named so', async () => {
-  const r = cli(['run', harness('bare'), '--workdir', await tmp('lhb-cli-'), '--yes', '--kind', 'ollama', '--api-key-env', KEY_NAME, 'x'], { [KEY_NAME]: KEY })
+  const r = cli(['run', harness('bare'), '--workdir', await tmp('lhb-cli-'), '--yes', '--kind', 'ollama', '--base-url', 'http://127.0.0.1:9/v1', '--api-key-env', KEY_NAME, 'x'], { [KEY_NAME]: KEY })
   expect(r.status).toBe(2)
   expect(r.stderr).toContain('invalid harness')
   expect(r.stderr).toContain('backend.apiKeyEnv needs kind openai: a key goes only to an OpenAI-compatible API')
