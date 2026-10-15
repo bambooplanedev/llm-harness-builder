@@ -38,8 +38,9 @@ export const mayAsk = (c: HarnessConfig): boolean =>
 export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGenerator<HarnessEvent> {
   const { config, task, workdir, answerSchema } = params
   const backend = opts.backend ?? createBackend(config.backend)
-  // The backend key's value never reaches the history or an event: tool and check output is cleaned before either sees
-  // it, every event is a cleaned copy, and what goes to the server or to a tool is left as it is.
+  // The backend key's value never enters the history from tool or check output, and never reaches an event: that output
+  // is cleaned before the history takes it, every event is a cleaned copy, and what goes to the server or to a tool is
+  // left as it is.
   const keyName = config.backend.apiKeyEnv
   const redact = redactor(keyName === undefined ? undefined : apiKey(config.backend, process.env), keyName ?? '')
   const prompted = config.toolCalls.mode === 'prompted'

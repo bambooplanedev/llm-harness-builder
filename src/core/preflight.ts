@@ -9,8 +9,9 @@ export type PreflightResult = { ok: true; server: Omit<ServerInfo, 'router'> } |
  * No generation: a list of models and llama-server's /props, nothing that costs model time (a router
  * does load the named model to report its window — the bench would load it anyway). The model name
  * is checked only where the server serves by it: Ollama, and a llama-server router. A one-model
- * llama-server answers any name with the model it has. With a key (a hosted API) the model is always
- * checked, by id or by id without a routing suffix, and the window comes from the list.
+ * llama-server answers any name with the model it has. With a key (a hosted API) the model is
+ * checked, by id or by id without a routing suffix, unless the server says its list is partial; the
+ * window comes from the list.
  */
 export async function preflight(backend: Backend, b: HarnessConfig['backend']): Promise<PreflightResult> {
   const where = `${b.baseUrl} (${b.kind})`

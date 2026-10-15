@@ -91,16 +91,16 @@ export function apiKey(b: { apiKeyEnv?: string }, env: Record<string, string | u
 }
 
 /** The line run, demo, bench and replay print before the first request, and the UI shows under the backend: which
- *  variable goes to which host. Nothing without a key, or for a name or URL validation would refuse — a key pasted in
- *  place of the name is never printed back. With `env`, a value too short to redact says so. */
+ *  variable goes to which host. Nothing without a key, or for a name validation would refuse or a URL that does not
+ *  parse — a key pasted in place of the name is never printed back. With `env`, a value too short to redact says so. */
 export function keyNote(b: { apiKeyEnv?: unknown; baseUrl?: unknown }, env?: Record<string, string | undefined>): string | undefined {
   if (typeof b.apiKeyEnv !== 'string' || !KEY_ENV.test(b.apiKeyEnv) || !isHttpUrl(b.baseUrl)) return undefined
   const v = env ? own(env, b.apiKeyEnv)?.trim() : undefined
-  const short = v && v.length < REDACT_MIN ? ' (shorter than 20 characters, so it is not redacted)' : ''
+  const short = v && v.length < REDACT_MIN ? ` (shorter than ${REDACT_MIN} characters, so it is not redacted)` : ''
   return `the key in ${b.apiKeyEnv} goes to ${new URL(b.baseUrl).host}${short}`
 }
 
-export type McpServerConfig ={ command: string; args?: string[]; tools?: string[] }
+export type McpServerConfig = { command: string; args?: string[]; tools?: string[] }
 
 export type HarnessConfig = {
   name: string

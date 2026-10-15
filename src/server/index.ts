@@ -44,7 +44,9 @@ export async function startServer(opts: ServerOpts) {
   const server = http.createServer(async (req, res) => {
     try {
       // DNS rebinding (a foreign Host) and CSRF (a page of another origin, other localhost ports included): refused.
-      // A missing Origin only means a non-browser client (curl, tests) and is allowed.
+      // No Origin is a client that is not a browser (curl, tests) or a browser GET (this page's own, or a simple one from
+      // elsewhere that cannot read the answer), and is allowed. A POST or PUT from a page always carries Origin, so a GET
+      // route must never send a key, and writes only housekeeping: the runs directory, a missing `done` on a trace.
       const no = refusal(req)
       if (no) return json(res, 403, { error: no })
       const url = new URL(req.url ?? '/', 'http://localhost')

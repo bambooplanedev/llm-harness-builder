@@ -42,7 +42,7 @@ function setThink(text: string) {
   else config.value.backend.think = text === 'on'
 }
 
-/** An empty box removes the key: the harness talks to a local server again, as before. */
+/** An empty box removes the key: the backend is keyless again, as before. */
 function setKeyEnv(text: string) {
   const t = text.trim()
   if (t) config.value.backend.apiKeyEnv = t
