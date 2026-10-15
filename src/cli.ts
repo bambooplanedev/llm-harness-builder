@@ -111,8 +111,10 @@ type ExecOpts = { yes: boolean; json: boolean; quiet?: boolean; signal?: AbortSi
 
 /** Runs one agent loop and keeps its trace in ./runs/<id>.jsonl, the file format serve reads. Written as .part and renamed when the loop ends, so a live or killed run is never listed. */
 async function execRun(config: HarnessConfig, task: string, workdir: string, o: ExecOpts): Promise<{ id: string; last: HarnessEvent }> {
+  // The task goes to the server as typed; the trace's first line is a file like the events after it, so it has no key in it.
+  const redact = redactor(apiKey(config.backend, process.env), config.backend.apiKeyEnv ?? '')
   const trace = new TraceWriter('runs', true)
-  await trace.open({ harness: config.name, task, workdir, started: Date.now(), bench: o.bench })
+  await trace.open({ harness: config.name, task: redact.text(task), workdir, started: Date.now(), bench: o.bench })
   // Ctrl-C: keep what the run has written instead of leaving a .part nothing ever lists again
   // (serve appends the synthetic done for any trace that ends without one). bench registers its
   // own handler before ours and exits from it, so its .part stays for the Bench page to finish.

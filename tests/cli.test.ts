@@ -983,6 +983,19 @@ test('run against a hosted API: the bearer token reaches it, nothing else is ask
   } finally { await api.close() }
 }, 30_000)
 
+test('a key typed into the task is redacted in the trace\'s first line', async () => {
+  const api = await fakeOpenAI([textTurn('done')])
+  try {
+    const wd = await tmp('lhb-cli-'), file = await keyedHarness(wd, api.baseUrl)
+    const r = await cliAsync(['run', file, '--workdir', wd, '--yes', `use ${KEY}`], { [KEY_NAME]: KEY })
+    expect(r.status).toBe(0)
+    const runs = join(r.cwd, 'runs'), [trace] = readdirSync(runs)
+    const first = (await readFile(join(runs, trace), 'utf8')).split('\n')[0]
+    expect(first).toContain(MARK); expect(first).not.toContain(KEY)
+    expect(JSON.parse(first).meta.task).toBe(`use ${MARK}`)
+  } finally { await api.close() }
+}, 30_000)
+
 test('bench against a hosted API: the start line before preflight, /models asked with the key, the window the smaller one, no key in any file', async () => {
   const api = await fakeOpenAI([textTurn('done')], [{ id: 'fake/model', context_length: 50000, top_provider: { context_length: 40000 } }])
   try {

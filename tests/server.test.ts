@@ -481,3 +481,21 @@ test('a throw that escapes the run is recorded with the key redacted', async () 
     expect(JSON.stringify(events)).not.toContain(KEYV)
   } finally { await s.close(); delete process.env.LHB_SRV_THROW_API_KEY }
 })
+
+test('a key typed into the task is redacted in the run file\'s first line and in the run listing', async () => {
+  const KEYV = 'sk-or-v1-' + '4'.repeat(31) // 40 characters, made up
+  process.env.LHB_SRV_TASK_API_KEY = KEYV
+  try {
+    const cfg = config({ backend: { ...harness().backend, baseUrl: 'https://or.example/v1', apiKeyEnv: 'LHB_SRV_TASK_API_KEY' } })
+    queue = [{ content: 'fin' }]
+    const r = await postJson(`${base}/api/runs`, { config: cfg, task: `use ${KEYV}`, workdir: await tmp('lhb-wd-task-') })
+    expect(r.status).toBe(201)
+    const { runId } = await r.json()
+    expect((await collectSSE(`${base}/api/runs/${runId}/events`)).at(-1)).toMatchObject({ type: 'done', reason: 'final' })
+    const first = (await readFile(join(runsDir, `${runId}.jsonl`), 'utf8')).split('\n')[0]
+    expect(first).toContain('[redacted: LHB_SRV_TASK_API_KEY]'); expect(first).not.toContain(KEYV)
+    expect(JSON.parse(first).meta.task).toBe('use [redacted: LHB_SRV_TASK_API_KEY]')
+    const listed = await (await fetch(`${base}/api/runs`)).text()
+    expect(listed).toContain('use [redacted: LHB_SRV_TASK_API_KEY]'); expect(listed).not.toContain(KEYV)
+  } finally { delete process.env.LHB_SRV_TASK_API_KEY }
+})

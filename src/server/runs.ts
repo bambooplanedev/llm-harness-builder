@@ -105,7 +105,7 @@ export class RunStore {
   }
 
   async start(params: RunParams, backend?: Backend): Promise<string> {
-    // runAgent redacts its own events; the catch below builds one outside it. First, so nothing is reserved yet if this throws.
+    // runAgent redacts its own events; the meta line and the catch below write outside it. First, so nothing is reserved yet if this throws.
     const redact = redactor(apiKey(params.config.backend, process.env), params.config.backend.apiKeyEnv ?? '')
     const workdir = await realpath(params.workdir)
     // Check-and-reserve with no `await` between them: nothing else can run on this thread
@@ -117,7 +117,7 @@ export class RunStore {
     this.active.set(id, a)
 
     try {
-      await trace.open({ harness: params.config.name, task: params.task, workdir, started: Date.now() })
+      await trace.open({ harness: params.config.name, task: redact.text(params.task), workdir, started: Date.now() })
     } catch (e) {
       this.active.delete(id)
       throw e
