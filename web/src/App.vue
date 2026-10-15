@@ -2,7 +2,7 @@
 import { ref, onMounted, watch } from 'vue'
 import { api, type Delta, type HarnessConfig, type HarnessEvent, type RunSummary } from './api'
 import { PRESETS, DEFAULT_PROMPTED_TEMPLATE, DEFAULT_PARSE_ERROR_HINT, DEMO_TASK } from '../../src/core/prompts'
-import { isLoopbackUrl } from '../../src/core/config'
+import { isLoopbackUrl, listsModelsByItself } from '../../src/core/config'
 import ConfigForm from './ConfigForm.vue'
 import ContextBar from './ContextBar.vue'
 import Trace from './Trace.vue'
@@ -87,8 +87,13 @@ function outbound(c: HarnessConfig): HarnessConfig {
 /** Loads a bench run's harness and workdir into the form; the user presses Run themselves. */
 function toWorkbench(c: HarnessConfig, wd: string) { setConfig(c); workdir.value = wd; tab.value = 'workbench' }
 
-onMounted(async () => { await refreshLists(); await refreshModels() })
-watch(() => [config.value.backend.kind, config.value.backend.baseUrl, config.value.backend.apiKeyEnv], refreshModels)
+onMounted(async () => { await refreshLists(); if (listsModelsByItself(config.value.backend)) await refreshModels() })
+watch(() => [config.value.backend.kind, config.value.backend.baseUrl, config.value.backend.apiKeyEnv], () => {
+  // With a key, asking for the list sends the key to baseUrl: that waits for the refresh button, so opening a harness
+  // or a bench run sends nothing, and a list from the previous host is not kept.
+  if (listsModelsByItself(config.value.backend)) refreshModels()
+  else { models.value = []; modelsError.value = '' }
+})
 </script>
 
 <template>

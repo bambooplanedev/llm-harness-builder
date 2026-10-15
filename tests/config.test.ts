@@ -2,7 +2,7 @@ import { test, expect } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { validateConfig, sendsAnswerSchema, ENV_NAME, keyErrors, keyProblem, apiKey, keyNote, FLAG_WORDS, backendErrors, isLoopbackUrl } from '../src/core/config.js'
+import { validateConfig, sendsAnswerSchema, ENV_NAME, keyErrors, keyProblem, apiKey, keyNote, FLAG_WORDS, backendErrors, isLoopbackUrl, listsModelsByItself } from '../src/core/config.js'
 import { harness } from './helpers.js'
 
 const validConfig = harness()
@@ -357,4 +357,11 @@ test('isLoopbackUrl: this machine only, judged on the parsed hostname; nothing f
     expect([u, isLoopbackUrl(u)]).toEqual([u, true])
   for (const u of ['https://openrouter.ai/api/v1', 'http://192.168.1.5:8080/v1', 'http://localhost@evil.com/v1', 'http://localhost.evil.com/v1', '', 'http://', 'https://', 7, undefined])
     expect([u, isLoopbackUrl(u)]).toEqual([u, false])
+})
+
+test('listsModelsByItself: only a backend without a key lists its models by itself', () => {
+  expect(listsModelsByItself({})).toBe(true)
+  expect(listsModelsByItself({ apiKeyEnv: undefined })).toBe(true)
+  expect(listsModelsByItself({ apiKeyEnv: 'OPENROUTER_API_KEY' })).toBe(false)
+  expect(listsModelsByItself({ apiKeyEnv: '' })).toBe(false)
 })

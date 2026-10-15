@@ -110,6 +110,7 @@ function editMcp(text: string) {
       <input type="text" :value="config.backend.apiKeyEnv ?? ''" placeholder="none (a local server)" @change="setKeyEnv(($event.target as HTMLInputElement).value)">
     </div>
     <div v-if="keyLine()" class="hint">{{ keyLine() }}</div>
+    <div v-if="keyLine() && !models.length" class="hint">press ↻ to list the models: that request carries the key</div>
     <div class="row">
       <select v-model="config.backend.model"><option v-for="m in models" :key="m" :value="m">{{ m }}</option></select>
       <input type="text" v-model="config.backend.model" placeholder="or type a model id">

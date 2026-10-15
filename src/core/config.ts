@@ -53,6 +53,11 @@ export function keyErrors(b: KeyFields, w: KeyWords = FILE_WORDS): string[] {
 /** Whether a URL points at this machine: a list from a server elsewhere — a hosted API above all — is never auto-picked from. */
 export const isLoopbackUrl = (s: unknown): boolean => isHttpUrl(s) && LOOPBACK.has(new URL(s).hostname)
 
+/** Whether the form may ask serve for the model list by itself. Never with a key: that request carries the key to
+ *  baseUrl, and opening someone else's harness or a bench run must not send it anywhere. With a key the list comes
+ *  on the refresh button. */
+export const listsModelsByItself = (b: { apiKeyEnv?: unknown }): boolean => b.apiKeyEnv === undefined
+
 /** The checks of `backend` that need no model: kind, URL and the key's rules. POST /api/models runs these alone. */
 export function backendErrors(b: Record<string, unknown>): string[] {
   const e: string[] = []

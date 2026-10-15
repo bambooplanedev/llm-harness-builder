@@ -11,8 +11,8 @@ const base = harness({
   backend: { kind: 'ollama', baseUrl: 'http://localhost:11434', model: 'qwen3:8b', numCtx: 8192, temperature: 0.2 },
   toolCalls: { mode: 'prompted', format: 'json', enforceSchema: true, promptedTemplate: '{{tools}}', parseErrorHint: 'h' },
 })
-const render = (c: HarnessConfig) =>
-  renderToString(createSSRApp(ConfigForm, { modelValue: c, models: [], modelsError: '', harnessNames: [] }))
+const render = (c: HarnessConfig, models: string[] = []) =>
+  renderToString(createSSRApp(ConfigForm, { modelValue: c, models, modelsError: '', harnessNames: [] }))
 
 /** The textarea's rendered content, with SSR's entity escaping undone. */
 function mcpBox(html: string): string {
@@ -119,4 +119,13 @@ test('the key env box shows the name, and the line under the backend says where 
   expect(await render(base)).not.toContain('the key in')
   expect(await render({ ...keyed, backend: { ...keyed.backend, apiKeyEnv: 'sk-or-v1-pasted-by-mistake' } })).not.toContain('the key in')
   expect(await render({ ...keyed, backend: { ...keyed.backend, baseUrl: '' } })).not.toContain('the key in')
+})
+
+test('with a key and no models listed, the form says the list waits for the refresh button, because that request carries the key; without a key, or once there are models, it says nothing', async () => {
+  const keyed = { ...base, backend: { kind: 'openai' as const, baseUrl: 'https://openrouter.ai/api/v1', model: 'm', temperature: 0, apiKeyEnv: 'OPENROUTER_API_KEY' } }
+  const asks = 'to list the models: that request carries the key'
+  const html = await render(keyed, [])
+  expect(html).toContain('press '); expect(html).toContain(asks)
+  expect(await render(keyed, ['m'])).not.toContain(asks)
+  expect(await render(base, [])).not.toContain(asks)
 })

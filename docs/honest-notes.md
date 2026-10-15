@@ -39,8 +39,10 @@ Limits of [llm-harness-builder](../README.md) and of what its [findings](finding
   shows a command as the model wrote it. A trace's first line keeps the task text as you typed it.
 - A harness file from someone else is code. It decides where requests go and, with `apiKeyEnv`,
   which of your `*_API_KEY` variables goes along; the start line (`the key in … goes to …`)
-  names the host, but the key has left with the first request by the time you read it (with `bench`,
-  with its preflight).
+  names the host. The key normally leaves with the first request, so it has gone by the time you
+  read the line (with `bench`, with its preflight); in `run` without `--yes` a question about an
+  MCP server or `loop.untilBash` can come first. In the UI, opening a keyed harness or a bench run
+  sends nothing until you press ↻ or Run.
 - `serve` listens on 127.0.0.1 and refuses other hosts and any page from another origin, other ports
   of localhost included, but trusts every local process: whatever can connect to its port can start
   runs, answer approvals and, with `apiKeyEnv`, make it send one of its `*_API_KEY` variables to a

@@ -111,11 +111,13 @@ OpenRouter advises:
 `harnesses/tuned-openrouter.json` is `tuned` on that backend. `serve` copies `harnesses/` into its
 working directory only when there is none there yet, so an older copy lacks it: copy it by hand. In
 the UI, `serve` reads the variable from the environment it was started in; the form takes a loaded
-harness's backend only while no model is picked, so set kind, base URL, key env and model there. The
-form picks a model from the list by itself only when there is no key and the base URL points at
-this machine (`localhost`, `127.0.0.1`, `[::1]`): OpenRouter lists hundreds, at every price, and its
-list is public, so it arrives before the key is typed. `replay --api-key-env` sends the recorded
-request to a hosted API as it was recorded.
+harness's backend only while no model is picked, so set kind, base URL, key env and model there.
+With a key the form lists the models only when you press ↻, because that request sends the key to
+the base URL: opening a harness or a bench run sends nothing to it. Without a key it lists them by
+itself, as before. The form picks a model from the list by itself only when there is no key and the
+base URL points at this machine (`localhost`, `127.0.0.1`, `[::1]`): OpenRouter lists hundreds, at
+every price, and its list is public, so it arrives before the key is typed. `replay --api-key-env`
+sends the recorded request to a hosted API as it was recorded.
 
 The value of the key is replaced with `[redacted: OPENROUTER_API_KEY]` in tool output,
 `loop.untilBash` output and every event, before the history, the trace, the terminal or the UI see
