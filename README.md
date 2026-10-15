@@ -103,8 +103,8 @@ and shows up as a 401 on the first request. A stream that fails after its 200 (O
 429 or a 5xx ends the run the same way, and nothing is retried.
 
 The demo on the cloud, no GPU needed — a free OpenRouter account is enough: models whose id ends
-in `:free` cost nothing, but OpenRouter allows them 20 requests a minute and 50 a day without
-purchased credits (as of October 2026). A 429 ends the run as `backend_error` (nothing is retried).
+in `:free` cost nothing, but OpenRouter allows them 20 requests a minute and 50 a day until you have
+bought 10 credits (as of October 2026). A 429 ends the run as `backend_error` (nothing is retried).
 Free models come and go, so pick another from OpenRouter's list if this one is gone. For a paid
 model, use a key of its own with a credit limit, as OpenRouter advises:
 

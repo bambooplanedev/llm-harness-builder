@@ -37,8 +37,8 @@ Limits of [llm-harness-builder](../README.md) and of what its [findings](finding
   `tools.bashEnv` stay as they are. `replay` prints the server's replies as they come, the model
   list in the UI shows the ids as the server sent them, and the approval question in the terminal
   shows a command as the model wrote it.
-- OpenRouter's error bodies — a 429, for one — carry the account's user id, and a trace keeps an
-  error body as it came (redaction looks only for the key).
+- OpenRouter's error bodies — a 429, for one — can carry the account's user id, and a trace
+  keeps an error body as it came (redaction looks only for the key).
 - A harness file from someone else is code. It decides where requests go and, with `apiKeyEnv`,
   which of your `*_API_KEY` variables goes along; the start line (`the key in … goes to …`)
   names the host. The key normally leaves with the first request, so it has gone by the time you
