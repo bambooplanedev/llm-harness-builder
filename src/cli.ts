@@ -230,6 +230,8 @@ const stamp = (d: Date) => { const p = (n: number) => String(n).padStart(2, '0')
 
 /** One bench run: fresh task workdir → execRun (timed) → the task's check. Never throws; an exception becomes a FAIL row with reason 'error'. */
 async function benchOnce(config: HarnessConfig, round: number, timeoutS: number, out: string, task: Task, size?: number): Promise<BenchRun> {
+  // An exception that escapes execRun is text nothing has cleaned yet, and it goes to the bench JSON and the terminal.
+  const redact = redactor(apiKey(config.backend, process.env), config.backend.apiKeyEnv ?? '')
   let workdir = '', parseErrors = 0, toolChars = 0, toolErrors = 0, guardBlocks = 0, editMiss = 0, lastError: string | undefined, t0 = Date.now(), run: BenchRun
   process.stderr.write(`${config.name} #${round} `)
   try {
@@ -254,7 +256,7 @@ async function benchOnce(config: HarnessConfig, round: number, timeoutS: number,
     const verdict = task.check(workdir, size, d?.reason === 'final' ? d.text : undefined, childEnv(config.tools.bashEnv)) ? 'PASS' : 'FAIL'
     run = { round, verdict, reason: d?.reason ?? 'error', turns: d?.turns ?? 0, toolCalls: d?.toolCallCount ?? 0, parseErrors, lastError, ms, workdir, trace: id, toolChars: toolChars || undefined, toolErrors, guardBlocks: config.tools.requireReadBeforeEdit ? guardBlocks : undefined, editMiss }
   } catch (e) {
-    run = { round, verdict: 'FAIL', reason: 'error', turns: 0, toolCalls: 0, parseErrors, lastError: String(e), ms: Date.now() - t0, workdir, toolChars: toolChars || undefined, toolErrors, guardBlocks: config.tools.requireReadBeforeEdit ? guardBlocks : undefined, editMiss }
+    run = { round, verdict: 'FAIL', reason: 'error', turns: 0, toolCalls: 0, parseErrors, lastError: redact.text(String(e)), ms: Date.now() - t0, workdir, toolChars: toolChars || undefined, toolErrors, guardBlocks: config.tools.requireReadBeforeEdit ? guardBlocks : undefined, editMiss }
   }
   const tail = (run.reason === 'error' || run.reason === 'aborted') && run.lastError ? `  ${run.lastError.replace(/\s+/g, ' ').slice(0, 200)}` : ''
   process.stderr.write(`${run.verdict}  reason=${run.reason} turns=${run.turns} toolCalls=${run.toolCalls} parseErrors=${run.parseErrors} ${Math.round(run.ms / 1000)}s${run.trace ? ` trace=${run.trace}` : ''}${tail}\n`)
