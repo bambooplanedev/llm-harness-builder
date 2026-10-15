@@ -292,6 +292,15 @@ test('a server\'s junk reaches nobody raw: usage only from numbers, text only fr
   expect(o).toEqual([{ content: 'ok' }])
 })
 
+test('a tool-call index that is not a small integer lands in slot 0 and touches no prototype', async () => {
+  const r = await openai([
+    { choices: [{ index: 0, delta: { tool_calls: [{ index: '__proto__', id: 'p', function: { name: 'bash', arguments: '{}' } }] } }] },
+    { choices: [{ index: 0, delta: { tool_calls: [{ index: 'constructor', function: { arguments: '' } }] }, finish_reason: 'tool_calls' }] },
+  ]).send({})
+  expect(r.toolCalls).toEqual([{ backendId: 'p', name: 'bash', args: {} }])
+  expect(([] as any).id).toBeUndefined(); expect(([] as any).name).toBeUndefined(); expect(([] as any).args).toBeUndefined()
+})
+
 test('a count the server leaves out is 0, as before: only a count that is not a number drops the usage', async () => {
   const r = await openai([{ choices: [{ index: 0, delta: { content: 'x' }, finish_reason: 'stop' }], usage: { prompt_tokens: 5 } }]).send({})
   expect(r.usage).toEqual({ promptTokens: 5, completionTokens: 0 })

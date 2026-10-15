@@ -37,7 +37,10 @@ export async function collect(chunks: AsyncIterable<any>, onDelta?: (d: Delta) =
     const rz = text(d.reasoning_content) ?? text(d.reasoning)
     if (rz) { reasoning += rz; onDelta?.({ reasoning: rz }) }
     for (const tc of Array.isArray(d.tool_calls) ? d.tool_calls : []) {
-      const t = (calls[tc?.index ?? 0] ??= { args: '' })
+      // The server's index picks a slot: only a small non-negative integer may, so "__proto__" or "constructor" can
+      // never reach a prototype.
+      const i = Number.isInteger(tc?.index) && tc.index >= 0 && tc.index < 128 ? tc.index : 0
+      const t = (calls[i] ??= { args: '' })
       if (tc?.id) t.id = String(tc.id)
       if (tc?.function?.name) t.name = String(tc.function.name)
       const a = tc?.function?.arguments
