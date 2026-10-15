@@ -74,7 +74,8 @@ A harness talks to a hosted OpenAI-compatible API when its backend names the env
 that holds the key:
 
     "backend": { "kind": "openai", "baseUrl": "https://openrouter.ai/api/v1",
-                 "apiKeyEnv": "OPENROUTER_API_KEY", "model": "qwen/qwen3-32b", "temperature": 0.2 }
+                 "apiKeyEnv": "OPENROUTER_API_KEY",
+                 "model": "nvidia/nemotron-3-super-120b-a12b:free", "temperature": 0.2 }
 
 The key itself is never in a harness file, and a run takes its value out of what it records and
 shows; the honest notes list what that misses. The key is read from the variable when a command
@@ -101,12 +102,15 @@ and shows up as a 401 on the first request. A stream that fails after its 200 (O
 `finish_reason: "error"`) is a `backend_error` with the provider's message, not an empty reply; a
 429 or a 5xx ends the run the same way, and nothing is retried.
 
-The demo on the cloud, no GPU needed — better with a key of its own and a credit limit, as
-OpenRouter advises:
+The demo on the cloud, no GPU needed — a free OpenRouter account is enough: models whose id ends
+in `:free` cost nothing, but OpenRouter allows them 20 requests a minute and 50 a day without
+purchased credits (as of October 2026). A 429 ends the run as `backend_error` (nothing is retried).
+Free models come and go, so pick another from OpenRouter's list if this one is gone. For a paid
+model, use a key of its own with a credit limit, as OpenRouter advises:
 
     export OPENROUTER_API_KEY=...
     npx llm-harness-builder demo --kind openai --base-url https://openrouter.ai/api/v1 \
-      --api-key-env OPENROUTER_API_KEY --model qwen/qwen3-32b
+      --api-key-env OPENROUTER_API_KEY --model nvidia/nemotron-3-super-120b-a12b:free
 
 `harnesses/tuned-openrouter.json` is `tuned` on that backend. `serve` copies `harnesses/` into its
 working directory only when there is none there yet, so an older copy lacks it: copy it by hand. In
