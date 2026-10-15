@@ -1,8 +1,21 @@
+<div align="center">
+
 # llm-harness-builder
 
-See what your agent harness really sends to a local LLM, and why it fails.
+**See what your agent harness really sends to the model — local or cloud — and why it fails.**
 
-A small workbench for the local-model layer of an agent: system prompt, tool description
+[![npm](https://img.shields.io/npm/v/llm-harness-builder?logo=npm)](https://www.npmjs.com/package/llm-harness-builder)
+[![CI](https://github.com/bambooplanedev/llm-harness-builder/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/bambooplanedev/llm-harness-builder/actions/workflows/ci.yml)
+[![Node](https://img.shields.io/node/v/llm-harness-builder)](https://nodejs.org)
+[![License: MIT](https://img.shields.io/npm/l/llm-harness-builder)](LICENSE)
+
+[Quick start](#quick-start) · [Cloud](#cloud) · [CLI](#cli) ·
+[Recording another agent](#recording-another-agent) · [Findings](#findings) ·
+[Honest notes](docs/honest-notes.md)
+
+</div>
+
+A small workbench for the model layer of an agent: system prompt, tool description
 format, native vs prompted tool calls, schema enforcement, tool-output truncation, context
 budget. Every run is a JSONL trace of exactly what went to the model and what came back.
 
