@@ -115,7 +115,9 @@ function outbound(c: HarnessConfig): HarnessConfig {
 function toWorkbench(c: HarnessConfig, wd: string) { setConfig(c); workdir.value = wd; tab.value = 'workbench' }
 
 onMounted(async () => { await refreshLists(); if (listsModelsByItself(config.value.backend)) await refreshModels() })
-watch(() => [config.value.backend.kind, config.value.backend.baseUrl, config.value.backend.apiKeyEnv], () => {
+// Three sources, not one getter returning an array: a new array never equals the last, so a family button, which swaps the
+// whole config, would ask for the model list again and blink the panel with every click.
+watch([() => config.value.backend.kind, () => config.value.backend.baseUrl, () => config.value.backend.apiKeyEnv], () => {
   // With a key, asking for the list sends the key to baseUrl: that waits for the refresh button, so opening a harness
   // or a bench run sends nothing, and a list from the previous host is not kept.
   if (listsModelsByItself(config.value.backend)) refreshModels()
