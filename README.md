@@ -153,7 +153,7 @@ harness whose backend is not Anthropic still starts its MCP servers with `ANTHRO
 environment.
 
     export ANTHROPIC_API_KEY=...
-    npx llm-harness-builder run --harness harnesses/native-anthropic.json --task slug
+    npx llm-harness-builder bench harnesses/native-anthropic.json harnesses/budget-anthropic.json --n 1
 
 `harnesses/native-anthropic.json` is `bare` on Claude Haiku 5.5 with thinking off;
 `harnesses/budget-anthropic.json` leaves `think` out (adaptive thinking) and adds
@@ -181,7 +181,7 @@ accounts created on 31 August 2026 or later a thinking block that no longer matc
 400. With `drop_block` the API drops the first mismatched block and the ones after it. The setting
 also switches that check on for older accounts, which would otherwise pass the blocks through:
 there they are dropped too, so a trace means the same on either. `think: false` sends
-`thinking: {type: "disabled"}` and neither the field nor the beta. A model that cannot turn
+`thinking: {type: "disabled"}`, with no `block_binding` and no beta header. A model that cannot turn
 thinking off (Opus 5.5, Sonnet 5.5) answers 400, and the trace shows a backend error.
 
 **Cache.** The request always carries a top-level `cache_control: {type: "ephemeral"}`. On Haiku 5.5 the
