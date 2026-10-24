@@ -211,9 +211,12 @@ estimates the context as chars/4 (about 460 tokens by the last turn), which leav
 schemas, while the server counted about 2000 prompt tokens. With `budgetTokens: 200` the stubs came
 from turn 3 on and there was no 400, but the server reported every thinking block after the first
 stub as dropped (`input_transformations`: `thinking_dropped`, `prefix_binding_mismatch`), so the
-model went on without its earlier reasoning; PASS in 14 turns, about $0.0054. Not checked live:
-Ollama's `/api/show` `capabilities` (no Ollama on the test machine) and the form's lock for an
-OpenRouter model (tests only).
+model went on without its earlier reasoning; PASS in 14 turns, about $0.0054. On Ollama 0.40.10
+`/api/show` gave `capabilities` `["completion", "tools", "thinking"]` for `qwen3:0.6b` and
+`["completion"]` for `gemma3:270m` (so a native harness with tools is refused on the latter), and a
+404 for a model it does not have; `prompt_eval_count` on a second turn with the same prefix was the
+whole prompt (1234, then 1253), so Ollama's prompt tokens read like the other backends'. Not checked
+live: the form's lock for an OpenRouter model (tests only).
 
 One run that ends in zero is "this model on this task", not a property of the knob.
 
