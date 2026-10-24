@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
-import { api, type ActiveTrace, type AnalysisCells, type BenchFile, type BenchResult, type BenchRun, type HarnessConfig, type HarnessEvent } from './api'
+import { api, type ActiveTrace, type AnalysisCells, type BenchFile, type BenchHarness, type BenchResult, type BenchRun, type HarnessConfig, type HarnessEvent } from './api'
 import { cellsLine } from '../../src/core/analyze'
-import { formatTable, mmss } from '../../src/core/bench'
+import { formatTable, mmss, wilson } from '../../src/core/bench'
 import Trace from './Trace.vue'
+import { H } from './hints'
 import Diff from './Diff.vue'
 import type { DiffSide } from '../../src/core/diff'
 
@@ -60,6 +61,26 @@ const sideB = computed<DiffSide | null>(() => diff.value && { ...diff.value, eve
 const total = computed(() => result.value ? result.value.n * result.value.harnesses.length : 0)
 const msDone = computed(() => runs.value.reduce((a, r) => a + r.ms, 0))
 const backend = computed(() => result.value?.harnesses[0].config.backend)
+const nCtx = computed(() => result.value?.harnesses.find(h => h.server?.nCtx)?.server?.nCtx)
+const hasCost = computed(() => runs.value.some(r => r.costUsd !== undefined))
+/** The harness of the open run: its row in the table is marked. */
+const openHarness = computed(() => sideA.value?.name)
+const pct = (x: number) => `${(x * 100).toFixed(1)}%`
+const ci = (pass: number, n: number) => wilson(pass, n) ?? [0, 0]
+/** PASS ends green, a run that ran into a wall red, the rest (turns, loop, abort) amber. */
+const reasonTone = (r: string) => r === 'final' ? 'ok' : r.endsWith('error') ? 'err' : 'warn'
+/** The biggest prompt + reply of any run: the one that came closest to the window. */
+const hasPeak = computed(() => runs.value.some(r => r.peakTokens !== undefined))
+const peak = (h: BenchHarness) => Math.max(0, ...h.runs.map(r => r.peakTokens ?? 0)) || undefined
+const starting = ref(false)
+async function again() {
+  if (!confirm('Run this bench again: the same harnesses, task, n and timeout, into a new JSON.\n\nbench approves everything without asking: the model\'s commands and the harness files\' mcpServers and loop.untilBash, in fresh temp workdirs.')) return
+  starting.value = true; error.value = ''
+  try { openFile((await api.benchAgain(file.value)).file) }
+  catch (e) { error.value = (e as Error).message }
+  finally { starting.value = false }
+}
+const medCost = (h: BenchHarness) => { const c = h.runs.flatMap(r => r.costUsd ?? []).sort((a, b) => a - b); return c.length ? `$${Number(c[(c.length - 1) >> 1].toPrecision(3))}` : '-' }
 
 /**
  * One poll. A setTimeout chain, not setInterval: a tick reads the whole .part and every bench JSON,
@@ -141,36 +162,37 @@ onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer); unsub?.(); d
         no benches yet: run <code>llm-harness-builder bench</code><br>
         this page reads only <code>runs/*.json</code> — a bench written with <code>--out</code> elsewhere will not show up here
       </div>
+      <details v-if="files.length" :open="!file"><summary class="hint">{{ file || 'pick a bench' }} · {{ files.length }} benches</summary>
       <div class="runs">
         <div v-for="f in files" :key="f.file" :class="{ on: f.file === file }" @click="openFile(f.file)">
-          {{ f.file }} · {{ f.model || '?' }} · {{ new Date(f.date).toLocaleString() }}<span v-if="!f.complete"> · incomplete</span>
+          <b>{{ f.file }}</b>
+          <div class="line one muted"><span :title="f.model">{{ f.model || '?' }}<span v-if="!f.complete"> · incomplete</span></span><span>{{ new Date(f.date).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) }}</span></div>
         </div>
       </div>
+      </details>
 
       <template v-if="result">
-        <div class="hint">
-          {{ backend?.model }} · {{ backend?.kind }} {{ backend?.baseUrl }} · n={{ result.n }} · timeout {{ mmss(result.timeoutS * 1000) }} · {{ new Date(result.date).toLocaleString() }}<br>
-          {{ runs.length }}/{{ total }} runs · {{ mmss(msDone) }} in
-        </div>
         <div v-if="active" class="ev approval live" @click="sel = 'live'">
           ● {{ active.harness }} #{{ active.round }} · {{ mmss(age) }} of {{ mmss(result.timeoutS * 1000) }} · silent {{ mmss(silence) }}
         </div>
         <div v-if="!runs.length" class="hint">round 1 still running, no results yet</div>
-        <pre v-else class="bench-table">{{ formatTable(result.harnesses) }}</pre>
         <div class="runs">
           <template v-for="h in result.harnesses" :key="h.name">
-            <div v-for="r in h.runs" :key="h.name + '#' + r.round" :class="{ notrace: !r.trace, bad: r.verdict === 'FAIL' }"
+            <h5 class="group">{{ h.name }} · runs</h5>
+            <div v-for="r in h.runs" :key="h.name + '#' + r.round" :class="{ notrace: !r.trace, on: !!r.trace && sideA?.run.trace === r.trace, b: !!r.trace && diff?.run.trace === r.trace }"
                  @click="r.trace && (sel = { id: r.trace })">
-              {{ h.name }} #{{ r.round }} {{ r.verdict }} {{ r.reason }} {{ mmss(r.ms) }}<span
-                v-if="r.verdict === 'FAIL' && r.reason === 'final'"> — the model answered, tests are red</span>
+              <div class="line"><span><b>#{{ r.round }}</b> <span :class="['chip', 'solid', r.verdict === 'PASS' ? 'ok' : 'err']">{{ r.verdict }}</span> {{ r.reason }}</span><span>{{ r.turns }} turns · {{ r.toolCalls }} tool calls · {{ mmss(r.ms) }}</span></div>
+              <div v-if="r.verdict === 'FAIL' && r.reason === 'final'">the model answered, tests are red</div>
               <div v-if="r.lastError" class="clip" :title="r.lastError">{{ r.lastError }}</div>
               <div v-if="r.trace && analysis[r.trace]" class="analysis">{{ cellsLine(analysis[r.trace]) }}</div>
-              <small>
+              <small class="where">
                 <template v-if="r.trace">{{ r.trace }}</template>
                 <template v-else>no trace written (JSON predates v2.0.3)</template> · {{ r.workdir }}
-                <button @click.stop="emit('toWorkbench', h.config, r.workdir)">to Workbench</button>
-                <button v-if="r.trace && sideA && r.trace !== sideA.run.trace && r.trace !== diff?.run.trace" @click.stop="compare(h.name, r, h.config)">⇄</button>
               </small>
+              <div class="actions">
+                <button @click.stop="emit('toWorkbench', h.config, r.workdir)">to Workbench</button>
+                <button v-if="r.trace && sideA && r.trace !== sideA.run.trace && r.trace !== diff?.run.trace" title="compare with the open run" @click.stop="compare(h.name, r, h.config)">⇄</button>
+              </div>
             </div>
           </template>
         </div>
@@ -178,6 +200,41 @@ onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer); unsub?.(); d
       <div class="err">{{ error }}</div>
     </div>
     <div class="col" ref="pane">
+      <template v-if="result">
+        <div class="bench-head">
+          <div>
+          <h2>{{ result.taskName ?? 'bench' }}<template v-if="result.size"> · size {{ result.size }}</template> · {{ result.harnesses.length }} harnesses × {{ result.n }} runs</h2>
+          <div class="muted">{{ backend?.model }} · {{ backend?.kind }} {{ backend?.baseUrl }}<template v-if="nCtx"> · window {{ nCtx.toLocaleString() }}</template> · timeout {{ mmss(result.timeoutS * 1000) }} · {{ new Date(result.date).toLocaleString() }}</div>
+          <div class="muted">{{ runs.length }}/{{ total }} runs<template v-if="!result.complete"> · incomplete</template> · {{ mmss(msDone) }} in</div>
+          </div>
+          <button @click="again" :disabled="starting || !!active" :title="active ? H.againBusy : H.again">{{ starting ? 'Starting…' : 'Run bench again' }}</button>
+        </div>
+        <div v-if="runs.length" class="table-wrap">
+          <table class="bench">
+            <thead><tr><th>harness</th><th class="n" :title="H.pass">pass</th><th :title="H.rate">rate · 95% interval</th><th class="n" :title="H.medTurns">med turns</th><th class="n" :title="H.medTime">med time</th><th v-if="hasCost" class="n" :title="H.medCost">med cost</th><th v-if="hasPeak" class="n" :title="H.peak">peak tok</th><th :title="H.reasons">how runs ended</th></tr></thead>
+            <tbody>
+              <tr v-for="h in result.harnesses" :key="h.name" :class="{ on: h.name === openHarness }">
+                <td>{{ h.name }}</td>
+                <td class="n"><span :class="['chip', h.runs.length && h.pass === 0 ? 'err' : h.runs.length && h.pass === h.runs.length ? 'ok' : '']">{{ h.pass }} / {{ h.runs.length }}</span></td>
+                <td :title="h.runs.length ? `${ci(h.pass, h.runs.length).map(x => x.toFixed(2)).join('–')}` : 'no runs yet'">
+                  <div v-if="h.runs.length" class="ci"><div class="axis"></div>
+                    <div class="range" :style="{ left: pct(ci(h.pass, h.runs.length)[0]), width: pct(ci(h.pass, h.runs.length)[1] - ci(h.pass, h.runs.length)[0]) }"></div>
+                    <div class="pt" :style="{ left: pct(h.pass / h.runs.length) }"></div></div>
+                  <span v-else class="muted">-</span>
+                </td>
+                <td class="n">{{ h.median.turns }}</td>
+                <td class="n">{{ mmss(h.median.ms) }}</td>
+                <td v-if="hasCost" class="n">{{ medCost(h) }}</td>
+                <td v-if="hasPeak" class="n" :class="{ warn: nCtx && (peak(h) ?? 0) > nCtx * 0.9 }">{{ peak(h)?.toLocaleString() ?? '-' }}</td>
+                <td><span v-for="(v, k) in h.reasons" :key="k" :class="['chip', reasonTone(String(k))]">{{ k }} ×{{ v }}</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p v-if="runs.length" class="hint">95% interval = Wilson interval of the PASS rate; two harnesses whose intervals overlap are not told apart by this bench.</p>
+        <details v-if="runs.length" class="inspector"><summary class="hint">plain table (every column)</summary><pre>{{ formatTable(result.harnesses) }}</pre></details>
+      </template>
+      <h5 v-if="result && events.length && !(sideA && sideB)" class="group">{{ sideA ? `${sideA.name} #${sideA.run.round} · ${sideA.run.verdict} · trace` : `${active?.harness ?? ''} #${active?.round ?? ''} · live trace` }}</h5>
       <Diff v-if="sideA && sideB" :a="sideA" :b="sideB" :task="result!.task" @close="closeDiff" />
       <Trace v-else-if="result && events.length" :events="events" :task="result.task" :approvable="false" />
     </div>

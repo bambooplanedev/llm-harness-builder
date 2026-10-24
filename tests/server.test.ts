@@ -532,3 +532,47 @@ test('model-info: POST with the backend fields and a model gives what the server
     expect((await fetch(`${u}/api/model-info`)).status).toBe(404)
   } finally { await s.close(); delete process.env.LHB_SRV_INFO_API_KEY }
 })
+
+test('GET /api/dirs lists subfolders by name and full path, no files, no dot folders', async () => {
+  const { mkdir } = await import('node:fs/promises')
+  const d = await tmp('lhb-dirs-')
+  await mkdir(join(d, 'b')); await mkdir(join(d, 'a')); await mkdir(join(d, '.git')); await writeFile(join(d, 'f.txt'), '')
+  const r = await (await fetch(`${base}/api/dirs?path=${encodeURIComponent(d)}`)).json()
+  expect(r.path).toBe(d)
+  expect(r.dirs).toEqual([{ name: 'a', path: join(d, 'a') }, { name: 'b', path: join(d, 'b') }])
+  expect(r.parent).toBe(join(d, '..'))
+  expect((await fetch(`${base}/api/dirs?path=${encodeURIComponent(join(d, 'nope'))}`)).status).toBe(400)
+})
+
+test('POST /api/bench/again starts bench from the JSON\'s own harnesses and answers once the new JSON exists; a bench that dies first is its stderr', async () => {
+  const { spawn } = await import('node:child_process')
+  const got: { args: string[]; configs: unknown[] }[] = []
+  let script = ''
+  const s = await startServer({ port: 0, runsDir: benchDir, harnessesDir, backendFactory: () => fake([]), bench: args => {
+    // the harness files go away once the bench exits: read them now
+    got.push({ args, configs: args.filter(a => !a.startsWith('--')).map(f => JSON.parse(require('node:fs').readFileSync(f, 'utf8'))) })
+    const out = args.find(a => a.startsWith('--out='))!.slice(6)
+    return spawn(process.execPath, ['-e', script.replace('OUT', JSON.stringify(out))], { stdio: ['ignore', 'ignore', 'pipe'] })
+  } })
+  const u = `http://127.0.0.1:${s.port}`
+  try {
+    script = `require('fs').writeFileSync(OUT, '{}'); setTimeout(() => {}, 300)`
+    const ok = await postJson(`${u}/api/bench/again`, { file: 'b1.json' })
+    expect(ok.status).toBe(201)
+    const { file } = await ok.json()
+    expect(file).toMatch(/^bench-\d{8}-\d{6}(-\d+)?\.json$/)
+    expect(got[0].args.slice(0, 4)).toEqual(['--task=slug', '--n=2', '--timeout=60', `--out=${join(benchDir, file)}`])
+    expect(got[0].configs).toEqual([config()])
+    // one at a time: the first one still runs
+    expect((await postJson(`${u}/api/bench/again`, { file: 'b1.json' })).status).toBe(409)
+    await new Promise(r => setTimeout(r, 400))
+    script = `console.error('preflight: http://x: connection refused'); process.exit(2)`
+    const bad = await postJson(`${u}/api/bench/again`, { file: 'b1.json' })
+    expect(bad.status).toBe(502)
+    expect((await bad.json()).error).toBe('preflight: http://x: connection refused')
+    expect((await postJson(`${u}/api/bench/again`, { file: '../b1.json' })).status).toBe(400)
+    expect((await postJson(`${u}/api/bench/again`, { file: 'notbench.json' })).status).toBe(404)
+    // a server that was not given a way to start one has no such route
+    expect((await postJson(`${base}/api/bench/again`, { file: 'b1.json' })).status).toBe(404)
+  } finally { await s.close() }
+})
