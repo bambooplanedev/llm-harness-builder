@@ -1,8 +1,9 @@
 import { BackendError, defaultFetch, readJson, jsonChunks, toolsField, usageFrom, type Backend, type ChatRequest, type Delta, type FetchLike, type NormalizedResponse, type NormalizedToolCall, type ServerInfo } from './types.js'
 
-type AccCall = { id?: string; name?: string; args: string }
+export type AccCall = { id?: string; name?: string; args: string }
 
-function parseCalls(calls: AccCall[]): NormalizedToolCall[] {
+/** Shared with the Anthropic adapter: one rule for arguments that are not a JSON object. */
+export function parseCalls(calls: AccCall[]): NormalizedToolCall[] {
   return calls.map(t => {
     try {
       const args = JSON.parse(t.args)
