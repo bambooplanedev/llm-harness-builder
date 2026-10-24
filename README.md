@@ -142,6 +142,65 @@ them, and MCP servers start without the variable. The [honest notes](docs/honest
 what that misses, among them an encoded key, one shorter than 20 characters, the live text of a
 turn and a command that sends the key somewhere itself.
 
+### Anthropic
+
+`kind: "anthropic"` talks to the Messages API with plain HTTP, no SDK. `baseUrl` is the server root
+(`https://api.anthropic.com`; the harness adds `/v1/...` and does not read `ANTHROPIC_BASE_URL`),
+and `apiKeyEnv` is required. Everything above about the key holds: it goes to `baseUrl` only,
+without redirects, and `run`, `demo` and `bench` say so before the first request. `ANTHROPIC_API_KEY`
+is often exported globally, and someone else's harness may name it: read the host in that notice. A
+harness whose backend is not Anthropic still starts its MCP servers with `ANTHROPIC_*` in their
+environment.
+
+    export ANTHROPIC_API_KEY=...
+    npx llm-harness-builder run --harness harnesses/native-anthropic.json --task slug
+
+`harnesses/native-anthropic.json` is `bare` on Claude Haiku 5.5 with thinking off;
+`harnesses/budget-anthropic.json` leaves `think` out (adaptive thinking) and adds
+`context.budgetTokens: 2670` and `loop.maxRepeats: 3`, so the stubs of `applyBudget` meet thinking
+blocks. Like the other examples, `serve` does not copy them into an older `harnesses/`. The request
+carries `anthropic-version: 2026-10-21`; `maxTokens` falls back to the model's own `max_tokens`
+from `GET /v1/models/{id}`, and the run asks you to set it if the server does not name one.
+Prompted mode with `enforceSchema` is refused here, and `replay` of an Anthropic request says "not
+yet".
+
+**Knobs a model does not take.** Some models refuse a setting that the harness file carries. The
+file keeps the value, the knob is just not sent, and `run` says so with one line per knob:
+`temperature 0.2 not sent: <reason>`. On this API version `temperature` is never sent: it is a
+400 on every model. For OpenRouter the list comes from the model's `supported_parameters`, for
+Ollama from `/api/show`. OpenRouter's list is a union across the providers that serve the model, so
+a knob missing from it is reliably unsupported, while one present is no guarantee that the provider
+your request reaches takes it. In the form the knob is locked with "this knob is not available for
+this model" (Ollama is asked about the model when it is committed in the box, the others on ↻), and
+unlocks when you pick another model.
+
+**Thinking.** Without `think`, or with `think: true`, the request asks for adaptive thinking with
+a summary, and sets `block_binding.prefix_mismatch_behavior` to `drop_block` (beta
+`thinking-binding-controls-2026-08-01`). The stubs of `applyBudget` rewrite old tool results, and on
+accounts created on 31 August 2026 or later a thinking block that no longer matches its prefix is a
+400. With `drop_block` the API drops the first mismatched block and the ones after it. The setting
+also switches that check on for older accounts, which would otherwise pass the blocks through:
+there they are dropped too, so a trace means the same on either. `think: false` sends
+`thinking: {type: "disabled"}` and neither the field nor the beta. A model that cannot turn
+thinking off (Opus 5.5, Sonnet 5.5) answers 400, and the trace shows a backend error.
+
+**Cache.** The request always carries a top-level `cache_control: {type: "ephemeral"}`. On Haiku 5.5 the
+prefix must be at least 512 tokens to be cached.
+
+**What a run costs.** Put prices in the harness, per million tokens:
+
+    "pricePerMTok": { "input": 0.1, "output": 0.5, "cacheRead": 0.01, "cacheWrite": 0.125 }
+
+With it the UI shows `$` on every reply, the CLI done line ends with `· $X total`, and `bench`
+reports `med $`. Without `cacheRead` and `cacheWrite`, cached tokens are priced as `input`. The tool
+has no price table: those numbers were Haiku 5.5's list prices for prompts up to 100,000 tokens
+(cache read 0.1 times input, 5-minute cache write 1.25 times) when the example was written, and
+they go stale. A prompt over 100,000 tokens, cache hits included, is priced on a second grid
+($0.50 input, $2.50 output), which a flat `pricePerMTok` cannot express: past that size the figure
+is too low.
+
+One run that ends in zero is "this model on this task", not a property of the knob.
+
 ## CLI
 
     llm-harness-builder --help | --version | help <command>
