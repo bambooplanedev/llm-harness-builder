@@ -3,7 +3,7 @@ import path from 'node:path'
 import { resolveInside } from './sandbox.js'
 import { GUARD_BLOCKED, EDIT_MISS, EDIT_IDENTICAL } from './errors.js'
 
-export type ToolCtx = { workdir: string; maxToolOutputChars: number; reads?: Set<string>; explainEditMiss?: boolean; /** Names from tools.bashEnv; absent: the base set only. */ bashEnv?: readonly string[] }
+export type ToolCtx = { workdir: string; maxToolOutputChars?: number; reads?: Set<string>; explainEditMiss?: boolean; /** Names from tools.bashEnv; absent: the base set only. */ bashEnv?: readonly string[]; /** tools.readMaxBytes, tools.bashMaxBytes, tools.bashTimeoutS; absent: the built-in limit. */ readMaxBytes?: number; bashMaxBytes?: number; bashTimeoutS?: number }
 type Args = Record<string, unknown>
 
 const str = (args: Args, key: string): string => {
@@ -33,18 +33,21 @@ export async function listDir(args: Args, ctx: ToolCtx): Promise<string> {
     .join('\n')
 }
 
-/** Hard ceiling on one read. The per-harness maxToolOutputChars cut happens in the run loop, which reports how much it dropped. */
+/** Default ceiling on one read (tools.readMaxBytes). The per-harness maxToolOutputChars cut happens in the run loop, which reports how much it dropped. */
 const MAX_READ_BYTES = 4 << 20
 
 export async function readFile(args: Args, ctx: ToolCtx): Promise<string> {
   const file = await resolveInside(ctx.workdir, str(args, 'path'))
   const fh = await open(file, 'r')
   try {
-    const n = Math.min((await fh.stat()).size, MAX_READ_BYTES)
+    const limit = ctx.readMaxBytes ?? MAX_READ_BYTES
+    const size = (await fh.stat()).size
+    const n = Math.min(size, limit)
     const buf = Buffer.alloc(n)
     const { bytesRead } = await fh.read(buf, 0, n, 0)
     ctx.reads?.add(file)
-    return buf.subarray(0, bytesRead).toString('utf8')
+    // The model must know it saw only the head.
+    return buf.subarray(0, bytesRead).toString('utf8') + (size > limit ? `\n[truncated at ${limit} bytes]` : '')
   } finally { await fh.close() }
 }
 

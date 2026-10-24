@@ -897,3 +897,102 @@ test('a key under 20 characters is not looked for', async () => {
     expect(last(ev).text).toBe(`say ${'k'.repeat(19)}`)
   } finally { delete process.env[KEY_NAME] }
 })
+
+test('llm_response.costUsd: only with a price and a usage', async () => {
+  const usage = { promptTokens: 1e6, completionTokens: 0 }
+  const cost = async (price: HarnessConfig['backend']['pricePerMTok'], u?: typeof usage) => {
+    const config = base(); config.backend = { ...config.backend, pricePerMTok: price }
+    const ev = await collect({ config, task: 'do', workdir: await wd() }, { backend: Fake([{ content: 'ok', usage: u }]) })
+    return ev.find(e => e.type === 'llm_response') as Extract<HarnessEvent, { type: 'llm_response' }>
+  }
+  expect((await cost({ input: 1, output: 1 }, usage)).costUsd).toBe(1)
+  expect('costUsd' in await cost(undefined, usage)).toBe(false)
+  expect('costUsd' in await cost({ input: 1, output: 1 })).toBe(false)
+})
+
+test('native blocks of an unchanged reply go back verbatim; a parse-error reply drops them', async () => {
+  const native = [{ type: 'thinking', thinking: 't', signature: 's' }]
+  const be = Fake([{ content: '', native, toolCalls: [{ backendId: 'id1', name: 'read_file', args: { path: 'a.txt' } }] }, { content: 'ok' }])
+  await collect({ config: base(), task: 'do', workdir: await wd() }, { backend: be })
+  expect(be.requests[1].messages.find(m => m.role === 'assistant')).toMatchObject({ native })
+
+  const cfg = base({ toolCalls: { ...base().toolCalls, mode: 'prompted' } })
+  const be2 = Fake([{ content: 'not json', native }, { content: '{"final":"x"}' }])
+  await collect({ config: cfg, task: 'do', workdir: await wd() }, { backend: be2 })
+  const a = be2.requests[1].messages.find(m => m.role === 'assistant') as any
+  expect(a.native).toBeUndefined()
+})
+
+test('a tool that errored goes back with isError', async () => {
+  const be = Fake([{ toolCalls: [{ backendId: 'id1', name: 'nope', args: {} }] }, { content: 'ok' }])
+  await collect({ config: base(), task: 'do', workdir: await wd() }, { backend: be })
+  expect(be.requests[1].messages.at(-1)).toMatchObject({ role: 'tool', isError: true })
+})
+
+test('a knob the model does not take is not sent and the run says so first; the harness keeps its value', async () => {
+  const config = base({ backend: { kind: 'ollama', baseUrl: 'http://x', model: 'fake-model', temperature: 0.2 } })
+  const be = Object.assign(Fake([{ content: 'done!' }]), { async serverInfo() { return { takes: { temperature: false as const }, takesFrom: 'test' } } })
+  const ev = await collect({ config, task: 'do', workdir: await wd() }, { backend: be })
+  expect(ev[0]).toMatchObject({ type: 'knobs_off', turn: 0, off: [{ knob: 'temperature', value: 0.2 }] })
+  expect(be.requests[0].temperature).toBeUndefined()
+  expect(config.backend.temperature).toBe(0.2)
+  expect(last(ev).reason).toBe('final')
+})
+
+test('a structural knob the model does not take refuses the run before any request', async () => {
+  const be = Object.assign(Fake([{ content: 'x' }]), { async serverInfo() { return { takes: { tools: false as const }, takesFrom: 'test' } } })
+  const config = base({ backend: { kind: 'ollama', baseUrl: 'http://x', model: 'fake-model', temperature: 0 } })
+  const ev = await collect({ config, task: 'do', workdir: await wd() }, { backend: be })
+  expect(types(ev)).toEqual(['error', 'done'])
+  expect((ev[0] as any).message).toContain('mode: "prompted"')
+  expect(last(ev).reason).toBe('backend_error')
+  expect(be.requests).toHaveLength(0)
+})
+
+test('anthropic without maxTokens sends the model\'s own output cap', async () => {
+  const config = base({ backend: { kind: 'anthropic', baseUrl: 'https://api.anthropic.com', model: 'claude-haiku-5-5', temperature: 0 } })
+  const be = Object.assign(Fake([{ content: 'done!' }]), { async serverInfo() { return { maxOutput: 64000, router: false } } })
+  await collect({ config, task: 'do', workdir: await wd() }, { backend: be })
+  expect(be.requests[0].maxTokens).toBe(64000)
+})
+
+test('keyless openai: serverInfo is not asked (a router would load the model; its answer has no takes)', async () => {
+  let asked = 0
+  const be = Object.assign(Fake([{ content: 'done!' }]), { async serverInfo() { asked++; return undefined } })
+  await collect({ config: base(), task: 'do', workdir: await wd() }, { backend: be })
+  expect(asked).toBe(0)
+})
+
+test('anthropic with no maxTokens and no answer from the server: the refusal names the failed lookup', async () => {
+  const config = base({ backend: { kind: 'anthropic', baseUrl: 'https://api.anthropic.com', model: 'claude-haiku-5-5', temperature: 0 } })
+  const be = Object.assign(Fake([]), { async serverInfo() { return undefined } })
+  const ev = await collect({ config, task: 'do', workdir: await wd() }, { backend: be })
+  expect((ev[0] as any).message).toContain('GET /v1/models/claude-haiku-5-5 failed or the model is unknown')
+  expect(be.requests).toHaveLength(0)
+})
+
+test('a price with no usage reported: no cost on the response event', async () => {
+  const config = base({ backend: { kind: 'openai', baseUrl: 'http://x/v1', model: 'fake-model', temperature: 0, pricePerMTok: { input: 1, output: 1 } } })
+  const ev = await collect({ config, task: 'do', workdir: await wd() }, { backend: Fake([{ content: 'done!' }]) })
+  expect(ev.find(e => e.type === 'llm_response')).not.toHaveProperty('costUsd')
+})
+
+test('no context limits: a long tool output is not truncated and nothing is stubbed', async () => {
+  const be = Fake([{ toolCalls: [{ name: 'read_file', args: { path: 'a.txt' } }] }, { toolCalls: [{ name: 'read_file', args: { path: 'a.txt' } }] }, { content: 'x' }])
+  const cfg = base(); delete (cfg as any).context
+  const ev = await collect({ config: cfg, task: 'do', workdir: await wd() }, { backend: be })
+  const tr = ev.filter(e => e.type === 'tool_result') as any[]
+  expect(tr.every(t => !t.truncated && t.output.includes('A'.repeat(120)))).toBe(true)
+  const stats = ev.filter(e => e.type === 'context_stats') as any[]
+  expect(stats.every(s => s.droppedChars === 0 && s.budgetTokens === undefined)).toBe(true)
+})
+
+test('bash timeout knob: the description the model reads names the real limit, native and prompted', async () => {
+  const cfg = base({ tools: { enabled: ['bash'], approveBash: false, bashTimeoutS: 5 } })
+  const be = Fake([{ content: 'x' }])
+  await collect({ config: cfg, task: 'do', workdir: await wd() }, { backend: be })
+  expect(be.requests[0].tools![0].description).toMatch(/ 5s timeout/)
+  const pr = Fake([{ content: '{"calls":[],"final":"done"}' }])
+  await collect({ config: { ...cfg, toolCalls: { mode: 'prompted', enforceSchema: true, promptedTemplate: '{{tools}}', parseErrorHint: 'H' } }, task: 'do', workdir: await wd() }, { backend: pr })
+  expect(pr.requests[0].messages[0].content).toMatch(/ 5s timeout/)
+})

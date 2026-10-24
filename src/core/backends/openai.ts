@@ -1,8 +1,9 @@
 import { BackendError, defaultFetch, readJson, jsonChunks, toolsField, usageFrom, type Backend, type ChatRequest, type Delta, type FetchLike, type NormalizedResponse, type NormalizedToolCall, type ServerInfo } from './types.js'
 
-type AccCall = { id?: string; name?: string; args: string }
+export type AccCall = { id?: string; name?: string; args: string }
 
-function parseCalls(calls: AccCall[]): NormalizedToolCall[] {
+/** Shared with the Anthropic adapter: one rule for arguments that are not a JSON object. */
+export function parseCalls(calls: AccCall[]): NormalizedToolCall[] {
   return calls.map(t => {
     try {
       const args = JSON.parse(t.args)
@@ -12,7 +13,7 @@ function parseCalls(calls: AccCall[]): NormalizedToolCall[] {
   })
 }
 
-const usageOf = (u: any) => u && typeof u === 'object' ? usageFrom(u.prompt_tokens, u.completion_tokens) : undefined
+const usageOf = (u: any) => u && typeof u === 'object' ? usageFrom(u.prompt_tokens, u.completion_tokens, u.prompt_tokens_details?.cached_tokens) : undefined
 /** Text a server sent, only when it is text: a number, an array or an object in its place is dropped, not printed. */
 const text = (x: unknown): string | undefined => typeof x === 'string' && x ? x : undefined
 
@@ -83,8 +84,10 @@ export class OpenAIBackend implements Backend {
   private models?: Promise<any[]>
 
   /** `key`: a hosted API (backend.apiKeyEnv). It goes as a bearer token to /models and /chat/completions, the only
-   *  requests made then — none of llama-server's — and those requests follow no redirect: undici would drop the key on
-   *  another origin, but a 307 would send the whole conversation again, and nothing about a hosted API redirects. */
+   *  requests made then — none of llama-server's — and those requests follow no redirect: undici drops authorization on
+   *  another origin, but a 307 would send the whole conversation again, and nothing about a hosted API redirects. The
+   *  rule for any other adapter: undici strips only authorization, never a custom header such as x-api-key, so every
+   *  request with a key goes with redirect: 'manual', no exception. */
   constructor(private baseUrl: string, private fetchFn: FetchLike = defaultFetch, private key?: string) { this.baseUrl = baseUrl.replace(/\/+$/, '') }
 
   private keyed(init: { method?: string; headers?: Record<string, string>; body?: string; signal?: AbortSignal } = {}) {
@@ -179,7 +182,15 @@ export class OpenAIBackend implements Backend {
       const list = await this.modelList()
       const m = list.find(x => x?.id === model) ?? list.find(x => x?.id === withoutVariant(model))
       const ns = [m?.context_length, m?.top_provider?.context_length].filter((n): n is number => Number.isInteger(n) && n > 0)
-      return { ...(ns.length ? { nCtx: Math.min(...ns) } : {}), router: false }
+      // A parameter missing from the union over the model's providers is taken by none of them; one listed may still be refused by some.
+      const p: unknown[] | undefined = Array.isArray(m?.supported_parameters) ? m.supported_parameters : undefined
+      const takes = p && {
+        ...(p.includes('temperature') ? {} : { temperature: false as const }),
+        ...(p.includes('max_tokens') ? {} : { maxTokens: false as const }),
+        ...(p.includes('tools') ? {} : { tools: false as const }),
+        ...(p.includes('response_format') || p.includes('structured_outputs') ? {} : { responseSchema: false as const }),
+      }
+      return { ...(ns.length ? { nCtx: Math.min(...ns) } : {}), ...(takes ? { takes, takesFrom: 'OpenRouter supported_parameters' } : {}), router: false }
     } catch { return undefined }
   }
 

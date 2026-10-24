@@ -128,7 +128,8 @@ test('tuned-budget is tuned-repeat plus context.budgetTokens and nothing else', 
 // A /no_think harness answers in under 200 tokens on the old task and the MCP pair, but a batch of edits is 486 tokens on pool at size 7
 // (598 at size 8) and 933 to 1004 on Bonsai 2, where 2 of 9 first tries were cut at 1024. bare thinks, and <think> counts against the cap.
 // curator writes a verdict per post in one call: 29 of them did not fit 1024 tokens (a window of the real feed, 2026-09-20), 19 did.
-test('every shipped harness caps generation at 1024 tokens, except bare (no cap) and the two curator ones (4096)', async () => {
+// The two Anthropic examples get 8192: adaptive thinking spends the cap too, and a hosted model has no window to protect.
+test('every shipped harness caps generation at 1024 tokens, except bare (no cap), the two curator ones (4096) and the two Anthropic ones (8192)', async () => {
   const { readdir } = await import('node:fs/promises')
   const dir = new URL('../harnesses/', import.meta.url)
   const files = (await readdir(dir)).filter(f => f.endsWith('.json'))
@@ -136,7 +137,7 @@ test('every shipped harness caps generation at 1024 tokens, except bare (no cap)
   for (const f of files) {
     const h = JSON.parse(await readFile(new URL(f, dir), 'utf8'))
     expect(validateConfig(h)).toEqual([])
-    expect([f, h.backend.maxTokens]).toEqual([f, f === 'bare.json' ? undefined : /^curator(-judge)?\.json$/.test(f) ? 4096 : 1024])
+    expect([f, h.backend.maxTokens]).toEqual([f, f === 'bare.json' ? undefined : /^curator(-judge)?\.json$/.test(f) ? 4096 : /-anthropic\.json$/.test(f) ? 8192 : 1024])
   }
 })
 

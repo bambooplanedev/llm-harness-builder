@@ -21,8 +21,10 @@ import { GUARD_BLOCKED, EDIT_MISS } from './core/tools/fs.js'
 import { createBackend } from './core/backends/index.js'
 import { redactor } from './core/redact.js'
 import { replayPayload, replySignature, recordedTurn } from './core/replay.js'
+import { normalizeRequest } from './core/normalize.js'
 import { analyzeTrace, formatAnalysisTable, type AnalyzedRun } from './core/analyze.js'
 import { preflight, windowWarning, type PreflightResult } from './core/preflight.js'
+import { knobsOff } from './core/knobs.js'
 import { startProxy } from './core/proxy/server.js'
 import { COMMANDS, isCommand, usage, commandHelp, overview, type CommandName } from './cli-help.js'
 
@@ -90,7 +92,7 @@ const excerpt = (s: string): string => showable(s.slice(0, 200).replace(/\n/g, '
  *  server wrote lands here, and the next thing on the screen may be the question whether to run a command: such text goes
  *  through showable (one line) or showableText (lines), never as it is. `streamed`: the turn's text was already written
  *  live to stderr, so llm_response skips its excerpt. */
-function describe(e: HarnessEvent, streamed = false): string {
+function describe(e: HarnessEvent, streamed = false, cost?: number): string {
   switch (e.type) {
     case 'context_stats': return `[t${e.turn}] context ${e.exactTokens !== undefined ? `${e.exactTokens} tok exact (~${e.estimatedTokens} est)` : `~${e.estimatedTokens} tok`}${e.droppedChars ? `, dropped ${e.droppedChars} chars` : ''}`
     case 'llm_request': return `[t${e.turn}] llm_request`
@@ -102,8 +104,9 @@ function describe(e: HarnessEvent, streamed = false): string {
     case 'context_reset': return `[t${e.turn}] context_reset: ${e.chars} chars of history cleared, the next request is the task again`
     case 'approval_required': return `[t${e.turn}] approval_required ${showable(e.call.name)}`
     case 'tool_result': return `[t${e.turn}] tool_result ${showable(e.name)}${e.error ? ' (error)' : ''}${e.truncated ? ' (truncated)' : ''}: ${excerpt(e.output)}`
+    case 'knobs_off': return e.off.map(o => `${o.knob} ${showable(JSON.stringify(o.value))} not sent: ${showable(o.reason)}`).join('\n')
     case 'error': return `error: ${showable(e.message)}${e.body ? `\n${showableText(e.body)}` : ''}`
-    case 'done': return `done: ${e.reason} after ${e.turns} turns, ${e.toolCallCount} tool calls${quitWithoutWork(e) ? '  ! final after 0 tool calls' : ''}${e.text ? `\n${showableText(e.text)}` : ''}`
+    case 'done': return `done: ${e.reason} after ${e.turns} turns, ${e.toolCallCount} tool calls${cost === undefined ? '' : ` · $${Number(cost.toPrecision(4))} total`}${quitWithoutWork(e) ? '  ! final after 0 tool calls' : ''}${e.text ? `\n${showableText(e.text)}` : ''}`
   }
 }
 
@@ -144,14 +147,15 @@ async function execRun(config: HarnessConfig, task: string, workdir: string, o: 
     if (d.content) process.stderr.write(showableText(d.content))
     streamed = true
   }
-  let last: HarnessEvent | undefined
+  let last: HarnessEvent | undefined, cost: number | undefined
   try {
     for await (const e of runAgent({ config, task, workdir, answerSchema: o.answerSchema }, opts)) {
       last = e
+      if (e.type === 'llm_response' && e.costUsd !== undefined) cost = (cost ?? 0) + e.costUsd
       await trace.append(e)
       if (o.json) process.stdout.write(JSON.stringify(e) + '\n')
       if (streamed) process.stderr.write('\n')
-      if (!o.quiet) console.error(describe(e, streamed))
+      if (!o.quiet) console.error(describe(e, streamed, cost))
       streamed = false // nothing yields during send, so any event ends the streamed stretch
       o.onEvent?.(e)
     }
@@ -232,7 +236,7 @@ const stamp = (d: Date) => { const p = (n: number) => String(n).padStart(2, '0')
 async function benchOnce(config: HarnessConfig, round: number, timeoutS: number, out: string, task: Task, size?: number): Promise<BenchRun> {
   // An exception that escapes execRun is text nothing has cleaned yet, and it goes to the bench JSON and the terminal.
   const redact = redactor(apiKey(config.backend, process.env), config.backend.apiKeyEnv ?? '')
-  let workdir = '', parseErrors = 0, toolChars = 0, toolErrors = 0, guardBlocks = 0, editMiss = 0, lastError: string | undefined, t0 = Date.now(), run: BenchRun
+  let workdir = '', parseErrors = 0, toolChars = 0, costUsd: number | undefined, toolErrors = 0, guardBlocks = 0, editMiss = 0, lastError: string | undefined, t0 = Date.now(), run: BenchRun
   process.stderr.write(`${config.name} #${round} `)
   try {
     workdir = await task.prepare(size)
@@ -242,6 +246,7 @@ async function benchOnce(config: HarnessConfig, round: number, timeoutS: number,
       yes: true, json: false, quiet: true, answerSchema: task.answerSchema?.(size), signal: AbortSignal.timeout(timeoutS * 1000), bench: { file: path.basename(out), round },
       onEvent: e => {
         if (e.type === 'parse_error') parseErrors++
+        if (e.type === 'llm_response' && e.costUsd !== undefined) costUsd = (costUsd ?? 0) + e.costUsd
         if (e.type === 'mcp_server_start') toolChars += e.descriptionChars + e.schemaChars
         if (e.type === 'tool_result' && e.error) {
           toolErrors++
@@ -254,11 +259,11 @@ async function benchOnce(config: HarnessConfig, round: number, timeoutS: number,
     const ms = Date.now() - t0
     const d = last.type === 'done' ? last : undefined
     const verdict = task.check(workdir, size, d?.reason === 'final' ? d.text : undefined, childEnv(config.tools.bashEnv)) ? 'PASS' : 'FAIL'
-    run = { round, verdict, reason: d?.reason ?? 'error', turns: d?.turns ?? 0, toolCalls: d?.toolCallCount ?? 0, parseErrors, lastError, ms, workdir, trace: id, toolChars: toolChars || undefined, toolErrors, guardBlocks: config.tools.requireReadBeforeEdit ? guardBlocks : undefined, editMiss }
+    run = { round, verdict, reason: d?.reason ?? 'error', turns: d?.turns ?? 0, toolCalls: d?.toolCallCount ?? 0, parseErrors, lastError, ms, workdir, trace: id, toolChars: toolChars || undefined, costUsd, toolErrors, guardBlocks: config.tools.requireReadBeforeEdit ? guardBlocks : undefined, editMiss }
   } catch (e) {
-    run = { round, verdict: 'FAIL', reason: 'error', turns: 0, toolCalls: 0, parseErrors, lastError: redact.text(String(e)), ms: Date.now() - t0, workdir, toolChars: toolChars || undefined, toolErrors, guardBlocks: config.tools.requireReadBeforeEdit ? guardBlocks : undefined, editMiss }
+    run = { round, verdict: 'FAIL', reason: 'error', turns: 0, toolCalls: 0, parseErrors, lastError: redact.text(String(e)), ms: Date.now() - t0, workdir, toolChars: toolChars || undefined, costUsd, toolErrors, guardBlocks: config.tools.requireReadBeforeEdit ? guardBlocks : undefined, editMiss }
   }
-  const tail = (run.reason === 'error' || run.reason === 'aborted') && run.lastError ? `  ${run.lastError.replace(/\s+/g, ' ').slice(0, 200)}` : ''
+  const tail = (run.reason === 'error' || run.reason === 'aborted') && run.lastError ? `  ${showable(run.lastError.replace(/\s+/g, ' ').slice(0, 200))}` : ''
   process.stderr.write(`${run.verdict}  reason=${run.reason} turns=${run.turns} toolCalls=${run.toolCalls} parseErrors=${run.parseErrors} ${Math.round(run.ms / 1000)}s${run.trace ? ` trace=${run.trace}` : ''}${tail}\n`)
   return run
 }
@@ -310,11 +315,14 @@ async function cmdBench(argv: string[]) {
       let r = asked.get(key)
       if (!r) {
         asked.set(key, r = await preflight(createBackend(b), b))
-        if (r.ok) console.error(`preflight: ${b.baseUrl} ${b.model}: window ${r.server.nCtx ?? 'unknown'}${r.server.build ? `, build ${r.server.build}` : ''}`)
+        if (r.ok) console.error(`preflight: ${b.baseUrl} ${b.model}: window ${r.server.nCtx ?? 'unknown'}${r.server.build ? `, build ${showable(r.server.build)}` : ''}`)
       }
-      if (!r.ok) die(redactor(apiKey(b, process.env), b.apiKeyEnv ?? '').text(r.message))
+      if (!r.ok) die(showable(redactor(apiKey(b, process.env), b.apiKeyEnv ?? '').text(r.message)))
       else {
         h.server = r.server
+        // A knob without which the harness would be another one is a refusal before any run, like a model that is not there.
+        const refuse = knobsOff(h.config, r.server, task.answerSchema?.(size)).refuse
+        if (refuse) die(showable(`preflight: ${h.name}: ${refuse}`))
         const w = windowWarning(h.config, r.server.nCtx)
         if (w) console.error(w)
       }
@@ -363,6 +371,7 @@ async function cmdReplay(argv: string[]) {
   if (!INT.test(values.turn ?? '')) argError('replay', '--turn must be a positive integer')
   if (!INT.test(values.n)) argError('replay', '--n must be a positive integer')
   if (values['max-tokens'] !== undefined && !INT.test(values['max-tokens'])) argError('replay', '--max-tokens must be a positive integer')
+  if (kind === 'anthropic') argError('replay', '--kind anthropic is not yet supported by replay')
   if (kind !== 'openai' && kind !== 'ollama') argError('replay', '--kind must be openai or ollama')
   // Not the prefix alone: `http://` has it, keyErrors does not judge a URL that does not parse, and the request would go to host "chat" (http:/chat/completions).
   if (!isHttpUrl(baseUrl)) argError('replay', '--base-url must be an http(s) URL')
@@ -377,6 +386,7 @@ async function cmdReplay(argv: string[]) {
     rec = recordedTurn(lines, Number(values.turn))
   }
   catch (e) { return die(`cannot replay ${file}:\n  ${(e as Error).message}`) }
+  if (normalizeRequest(rec.payload)?.format === 'anthropic') die(`cannot replay ${file}:\n  a recorded Anthropic request is not yet supported by replay`)
   // Before the first request: check the value the name points at and say where it goes. A server's error can echo the key back, so that text is redacted.
   const keyed = { apiKeyEnv: keyEnv, baseUrl }
   const problem = keyProblem(keyed, process.env)
@@ -389,7 +399,7 @@ async function cmdReplay(argv: string[]) {
   const recorded = rec.raw === undefined ? undefined : replySignature(rec.raw)
   const replies = new Map<string, { count: number; sameAsRecorded: boolean; promptTokens?: number; truncated: boolean }>()
   for (let i = 0; i < Number(values.n); i++) {
-    const r = await backend.send(payload).catch(e => die(redact.text(`backend: ${(e as Error).message}${(e as { body?: string }).body ? `\n${(e as { body?: string }).body}` : ''}`)))
+    const r = await backend.send(payload).catch(e => die(`backend: ${showable(redact.text((e as Error).message))}${(e as { body?: string }).body ? `\n${showableText(redact.text((e as { body?: string }).body!))}` : ''}`))
     const sig = replySignature(r.raw), seen = replies.get(sig)
     if (seen) seen.count++
     else replies.set(sig, { count: 1, sameAsRecorded: sig === recorded, promptTokens: r.usage?.promptTokens, truncated: !!r.truncated })

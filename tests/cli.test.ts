@@ -8,6 +8,7 @@ import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmp } from './helpers.js'
 import { fakeOpenAI, toolTurn, textTurn } from './fake-openai.js'
+import { fakeAnthropic, toolReply, textReply } from './fake-anthropic.js'
 import { RunStore } from '../src/server/runs'
 
 const ROOT = process.cwd()
@@ -608,6 +609,17 @@ test('replay reads a trace whose last line is half-written', async () => {
   expect(r.status).toBe(0); expect(r.stdout).toMatch(/1x same as recorded/)
 }, 30_000)
 
+test('replay of a recorded Anthropic request is refused as not yet supported', async () => {
+  const wd = await tmp('lhb-cli-')
+  const trace = join(wd, 't.jsonl')
+  await writeFile(trace, [
+    JSON.stringify({ meta: { id: 't', harness: 'p', task: 'x', workdir: '', started: 1 } }),
+    JSON.stringify({ seq: 0, turn: 1, ts: 1, type: 'llm_request', payload: { model: 'm', max_tokens: 5, system: 'S', messages: [{ role: 'user', content: 'U' }] } }),
+  ].join('\n'))
+  const r = cli(['replay', trace, '--turn', '1', '--base-url', 'http://x', '--kind', 'openai', '--n', '1'])
+  expect(r.status).toBe(2); expect(r.stderr).toContain('not yet')
+}, 30_000)
+
 const ev = (o: object) => JSON.stringify(o)
 /** A tiny trace: one failed and one good edit, a stub at turn 3 of the read from turn 1. */
 function analyzeFixture(dir: string, id: string, done = true) {
@@ -745,6 +757,7 @@ test('argument errors name the option, show the usage, exit 2 and print no stack
     [['bench', '--task', 'slug', '--size', '3'], /^error: --size: slug has no sizes$/m],
     [['bench', '--max-turns', '1.5'], /^error: --max-turns must be a positive integer$/m],
     [['replay', 'x.jsonl', '--turn', '0', '--kind', 'openai', '--base-url', 'http://x'], /^error: --turn must be a positive integer$/m],
+    [['replay', 'x.jsonl', '--turn', '1', '--kind', 'anthropic', '--base-url', 'http://x'], /^error: --kind anthropic is not yet supported by replay$/m],
     [['replay', 'x.jsonl', '--turn', '1', '--kind', 'vllm', '--base-url', 'http://x'], /^error: --kind must be openai or ollama$/m],
     [['replay', 'x.jsonl', '--turn', '1', '--kind', 'openai', '--base-url', 'x'], /^error: --base-url must be an http\(s\) URL$/m],
     [['analyze'], /^error: analyze needs at least one bench JSON, run id or trace file$/m],
@@ -974,13 +987,65 @@ test('run against a hosted API: the bearer token reaches it, nothing else is ask
     const r = await cliAsync(['run', file, '--workdir', wd, '--yes', 'go'], { [KEY_NAME]: KEY })
     expect(r.status).toBe(0)
     expect(r.stderr).toContain(`the key in ${KEY_NAME} goes to ${new URL(api.baseUrl).host}`)
-    expect(api.seen.map(s => `${s.method} ${s.path}`)).toEqual(['POST /v1/chat/completions', 'POST /v1/chat/completions'])
+    expect(api.seen.map(s => `${s.method} ${s.path}`)).toEqual(['GET /v1/models', 'POST /v1/chat/completions', 'POST /v1/chat/completions'])
     expect(api.seen.every(s => s.headers.authorization === `Bearer ${KEY}`)).toBe(true)
-    expect(api.seen[1].body).toContain(MARK); expect(api.seen[1].body).not.toContain(KEY)
+    expect(api.seen[2].body).toContain(MARK); expect(api.seen[2].body).not.toContain(KEY)
     const runs = allText(join(r.cwd, 'runs'))
     expect(runs).toContain(MARK); expect(runs).not.toContain(KEY)
     expect(r.stderr).not.toContain(KEY)
   } finally { await api.close() }
+}, 30_000)
+
+/** `bare` on the Anthropic API, priced, with the key in bash's environment. */
+async function claudeHarness(dir: string, baseUrl: string) {
+  const file = await keyedHarness(dir, baseUrl), h = JSON.parse(await readFile(file, 'utf8'))
+  await writeFile(file, JSON.stringify({ ...h, backend: { kind: 'anthropic', baseUrl, model: 'claude-haiku-5-5', temperature: 0, maxTokens: 1024, apiKeyEnv: KEY_NAME, pricePerMTok: { input: 0.1, output: 0.5 } } }))
+  return file
+}
+
+test('run against the Anthropic API: x-api-key reaches it, the run ends final, the key sits in no file and not on stderr', async () => {
+  const api = await fakeAnthropic([toolReply('bash', { command: `printf %s "$${KEY_NAME}"` }), textReply('done')])
+  try {
+    const wd = await tmp('lhb-cli-'), file = await claudeHarness(wd, api.baseUrl)
+    const r = await cliAsync(['run', file, '--workdir', wd, '--yes', 'go'], { [KEY_NAME]: KEY })
+    expect(r.status).toBe(0)
+    expect(api.seen.map(s => `${s.method} ${s.path}`)).toEqual(['GET /v1/models/claude-haiku-5-5', 'POST /v1/messages', 'POST /v1/messages'])
+    // the harness's temperature stays in the file and is not sent: no model on this API takes one
+    expect(r.stderr).toContain('temperature 0 not sent: claude-haiku-5-5 takes no temperature (Anthropic API 2026-10-21)\n')
+    expect(api.seen[1].body).not.toContain('temperature')
+    expect(api.seen.every(s => s.headers['x-api-key'] === KEY && s.headers.authorization === undefined)).toBe(true)
+    expect(api.seen[2].body).toContain(MARK); expect(api.seen[2].body).not.toContain(KEY)
+    const runs = allText(join(r.cwd, 'runs'))
+    expect(runs).toContain('"reason":"final"')
+    expect(runs).toContain(MARK); expect(runs).not.toContain(KEY)
+    expect(r.stderr).not.toContain(KEY)
+  } finally { await api.close() }
+}, 30_000)
+
+test('bench against the Anthropic API: preflight asks the model, the window is its max_input_tokens, a med $ column, no key in any file', async () => {
+  const api = await fakeAnthropic([textReply('done')])
+  try {
+    const wd = await tmp('lhb-cli-'), file = await claudeHarness(wd, api.baseUrl), out = join(wd, 'b.json')
+    const r = await cliAsync(['bench', '--n', '1', '--out', out, file], { [KEY_NAME]: KEY })
+    expect(r.status).toBe(0)
+    expect(r.stderr).toContain('window 200000')
+    expect(r.stdout).toContain('med $')
+    expect(api.seen.slice(0, 2).map(s => `${s.method} ${s.path}`)).toEqual(['GET /v1/models', 'GET /v1/models/claude-haiku-5-5'])
+    expect(api.seen.every(s => s.headers['x-api-key'] === KEY)).toBe(true)
+    expect(allText(wd) + allText(join(r.cwd, 'runs')) + r.stderr + r.stdout).not.toContain(KEY)
+  } finally { await api.close() }
+}, 60_000)
+
+test('bench against the Anthropic API: an error the server words with a terminal escape is printed escaped', async () => {
+  const srv = http.createServer((_req, res) => { res.writeHead(400, { 'content-type': 'application/json' }); res.end(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'bad \x1b[31mred' } })) })
+  await new Promise<void>(r => srv.listen(0, '127.0.0.1', r))
+  try {
+    const wd = await tmp('lhb-cli-'), file = await claudeHarness(wd, `http://127.0.0.1:${(srv.address() as AddressInfo).port}`)
+    const r = await cliAsync(['bench', '--n', '1', '--out', join(wd, 'b.json'), file], { [KEY_NAME]: KEY })
+    expect(r.status).not.toBe(0)
+    expect(r.stderr).toContain('GET /v1/models: 400 invalid_request_error: bad \\u001b[31mred')
+    expect(r.stderr).not.toContain('\x1b')
+  } finally { await new Promise<void>(r => { srv.closeAllConnections(); srv.close(() => r()) }) }
 }, 30_000)
 
 test('a key typed into the task is redacted in the trace\'s first line', async () => {
@@ -1068,7 +1133,7 @@ test('a key with --kind ollama is an invalid harness, named so', async () => {
   const r = cli(['run', harness('bare'), '--workdir', await tmp('lhb-cli-'), '--yes', '--kind', 'ollama', '--base-url', 'http://127.0.0.1:9/v1', '--api-key-env', KEY_NAME, 'x'], { [KEY_NAME]: KEY })
   expect(r.status).toBe(2)
   expect(r.stderr).toContain('invalid harness')
-  expect(r.stderr).toContain('backend.apiKeyEnv needs kind openai: a key goes only to an OpenAI-compatible API')
+  expect(r.stderr).toContain('backend.apiKeyEnv needs kind openai or anthropic: a key goes only to an OpenAI-compatible or the Anthropic API')
 }, 30_000)
 
 test('a key variable that is not set or is empty stops run and demo before the trace, and says where the name came from', async () => {
@@ -1121,7 +1186,7 @@ test('replay --api-key-env sends the key to the server it names, says so on stde
     const unset = await cliAsync(at('openai', api.baseUrl), {}, cwd)
     expect(unset.status).toBe(2); expect(unset.stderr).toContain(`${KEY_NAME} is not set: --api-key-env names it as the API key`)
     const ollama = await cliAsync(at('ollama', api.baseUrl), { [KEY_NAME]: KEY }, cwd)
-    expect(ollama.status).toBe(2); expect(ollama.stderr).toContain('error: --api-key-env needs --kind openai: a key goes only to an OpenAI-compatible API')
+    expect(ollama.status).toBe(2); expect(ollama.stderr).toContain('error: --api-key-env needs --kind openai or anthropic: a key goes only to an OpenAI-compatible or the Anthropic API')
     const lan = await cliAsync(at('openai', 'http://192.168.1.5/v1'), { [KEY_NAME]: KEY }, cwd)
     expect(lan.status).toBe(2)
     expect(lan.stderr).toContain('error: --api-key-env needs an https --base-url (http only on localhost, 127.0.0.1 or [::1]): the key would cross the network in clear text')
@@ -1136,3 +1201,28 @@ test('replay --api-key-env sends the key to the server it names, says so on stde
     expect(api.seen).toHaveLength(2)
   } finally { await api.close() }
 }, 60_000)
+
+test('the done line carries the run cost when the harness has a price, and no $ otherwise', async () => {
+  const wd = await tmp('lhb-cli-')
+  const fake = join(wd, 'fake.json'), file = join(wd, 'priced.json')
+  const plain = JSON.parse(await readFile(harness('bare'), 'utf8'))
+  await writeFile(file, JSON.stringify({ ...plain, backend: { ...plain.backend, pricePerMTok: { input: 1, output: 2 } } }))
+  await writeFile(fake, JSON.stringify([{ content: 'a', usage: { promptTokens: 1_000_000, completionTokens: 500_000 } }]))
+  expect(cli(['run', file, '--workdir', wd, '--yes', 'x'], { LHB_FAKE_BACKEND: fake }).stderr).toContain('done: final after 1 turns, 0 tool calls · $2 total')
+  const r = cli(['run', harness('bare'), '--workdir', wd, '--yes', 'x'], { LHB_FAKE_BACKEND: fake })
+  expect(r.stderr).toContain('done: final')
+  expect(r.stderr).not.toContain('$')
+}, 30_000)
+
+test('bench refuses a harness whose native tool calls the model does not take, before any run', async () => {
+  const listed = { data: [{ id: 'fake/model', supported_parameters: ['max_tokens'] }] }
+  const srv = http.createServer((_req, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(listed)) })
+  await new Promise<void>(r => srv.listen(0, '127.0.0.1', r))
+  try {
+    const wd = await tmp('lhb-cli-'), file = await keyedHarness(wd, `http://127.0.0.1:${(srv.address() as AddressInfo).port}/v1`)
+    const r = await cliAsync(['bench', '--n', '1', '--out', join(wd, 'b.json'), file], { [KEY_NAME]: KEY })
+    expect(r.status).not.toBe(0)
+    expect(r.stderr).toContain('fake/model takes no tools (OpenRouter supported_parameters)')
+    expect(r.stderr).toContain('mode: "prompted"')
+  } finally { await new Promise<void>(r => { srv.closeAllConnections(); srv.close(() => r()) }) }
+}, 30_000)

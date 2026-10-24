@@ -1,4 +1,4 @@
-import { NO_THINK_LINE, apiKey, type HarnessConfig, type RunParams } from './config.js'
+import { NO_THINK_LINE, apiKey, listsModelsByItself, type HarnessConfig, type RunParams } from './config.js'
 import { mcpApprovalName, UNTIL_BASH, type HarnessEvent, type ToolCall, type DoneReason } from './events.js'
 import { createBackend, type Backend, type ChatMessage, type ChatRequest, type Delta, type NormalizedResponse, type Usage } from './backends/index.js'
 import { TOOL_SCHEMAS, runTool } from './tools/index.js'
@@ -10,6 +10,8 @@ import { estimateTokens, applyBudget } from './tokens.js'
 import { normPath } from './analyze.js'
 import { startServers, type McpSession } from './mcp.js'
 import { redactor } from './redact.js'
+import { costOf } from './cost.js'
+import { knobsOff } from './knobs.js'
 
 export type RunOpts = {
   signal?: AbortSignal
@@ -105,8 +107,17 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
   // renderTools() still reaches the finally and mcp.close() runs — no detached child outlives the run.
   try {
     if (mcp) for (const s of mcp.servers) yield ev({ type: 'mcp_server_start', ...s })
+    // Once, before the first request: what the model does not take is not sent, or, when that would change the harness, nothing is.
+    // Not for keyless openai (llama-server): its answer holds no `takes`, and a router loads the model it is asked about.
+    const info = listsModelsByItself(config.backend) && config.backend.kind === 'openai' ? undefined : await backend.serverInfo?.(config.backend.model)
+    const knobs = knobsOff(config, info, answerSchema), takes = info?.takes ?? {}
+    if (knobs.refuse) { yield ev({ type: 'error', message: knobs.refuse }); yield done('backend_error'); return }
+    if (knobs.off.length) yield ev({ type: 'knobs_off', off: knobs.off })
+    // Anthropic needs a max_tokens: absent from the harness, it is the model's own cap (knobsOff refused when neither is known).
+    const maxTokens = config.backend.kind === 'anthropic' ? config.backend.maxTokens ?? info?.maxOutput : config.backend.maxTokens
 
-    const schemas = [...config.tools.enabled.map(n => TOOL_SCHEMAS[n]), ...(mcp?.tools ?? [])]
+    // Depends on the '30s' in TOOL_SCHEMAS.bash.description (tools/index.ts).
+    const schemas = [...config.tools.enabled.map(n => n === 'bash' && config.tools.bashTimeoutS ? { ...TOOL_SCHEMAS[n], description: TOOL_SCHEMAS[n].description.replace('30s', `${config.tools.bashTimeoutS}s`) } : TOOL_SCHEMAS[n]), ...(mcp?.tools ?? [])]
     const system = prompted
       ? config.systemPrompt + '\n\n' + config.toolCalls.promptedTemplate.split('{{tools}}').join(renderTools(schemas, config.toolCalls.format))
       : config.systemPrompt
@@ -114,8 +125,8 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
     // loop.repeatThinkTokens: the system message of a thinking turn. It is sent for that turn only and never enters the history.
     const thinkTokens = config.loop.repeatThinkTokens
     const systemThinking = system.replace(NO_THINK_LINE, '/think')
-    const max = config.context.maxToolOutputChars
-    const cut = (s: string) => s.length > max ? s.slice(0, max) + `\n[truncated: ${s.length - max} more chars]` : s
+    const max = config.context?.maxToolOutputChars
+    const cut = (s: string) => max !== undefined && s.length > max ? s.slice(0, max) + `\n[truncated: ${s.length - max} more chars]` : s
     const ctx = {
       workdir,
       maxToolOutputChars: max,
@@ -124,6 +135,9 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
       explainEditMiss: config.tools.explainEditMiss,
       // bash and loop.untilBash get the base environment plus these names; see tools/env.ts.
       bashEnv: config.tools.bashEnv,
+      readMaxBytes: config.tools.readMaxBytes,
+      bashMaxBytes: config.tools.bashMaxBytes,
+      bashTimeoutS: config.tools.bashTimeoutS,
     }
     // loop.maxRepeats: how many times each call was made since the files last changed through a tool.
     // An edit that has succeeded is counted over the whole run: it succeeds twice only when it was undone in between.
@@ -141,13 +155,14 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
       if (turn >= config.loop.maxTurns) { yield done('max_turns'); return }
       turn++
 
-      const droppedChars = applyBudget(messages, config.context.budgetTokens)
+      const droppedChars = applyBudget(messages, config.context?.budgetTokens ?? 0)
       const think = hot && thinkTokens !== undefined
       const req: ChatRequest = {
         model: config.backend.model, messages: think ? [{ role: 'system', content: systemThinking }, ...messages.slice(1)] : messages,
-        temperature: hot && config.loop.repeatTemperature !== undefined ? config.loop.repeatTemperature : config.backend.temperature, numCtx: config.backend.numCtx, maxTokens: think ? thinkTokens : config.backend.maxTokens,
+        temperature: takes.temperature === false ? undefined : hot && config.loop.repeatTemperature !== undefined ? config.loop.repeatTemperature : config.backend.temperature,
+        numCtx: config.backend.numCtx, maxTokens: takes.maxTokens === false ? undefined : think ? thinkTokens : maxTokens,
         // A thinking turn needs the template's switch on as well: with it off, the /think line would be overruled.
-        think: config.backend.think === undefined ? undefined : think || config.backend.think,
+        think: config.backend.think === undefined || takes.think === false ? undefined : think || config.backend.think,
         tools: prompted || !schemas.length ? undefined : schemas,
         // The schema is the form of the final answer, not of the turns before it, so it goes out only where no call can be made.
         // Such a run is one request: nothing in it can loop, run a script or write a file.
@@ -156,7 +171,7 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
       }
       const payload = backend.buildPayload(req)
       const exactTokens = await backend.countTokens?.(payload, opts.signal)
-      yield ev({ type: 'context_stats', estimatedTokens: estimateTokens(messages), exactTokens, budgetTokens: config.context.budgetTokens, droppedChars, usage: lastUsage })
+      yield ev({ type: 'context_stats', estimatedTokens: estimateTokens(messages), exactTokens, budgetTokens: config.context?.budgetTokens, droppedChars, usage: lastUsage })
       yield ev({ type: 'llm_request', payload })
 
       const t0 = Date.now()
@@ -171,7 +186,8 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
         yield done('backend_error'); return
       }
       lastUsage = res.usage
-      yield ev({ type: 'llm_response', raw: res.raw, content: res.content, reasoning: res.reasoning, usage: res.usage, latencyMs: Date.now() - t0 })
+      const cost = costOf(res.usage, config.backend.pricePerMTok)
+      yield ev({ type: 'llm_response', raw: res.raw, content: res.content, reasoning: res.reasoning, usage: res.usage, ...cost === undefined ? {} : { costUsd: cost }, latencyMs: Date.now() - t0 })
 
       // ---- parse -------------------------------------------------------------
       let calls: { name: string; args: Record<string, unknown>; backendId?: string; argsError?: string }[] = []
@@ -218,7 +234,9 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
       const assistantText = hermes && calls.length && !res.content.includes('<tool_call>')
         ? [res.content, ...calls.map(c => `<tool_call>\n${JSON.stringify({ name: c.name, arguments: c.args })}\n</tool_call>`)].filter(Boolean).join('\n')
         : res.content
-      messages.push({ role: 'assistant', content: assistantText, toolCalls: prompted ? undefined : res.toolCalls })
+      // native only for a reply that goes back unchanged: a signature covers every block before it
+      const native = res.native && assistantText === res.content && calls === res.toolCalls ? res.native : undefined
+      messages.push({ role: 'assistant', content: assistantText, toolCalls: prompted ? undefined : res.toolCalls, ...native && { native } })
 
       if (calls.length === 0) {
         const command = config.loop.untilBash
@@ -267,7 +285,7 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
         }
         // Before the cut: a key the cut split would leave its first half behind.
         result = { ...result, output: redact.text(result.output) }
-        const truncated = result.output.length > max
+        const truncated = max !== undefined && result.output.length > max
         let output = cut(result.output)
         let repeats = 0
         if (config.loop.maxRepeats !== undefined) {
@@ -301,7 +319,7 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
 
         if (hermes) wrapped.push(`<tool_response>\n${output}\n</tool_response>`)
         else if (prompted) wrapped.push(`<tool_result id="${call.callId}" name="${call.name}">\n${output}\n</tool_result>`)
-        else messages.push({ role: 'tool', content: output, toolCallId: call.backendId!, name: call.name, isToolResult: true })
+        else messages.push({ role: 'tool', content: output, toolCallId: call.backendId!, name: call.name, isToolResult: true, ...result.error && { isError: true } })
       }
       if (reset) {
         wasReset = true

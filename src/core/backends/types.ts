@@ -13,7 +13,8 @@ export type FetchLike = (
 const patient = new Agent({ headersTimeout: 0, bodyTimeout: 0 })
 export const defaultFetch: FetchLike = (url, init) => undiciFetch(url, { ...init, dispatcher: patient })
 
-export type Usage = { promptTokens: number; completionTokens: number }
+/** promptTokens is the whole prompt; the cache counts are the parts of it served from or written to the cache. */
+export type Usage = { promptTokens: number; completionTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number }
 
 /** A count as a server sent it: absent is 0, as it always was; anything but a finite non-negative number is not one. */
 const tokenCount = (x: unknown): number | undefined =>
@@ -21,9 +22,13 @@ const tokenCount = (x: unknown): number | undefined =>
 
 /** Usage from the two counts a server sent, or none at all: a server's text must never reach the terminal as a count,
  *  two lines above an approval question. */
-export function usageFrom(prompt: unknown, completion: unknown): Usage | undefined {
+export function usageFrom(prompt: unknown, completion: unknown, cacheRead?: unknown, cacheWrite?: unknown): Usage | undefined {
   const p = tokenCount(prompt), c = tokenCount(completion)
-  return p === undefined || c === undefined ? undefined : { promptTokens: p, completionTokens: c }
+  if (p === undefined || c === undefined) return undefined
+  // Unlike the two counts, an absent or bad cache count is no field at all: 0 would claim the server said "no hit".
+  const count = (x: unknown) => typeof x === 'number' && Number.isFinite(x) && x >= 0 ? x : undefined
+  const r = count(cacheRead), w = count(cacheWrite)
+  return { promptTokens: p, completionTokens: c, ...(r === undefined ? {} : { cacheReadTokens: r }), ...(w === undefined ? {} : { cacheWriteTokens: w }) }
 }
 
 /** One streamed piece of the assistant turn; either field may be absent. */
@@ -41,8 +46,9 @@ export type NormalizedToolCall = {
 
 export type ChatMessage =
   | { role: 'system' | 'user'; content: string; isToolResult?: boolean }
-  | { role: 'assistant'; content: string; toolCalls?: NormalizedToolCall[] }
-  | { role: 'tool'; content: string; toolCallId: string; name: string; isToolResult: true }
+  /** `native`: the reply's own blocks (Anthropic), sent back verbatim, since a thinking signature covers all before it. */
+  | { role: 'assistant'; content: string; toolCalls?: NormalizedToolCall[]; native?: unknown[] }
+  | { role: 'tool'; content: string; toolCallId: string; name: string; isToolResult: true; isError?: boolean }
 
 /** The `tools` field of a request body, empty when the harness sends no tools. Both adapters send the same OpenAI-style shape. */
 export const toolsField = (tools?: ToolSchema[]) =>
@@ -53,7 +59,8 @@ export type ChatRequest = {
   messages: ChatMessage[]
   tools?: ToolSchema[]
   responseSchema?: Record<string, unknown>
-  temperature: number
+  /** Absent = not sent (a model that takes none). */
+  temperature?: number
   numCtx?: number
   /** Cap on generated tokens, thinking included; absent = the server's default, which is the rest of the window. */
   maxTokens?: number
@@ -68,11 +75,17 @@ export type NormalizedResponse = {
   usage?: Usage
   /** Backend stopped at max tokens (finish_reason/done_reason "length"); the content is incomplete. */
   truncated?: boolean
+  /** Anthropic: the reply's `content` blocks as they came, for ChatMessage.native. */
+  native?: unknown[]
   raw: unknown
 }
 
-/** What a server says about itself. `nCtx`: the window a request gets there; `router`: llama-server serving several models, one of which the request names. */
-export type ServerInfo = { nCtx?: number; build?: string; router?: boolean }
+/** What a server says about itself. `nCtx`: the window a request gets there; `maxOutput`: the most a reply may generate
+ *  (Anthropic); `router`: llama-server serving several models, one of which the request names. `takes`: a knob the
+ *  server said the model does not take is `false`, no entry is unknown; `takesFrom` names where that was said. */
+export type ServerInfo = { nCtx?: number; maxOutput?: number; build?: string; router?: boolean; takes?: Partial<Record<Knob, false>>; takesFrom?: string }
+
+export type Knob = 'temperature' | 'maxTokens' | 'think' | 'tools' | 'responseSchema'
 
 export interface Backend {
   listModels(): Promise<string[]>

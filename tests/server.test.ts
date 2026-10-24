@@ -499,3 +499,36 @@ test('a key typed into the task is redacted in the run file\'s first line and in
     expect(listed).toContain('use [redacted: LHB_SRV_TASK_API_KEY]'); expect(listed).not.toContain(KEYV)
   } finally { delete process.env.LHB_SRV_TASK_API_KEY }
 })
+
+test('model-info: POST with the backend fields and a model gives what the server says the model takes; a missing variable is a 400; a failing backend is a 502 with the key redacted', async () => {
+  const KEYV = 'sk-ant-' + '3'.repeat(32)
+  const asked: string[] = []
+  let fail = false
+  const s = await startServer({ port: 0, runsDir, harnessesDir, backendFactory: () => ({
+    ...fake([]),
+    serverInfo: async (model: string) => {
+      asked.push(model)
+      if (fail) throw new Error(`upstream echoed ${KEYV}`)
+      return { nCtx: 200000, maxOutput: 64000, build: 'b', takes: { temperature: false }, takesFrom: 'anthropic models list' }
+    },
+  }) })
+  const u = `http://127.0.0.1:${s.port}`
+  const body = { kind: 'anthropic', baseUrl: 'https://api.anthropic.com/v1', model: 'claude-x', apiKeyEnv: 'LHB_SRV_INFO_API_KEY' }
+  try {
+    const unset = await postJson(`${u}/api/model-info`, body)
+    expect(unset.status).toBe(400)
+    expect(await unset.json()).toEqual({ errors: ['backend.apiKeyEnv: LHB_SRV_INFO_API_KEY is not set in the environment serve was started from'] })
+    expect((await postJson(`${u}/api/model-info`, { ...body, model: '' })).status).toBe(400)
+    process.env.LHB_SRV_INFO_API_KEY = KEYV
+    const ok = await postJson(`${u}/api/model-info`, body)
+    expect(ok.status).toBe(200)
+    expect(await ok.json()).toEqual({ nCtx: 200000, maxOutput: 64000, takes: { temperature: false }, takesFrom: 'anthropic models list' })
+    expect(asked).toEqual(['claude-x'])
+    fail = true
+    const bad = await postJson(`${u}/api/model-info`, body)
+    expect(bad.status).toBe(502)
+    const j = JSON.stringify(await bad.json())
+    expect(j).toContain('[redacted: LHB_SRV_INFO_API_KEY]'); expect(j).not.toContain(KEYV)
+    expect((await fetch(`${u}/api/model-info`)).status).toBe(404)
+  } finally { await s.close(); delete process.env.LHB_SRV_INFO_API_KEY }
+})

@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { OpenAIBackend, collect, fromJson } from '../src/core/backends/openai.js'
 import { OllamaBackend } from '../src/core/backends/ollama.js'
+import { AnthropicBackend } from '../src/core/backends/anthropic.js'
 import { BackendError, defaultFetch, jsonChunks, type ChatRequest, type Delta, type FetchLike } from '../src/core/backends/types.js'
 import { createBackend } from '../src/core/backends/index.js'
 
@@ -425,4 +426,39 @@ test('without a key nothing changes: no authorization, no redirect mode, llama-s
   expect(await be.serverInfo('m')).toEqual({ nCtx: 4096, router: false })
   expect(rec.paths()).toEqual(['POST /apply-template', 'POST /tokenize', 'GET /props'])
   expect(rec.log.every(r => r.init?.headers?.authorization === undefined && r.init?.redirect === undefined)).toBe(true)
+})
+
+test('usage carries cached_tokens as cacheReadTokens, only as a finite non-negative number', async () => {
+  const send = (cached: unknown) => new OpenAIBackend('http://x/v1', fakeFetch(200, { choices: [{ message: { content: 'hi' }, finish_reason: 'stop' }], usage: { prompt_tokens: 9, completion_tokens: 1, prompt_tokens_details: { cached_tokens: cached } } })).send({ stream: false })
+  expect((await send(7)).usage).toEqual({ promptTokens: 9, completionTokens: 1, cacheReadTokens: 7 })
+  expect((await send('7')).usage).toEqual({ promptTokens: 9, completionTokens: 1 })
+})
+
+test('createBackend: kind anthropic never falls through to OpenAIBackend', () => {
+  const b = { kind: 'anthropic' as const, baseUrl: 'https://api.anthropic.com', model: 'm', temperature: 0 }
+  expect(() => createBackend(b, {})).toThrow('backend.kind anthropic needs backend.apiKeyEnv')
+  expect(createBackend({ ...b, apiKeyEnv: 'LHB_T_API_KEY' }, { LHB_T_API_KEY: KEY })).toBeInstanceOf(AnthropicBackend)
+})
+
+test('serverInfo with a key: what a model lacks in supported_parameters it does not take; no list, nothing known', async () => {
+  const listed = { data: [
+    { id: 'plain/model', supported_parameters: ['max_tokens', 'seed'] },
+    { id: 'one/schema', supported_parameters: ['temperature', 'max_tokens', 'tools', 'structured_outputs'] },
+    { id: 'no/list' },
+  ] }
+  const be = new OpenAIBackend('https://or.example/api/v1', recorder(() => jsonRes(listed)).f, KEY)
+  expect(await be.serverInfo('plain/model')).toEqual({ takes: { temperature: false, tools: false, responseSchema: false }, takesFrom: 'OpenRouter supported_parameters', router: false })
+  expect(await be.serverInfo('one/schema')).toEqual({ takes: {}, takesFrom: 'OpenRouter supported_parameters', router: false })
+  expect(await be.serverInfo('no/list')).toEqual({ router: false })
+})
+
+test('ollama serverInfo: capabilities from POST /api/show; without them nothing is known; a failure is undefined', async () => {
+  const rec = recorder(() => jsonRes({ capabilities: ['completion'] }))
+  expect(await new OllamaBackend('http://x/', rec.f).serverInfo('q:8b')).toEqual({ takes: { tools: false, think: false }, takesFrom: 'Ollama /api/show', router: false })
+  expect(rec.paths()).toEqual(['POST /api/show'])
+  expect(JSON.parse(rec.log[0].init.body)).toEqual({ model: 'q:8b' })
+  expect(await new OllamaBackend('http://x', recorder(() => jsonRes({ capabilities: ['completion', 'tools', 'thinking'] })).f).serverInfo('q')).toEqual({ takes: {}, takesFrom: 'Ollama /api/show', router: false })
+  expect(await new OllamaBackend('http://x', recorder(() => jsonRes({ modelfile: '' })).f).serverInfo('q')).toEqual({ router: false })
+  expect(await new OllamaBackend('http://x', recorder(() => jsonRes({ error: 'no' }, 404)).f).serverInfo('q')).toBeUndefined()
+  expect(await new OllamaBackend('http://x', (async () => { throw new Error('fetch failed') }) as unknown as FetchLike).serverInfo('q')).toBeUndefined()
 })

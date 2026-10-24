@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
-import { api, type Delta, type HarnessConfig, type HarnessEvent, type RunSummary } from './api'
+import { ref, computed, onMounted, watch } from 'vue'
+import { api, type Delta, type HarnessConfig, type HarnessEvent, type RunSummary, type ServerInfo } from './api'
 import { PRESETS, DEFAULT_PROMPTED_TEMPLATE, DEFAULT_PARSE_ERROR_HINT, DEMO_TASK } from '../../src/core/prompts'
 import { isLoopbackUrl, listsModelsByItself } from '../../src/core/config'
+import { knobsOff } from '../../src/core/knobs'
 import ConfigForm from './ConfigForm.vue'
 import ContextBar from './ContextBar.vue'
 import Trace from './Trace.vue'
@@ -13,10 +14,12 @@ const config = ref<HarnessConfig>({
   name: 'new', backend: { kind: 'ollama', baseUrl: 'http://localhost:11434', model: '', numCtx: 8192, temperature: 0.2 },
   systemPrompt: PRESETS.minimal, tools: { enabled: ['list_dir', 'read_file', 'write_file', 'edit_file', 'bash'], approveBash: true },
   toolCalls: { mode: 'native', format: 'json', enforceSchema: false, promptedTemplate: DEFAULT_PROMPTED_TEMPLATE, parseErrorHint: DEFAULT_PARSE_ERROR_HINT },
-  context: { maxToolOutputChars: 4000, budgetTokens: 0 }, loop: { maxTurns: 15 },
+  context: { maxToolOutputChars: 4000 }, loop: { maxTurns: 15 },
 })
 const harnessNames = ref<string[]>([])
 const models = ref<string[]>([]); const modelsError = ref('')
+/** What the server says the picked model takes; undefined is unknown, and nothing is locked. */
+const modelInfo = ref<ServerInfo>()
 const workdir = ref(''); const task = ref(DEMO_TASK)
 const runs = ref<RunSummary[]>([]); const runId = ref(''); const events = ref<HarnessEvent[]>([]); const error = ref('')
 /** Non-empty while the form's mcpServers box holds unparseable JSON: the config then still carries
@@ -40,7 +43,7 @@ const canAbort = () => !!runId.value && !isDone() && (running() || openActive.va
 
 async function refreshModels() {
   modelsError.value = ''
-  const b = config.value.backend
+  const b = config.value.backend, picked = b.model
   try {
     models.value = await api.models(b.kind, b.baseUrl, b.apiKeyEnv)
     // A list from elsewhere is hundreds of models at every price, and a hosted one is public, so it arrives before the key is typed:
@@ -48,7 +51,27 @@ async function refreshModels() {
     if (!b.model && !b.apiKeyEnv && isLoopbackUrl(b.baseUrl) && models.value[0]) b.model = models.value[0]
   }
   catch (e) { models.value = []; modelsError.value = `cannot list models: ${(e as Error).message}` }
+  if (b.model === picked) await refreshInfo() // a model picked from the list above is asked for by the model watch
 }
+const INFO_ERROR = 'cannot read what the model takes: '
+let infoAsk = 0
+/** Also drops an answer still on its way: it is about the backend or model before this change. */
+function forgetInfo() { infoAsk++; modelInfo.value = undefined }
+/** With a key: on the refresh button only, as the list. Without one, only Ollama: an OpenAI-compatible server's answer
+ *  holds no `takes` (llama-server's /props), and a llama router loads the model it is asked about. */
+async function refreshInfo() {
+  forgetInfo()
+  const b = config.value.backend, ask = infoAsk
+  if (!b.model || (listsModelsByItself(b) && b.kind !== 'ollama')) return
+  try {
+    const info = await api.modelInfo(b.kind, b.baseUrl, b.model, b.apiKeyEnv)
+    if (ask !== infoAsk) return // the backend or the model changed meanwhile: a later ask owns the answer
+    modelInfo.value = info
+    if (modelsError.value.startsWith(INFO_ERROR)) modelsError.value = ''
+  } catch (e) { if (ask === infoAsk) modelsError.value ||= INFO_ERROR + (e as Error).message }
+}
+/** A structural knob the model does not take: the run would be refused, so the form says it before Run. */
+const refusal = computed(() => modelInfo.value && knobsOff(config.value, modelInfo.value).refuse) // unknown: nothing to say yet
 async function refreshLists() { harnessNames.value = (await api.harnesses()).map(h => h.name); runs.value = await api.runs() }
 /** Normalises a config from either door (saved harness, bench JSON) before it lands in the form. */
 /** A harness without toolCalls.format stays without it: the form shows json for a missing key, and only a choice made there writes one. */
@@ -92,7 +115,11 @@ watch(() => [config.value.backend.kind, config.value.backend.baseUrl, config.val
   // With a key, asking for the list sends the key to baseUrl: that waits for the refresh button, so opening a harness
   // or a bench run sends nothing, and a list from the previous host is not kept.
   if (listsModelsByItself(config.value.backend)) refreshModels()
-  else { models.value = []; modelsError.value = '' }
+  else { models.value = []; modelsError.value = ''; forgetInfo() }
+})
+watch(() => config.value.backend.model, () => {
+  if (listsModelsByItself(config.value.backend)) refreshInfo()
+  else forgetInfo()
 })
 </script>
 
@@ -105,13 +132,14 @@ watch(() => [config.value.backend.kind, config.value.backend.baseUrl, config.val
     <Bench v-if="tab === 'bench'" @to-workbench="toWorkbench" />
     <div class="layout" v-else>
       <div class="col left">
-        <ConfigForm v-model="config" v-model:mcp-error="mcpError" :models="models" :models-error="modelsError" :harness-names="harnessNames" @refresh-models="refreshModels" @load="load" @save-as="saveAs" />
+        <ConfigForm v-model="config" v-model:mcp-error="mcpError" :models="models" :models-error="modelsError" :model-info="modelInfo" :harness-names="harnessNames" @refresh-models="refreshModels" @load="load" @save-as="saveAs" />
       </div>
       <div class="col">
         <label>Workdir (absolute path to a scratch project; not / or your home)</label>
         <input type="text" v-model="workdir" placeholder="/path/to/project">
         <label>Task</label>
         <textarea v-model="task" style="min-height:50px"></textarea>
+        <div v-if="refusal" class="warn">{{ refusal }}</div>
         <div class="row" style="margin:8px 0">
           <button @click="start" :disabled="!!running() || !!mcpError">Run</button>
           <button @click="abort" :disabled="!canAbort()">Abort</button>

@@ -93,3 +93,13 @@ test('formatTable: a harness with no finished run yet shows "-" for its interval
   const t = formatTable([{ name: 'x', config: {} as BenchHarness['config'], pass: 0, reasons: {}, median: { turns: 0, toolCalls: 0, ms: 0 }, runs: [] }])
   expect(t.split('\n')[1]).toMatch(/^x\s+0\/0\s+-\s+-\s/)
 })
+
+test('formatTable: med $ column only when a run carries a cost', () => {
+  const h = (name: string, runs: Partial<BenchRun>[]): BenchHarness =>
+    ({ name, config: {} as BenchHarness['config'], pass: 0, reasons: {}, median: { turns: 0, toolCalls: 0, ms: 0 }, runs: runs as BenchRun[] })
+  expect(formatTable([h('a', [{}, {}])]).split('\n')[0]).not.toContain('med $')
+  const lines = formatTable([h('a', [{ costUsd: 0.0123 }]), h('b', [{}])]).split('\n')
+  expect(lines[0]).toMatch(/\s+med \$$/)
+  expect(lines[1]).toMatch(/\s+0\.0123$/)
+  expect(lines[2]).toMatch(/\s+-$/)
+})

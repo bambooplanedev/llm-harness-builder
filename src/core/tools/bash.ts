@@ -8,8 +8,8 @@ export type BashOpts = { timeoutMs?: number; maxBuffer?: number }
 export function bash(args: Record<string, unknown>, ctx: ToolCtx, opts: BashOpts = {}): Promise<string> {
   const command = args.command
   if (typeof command !== 'string') return Promise.reject(new Error('argument "command" must be a string'))
-  const timeoutMs = opts.timeoutMs ?? 30_000
-  const maxBuffer = opts.maxBuffer ?? 1 << 20
+  const timeoutMs = opts.timeoutMs ?? (ctx.bashTimeoutS ?? 30) * 1000
+  const maxBuffer = opts.maxBuffer ?? ctx.bashMaxBytes ?? 1 << 20
   return new Promise(resolve => {
     const child = spawn('sh', ['-c', command], { cwd: ctx.workdir, env: childEnv(ctx.bashEnv), detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
     const pid = child.pid

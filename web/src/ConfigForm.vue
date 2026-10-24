@@ -1,15 +1,20 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
-import type { HarnessConfig } from './api'
+import type { HarnessConfig, ServerInfo } from './api'
 import { PRESETS, FAMILIES, applyFamily, DEFAULT_PROMPTED_TEMPLATE, DEFAULT_PARSE_ERROR_HINT } from '../../src/core/prompts'
 import { TOOL_NAMES, keyNote } from '../../src/core/config'
 
 const config = defineModel<HarnessConfig>({ required: true })
-const props = defineProps<{ models: string[]; modelsError: string; harnessNames: string[] }>()
+const props = defineProps<{ models: string[]; modelsError: string; harnessNames: string[]; modelInfo?: ServerInfo }>()
 const emit = defineEmits<{ refreshModels: []; load: [name: string]; saveAs: [name: string] }>()
 
 const saveName = ref(config.value.name)
 watch(() => config.value.name, n => (saveName.value = n))
+/** A knob the model does not take cannot be turned; its value stays in the harness, so another model gets it back.
+ *  Same pairs as knobsOff: the repeat knobs go with what they change. */
+const off = (k: 'temperature' | 'maxTokens' | 'think') => props.modelInfo?.takes?.[k] === false
+const lockedThinkTokens = () => off('think') || off('maxTokens')
+const locked = () => [off('temperature') && 'temp', off('maxTokens') && 'max_tokens', off('think') && 'think'].filter(Boolean).join(', ')
 const ollamaViaV1 = () => config.value.backend.kind === 'openai' && /:11434/.test(config.value.backend.baseUrl)
 function applyPreset(k: keyof typeof PRESETS) {
   config.value.systemPrompt = PRESETS[k]
@@ -34,6 +39,20 @@ function setMaxTokens(text: string) {
   const n = Number(text)
   if (Number.isInteger(n) && n > 0) config.value.backend.maxTokens = n
   else delete config.value.backend.maxTokens
+}
+/** Same rule for the tool limits: empty keeps the built-in one. */
+function setToolLimit(k: 'readMaxBytes' | 'bashMaxBytes' | 'bashTimeoutS', text: string) {
+  const n = Number(text)
+  if (Number.isInteger(n) && n > 0) config.value.tools[k] = n
+  else delete config.value.tools[k]
+}
+/** Same rule for the context limits; an emptied section goes too. */
+function setContext(k: 'maxToolOutputChars' | 'budgetTokens', text: string) {
+  const n = Number(text)
+  const cx = config.value.context ??= {}
+  if (text !== '' && Number.isInteger(n) && n >= (k === 'budgetTokens' ? 0 : 1)) cx[k] = n
+  else delete cx[k]
+  if (!Object.keys(cx).length) delete config.value.context
 }
 
 /** Three states, and the first is no key at all: absent, nothing about thinking is sent. */
@@ -101,7 +120,7 @@ function editMcp(text: string) {
 
     <label>Backend</label>
     <div class="row">
-      <select v-model="config.backend.kind"><option value="openai">openai-compatible</option><option value="ollama">ollama (native)</option></select>
+      <select v-model="config.backend.kind"><option value="openai">openai-compatible</option><option value="ollama">ollama (native)</option><option value="anthropic">anthropic (native)</option></select>
       <input type="text" v-model.lazy="config.backend.baseUrl">
     </div>
     <div v-if="ollamaViaV1()" class="warn">Ollama via /v1 ignores num_ctx and silently truncates the prompt. Pick kind "ollama".</div>
@@ -113,16 +132,17 @@ function editMcp(text: string) {
     <div v-if="keyLine() && !models.length" class="hint">press ↻ to list the models: that request carries the key</div>
     <div class="row">
       <select v-model="config.backend.model"><option v-for="m in models" :key="m" :value="m">{{ m }}</option></select>
-      <input type="text" v-model="config.backend.model" placeholder="or type a model id">
+      <input type="text" v-model.lazy="config.backend.model" placeholder="or type a model id">
       <button @click="emit('refreshModels')">↻</button>
     </div>
     <div v-if="modelsError" class="err">{{ modelsError }}</div>
     <div class="row">
-      <span>temp</span><input type="number" step="0.1" v-model.number="config.backend.temperature">
+      <span>temp</span><input type="number" step="0.1" v-model.number="config.backend.temperature" :disabled="off('temperature')">
       <span>num_ctx</span><input type="number" v-model.number="config.backend.numCtx" :disabled="config.backend.kind !== 'ollama'">
-      <span title="cap on generated tokens, thinking included; empty = no cap">max_tokens</span><input type="number" min="1" :value="config.backend.maxTokens ?? ''" @change="setMaxTokens(($event.target as HTMLInputElement).value)">
-      <span title="the chat template's thinking switch: chat_template_kwargs.enable_thinking on an OpenAI-compatible server, think on Ollama; — sends nothing, and the model does what its template does">think</span><select :value="config.backend.think === undefined ? '' : config.backend.think ? 'on' : 'off'" @change="setThink(($event.target as HTMLSelectElement).value)"><option value="">—</option><option>on</option><option>off</option></select>
+      <span title="cap on generated tokens, thinking included; empty = no cap">max_tokens</span><input type="number" min="1" :value="config.backend.maxTokens ?? ''" :disabled="off('maxTokens')" @change="setMaxTokens(($event.target as HTMLInputElement).value)">
+      <span title="the chat template's thinking switch: chat_template_kwargs.enable_thinking on an OpenAI-compatible server, think on Ollama; — sends nothing, and the model does what its template does">think</span><select :value="config.backend.think === undefined ? '' : config.backend.think ? 'on' : 'off'" :disabled="off('think')" @change="setThink(($event.target as HTMLSelectElement).value)"><option value="">—</option><option>on</option><option>off</option></select>
     </div>
+    <div v-if="locked()" class="hint">{{ locked() }}: this knob is not available for this model<span v-if="modelInfo?.takesFrom"> ({{ modelInfo.takesFrom }})</span></div>
 
     <label>System prompt <span v-for="(_, k) in PRESETS" :key="k"><button @click="applyPreset(k)">{{ k }}</button> </span></label>
     <textarea v-model="config.systemPrompt"></textarea>
@@ -136,6 +156,9 @@ function editMcp(text: string) {
     <div v-if="config.tools.bashEnv?.length" class="hint">bash gets from your environment: {{ config.tools.bashEnv.join(', ') }}</div>
     <div><input type="checkbox" :checked="!!config.tools.requireReadBeforeEdit" @change="toggleGuard(($event.target as HTMLInputElement).checked)"> refuse to edit a file that has not been read</div>
     <div class="row"><span title="after this many failed edits of one file, each further failed edit tells the model to read the file again; a read or a change of the file starts the count over; empty = off">edit misses before a re-read note</span><input type="number" min="1" :value="config.tools.editMissEscalation ?? ''" @change="setEscalation(($event.target as HTMLInputElement).value)"></div>
+    <div class="row"><span title="read_file stops here and says so; empty = built-in limit">read_file max bytes</span><input type="number" min="1" placeholder="4194304 (default)" :value="config.tools.readMaxBytes ?? ''" @change="setToolLimit('readMaxBytes', ($event.target as HTMLInputElement).value)"></div>
+    <div class="row"><span title="bash output kept; empty = built-in limit">bash max bytes</span><input type="number" min="1" placeholder="1048576 (default)" :value="config.tools.bashMaxBytes ?? ''" @change="setToolLimit('bashMaxBytes', ($event.target as HTMLInputElement).value)"></div>
+    <div class="row"><span title="bash is killed after this many seconds; empty = built-in limit">bash timeout, s</span><input type="number" min="1" placeholder="30 (default)" :value="config.tools.bashTimeoutS ?? ''" @change="setToolLimit('bashTimeoutS', ($event.target as HTMLInputElement).value)"></div>
     <details><summary>MCP servers ({{ mcpCount() }})</summary>
       <textarea :value="mcpText" @input="editMcp(($event.target as HTMLTextAreaElement).value)" style="min-height:80px"
         placeholder='{"fs": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "."], "tools": ["read_text_file"]}}'></textarea>
@@ -155,8 +178,8 @@ function editMcp(text: string) {
 
     <label>Context</label>
     <div class="row">
-      <span>max tool output chars</span><input type="number" v-model.number="config.context.maxToolOutputChars">
-      <span>budget tokens (0=off)</span><input type="number" v-model.number="config.context.budgetTokens">
+      <span>max tool output chars (empty = no limit)</span><input type="number" min="1" :value="config.context?.maxToolOutputChars ?? ''" @change="setContext('maxToolOutputChars', ($event.target as HTMLInputElement).value)">
+      <span>budget tokens (empty = no budget)</span><input type="number" min="0" :value="config.context?.budgetTokens ?? ''" @change="setContext('budgetTokens', ($event.target as HTMLInputElement).value)">
     </div>
     <label>Loop</label>
     <div class="row"><span>max turns</span><input type="number" v-model.number="config.loop.maxTurns"></div>
@@ -165,8 +188,8 @@ function editMcp(text: string) {
       <span title="after this many repeats of one call the history is cleared back to the task, once per run; 1 to max repeats">fresh context</span><input type="number" min="1" :value="config.loop.freshContext ?? ''" @change="setLoop('freshContext', ($event.target as HTMLInputElement).value)">
     </div>
     <div class="row">
-      <span title="the turn after a repeat is sampled at this temperature, 0 to 2; needs max repeats">repeat temperature</span><input type="number" min="0" max="2" step="0.1" :value="config.loop.repeatTemperature ?? ''" @change="setLoop('repeatTemperature', ($event.target as HTMLInputElement).value)">
-      <span title="the turn after a repeat is sent with /think in place of the /no_think line, with this token cap; needs max repeats and a /no_think line in the system prompt">repeat think tokens</span><input type="number" min="1" :value="config.loop.repeatThinkTokens ?? ''" @change="setLoop('repeatThinkTokens', ($event.target as HTMLInputElement).value)">
+      <span title="the turn after a repeat is sampled at this temperature, 0 to 2; needs max repeats">repeat temperature</span><input type="number" min="0" max="2" step="0.1" :value="config.loop.repeatTemperature ?? ''" :disabled="off('temperature')" @change="setLoop('repeatTemperature', ($event.target as HTMLInputElement).value)">
+      <span title="the turn after a repeat is sent with /think in place of the /no_think line, with this token cap; needs max repeats and a /no_think line in the system prompt">repeat think tokens</span><input type="number" min="1" :value="config.loop.repeatThinkTokens ?? ''" :disabled="lockedThinkTokens()" @change="setLoop('repeatThinkTokens', ($event.target as HTMLInputElement).value)">
     </div>
     <div class="row"><span title="a final answer ends the run only when this command exits 0; it runs on files the model wrote, and is approved before the run">until bash</span><input type="text" :value="config.loop.untilBash ?? ''" @change="setUntilBash(($event.target as HTMLInputElement).value)"></div>
   </div>

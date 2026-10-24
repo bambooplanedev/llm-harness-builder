@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import type { Delta, HarnessEvent } from './api'
 import { mcpApprovalServer, mcpCounts, UNTIL_BASH } from '../../src/core/events'
 import { analyzeTrace, summaryLine } from '../../src/core/analyze'
+import { normalizeRequest } from '../../src/core/normalize'
 // approvable is a Boolean-typed prop, so Vue casts an ABSENT value to `false` (not `undefined`).
 // App.vue's live Workbench never passes this prop and needs the opposite default -- only a
 // finished/replayed trace (Bench.vue, Diff.vue) opts out by passing `false` explicitly.
@@ -37,6 +38,13 @@ const stubbedAt = computed(() => {
   return m
 })
 const pretty = (v: unknown) => JSON.stringify(v, null, 2)
+/** The CLI's knobs_off line: what the file sets and was not sent, and who said so. */
+const knobsOff = computed(() => props.events.flatMap(e => e.type === 'knobs_off' ? e.off.map(o => `${o.knob} ${JSON.stringify(o.value)} not sent: ${o.reason}`) : []))
+/** One line of what a request holds, read the same way whatever API it went to. */
+function layers(payload: unknown): string {
+  const n = normalizeRequest(payload)
+  return n ? `system ${n.system.length} chars · tools ${n.tools.length} · messages ${n.messages.filter(m => m.role !== 'system').length} · ${n.format}` : ''
+}
 // The current turn is "open" from its llm_request until its llm_response; the live bubble shows the streamed text meanwhile,
 // and stays (without the cursor) if the run ended first, since that text is not in the trace.
 const done = computed(() => props.events.some(e => e.type === 'done'))
@@ -50,12 +58,13 @@ const liveTok = computed(() => Math.ceil(liveText.value.length / 4))
 </script>
 <template>
   <div v-if="summary" class="analysis">{{ summary }}</div>
+  <div v-for="k in knobsOff" :key="k" class="warn">{{ k }}</div>
   <div v-if="task" class="ev user">{{ task }}</div>
   <div v-for="[turn, evs] in turns" :key="turn" class="turn">
     <template v-for="e in evs" :key="e.seq">
       <div v-if="e.type === 'llm_response'" class="ev assistant">
         <div v-if="e.reasoning" style="color:#888">thinking: {{ e.reasoning }}</div>{{ e.content || '(empty content)' }}
-        <small style="color:#888"> · {{ e.latencyMs }}ms</small>
+        <small style="color:#888"> · {{ e.latencyMs }}ms<template v-if="e.costUsd !== undefined"> · ${{ Number(e.costUsd.toPrecision(4)) }}</template></small>
       </div>
       <div v-else-if="e.type === 'parse_error'" class="ev parse_error">parse error: {{ e.message }}<span v-if="e.droppedChars"> · {{ e.droppedChars }} chars kept out of the history, a marker went back instead</span></div>
       <div v-else-if="e.type === 'tool_call'" class="ev tool_call">{{ e.call.name }} {{ pretty(e.call.args) }}</div>
@@ -83,7 +92,7 @@ const liveTok = computed(() => Math.ceil(liveText.value.length / 4))
     </div>
     <details class="inspector"><summary>{{ turn === 0 ? 'setup' : `turn ${turn}` }} — raw request / response</summary>
       <template v-for="e in evs" :key="'raw' + e.seq">
-        <pre v-if="e.type === 'llm_request'">{{ pretty(e.payload) }}</pre>
+        <template v-if="e.type === 'llm_request'"><div class="hint">{{ layers(e.payload) }}</div><pre>{{ pretty(e.payload) }}</pre></template>
         <pre v-if="e.type === 'llm_response'">{{ pretty(e.raw) }}</pre>
       </template>
     </details>

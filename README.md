@@ -142,6 +142,84 @@ them, and MCP servers start without the variable. The [honest notes](docs/honest
 what that misses, among them an encoded key, one shorter than 20 characters, the live text of a
 turn and a command that sends the key somewhere itself.
 
+### Anthropic
+
+`kind: "anthropic"` talks to the Messages API with plain HTTP, no SDK. `baseUrl` is the server root
+(`https://api.anthropic.com`; the harness adds `/v1/...` and does not read `ANTHROPIC_BASE_URL`),
+and `apiKeyEnv` is required. Everything above about the key holds: it goes to `baseUrl` only,
+without redirects, and `run`, `demo` and `bench` say so before the first request. `ANTHROPIC_API_KEY`
+is often exported globally, and someone else's harness may name it: read the host in that notice. A
+harness whose backend is not Anthropic still starts its MCP servers with `ANTHROPIC_*` in their
+environment.
+
+    export ANTHROPIC_API_KEY=...
+    npx llm-harness-builder bench harnesses/native-anthropic.json harnesses/budget-anthropic.json --n 1
+
+`harnesses/native-anthropic.json` is `bare` on Claude Haiku 5.5 with thinking off;
+`harnesses/budget-anthropic.json` leaves `think` out (adaptive thinking) and adds
+`context.budgetTokens: 2670` and `loop.maxRepeats: 3`, so the stubs of `applyBudget` meet thinking
+blocks. Like the other examples, `serve` does not copy them into an older `harnesses/`. The request
+carries `anthropic-version: 2026-10-21`; `maxTokens` falls back to the model's own `max_tokens`
+from `GET /v1/models/{id}`, and the run asks you to set it if the server does not name one.
+Prompted mode with `enforceSchema` is refused here, and `replay` of an Anthropic request says "not
+yet".
+
+**Knobs a model does not take.** Some models refuse a setting that the harness file carries. The
+file keeps the value, the knob is just not sent, and `run` says so with one line per knob:
+`temperature 0.2 not sent: <reason>`. On this API version `temperature` is never sent: it is a
+400 on every model. For OpenRouter the list comes from the model's `supported_parameters`, for
+Ollama from `/api/show`. OpenRouter's list is a union across the providers that serve the model, so
+a knob missing from it is reliably unsupported, while one present is no guarantee that the provider
+your request reaches takes it. In the form the knob is locked with "this knob is not available for
+this model" (Ollama is asked about the model when it is committed in the box, the others on ↻), and
+unlocks when you pick another model.
+A knob that would change the harness itself is not dropped but refused before the first request:
+`toolCalls.mode: "native"` on a model whose server says it takes no tools, and `enforceSchema` on a
+model that takes no response schema (the same sources). The message names the fix: set
+`toolCalls.mode: "prompted"`, or `toolCalls.enforceSchema: false`.
+
+**Thinking.** Without `think`, or with `think: true`, the request asks for adaptive thinking with
+a summary, and sets `block_binding.prefix_mismatch_behavior` to `drop_block` (beta
+`thinking-binding-controls-2026-08-01`). The stubs of `applyBudget` rewrite old tool results, and on
+accounts created on 31 August 2026 or later a thinking block that no longer matches its prefix is a
+400. With `drop_block` the API drops the first mismatched block and the ones after it. The setting
+also switches that check on for older accounts, which would otherwise pass the blocks through:
+there they are dropped too, so a trace means the same on either. `think: false` sends
+`thinking: {type: "disabled"}`, with no `block_binding` and no beta header. A model that cannot turn
+thinking off (Opus 5.5, Sonnet 5.5) answers 400, and the trace shows a backend error.
+
+**Cache.** The request always carries a top-level `cache_control: {type: "ephemeral"}`. On Haiku 5.5 the
+prefix must be at least 512 tokens to be cached.
+
+**What a run costs.** Put prices in the harness, per million tokens:
+
+    "pricePerMTok": { "input": 0.1, "output": 0.5, "cacheRead": 0.01, "cacheWrite": 0.125 }
+
+With it the UI shows `$` on every reply, the CLI done line ends with `· $X total`, and `bench`
+reports `med $`. Without `cacheRead` and `cacheWrite`, cached tokens are priced as `input`. The tool
+has no price table: those numbers were Haiku 5.5's list prices for prompts up to 100,000 tokens
+(cache read 0.1 times input, 5-minute cache write 1.25 times) when the example was written, and
+they go stale. A prompt over 100,000 tokens, cache hits included, is priced on a second grid
+($0.50 input, $2.50 output), which a flat `pricePerMTok` cannot express: past that size the figure
+is too low.
+
+**Measured** (24 October 2026, `claude-haiku-5-5`, task `slug`, one run each: this model on this
+task, not a property of the knob). `native-anthropic.json`: PASS in 3 turns, about $0.0005, cache
+reads from the second turn on, and the `temperature 0.2 not sent` line appeared.
+`budget-anthropic.json` (`budgetTokens: 2670`): PASS in 4 turns and no stub fired: the harness
+estimates the context as chars/4 (about 460 tokens by the last turn), which leaves out the tool
+schemas, while the server counted about 2000 prompt tokens. With `budgetTokens: 200` the stubs came
+from turn 3 on and there was no 400, but the server reported every thinking block after the first
+stub as dropped (`input_transformations`: `thinking_dropped`, `prefix_binding_mismatch`), so the
+model went on without its earlier reasoning; PASS in 14 turns, about $0.0054. On Ollama 0.40.10
+`/api/show` gave `capabilities` `["completion", "tools", "thinking"]` for `qwen3:0.6b` and
+`["completion"]` for `gemma3:270m` (so a native harness with tools is refused on the latter), and a
+404 for a model it does not have; `prompt_eval_count` on a second turn with the same prefix was the
+whole prompt (1234, then 1253), so Ollama's prompt tokens read like the other backends'. Not checked
+live: the form's lock for an OpenRouter model (tests only).
+
+One run that ends in zero is "this model on this task", not a property of the knob.
+
 ## CLI
 
     llm-harness-builder --help | --version | help <command>
@@ -332,6 +410,11 @@ one would otherwise be silently off.
 `backend.maxTokens` caps the tokens of one response, thinking included; without it a generation
 runs until the window is full. `numCtx` is sent to Ollama only.
 
+`context.maxToolOutputChars` and `context.budgetTokens` are optional, and so is `context`. Absent,
+the harness does not limit that thing: tool output is not truncated, and no budget stubs old results
+(`budgetTokens: 0` still means no budget, so older files keep working). Present, they must be a
+positive integer and a non-negative integer.
+
 `backend.think` sets the chat template's thinking switch: `chat_template_kwargs.enable_thinking` on
 an OpenAI-compatible server (llama-server reads it), `think` on Ollama. Absent, nothing is sent and
 the model's own default holds, so a harness without the key sends the request it always sent. It is
@@ -369,6 +452,12 @@ Hermes Agent's (its per-file miss counter in `tools/file_operations.py`), and th
 that read the looping file again passed far more often. It is built, not measured. Counted over the
 recorded traces with no model, `N = 3` would have fired in 36 of the 166 runs that edited anything —
 what the model would then have done, only a run can say.
+
+`tools.readMaxBytes` (default 4194304), `tools.bashMaxBytes` (default 1048576) and `tools.bashTimeoutS`
+(default 30) set the limits that protect the process: how much of a file `read_file` returns, how much
+`bash` output is kept, and when a command is killed. Each is a positive integer; a key left out keeps
+its default. A `read_file` cut at the ceiling ends with `[truncated at N bytes]`; `loop.untilBash`
+uses the same `bash` limits.
 
 `tools.bashEnv: ["NAME", ...]` names the environment variables that `bash`, `loop.untilBash` and
 the task checks of `bench` and `demo` get from yours — names only; a harness file never sets a
