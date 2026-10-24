@@ -203,6 +203,18 @@ they go stale. A prompt over 100,000 tokens, cache hits included, is priced on a
 ($0.50 input, $2.50 output), which a flat `pricePerMTok` cannot express: past that size the figure
 is too low.
 
+**Measured** (24 October 2026, `claude-haiku-5-5`, task `slug`, one run each: this model on this
+task, not a property of the knob). `native-anthropic.json`: PASS in 3 turns, about $0.0005, cache
+reads from the second turn on, and the `temperature 0.2 not sent` line appeared.
+`budget-anthropic.json` (`budgetTokens: 2670`): PASS in 4 turns and no stub fired: the harness
+estimates the context as chars/4 (about 460 tokens by the last turn), which leaves out the tool
+schemas, while the server counted about 2000 prompt tokens. With `budgetTokens: 200` the stubs came
+from turn 3 on and there was no 400, but the server reported every thinking block after the first
+stub as dropped (`input_transformations`: `thinking_dropped`, `prefix_binding_mismatch`), so the
+model went on without its earlier reasoning; PASS in 14 turns, about $0.0054. Not checked live:
+Ollama's `/api/show` `capabilities` (no Ollama on the test machine) and the form's lock for an
+OpenRouter model (tests only).
+
 One run that ends in zero is "this model on this task", not a property of the knob.
 
 ## CLI
