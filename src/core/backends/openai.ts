@@ -84,8 +84,10 @@ export class OpenAIBackend implements Backend {
   private models?: Promise<any[]>
 
   /** `key`: a hosted API (backend.apiKeyEnv). It goes as a bearer token to /models and /chat/completions, the only
-   *  requests made then — none of llama-server's — and those requests follow no redirect: undici would drop the key on
-   *  another origin, but a 307 would send the whole conversation again, and nothing about a hosted API redirects. */
+   *  requests made then — none of llama-server's — and those requests follow no redirect: undici drops authorization on
+   *  another origin, but a 307 would send the whole conversation again, and nothing about a hosted API redirects. The
+   *  rule for any other adapter: undici strips only authorization, never a custom header such as x-api-key, so every
+   *  request with a key goes with redirect: 'manual', no exception. */
   constructor(private baseUrl: string, private fetchFn: FetchLike = defaultFetch, private key?: string) { this.baseUrl = baseUrl.replace(/\/+$/, '') }
 
   private keyed(init: { method?: string; headers?: Record<string, string>; body?: string; signal?: AbortSignal } = {}) {

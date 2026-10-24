@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { OpenAIBackend, collect, fromJson } from '../src/core/backends/openai.js'
 import { OllamaBackend } from '../src/core/backends/ollama.js'
+import { AnthropicBackend } from '../src/core/backends/anthropic.js'
 import { BackendError, defaultFetch, jsonChunks, type ChatRequest, type Delta, type FetchLike } from '../src/core/backends/types.js'
 import { createBackend } from '../src/core/backends/index.js'
 
@@ -436,5 +437,5 @@ test('usage carries cached_tokens as cacheReadTokens, only as a finite non-negat
 test('createBackend: kind anthropic never falls through to OpenAIBackend', () => {
   const b = { kind: 'anthropic' as const, baseUrl: 'https://api.anthropic.com', model: 'm', temperature: 0 }
   expect(() => createBackend(b, {})).toThrow('backend.kind anthropic needs backend.apiKeyEnv')
-  expect(() => createBackend({ ...b, apiKeyEnv: 'LHB_T_API_KEY' }, { LHB_T_API_KEY: KEY })).toThrow('backend.kind anthropic: not implemented yet')
+  expect(createBackend({ ...b, apiKeyEnv: 'LHB_T_API_KEY' }, { LHB_T_API_KEY: KEY })).toBeInstanceOf(AnthropicBackend)
 })

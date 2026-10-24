@@ -66,3 +66,10 @@ test('a server that does not answer: the cause, when there is one, is in the mes
   const e = Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:8080'), { code: 'ECONNREFUSED' }) })
   expect(await preflight(be(e), openai())).toEqual({ ok: false, message: 'preflight: http://127.0.0.1:8080/v1 (openai) does not answer: fetch failed (ECONNREFUSED)' })
 })
+
+test('anthropic: the window comes from serverInfo; a model the list lacks is refused', async () => {
+  const claude = (model: string) => ({ kind: 'anthropic' as const, baseUrl: 'https://api.anthropic.com', model, temperature: 0, apiKeyEnv: 'ANTHROPIC_API_KEY' })
+  expect(await preflight(be(['claude-haiku-5-5'], { nCtx: 200000, maxOutput: 64000, router: false }), claude('claude-haiku-5-5')))
+    .toEqual({ ok: true, server: { nCtx: 200000, maxOutput: 64000 } })
+  expect(await preflight(be(['claude-haiku-5-5']), claude('claude-nope'))).toEqual({ ok: false, message: 'preflight: model claude-nope is not among the 1 models https://api.anthropic.com lists' })
+})

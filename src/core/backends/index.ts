@@ -2,6 +2,7 @@ import { apiKey, isHttpUrl, keyErrors, keyProblem, type HarnessConfig } from '..
 import { defaultFetch, type Backend } from './types.js'
 import { OpenAIBackend } from './openai.js'
 import { OllamaBackend } from './ollama.js'
+import { AnthropicBackend } from './anthropic.js'
 export * from './types.js'
 
 /** `env`: where the variable `backend.apiKeyEnv` names is read. Every caller asks keyProblem first and refuses with its
@@ -15,6 +16,6 @@ export function createBackend(b: HarnessConfig['backend'], env: NodeJS.ProcessEn
   if (refused.length) throw new Error(refused[0])
   const key = apiKey(b, env)
   if (!key) throw new Error(`backend.apiKeyEnv: ${keyProblem(b, env)}`)
-  if (b.kind === 'anthropic') throw new Error('backend.kind anthropic: not implemented yet')
+  if (b.kind === 'anthropic') return new AnthropicBackend(b.baseUrl, defaultFetch, key, b.apiKeyEnv)
   return new OpenAIBackend(b.baseUrl, defaultFetch, key)
 }

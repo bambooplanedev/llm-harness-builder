@@ -8,6 +8,7 @@ import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmp } from './helpers.js'
 import { fakeOpenAI, toolTurn, textTurn } from './fake-openai.js'
+import { fakeAnthropic, toolReply, textReply } from './fake-anthropic.js'
 import { RunStore } from '../src/server/runs'
 
 const ROOT = process.cwd()
@@ -983,6 +984,43 @@ test('run against a hosted API: the bearer token reaches it, nothing else is ask
     expect(r.stderr).not.toContain(KEY)
   } finally { await api.close() }
 }, 30_000)
+
+/** `bare` on the Anthropic API, priced, with the key in bash's environment. */
+async function claudeHarness(dir: string, baseUrl: string) {
+  const file = await keyedHarness(dir, baseUrl), h = JSON.parse(await readFile(file, 'utf8'))
+  await writeFile(file, JSON.stringify({ ...h, backend: { kind: 'anthropic', baseUrl, model: 'claude-haiku-5-5', temperature: 0, maxTokens: 1024, apiKeyEnv: KEY_NAME, pricePerMTok: { input: 0.1, output: 0.5 } } }))
+  return file
+}
+
+test('run against the Anthropic API: x-api-key reaches it, the run ends final, the key sits in no file and not on stderr', async () => {
+  const api = await fakeAnthropic([toolReply('bash', { command: `printf %s "$${KEY_NAME}"` }), textReply('done')])
+  try {
+    const wd = await tmp('lhb-cli-'), file = await claudeHarness(wd, api.baseUrl)
+    const r = await cliAsync(['run', file, '--workdir', wd, '--yes', 'go'], { [KEY_NAME]: KEY })
+    expect(r.status).toBe(0)
+    expect(api.seen.map(s => `${s.method} ${s.path}`)).toEqual(['POST /v1/messages', 'POST /v1/messages'])
+    expect(api.seen.every(s => s.headers['x-api-key'] === KEY && s.headers.authorization === undefined)).toBe(true)
+    expect(api.seen[1].body).toContain(MARK); expect(api.seen[1].body).not.toContain(KEY)
+    const runs = allText(join(r.cwd, 'runs'))
+    expect(runs).toContain('"reason":"final"')
+    expect(runs).toContain(MARK); expect(runs).not.toContain(KEY)
+    expect(r.stderr).not.toContain(KEY)
+  } finally { await api.close() }
+}, 30_000)
+
+test('bench against the Anthropic API: preflight asks the model, the window is its max_input_tokens, a med $ column, no key in any file', async () => {
+  const api = await fakeAnthropic([textReply('done')])
+  try {
+    const wd = await tmp('lhb-cli-'), file = await claudeHarness(wd, api.baseUrl), out = join(wd, 'b.json')
+    const r = await cliAsync(['bench', '--n', '1', '--out', out, file], { [KEY_NAME]: KEY })
+    expect(r.status).toBe(0)
+    expect(r.stderr).toContain('window 200000')
+    expect(r.stdout).toContain('med $')
+    expect(api.seen.slice(0, 2).map(s => `${s.method} ${s.path}`)).toEqual(['GET /v1/models', 'GET /v1/models/claude-haiku-5-5'])
+    expect(api.seen.every(s => s.headers['x-api-key'] === KEY)).toBe(true)
+    expect(allText(wd) + allText(join(r.cwd, 'runs')) + r.stderr + r.stdout).not.toContain(KEY)
+  } finally { await api.close() }
+}, 60_000)
 
 test('a key typed into the task is redacted in the trace\'s first line', async () => {
   const api = await fakeOpenAI([textTurn('done')])

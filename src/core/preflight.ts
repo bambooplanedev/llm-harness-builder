@@ -11,7 +11,7 @@ export type PreflightResult = { ok: true; server: Omit<ServerInfo, 'router'> } |
  * is checked only where the server serves by it: Ollama, and a llama-server router. A one-model
  * llama-server answers any name with the model it has. With a key (a hosted API) the model is
  * checked, by id or by id without a routing suffix, unless the server says its list is partial; the
- * window comes from the list.
+ * window comes from the list, or on Anthropic from the model's own entry.
  */
 export async function preflight(backend: Backend, b: HarnessConfig['backend']): Promise<PreflightResult> {
   const where = `${b.baseUrl} (${b.kind})`
@@ -21,7 +21,7 @@ export async function preflight(backend: Backend, b: HarnessConfig['backend']): 
     const cause = (e as any)?.cause?.code ?? (e as any)?.cause?.message
     return { ok: false, message: `preflight: ${where} does not answer: ${(e as Error).message}${cause ? ` (${cause})` : ''}` }
   }
-  const info = b.kind === 'openai' ? await backend.serverInfo?.(b.model) : undefined
+  const info = b.kind !== 'ollama' ? await backend.serverInfo?.(b.model) : undefined
   if (b.apiKeyEnv !== undefined) {
     // A hosted API serves by name. Its list is long, so a refusal counts it instead of printing it.
     const listed = models.includes(b.model) || models.includes(withoutVariant(b.model))

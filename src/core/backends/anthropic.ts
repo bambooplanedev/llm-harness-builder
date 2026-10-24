@@ -1,4 +1,4 @@
-import { BackendError, usageFrom, type Backend, type ChatRequest, type Delta, type FetchLike, type NormalizedResponse, type NormalizedToolCall } from './types.js'
+import { BackendError, jsonChunks, readJson, usageFrom, type Backend, type ChatRequest, type Delta, type FetchLike, type NormalizedResponse, type NormalizedToolCall, type ServerInfo } from './types.js'
 import { parseCalls } from './openai.js'
 
 /** Text a server sent, only when it is text: a number, an array or an object in its place is dropped, not printed. */
@@ -56,11 +56,49 @@ export async function collectAnthropic(chunks: AsyncIterable<any>, onDelta?: (d:
   }
 }
 
+/** A token count from the server: only a positive integer is one. */
+const count = (x: unknown): number | undefined => Number.isInteger(x) && (x as number) > 0 ? x as number : undefined
+
 export class AnthropicBackend implements Backend {
-  /** `keyName`: the variable the key came from, for the words of a 401. */
+  partialList?: boolean
+
+  /** `baseUrl`: the server root, under which the requests go to /v1/... `keyName`: the variable the key came from, for the words of a 401. */
   constructor(private baseUrl: string, private fetchFn: FetchLike, private key: string, private keyName: string) { this.baseUrl = baseUrl.replace(/\/+$/, '') }
 
-  async listModels(): Promise<string[]> { throw new Error('not implemented') }
+  /** Every request here: the key goes as x-api-key, which undici keeps on a redirect to another origin (it strips only
+   *  authorization), so no redirect is followed at all. Nothing about the API redirects. */
+  private keyed(path: string, init: { method?: string; headers?: Record<string, string>; body?: string; signal?: AbortSignal } = {}) {
+    return this.fetchFn(`${this.baseUrl}${path}`, { ...init, headers: { ...init.headers, 'x-api-key': this.key, 'anthropic-version': '2026-10-21' }, redirect: 'manual' })
+  }
+
+  /** A non-2xx in words a person can act on, with the API's own error type and message when the body is its error shape. */
+  private async failed(what: string, r: { status: number; text(): Promise<string> }): Promise<BackendError> {
+    const body = await r.text().catch(() => '')
+    if (r.status === 401) return new BackendError(`${what}: 401 (the key in ${this.keyName} was refused)`, body)
+    if (r.status >= 300 && r.status < 400) return new BackendError(`${what}: ${r.status} (redirect not followed: with a key, requests go only to baseUrl)`, body)
+    let e: any
+    try { e = JSON.parse(body) } catch { /* not the API's error shape */ }
+    const type = e?.type === 'error' ? text(e.error?.type) : undefined, message = type && text(e.error?.message)
+    return new BackendError(`${what}: ${r.status}${type ? ` ${type}` : ''}${message ? `: ${message}` : ''}`, body)
+  }
+
+  /** One page of 1000: a longer list sets partialList, and preflight then gives no verdict. */
+  async listModels(): Promise<string[]> {
+    const r = await this.keyed('/v1/models?limit=1000')
+    if (!r.ok) throw await this.failed('GET /v1/models', r)
+    const j = await readJson(r, 'GET /v1/models')
+    this.partialList = j?.has_more === true
+    return (Array.isArray(j?.data) ? j.data : []).map((m: any) => m?.id)
+  }
+
+  async serverInfo(model: string): Promise<ServerInfo | undefined> {
+    try {
+      const r = await this.keyed(`/v1/models/${encodeURIComponent(model)}`)
+      if (!r.ok) return undefined
+      const m = await readJson(r, 'GET /v1/models/{id}'), nCtx = count(m?.max_input_tokens), maxOutput = count(m?.max_tokens)
+      return { ...(nCtx ? { nCtx } : {}), ...(maxOutput ? { maxOutput } : {}), router: false }
+    } catch { return undefined }
+  }
 
   buildPayload(req: ChatRequest): unknown {
     const first = req.messages.findIndex(m => m.role === 'system'), system = req.messages[first]?.content
@@ -93,5 +131,11 @@ export class AnthropicBackend implements Backend {
     }
   }
 
-  async send(_payload: unknown, _signal?: AbortSignal, _onDelta?: (d: Delta) => void): Promise<NormalizedResponse> { throw new Error('not implemented') }
+  async send(payload: unknown, signal?: AbortSignal, onDelta?: (d: Delta) => void): Promise<NormalizedResponse> {
+    // block_binding is a beta, and only adaptive thinking carries it.
+    const beta: Record<string, string> = (payload as any)?.thinking?.type === 'adaptive' ? { 'anthropic-beta': 'thinking-binding-controls-2026-08-01' } : {}
+    const r = await this.keyed('/v1/messages', { method: 'POST', headers: { 'content-type': 'application/json', ...beta }, body: JSON.stringify(payload), signal })
+    if (!r.ok) throw await this.failed('POST /v1/messages', r)
+    return collectAnthropic(jsonChunks(r, 'POST /v1/messages', 'data:'), onDelta)
+  }
 }

@@ -1,6 +1,8 @@
 import { test, expect } from 'vitest'
 import { AnthropicBackend, collectAnthropic } from '../src/core/backends/anthropic.js'
-import { BackendError, jsonChunks, type ChatRequest, type Delta, type FetchLike } from '../src/core/backends/types.js'
+import http from 'node:http'
+import type { AddressInfo } from 'node:net'
+import { BackendError, defaultFetch, jsonChunks, type ChatRequest, type Delta, type FetchLike } from '../src/core/backends/types.js'
 
 const backend = new AnthropicBackend('https://api.anthropic.com', (async () => { throw new Error('no network') }) as unknown as FetchLike, 'k', 'ANTHROPIC_API_KEY')
 const base: ChatRequest = { model: 'claude-haiku-5-5', messages: [{ role: 'system', content: 's' }, { role: 'user', content: 'u' }], maxTokens: 1000 }
@@ -168,4 +170,87 @@ test('buildPayload: an empty native takes the marker; blank text with calls is t
 test('collectAnthropic: a text block that got no deltas is left out of native', async () => {
   const r = await read([start(), ...block(0, { type: 'text', text: '' }, []), ...block(1, { type: 'tool_use', id: 'tu_1', name: 'bash', input: {} }, []), ...end('tool_use')])
   expect(r.native).toEqual([{ type: 'tool_use', id: 'tu_1', name: 'bash', input: {} }])
+})
+
+// --- the network ---
+type Sent = { url: string; init: any }
+/** A fetch that records every request and answers each with `answer(url)`. */
+const recording = (answer: (url: string) => Response) => {
+  const sent: Sent[] = []
+  const fetchFn = (async (url: string, init: any) => { sent.push({ url, init }); return answer(url) }) as unknown as FetchLike
+  return { sent, net: new AnthropicBackend('https://api.anthropic.com/', fetchFn, 'sk-ant-test', 'ANTHROPIC_API_KEY') }
+}
+const ok = (events: unknown[]) => new Response(sse(events), { headers: { 'content-type': 'text/event-stream' } })
+const failure = (status: number, type: string, message: string) => new Response(JSON.stringify({ type: 'error', error: { type, message } }), { status })
+
+test('send: x-api-key and anthropic-version on the request, no authorization; the beta only with adaptive thinking', async () => {
+  const { sent, net } = recording(() => ok([start(), ...block(0, { type: 'text', text: '' }, [{ type: 'text_delta', text: 'hi' }]), ...end()]))
+  expect((await net.send(body())).content).toBe('hi')
+  await net.send(body({ think: false }))
+  expect(sent.map(s => s.url)).toEqual(['https://api.anthropic.com/v1/messages', 'https://api.anthropic.com/v1/messages'])
+  for (const s of sent) {
+    expect(s.init).toMatchObject({ method: 'POST', redirect: 'manual', headers: { 'x-api-key': 'sk-ant-test', 'anthropic-version': '2026-10-21', 'content-type': 'application/json' } })
+    expect('authorization' in s.init.headers).toBe(false)
+  }
+  expect(sent[0].init.headers['anthropic-beta']).toBe('thinking-binding-controls-2026-08-01')
+  expect('anthropic-beta' in sent[1].init.headers).toBe(false)
+})
+
+test('send: a non-2xx is a BackendError with the status and the error type, the body kept; a 401 names the variable', async () => {
+  const cases: [number, string, string, string][] = [
+    [401, 'authentication_error', 'invalid x-api-key', 'POST /v1/messages: 401 (the key in ANTHROPIC_API_KEY was refused)'],
+    [429, 'rate_limit_error', 'slow down', 'POST /v1/messages: 429 rate_limit_error: slow down'],
+    [529, 'overloaded_error', 'Overloaded', 'POST /v1/messages: 529 overloaded_error: Overloaded'],
+    [400, 'invalid_request_error', 'max_tokens: Field required', 'POST /v1/messages: 400 invalid_request_error: max_tokens: Field required'],
+  ]
+  for (const [status, type, message, words] of cases) {
+    const { net } = recording(() => failure(status, type, message))
+    const e = await net.send(body()).catch(e => e)
+    expect(e).toBeInstanceOf(BackendError)
+    expect(e.message).toBe(words)
+    expect(e.body).toContain(message)
+  }
+  const { net } = recording(() => new Response('<html>bad gateway</html>', { status: 502 }))
+  expect((await net.send(body()).catch(e => e)).message).toBe('POST /v1/messages: 502')
+})
+
+test('listModels: one page of 1000, keyed; has_more makes the list partial', async () => {
+  const { sent, net } = recording(() => Response.json({ data: [{ id: 'claude-haiku-5-5' }, { id: 'claude-opus-5-5' }], has_more: true, last_id: 'claude-opus-5-5' }))
+  expect(await net.listModels()).toEqual(['claude-haiku-5-5', 'claude-opus-5-5'])
+  expect(net.partialList).toBe(true)
+  expect(sent[0].url).toBe('https://api.anthropic.com/v1/models?limit=1000')
+  expect(sent[0].init).toMatchObject({ redirect: 'manual', headers: { 'x-api-key': 'sk-ant-test', 'anthropic-version': '2026-10-21' } })
+  const full = recording(() => Response.json({ data: [{ id: 'a' }], has_more: false }))
+  await full.net.listModels()
+  expect(full.net.partialList).toBe(false)
+  const refused = recording(() => failure(401, 'authentication_error', 'no'))
+  expect((await refused.net.listModels().catch(e => e)).message).toBe('GET /v1/models: 401 (the key in ANTHROPIC_API_KEY was refused)')
+})
+
+test('serverInfo: the window and the output cap of one model, keyed; any failure is undefined', async () => {
+  const { sent, net } = recording(() => Response.json({ id: 'claude-haiku-5-5', max_input_tokens: 200000, max_tokens: 64000 }))
+  expect(await net.serverInfo('claude-haiku-5-5')).toEqual({ nCtx: 200000, maxOutput: 64000, router: false })
+  expect(sent[0].url).toBe('https://api.anthropic.com/v1/models/claude-haiku-5-5')
+  expect(sent[0].init).toMatchObject({ redirect: 'manual', headers: { 'x-api-key': 'sk-ant-test' } })
+  await net.serverInfo('a/b?c')
+  expect(sent[1].url).toBe('https://api.anthropic.com/v1/models/a%2Fb%3Fc')
+  expect(await recording(() => failure(404, 'not_found_error', 'no')).net.serverInfo('x')).toBeUndefined()
+  expect(await recording(() => new Response('not json')).net.serverInfo('x')).toBeUndefined()
+  expect(await recording(() => { throw new Error('fetch failed') }).net.serverInfo('x')).toBeUndefined()
+  // counts that are not counts are left out, not passed on
+  expect(await recording(() => Response.json({ max_input_tokens: '9', max_tokens: -1 })).net.serverInfo('x')).toEqual({ router: false })
+})
+
+test('a 307 from any keyed request is not followed: no second address is asked', async () => {
+  const hits: string[] = []
+  const srv = http.createServer((req, res) => { hits.push(req.url ?? ''); res.writeHead(307, { location: '/elsewhere' }); res.end() })
+  await new Promise<void>(r => srv.listen(0, '127.0.0.1', r))
+  try {
+    const net = new AnthropicBackend(`http://127.0.0.1:${(srv.address() as AddressInfo).port}`, defaultFetch, 'sk-ant-test', 'ANTHROPIC_API_KEY')
+    const e = await net.send(body()).catch(e => e)
+    expect(e.message).toBe('POST /v1/messages: 307 (redirect not followed: with a key, requests go only to baseUrl)')
+    await expect(net.listModels()).rejects.toThrow('GET /v1/models: 307')
+    expect(await net.serverInfo('claude-haiku-5-5')).toBeUndefined()
+    expect(hits).toEqual(['/v1/messages', '/v1/models?limit=1000', '/v1/models/claude-haiku-5-5'])
+  } finally { await new Promise<void>(r => { srv.closeAllConnections(); srv.close(() => r()) }) }
 })

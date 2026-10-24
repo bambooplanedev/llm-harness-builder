@@ -80,8 +80,9 @@ export type NormalizedResponse = {
   raw: unknown
 }
 
-/** What a server says about itself. `nCtx`: the window a request gets there; `router`: llama-server serving several models, one of which the request names. */
-export type ServerInfo = { nCtx?: number; build?: string; router?: boolean }
+/** What a server says about itself. `nCtx`: the window a request gets there; `maxOutput`: the most a reply may generate
+ *  (Anthropic); `router`: llama-server serving several models, one of which the request names. */
+export type ServerInfo = { nCtx?: number; maxOutput?: number; build?: string; router?: boolean }
 
 export interface Backend {
   listModels(): Promise<string[]>
