@@ -81,8 +81,11 @@ export type NormalizedResponse = {
 }
 
 /** What a server says about itself. `nCtx`: the window a request gets there; `maxOutput`: the most a reply may generate
- *  (Anthropic); `router`: llama-server serving several models, one of which the request names. */
-export type ServerInfo = { nCtx?: number; maxOutput?: number; build?: string; router?: boolean }
+ *  (Anthropic); `router`: llama-server serving several models, one of which the request names. `takes`: a knob the
+ *  server said the model does not take is `false`, no entry is unknown; `takesFrom` names where that was said. */
+export type ServerInfo = { nCtx?: number; maxOutput?: number; build?: string; router?: boolean; takes?: Partial<Record<Knob, false>>; takesFrom?: string }
+
+export type Knob = 'temperature' | 'maxTokens' | 'think' | 'tools' | 'responseSchema'
 
 export interface Backend {
   listModels(): Promise<string[]>

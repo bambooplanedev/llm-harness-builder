@@ -11,6 +11,7 @@ import { normPath } from './analyze.js'
 import { startServers, type McpSession } from './mcp.js'
 import { redactor } from './redact.js'
 import { costOf } from './cost.js'
+import { knobsOff } from './knobs.js'
 
 export type RunOpts = {
   signal?: AbortSignal
@@ -106,6 +107,13 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
   // renderTools() still reaches the finally and mcp.close() runs — no detached child outlives the run.
   try {
     if (mcp) for (const s of mcp.servers) yield ev({ type: 'mcp_server_start', ...s })
+    // Once, before the first request: what the model does not take is not sent, or, when that would change the harness, nothing is.
+    const info = await backend.serverInfo?.(config.backend.model)
+    const knobs = knobsOff(config, info), takes = info?.takes ?? {}
+    if (knobs.refuse) { yield ev({ type: 'error', message: knobs.refuse }); yield done('backend_error'); return }
+    if (knobs.off.length) yield ev({ type: 'knobs_off', off: knobs.off })
+    // Anthropic needs a max_tokens: absent from the harness, it is the model's own cap (knobsOff refused when neither is known).
+    const maxTokens = config.backend.kind === 'anthropic' ? config.backend.maxTokens ?? info?.maxOutput : config.backend.maxTokens
 
     const schemas = [...config.tools.enabled.map(n => TOOL_SCHEMAS[n]), ...(mcp?.tools ?? [])]
     const system = prompted
@@ -146,9 +154,10 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
       const think = hot && thinkTokens !== undefined
       const req: ChatRequest = {
         model: config.backend.model, messages: think ? [{ role: 'system', content: systemThinking }, ...messages.slice(1)] : messages,
-        temperature: hot && config.loop.repeatTemperature !== undefined ? config.loop.repeatTemperature : config.backend.temperature, numCtx: config.backend.numCtx, maxTokens: think ? thinkTokens : config.backend.maxTokens,
+        temperature: takes.temperature === false ? undefined : hot && config.loop.repeatTemperature !== undefined ? config.loop.repeatTemperature : config.backend.temperature,
+        numCtx: config.backend.numCtx, maxTokens: takes.maxTokens === false ? undefined : think ? thinkTokens : maxTokens,
         // A thinking turn needs the template's switch on as well: with it off, the /think line would be overruled.
-        think: config.backend.think === undefined ? undefined : think || config.backend.think,
+        think: config.backend.think === undefined || takes.think === false ? undefined : think || config.backend.think,
         tools: prompted || !schemas.length ? undefined : schemas,
         // The schema is the form of the final answer, not of the turns before it, so it goes out only where no call can be made.
         // Such a run is one request: nothing in it can loop, run a script or write a file.

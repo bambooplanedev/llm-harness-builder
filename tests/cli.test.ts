@@ -976,9 +976,9 @@ test('run against a hosted API: the bearer token reaches it, nothing else is ask
     const r = await cliAsync(['run', file, '--workdir', wd, '--yes', 'go'], { [KEY_NAME]: KEY })
     expect(r.status).toBe(0)
     expect(r.stderr).toContain(`the key in ${KEY_NAME} goes to ${new URL(api.baseUrl).host}`)
-    expect(api.seen.map(s => `${s.method} ${s.path}`)).toEqual(['POST /v1/chat/completions', 'POST /v1/chat/completions'])
+    expect(api.seen.map(s => `${s.method} ${s.path}`)).toEqual(['GET /v1/models', 'POST /v1/chat/completions', 'POST /v1/chat/completions'])
     expect(api.seen.every(s => s.headers.authorization === `Bearer ${KEY}`)).toBe(true)
-    expect(api.seen[1].body).toContain(MARK); expect(api.seen[1].body).not.toContain(KEY)
+    expect(api.seen[2].body).toContain(MARK); expect(api.seen[2].body).not.toContain(KEY)
     const runs = allText(join(r.cwd, 'runs'))
     expect(runs).toContain(MARK); expect(runs).not.toContain(KEY)
     expect(r.stderr).not.toContain(KEY)
@@ -998,9 +998,12 @@ test('run against the Anthropic API: x-api-key reaches it, the run ends final, t
     const wd = await tmp('lhb-cli-'), file = await claudeHarness(wd, api.baseUrl)
     const r = await cliAsync(['run', file, '--workdir', wd, '--yes', 'go'], { [KEY_NAME]: KEY })
     expect(r.status).toBe(0)
-    expect(api.seen.map(s => `${s.method} ${s.path}`)).toEqual(['POST /v1/messages', 'POST /v1/messages'])
+    expect(api.seen.map(s => `${s.method} ${s.path}`)).toEqual(['GET /v1/models/claude-haiku-5-5', 'POST /v1/messages', 'POST /v1/messages'])
+    // the harness's temperature stays in the file and is not sent: no model on this API takes one
+    expect(r.stderr).toContain('temperature 0 not sent: claude-haiku-5-5 takes no temperature (Anthropic API 2026-10-21)\n')
+    expect(api.seen[1].body).not.toContain('temperature')
     expect(api.seen.every(s => s.headers['x-api-key'] === KEY && s.headers.authorization === undefined)).toBe(true)
-    expect(api.seen[1].body).toContain(MARK); expect(api.seen[1].body).not.toContain(KEY)
+    expect(api.seen[2].body).toContain(MARK); expect(api.seen[2].body).not.toContain(KEY)
     const runs = allText(join(r.cwd, 'runs'))
     expect(runs).toContain('"reason":"final"')
     expect(runs).toContain(MARK); expect(runs).not.toContain(KEY)
@@ -1198,4 +1201,17 @@ test('the done line carries the run cost when the harness has a price, and no $ 
   const r = cli(['run', harness('bare'), '--workdir', wd, '--yes', 'x'], { LHB_FAKE_BACKEND: fake })
   expect(r.stderr).toContain('done: final')
   expect(r.stderr).not.toContain('$')
+}, 30_000)
+
+test('bench refuses a harness whose native tool calls the model does not take, before any run', async () => {
+  const listed = { data: [{ id: 'fake/model', supported_parameters: ['max_tokens'] }] }
+  const srv = http.createServer((_req, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(listed)) })
+  await new Promise<void>(r => srv.listen(0, '127.0.0.1', r))
+  try {
+    const wd = await tmp('lhb-cli-'), file = await keyedHarness(wd, `http://127.0.0.1:${(srv.address() as AddressInfo).port}/v1`)
+    const r = await cliAsync(['bench', '--n', '1', '--out', join(wd, 'b.json'), file], { [KEY_NAME]: KEY })
+    expect(r.status).not.toBe(0)
+    expect(r.stderr).toContain('fake/model takes no tools (OpenRouter supported_parameters)')
+    expect(r.stderr).toContain('mode: "prompted"')
+  } finally { await new Promise<void>(r => { srv.closeAllConnections(); srv.close(() => r()) }) }
 }, 30_000)

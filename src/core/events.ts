@@ -1,6 +1,8 @@
-import type { Usage } from './backends/types.js'
+import type { Knob, Usage } from './backends/types.js'
 
 export type ToolCall = { callId: string; name: string; args: Record<string, unknown>; backendId?: string }
+/** A knob set in the harness that is not sent, because the server said the model does not take it. */
+export type KnobOff = { knob: Knob | 'repeatTemperature'; value: unknown; reason: string }
 export type DoneReason = 'final' | 'max_turns' | 'parse_failed' | 'aborted' | 'backend_error' | 'mcp_error' | 'repeat_loop'
 
 type Base = { seq: number; turn: number; ts: number }
@@ -17,6 +19,7 @@ export type HarnessEvent = Base & (
   | { type: 'final_check'; command: string; passed: boolean; output: string }
   | { type: 'mcp_server_start'; server: string; command: string; args: string[]
       offered: number; tools: string[]; descriptionChars: number; schemaChars: number }
+  | { type: 'knobs_off'; off: KnobOff[] }
   | { type: 'error'; message: string; body?: string }
   | { type: 'done'; reason: DoneReason; text?: string; turns: number; toolCallCount: number }
 )

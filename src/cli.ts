@@ -23,6 +23,7 @@ import { redactor } from './core/redact.js'
 import { replayPayload, replySignature, recordedTurn } from './core/replay.js'
 import { analyzeTrace, formatAnalysisTable, type AnalyzedRun } from './core/analyze.js'
 import { preflight, windowWarning, type PreflightResult } from './core/preflight.js'
+import { knobsOff } from './core/knobs.js'
 import { startProxy } from './core/proxy/server.js'
 import { COMMANDS, isCommand, usage, commandHelp, overview, type CommandName } from './cli-help.js'
 
@@ -102,6 +103,7 @@ function describe(e: HarnessEvent, streamed = false, cost?: number): string {
     case 'context_reset': return `[t${e.turn}] context_reset: ${e.chars} chars of history cleared, the next request is the task again`
     case 'approval_required': return `[t${e.turn}] approval_required ${showable(e.call.name)}`
     case 'tool_result': return `[t${e.turn}] tool_result ${showable(e.name)}${e.error ? ' (error)' : ''}${e.truncated ? ' (truncated)' : ''}: ${excerpt(e.output)}`
+    case 'knobs_off': return e.off.map(o => `${o.knob} ${showable(JSON.stringify(o.value))} not sent: ${showable(o.reason)}`).join('\n')
     case 'error': return `error: ${showable(e.message)}${e.body ? `\n${showableText(e.body)}` : ''}`
     case 'done': return `done: ${e.reason} after ${e.turns} turns, ${e.toolCallCount} tool calls${cost === undefined ? '' : ` · $${Number(cost.toPrecision(4))} total`}${quitWithoutWork(e) ? '  ! final after 0 tool calls' : ''}${e.text ? `\n${showableText(e.text)}` : ''}`
   }
@@ -317,6 +319,9 @@ async function cmdBench(argv: string[]) {
       if (!r.ok) die(showable(redactor(apiKey(b, process.env), b.apiKeyEnv ?? '').text(r.message)))
       else {
         h.server = r.server
+        // A knob without which the harness would be another one is a refusal before any run, like a model that is not there.
+        const refuse = knobsOff(h.config, r.server).refuse
+        if (refuse) die(showable(`preflight: ${h.name}: ${refuse}`))
         const w = windowWarning(h.config, r.server.nCtx)
         if (w) console.error(w)
       }

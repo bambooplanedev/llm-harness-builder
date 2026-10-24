@@ -928,3 +928,29 @@ test('a tool that errored goes back with isError', async () => {
   await collect({ config: base(), task: 'do', workdir: await wd() }, { backend: be })
   expect(be.requests[1].messages.at(-1)).toMatchObject({ role: 'tool', isError: true })
 })
+
+test('a knob the model does not take is not sent and the run says so first; the harness keeps its value', async () => {
+  const config = base({ backend: { kind: 'openai', baseUrl: 'http://x/v1', model: 'fake-model', temperature: 0.2 } })
+  const be = Object.assign(Fake([{ content: 'done!' }]), { async serverInfo() { return { takes: { temperature: false as const }, takesFrom: 'test' } } })
+  const ev = await collect({ config, task: 'do', workdir: await wd() }, { backend: be })
+  expect(ev[0]).toMatchObject({ type: 'knobs_off', turn: 0, off: [{ knob: 'temperature', value: 0.2 }] })
+  expect(be.requests[0].temperature).toBeUndefined()
+  expect(config.backend.temperature).toBe(0.2)
+  expect(last(ev).reason).toBe('final')
+})
+
+test('a structural knob the model does not take refuses the run before any request', async () => {
+  const be = Object.assign(Fake([{ content: 'x' }]), { async serverInfo() { return { takes: { tools: false as const }, takesFrom: 'test' } } })
+  const ev = await collect({ config: base(), task: 'do', workdir: await wd() }, { backend: be })
+  expect(types(ev)).toEqual(['error', 'done'])
+  expect((ev[0] as any).message).toContain('mode: "prompted"')
+  expect(last(ev).reason).toBe('backend_error')
+  expect(be.requests).toHaveLength(0)
+})
+
+test('anthropic without maxTokens sends the model\'s own output cap', async () => {
+  const config = base({ backend: { kind: 'anthropic', baseUrl: 'https://api.anthropic.com', model: 'claude-haiku-5-5', temperature: 0 } })
+  const be = Object.assign(Fake([{ content: 'done!' }]), { async serverInfo() { return { maxOutput: 64000, router: false } } })
+  await collect({ config, task: 'do', workdir: await wd() }, { backend: be })
+  expect(be.requests[0].maxTokens).toBe(64000)
+})

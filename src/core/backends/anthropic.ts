@@ -96,7 +96,9 @@ export class AnthropicBackend implements Backend {
       const r = await this.keyed(`/v1/models/${encodeURIComponent(model)}`)
       if (!r.ok) return undefined
       const m = await readJson(r, 'GET /v1/models/{id}'), nCtx = count(m?.max_input_tokens), maxOutput = count(m?.max_tokens)
-      return { ...(nCtx ? { nCtx } : {}), ...(maxOutput ? { maxOutput } : {}), router: false }
+      // No temperature: on this API version no model takes one, so capabilities do not list it.
+      const takes = { temperature: false as const, ...(m?.capabilities?.structured_outputs?.supported === false ? { responseSchema: false as const } : {}) }
+      return { ...(nCtx ? { nCtx } : {}), ...(maxOutput ? { maxOutput } : {}), takes, takesFrom: 'Anthropic API 2026-10-21', router: false }
     } catch { return undefined }
   }
 

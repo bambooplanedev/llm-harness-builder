@@ -182,7 +182,15 @@ export class OpenAIBackend implements Backend {
       const list = await this.modelList()
       const m = list.find(x => x?.id === model) ?? list.find(x => x?.id === withoutVariant(model))
       const ns = [m?.context_length, m?.top_provider?.context_length].filter((n): n is number => Number.isInteger(n) && n > 0)
-      return { ...(ns.length ? { nCtx: Math.min(...ns) } : {}), router: false }
+      // A parameter missing from the union over the model's providers is taken by none of them; one listed may still be refused by some.
+      const p: unknown[] | undefined = Array.isArray(m?.supported_parameters) ? m.supported_parameters : undefined
+      const takes = p && {
+        ...(p.includes('temperature') ? {} : { temperature: false as const }),
+        ...(p.includes('max_tokens') ? {} : { maxTokens: false as const }),
+        ...(p.includes('tools') ? {} : { tools: false as const }),
+        ...(p.includes('response_format') || p.includes('structured_outputs') ? {} : { responseSchema: false as const }),
+      }
+      return { ...(ns.length ? { nCtx: Math.min(...ns) } : {}), ...(takes ? { takes, takesFrom: 'OpenRouter supported_parameters' } : {}), router: false }
     } catch { return undefined }
   }
 

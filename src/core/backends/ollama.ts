@@ -1,4 +1,4 @@
-import { BackendError, defaultFetch, readJson, jsonChunks, toolsField, usageFrom, type Backend, type ChatRequest, type Delta, type FetchLike, type NormalizedResponse, type NormalizedToolCall } from './types.js'
+import { BackendError, defaultFetch, readJson, jsonChunks, toolsField, usageFrom, type Backend, type ChatRequest, type Delta, type FetchLike, type NormalizedResponse, type NormalizedToolCall, type ServerInfo } from './types.js'
 
 export class OllamaBackend implements Backend {
   constructor(private baseUrl: string, private fetchFn: FetchLike = defaultFetch) { this.baseUrl = baseUrl.replace(/\/+$/, '') }
@@ -8,6 +8,18 @@ export class OllamaBackend implements Backend {
     if (!r.ok) throw new BackendError(`GET /api/tags: ${r.status}`, await r.text())
     const j = (await readJson(r, 'GET /api/tags')) as { models: { name: string }[] }
     return j.models.map(m => m.name)
+  }
+
+  /** What the model takes, from its `capabilities` in POST /api/show; no window (that is the num_ctx the harness sends). Never throws. */
+  async serverInfo(model: string): Promise<ServerInfo | undefined> {
+    try {
+      const r = await this.fetchFn(`${this.baseUrl}/api/show`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model }) })
+      if (!r.ok) return undefined
+      const c = (await readJson(r, 'POST /api/show'))?.capabilities
+      if (!Array.isArray(c)) return { router: false }
+      const takes = { ...(c.includes('tools') ? {} : { tools: false as const }), ...(c.includes('thinking') ? {} : { think: false as const }) }
+      return { takes, takesFrom: 'Ollama /api/show', router: false }
+    } catch { return undefined }
   }
 
   buildPayload(req: ChatRequest): unknown {

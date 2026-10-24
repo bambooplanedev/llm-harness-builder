@@ -229,7 +229,7 @@ test('listModels: one page of 1000, keyed; has_more makes the list partial', asy
 
 test('serverInfo: the window and the output cap of one model, keyed; any failure is undefined', async () => {
   const { sent, net } = recording(() => Response.json({ id: 'claude-haiku-5-5', max_input_tokens: 200000, max_tokens: 64000 }))
-  expect(await net.serverInfo('claude-haiku-5-5')).toEqual({ nCtx: 200000, maxOutput: 64000, router: false })
+  expect(await net.serverInfo('claude-haiku-5-5')).toEqual({ nCtx: 200000, maxOutput: 64000, takes: { temperature: false }, takesFrom: 'Anthropic API 2026-10-21', router: false })
   expect(sent[0].url).toBe('https://api.anthropic.com/v1/models/claude-haiku-5-5')
   expect(sent[0].init).toMatchObject({ redirect: 'manual', headers: { 'x-api-key': 'sk-ant-test' } })
   await net.serverInfo('a/b?c')
@@ -238,7 +238,14 @@ test('serverInfo: the window and the output cap of one model, keyed; any failure
   expect(await recording(() => new Response('not json')).net.serverInfo('x')).toBeUndefined()
   expect(await recording(() => { throw new Error('fetch failed') }).net.serverInfo('x')).toBeUndefined()
   // counts that are not counts are left out, not passed on
-  expect(await recording(() => Response.json({ max_input_tokens: '9', max_tokens: -1 })).net.serverInfo('x')).toEqual({ router: false })
+  expect(await recording(() => Response.json({ max_input_tokens: '9', max_tokens: -1 })).net.serverInfo('x')).toEqual({ takes: { temperature: false }, takesFrom: 'Anthropic API 2026-10-21', router: false })
+})
+
+test('serverInfo: no model takes a temperature; one without structured outputs takes no response schema', async () => {
+  const info = await recording(() => Response.json({ id: 'x', capabilities: { structured_outputs: { supported: false } } })).net.serverInfo('x')
+  expect(info?.takes).toEqual({ temperature: false, responseSchema: false })
+  const yes = await recording(() => Response.json({ id: 'x', capabilities: { structured_outputs: { supported: true } } })).net.serverInfo('x')
+  expect(yes?.takes).toEqual({ temperature: false })
 })
 
 test('a 307 from any keyed request is not followed: no second address is asked', async () => {

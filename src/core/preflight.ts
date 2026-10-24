@@ -21,7 +21,7 @@ export async function preflight(backend: Backend, b: HarnessConfig['backend']): 
     const cause = (e as any)?.cause?.code ?? (e as any)?.cause?.message
     return { ok: false, message: `preflight: ${where} does not answer: ${(e as Error).message}${cause ? ` (${cause})` : ''}` }
   }
-  const info = b.kind !== 'ollama' ? await backend.serverInfo?.(b.model) : undefined
+  const info = await backend.serverInfo?.(b.model)
   if (b.apiKeyEnv !== undefined) {
     // A hosted API serves by name. Its list is long, so a refusal counts it instead of printing it.
     const listed = models.includes(b.model) || models.includes(withoutVariant(b.model))
@@ -31,8 +31,8 @@ export async function preflight(backend: Backend, b: HarnessConfig['backend']): 
     if (!names.some(n => models.includes(n))) return { ok: false, message: `preflight: model ${b.model} is not on ${where}; it has: ${models.join(', ')}` }
   }
   // Ollama's window is the num_ctx the harness sends; without one it is Ollama's default, which the harness does not know.
-  if (b.kind === 'ollama') return { ok: true, server: b.numCtx ? { nCtx: b.numCtx } : {} }
   const { router: _, ...server } = info ?? {}
+  if (b.kind === 'ollama') return { ok: true, server: { ...server, ...(b.numCtx ? { nCtx: b.numCtx } : {}) } }
   return { ok: true, server }
 }
 
