@@ -402,3 +402,22 @@ test('context limits are optional: absent means no limit, 0 budget still means o
   for (const ok of [undefined, {}, { maxToolOutputChars: 10 }, { budgetTokens: 0 }, { budgetTokens: 100 }]) expect(put(ok)).toEqual([])
   for (const bad of [{ maxToolOutputChars: 0 }, { maxToolOutputChars: -1 }, { maxToolOutputChars: 1.5 }, { budgetTokens: -1 }, { budgetTokens: 1.5 }, { budgetTokens: '5' }, 3]) expect(put(bad).length).toBeGreaterThan(0)
 })
+
+test('tools.readMaxBytes, bashMaxBytes, bashTimeoutS are optional positive integers', () => {
+  const on = structuredClone(validConfig) as any
+  Object.assign(on.tools, { readMaxBytes: 10, bashMaxBytes: 20, bashTimeoutS: 1 })
+  expect(validateConfig(on)).toEqual([])
+  for (const k of ['readMaxBytes', 'bashMaxBytes', 'bashTimeoutS']) for (const bad of [0, -1, 1.5, '5', null]) {
+    const c = structuredClone(validConfig) as any
+    c.tools[k] = bad
+    expect(validateConfig(c)).toContain(`tools.${k} must be a positive integer`)
+  }
+})
+
+test('tools.bashTimeoutS has a maximum: a larger delay would make setTimeout fire at once', () => {
+  const c = structuredClone(validConfig) as any
+  c.tools.bashTimeoutS = 2147483
+  expect(validateConfig(c)).toEqual([])
+  c.tools.bashTimeoutS = 2147484
+  expect(validateConfig(c)).toContain('tools.bashTimeoutS must be at most 2147483')
+})

@@ -109,7 +109,7 @@ export type HarnessConfig = {
   name: string
   backend: { kind: BackendKind; baseUrl: string; model: string; numCtx?: number; maxTokens?: number; think?: boolean; temperature: number; apiKeyEnv?: string; pricePerMTok?: Price }
   systemPrompt: string
-  tools: { enabled: ToolName[]; approveBash: boolean; requireReadBeforeEdit?: boolean; explainEditMiss?: boolean; editMissEscalation?: number; bashEnv?: string[] }
+  tools: { enabled: ToolName[]; approveBash: boolean; requireReadBeforeEdit?: boolean; explainEditMiss?: boolean; editMissEscalation?: number; bashEnv?: string[]; readMaxBytes?: number; bashMaxBytes?: number; bashTimeoutS?: number }
   toolCalls: { mode: 'native' | 'prompted'; format?: ToolCallFormat; enforceSchema: boolean; promptedTemplate: string; parseErrorHint: string }
   /** Both limits are off when absent; budgetTokens 0 is off too. */
   context?: { maxToolOutputChars?: number; budgetTokens?: number }
@@ -128,7 +128,7 @@ export const sendsAnswerSchema = (c: HarnessConfig): boolean =>
 const KEYS: Record<string, string[]> = {
   '': ['name', 'backend', 'systemPrompt', 'tools', 'toolCalls', 'context', 'loop', 'mcpServers'],
   backend: ['kind', 'baseUrl', 'model', 'numCtx', 'maxTokens', 'think', 'temperature', 'apiKeyEnv', 'pricePerMTok'],
-  tools: ['enabled', 'approveBash', 'requireReadBeforeEdit', 'explainEditMiss', 'editMissEscalation', 'bashEnv'],
+  tools: ['enabled', 'approveBash', 'requireReadBeforeEdit', 'explainEditMiss', 'editMissEscalation', 'bashEnv', 'readMaxBytes', 'bashMaxBytes', 'bashTimeoutS'],
   toolCalls: ['mode', 'format', 'enforceSchema', 'promptedTemplate', 'parseErrorHint'],
   context: ['maxToolOutputChars', 'budgetTokens'],
   loop: ['maxTurns', 'maxRepeats', 'repeatTemperature', 'repeatThinkTokens', 'freshContext', 'untilBash'],
@@ -180,6 +180,10 @@ export function validateConfig(c: unknown): string[] {
     for (const k of ['requireReadBeforeEdit', 'explainEditMiss'] as const)
       if (t[k] !== undefined && typeof t[k] !== 'boolean') e.push(`tools.${k} must be boolean`)
     if (t.editMissEscalation !== undefined && !(Number.isInteger(t.editMissEscalation) && t.editMissEscalation >= 1)) e.push('tools.editMissEscalation must be a positive integer')
+    for (const k of ['readMaxBytes', 'bashMaxBytes', 'bashTimeoutS'] as const)
+      if (t[k] !== undefined && !(Number.isInteger(t[k]) && t[k] > 0)) e.push(`tools.${k} must be a positive integer`)
+    // setTimeout runs a delay above 2^31-1 ms after 1 ms, which would kill every command at once.
+    if (Number.isInteger(t.bashTimeoutS) && t.bashTimeoutS > 2147483) e.push('tools.bashTimeoutS must be at most 2147483')
     if (t.bashEnv !== undefined && !(Array.isArray(t.bashEnv) && t.bashEnv.every((n: unknown) => typeof n === 'string' && ENV_NAME.test(n)))) e.push('tools.bashEnv must be an array of environment variable names')
   }
   const tc = c.toolCalls

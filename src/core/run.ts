@@ -116,7 +116,8 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
     // Anthropic needs a max_tokens: absent from the harness, it is the model's own cap (knobsOff refused when neither is known).
     const maxTokens = config.backend.kind === 'anthropic' ? config.backend.maxTokens ?? info?.maxOutput : config.backend.maxTokens
 
-    const schemas = [...config.tools.enabled.map(n => TOOL_SCHEMAS[n]), ...(mcp?.tools ?? [])]
+    // Depends on the '30s' in TOOL_SCHEMAS.bash.description (tools/index.ts).
+    const schemas = [...config.tools.enabled.map(n => n === 'bash' && config.tools.bashTimeoutS ? { ...TOOL_SCHEMAS[n], description: TOOL_SCHEMAS[n].description.replace('30s', `${config.tools.bashTimeoutS}s`) } : TOOL_SCHEMAS[n]), ...(mcp?.tools ?? [])]
     const system = prompted
       ? config.systemPrompt + '\n\n' + config.toolCalls.promptedTemplate.split('{{tools}}').join(renderTools(schemas, config.toolCalls.format))
       : config.systemPrompt
@@ -134,6 +135,9 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
       explainEditMiss: config.tools.explainEditMiss,
       // bash and loop.untilBash get the base environment plus these names; see tools/env.ts.
       bashEnv: config.tools.bashEnv,
+      readMaxBytes: config.tools.readMaxBytes,
+      bashMaxBytes: config.tools.bashMaxBytes,
+      bashTimeoutS: config.tools.bashTimeoutS,
     }
     // loop.maxRepeats: how many times each call was made since the files last changed through a tool.
     // An edit that has succeeded is counted over the whole run: it succeeds twice only when it was undone in between.

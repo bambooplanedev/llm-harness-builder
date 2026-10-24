@@ -26,7 +26,7 @@ test('read_file reads whole files up to a 4 MiB ceiling', async () => {
   await writeFile(join(ctx.workdir, 'huge.txt'), 'z'.repeat((4 << 20) + 10))
   expect(await readFile({ path: 'a.txt' }, ctx)).toBe('hello\nworld\n')
   expect((await readFile({ path: 'big.txt' }, ctx)).length).toBe(1000)
-  expect((await readFile({ path: 'huge.txt' }, ctx)).length).toBe(4 << 20)
+  expect((await readFile({ path: 'huge.txt' }, ctx)).length).toBe((4 << 20) + '\n[truncated at 4194304 bytes]'.length)
 })
 
 test('read_file missing gives model-readable error', async () => {
@@ -135,4 +135,11 @@ test('explainEditMiss: a one-line miss that differs only in punctuation names th
   expect(await call('return cleanedString;', on)).toBe(plain)                // nothing like it in the file
   expect(await call(';;', on)).toBe(plain)                                   // normalises to nothing: must not match the "}" line
   expect(await call("export function f(s) {;\n  return s.trim();", on)).toBe(plain)   // multi-line "old": out of scope
+})
+
+test('read_file: readMaxBytes cuts the read and says so; a file within it, or no knob, reads whole', async () => {
+  await writeFile(join(ctx.workdir, 'big.txt'), '0123456789')
+  expect(await readFile({ path: 'big.txt' }, { ...ctx, readMaxBytes: 4 })).toBe('0123\n[truncated at 4 bytes]')
+  expect(await readFile({ path: 'big.txt' }, { ...ctx, readMaxBytes: 10 })).toBe('0123456789')
+  expect(await readFile({ path: 'big.txt' }, ctx)).toBe('0123456789')
 })

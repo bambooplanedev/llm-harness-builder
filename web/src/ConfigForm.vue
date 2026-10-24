@@ -40,6 +40,12 @@ function setMaxTokens(text: string) {
   if (Number.isInteger(n) && n > 0) config.value.backend.maxTokens = n
   else delete config.value.backend.maxTokens
 }
+/** Same rule for the tool limits: empty keeps the built-in one. */
+function setToolLimit(k: 'readMaxBytes' | 'bashMaxBytes' | 'bashTimeoutS', text: string) {
+  const n = Number(text)
+  if (Number.isInteger(n) && n > 0) config.value.tools[k] = n
+  else delete config.value.tools[k]
+}
 /** Same rule for the context limits; an emptied section goes too. */
 function setContext(k: 'maxToolOutputChars' | 'budgetTokens', text: string) {
   const n = Number(text)
@@ -150,6 +156,9 @@ function editMcp(text: string) {
     <div v-if="config.tools.bashEnv?.length" class="hint">bash gets from your environment: {{ config.tools.bashEnv.join(', ') }}</div>
     <div><input type="checkbox" :checked="!!config.tools.requireReadBeforeEdit" @change="toggleGuard(($event.target as HTMLInputElement).checked)"> refuse to edit a file that has not been read</div>
     <div class="row"><span title="after this many failed edits of one file, each further failed edit tells the model to read the file again; a read or a change of the file starts the count over; empty = off">edit misses before a re-read note</span><input type="number" min="1" :value="config.tools.editMissEscalation ?? ''" @change="setEscalation(($event.target as HTMLInputElement).value)"></div>
+    <div class="row"><span title="read_file stops here and says so; empty = built-in limit">read_file max bytes</span><input type="number" min="1" placeholder="4194304 (default)" :value="config.tools.readMaxBytes ?? ''" @change="setToolLimit('readMaxBytes', ($event.target as HTMLInputElement).value)"></div>
+    <div class="row"><span title="bash output kept; empty = built-in limit">bash max bytes</span><input type="number" min="1" placeholder="1048576 (default)" :value="config.tools.bashMaxBytes ?? ''" @change="setToolLimit('bashMaxBytes', ($event.target as HTMLInputElement).value)"></div>
+    <div class="row"><span title="bash is killed after this many seconds; empty = built-in limit">bash timeout, s</span><input type="number" min="1" placeholder="30 (default)" :value="config.tools.bashTimeoutS ?? ''" @change="setToolLimit('bashTimeoutS', ($event.target as HTMLInputElement).value)"></div>
     <details><summary>MCP servers ({{ mcpCount() }})</summary>
       <textarea :value="mcpText" @input="editMcp(($event.target as HTMLTextAreaElement).value)" style="min-height:80px"
         placeholder='{"fs": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "."], "tools": ["read_text_file"]}}'></textarea>

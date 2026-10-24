@@ -453,6 +453,12 @@ that read the looping file again passed far more often. It is built, not measure
 recorded traces with no model, `N = 3` would have fired in 36 of the 166 runs that edited anything —
 what the model would then have done, only a run can say.
 
+`tools.readMaxBytes` (default 4194304), `tools.bashMaxBytes` (default 1048576) and `tools.bashTimeoutS`
+(default 30) set the limits that protect the process: how much of a file `read_file` returns, how much
+`bash` output is kept, and when a command is killed. Each is a positive integer; a key left out keeps
+its default. A `read_file` cut at the ceiling ends with `[truncated at N bytes]`; `loop.untilBash`
+uses the same `bash` limits.
+
 `tools.bashEnv: ["NAME", ...]` names the environment variables that `bash`, `loop.untilBash` and
 the task checks of `bench` and `demo` get from yours — names only; a harness file never sets a
 value. Without it they get `PATH`, `HOME`, `LANG`, `LC_ALL`, `LC_CTYPE`, `LC_COLLATE`,

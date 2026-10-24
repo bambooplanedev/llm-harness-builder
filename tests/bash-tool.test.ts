@@ -72,3 +72,10 @@ test('a name in bashEnv reaches the command with its value', async () => {
     expect(out).toContain('[named-value]')
   } finally { delete process.env.LHB_BASH_NAMED }
 })
+
+test('ctx.bashMaxBytes and ctx.bashTimeoutS replace the defaults; absent keeps them', async () => {
+  const c = await ctx()
+  expect(await bash({ command: 'printf 0123456789' }, { ...c, bashMaxBytes: 4 })).toBe('0123\n[output truncated]\n[exit 0]')
+  expect(await bash({ command: 'sleep 5' }, { ...c, bashTimeoutS: 1 })).toContain('[killed: timeout after 1s]')
+  expect(await bash({ command: 'printf 0123456789' }, c)).toBe('0123456789\n[exit 0]')
+})

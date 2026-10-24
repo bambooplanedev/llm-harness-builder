@@ -986,3 +986,13 @@ test('no context limits: a long tool output is not truncated and nothing is stub
   const stats = ev.filter(e => e.type === 'context_stats') as any[]
   expect(stats.every(s => s.droppedChars === 0 && s.budgetTokens === undefined)).toBe(true)
 })
+
+test('bash timeout knob: the description the model reads names the real limit, native and prompted', async () => {
+  const cfg = base({ tools: { enabled: ['bash'], approveBash: false, bashTimeoutS: 5 } })
+  const be = Fake([{ content: 'x' }])
+  await collect({ config: cfg, task: 'do', workdir: await wd() }, { backend: be })
+  expect(be.requests[0].tools![0].description).toMatch(/ 5s timeout/)
+  const pr = Fake([{ content: '{"calls":[],"final":"done"}' }])
+  await collect({ config: { ...cfg, toolCalls: { mode: 'prompted', enforceSchema: true, promptedTemplate: '{{tools}}', parseErrorHint: 'H' } }, task: 'do', workdir: await wd() }, { backend: pr })
+  expect(pr.requests[0].messages[0].content).toMatch(/ 5s timeout/)
+})

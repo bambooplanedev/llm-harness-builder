@@ -107,3 +107,20 @@ test('emptying a context box leaves the knob out of the saved harness, an emptie
   await put('max tool output chars', '99')
   expect((await saved()).context).toEqual({ maxToolOutputChars: 99, budgetTokens: 0 })
 })
+
+test('emptying a tools limit box leaves the key out of the saved harness, and a number puts it in', async () => {
+  const answers: Record<string, unknown> = { '/api/harnesses': [{ name: 'c' }], '/api/harnesses/c': harness({ tools: { enabled: ['bash'], approveBash: false, readMaxBytes: 50, bashTimeoutS: 5 } }), '/api/runs': [], '/api/models': [] }
+  const app = await mount(answers)
+  await app.load('c')
+  const box = (label: string) => { const span = all(app.root).find(n => n.tag === 'span' && textOf(n).startsWith(label))!; return span.parent!.children[span.parent!.children.indexOf(span) + 1] }
+  const put = async (label: string, value: string) => { box(label).props.onChange({ target: { value } }); await settle() }
+  const saved = async () => {
+    all(app.root).find(n => n.tag === 'button' && textOf(n) === 'Save as')!.props.onClick(); await settle()
+    return app.calls.filter(c => c.url.startsWith('/api/harnesses/') && c.body).at(-1)!.body.tools
+  }
+  await put('read_file max bytes', '')
+  expect(await saved()).toEqual({ enabled: ['bash'], approveBash: false, bashTimeoutS: 5 })
+  await put('bash max bytes', '99')
+  await put('bash timeout', '')
+  expect(await saved()).toEqual({ enabled: ['bash'], approveBash: false, bashMaxBytes: 99 })
+})
