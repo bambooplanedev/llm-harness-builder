@@ -91,9 +91,26 @@ label button { min-height: 24px; padding: 0 8px; font-size: 12px; font-weight: 5
 pre { font-family: var(--mono); }
 details.inspector pre { max-height: 300px; overflow: auto; background: var(--sunk); padding: 10px 12px; border-radius: 6px; font-size: 12px; line-height: 1.5; }
 .hint { font-size: 12px; color: var(--muted); margin: 8px 0; }
-.bench-table { font: 12px var(--mono); background: var(--sunk); padding: 10px 12px; border-radius: 6px; overflow: auto; }
+.bench-head h2 { margin: 0; font-size: 20px; font-weight: 600; }
+.bench-head .muted { font: 12px var(--mono); }
+.table-wrap { margin: 14px 0 6px; overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; }
+table.bench { border-collapse: collapse; width: 100%; font: 13px var(--mono); }
+table.bench th { text-align: left; font: 600 11px var(--sans); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); padding: 8px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+table.bench td { padding: 10px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; vertical-align: middle; }
+table.bench tr:last-child td { border-bottom: 0; }
+table.bench .n { text-align: right; }
+table.bench tr.on td { background: var(--accent-bg); }
+table.bench td .chip + .chip { margin-left: 4px; }
+/* The PASS rate as a point on 0..1, its 95% interval as the band around it. */
+.ci { position: relative; width: 140px; height: 14px; }
+.ci .axis { position: absolute; left: 0; right: 0; top: 6px; height: 2px; background: var(--sunk); }
+.ci .range { position: absolute; top: 3px; height: 8px; border-radius: 4px; background: var(--muted); opacity: .35; }
+.ci .pt { position: absolute; top: 2px; width: 10px; height: 10px; margin-left: -5px; border-radius: 5px; background: var(--text); }
+.chip { display: inline-block; padding: 1px 7px; border-radius: 4px; font: 500 12px var(--mono); white-space: nowrap; background: var(--sunk); color: var(--text); }
+.chip.ok { background: var(--ok-bg); color: var(--ok); } .chip.err { background: var(--err-bg); color: var(--err); } .chip.warn { background: var(--warn-bg); color: var(--warn); }
+.chip.solid.ok { background: var(--ok); color: var(--bg); } .chip.solid.err { background: var(--err); color: var(--bg); }
+h5.group { margin: 16px 0 4px; font: 600 11px var(--sans); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
 .runs div.on { border-color: var(--accent); box-shadow: inset 3px 0 var(--accent); }
-.runs div.bad { border-color: var(--err); color: var(--err); }
 .runs div.notrace { cursor: default; } .runs div.notrace:hover { border-color: var(--line); }
 .runs .clip { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--warn); }
 
