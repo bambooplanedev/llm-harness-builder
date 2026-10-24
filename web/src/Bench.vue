@@ -179,18 +179,20 @@ onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer); unsub?.(); d
         <div class="runs">
           <template v-for="h in result.harnesses" :key="h.name">
             <h5 class="group">{{ h.name }} · runs</h5>
-            <div v-for="r in h.runs" :key="h.name + '#' + r.round" :class="{ notrace: !r.trace, on: !!r.trace && sideA?.run.trace === r.trace }"
+            <div v-for="r in h.runs" :key="h.name + '#' + r.round" :class="{ notrace: !r.trace, on: !!r.trace && sideA?.run.trace === r.trace, b: !!r.trace && diff?.run.trace === r.trace }"
                  @click="r.trace && (sel = { id: r.trace })">
               <div class="line"><span><b>#{{ r.round }}</b> <span :class="['chip', 'solid', r.verdict === 'PASS' ? 'ok' : 'err']">{{ r.verdict }}</span> {{ r.reason }}</span><span>{{ r.turns }} turns · {{ r.toolCalls }} tool calls · {{ mmss(r.ms) }}</span></div>
               <div v-if="r.verdict === 'FAIL' && r.reason === 'final'">the model answered, tests are red</div>
               <div v-if="r.lastError" class="clip" :title="r.lastError">{{ r.lastError }}</div>
               <div v-if="r.trace && analysis[r.trace]" class="analysis">{{ cellsLine(analysis[r.trace]) }}</div>
-              <small>
+              <small class="where">
                 <template v-if="r.trace">{{ r.trace }}</template>
                 <template v-else>no trace written (JSON predates v2.0.3)</template> · {{ r.workdir }}
-                <button @click.stop="emit('toWorkbench', h.config, r.workdir)">to Workbench</button>
-                <button v-if="r.trace && sideA && r.trace !== sideA.run.trace && r.trace !== diff?.run.trace" @click.stop="compare(h.name, r, h.config)">⇄</button>
               </small>
+              <div class="actions">
+                <button @click.stop="emit('toWorkbench', h.config, r.workdir)">to Workbench</button>
+                <button v-if="r.trace && sideA && r.trace !== sideA.run.trace && r.trace !== diff?.run.trace" title="compare with the open run" @click.stop="compare(h.name, r, h.config)">⇄</button>
+              </div>
             </div>
           </template>
         </div>

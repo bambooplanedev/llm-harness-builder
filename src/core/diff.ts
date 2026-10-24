@@ -6,8 +6,8 @@ import type { BenchRun } from './bench.js'
 /** One side of a comparison: the bench row with its verdict, the harness config behind it, its trace. */
 export type DiffSide = { name: string; run: BenchRun; config: HarnessConfig; events: HarnessEvent[] }
 
-/** One thing a turn did. `truncated` is shown but deliberately kept out of `sig`. */
-export type Chip = { label: string; bad: boolean; truncated?: boolean }
+/** One thing a turn did. `truncated` and `detail` (the call's path or command) are shown but deliberately kept out of `sig`. */
+export type Chip = { label: string; bad: boolean; truncated?: boolean; detail?: string }
 /** A turn as the diff sees it: what happened (chips, sig) and what it cost (ms, tokens). */
 export type Turn = { chips: Chip[]; sig: string; ms: number; tokens: number }
 
@@ -45,7 +45,8 @@ export function skeleton(events: HarnessEvent[]): Turn[] {
         case 'final_check': chips.push({ label: e.passed ? 'check passed' : 'check failed', bad: !e.passed, truncated: false }); break
         case 'context_reset': chips.push({ label: 'context reset', bad: false, truncated: false }); break
         case 'tool_call': {
-          const chip: Chip = { label: e.call.name, bad: false, truncated: false }
+          const d = e.call.args.path ?? e.call.args.command
+          const chip: Chip = { label: e.call.name, bad: false, truncated: false, ...typeof d === 'string' ? { detail: d.length > 40 ? `${d.slice(0, 39)}…` : d } : {} }
           byCall.set(e.call.callId, chip)
           chips.push(chip)
           break

@@ -115,21 +115,38 @@ table.bench td .chip + .chip { margin-left: 4px; }
 .chip.solid.ok { background: var(--ok); color: var(--bg); } .chip.solid.err { background: var(--err); color: var(--bg); }
 h5.group { margin: 16px 0 4px; font: 600 11px var(--sans); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
 .runs div.on { border-color: var(--accent); box-shadow: inset 3px 0 var(--accent); }
+/* A bench run card: where it ran, then its buttons in a strip of their own below a line. */
+.runs small.where { display: block; margin-top: 4px; color: var(--muted); }
+.runs .actions { display: flex; gap: 6px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+/* Side B of an open comparison: the same accent, dashed. */
+.runs div.b { border: 1px dashed var(--accent); }
 .runs div.notrace { cursor: default; } .runs div.notrace:hover { border-color: var(--line); }
 .runs .clip { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--warn); }
 
-.diff { font-size: 12px; }
-.diff table.cfg { border-collapse: collapse; width: 100%; }
-.diff table.cfg td { border-top: 1px solid var(--line); padding: 4px 8px; vertical-align: top; font-family: var(--mono); }
+/* Diff: A and B in two columns, the turn number in a gutter; the turns both runs took alike are muted, the split is amber. */
+.diff { --cols: 44px repeat(2, minmax(0, 1fr)); }
+.diff .mono { font: 12px var(--mono); }
+.diff .sides { display: grid; grid-template-columns: var(--cols) auto; column-gap: 16px; align-items: start; padding: 0 14px; }
+.diff .who { display: flex; gap: 8px; align-items: center; font-size: 16px; }
+.diff .who b { font-weight: 600; }
+.diff .summary { margin: 12px 14px; }
+.diff table.cfg { border-collapse: collapse; width: 100%; font: 12px var(--mono); }
+.diff table.cfg td { border-top: 1px solid var(--line); padding: 6px 12px; vertical-align: top; overflow-wrap: anywhere; }
+.diff table.cfg tr:first-child td { border-top: 0; }
 .diff .onlyA { color: var(--err); } .diff .onlyB { color: var(--ok); }
 .diff pre { white-space: pre-wrap; background: var(--sunk); padding: 8px 10px; border-radius: 6px; }
-.diff .turnrow { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 6px 8px; cursor: pointer; border-top: 1px solid var(--line); }
-.diff .turnrow:hover { background: var(--sunk); }
+.diff .turnrow { display: grid; grid-template-columns: var(--cols); column-gap: 16px; align-items: center; padding: 8px 14px; border-top: 1px solid var(--line); cursor: pointer; }
+.diff .path > :first-child { border-top: 0; }
+.diff .turnrow:hover, .diff .turnrow.on { background: var(--sunk); }
+.diff .turnrow.same { color: var(--muted); }
+.diff .turnrow.same .chip:not(.err) { background: none; box-shadow: inset 0 0 0 1px var(--line); color: var(--muted); }
 .diff .turnrow.split { background: var(--warn-bg); }
-.diff .split-label { grid-column: 1 / -1; margin: 0; color: var(--warn); font-weight: 600; }
-.diff .chip { display: inline-block; margin-right: 4px; padding: 1px 7px; background: var(--sunk); border-radius: 4px; font-family: var(--mono); }
-.diff .chip.err { background: var(--err-bg); color: var(--err); }
-.diff .layout { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; height: auto; }
+.diff .tn { font: 600 13px var(--mono); color: var(--muted); }
+.diff .turnrow.split .tn { color: var(--warn); }
+.diff .cell { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-width: 0; }
+.diff .cell .chip { white-space: normal; overflow-wrap: anywhere; }
+.diff .split-label { padding: 8px 14px; border-top: 1px solid var(--line); background: var(--warn-bg); color: var(--warn); font: 12px var(--mono); }
+.diff .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 8px 14px 8px 74px; border-top: 1px solid var(--line); background: var(--bg); }
 .analysis { color: var(--muted); font: 12px var(--mono); margin: 0 0 8px; }
 .stubbed { color: var(--stub); border: 1px dashed var(--stub); border-radius: 4px; padding: 0 5px; }
 /* The task box grows with its text (no JS); a browser without field-sizing keeps the min height and the resize handle. */

@@ -13,7 +13,7 @@ const lines = (r: { a: string; b: string }) => r.a.includes('\\n') || r.b.includ
 /** A key missing on one side is the literal 'undefined', which JSON.parse would throw on. */
 const text = (v: string) => (v === 'undefined' ? '' : String(JSON.parse(v)))
 const onlyIn = (r: { a: string; b: string }) => lineDiff(text(r.a), text(r.b))
-const head = (s: DiffSide) => `${s.name} #${s.run.round} · ${s.run.verdict} · ${s.run.reason} · ${mmss(s.run.ms)}`
+const sides = computed(() => [{ tag: 'A', s: props.a }, { tag: 'B', s: props.b }])
 
 const sa = computed(() => skeleton(props.a.events))
 const sb = computed(() => skeleton(props.b.events))
@@ -33,15 +33,18 @@ const hasEvents = computed(() => props.a.events.length > 0 && props.b.events.len
 
 <template>
   <div class="diff">
-    <div class="row">
-      <b>{{ head(a) }}</b> vs <b>{{ head(b) }}</b>
-      <button @click="$emit('close')">×</button>
+    <div class="sides">
+      <span></span>
+      <div v-for="x in sides" :key="x.tag">
+        <div class="who"><span :class="['chip', 'solid', x.s.run.verdict === 'PASS' ? 'ok' : 'err']">{{ x.s.run.verdict }}</span><b>{{ x.tag }} · {{ x.s.name }} #{{ x.s.run.round }}</b></div>
+        <div class="muted mono">{{ x.s.run.reason }} · {{ x.s.run.turns }} turns · {{ x.s.run.toolCalls }} tool calls · {{ mmss(x.s.run.ms) }}</div>
+      </div>
+      <button @click="$emit('close')" title="close the comparison">×</button>
     </div>
-    <div class="hint">{{ task }}</div>
 
-    <h4>config</h4>
-    <div v-if="!rows.length" class="hint">configs are identical</div>
-    <table v-else class="cfg">
+    <div class="muted mono summary">config: {{ rows.length }} knob{{ rows.length === 1 ? '' : 's' }} differ{{ rows.length === 1 ? 's' : '' }}<template v-if="!rows.length"> (same harness). The paths split on what the model did.</template></div>
+    <div v-if="rows.length" class="table-wrap">
+    <table class="cfg">
       <tr v-for="r in rows" :key="r.path">
         <td><code>{{ r.path }}</code></td>
         <template v-if="lines(r)">
@@ -55,29 +58,33 @@ const hasEvents = computed(() => props.a.events.length > 0 && props.b.events.len
           </td>
         </template>
         <template v-else>
-          <td class="onlyA">{{ r.a }}</td>
-          <td class="onlyB">{{ r.b }}</td>
+          <td class="onlyA">A {{ r.a }}</td>
+          <td class="onlyB">B {{ r.b }}</td>
         </template>
       </tr>
     </table>
+    </div>
 
     <template v-if="hasEvents">
-      <h4>path</h4>
-      <div v-if="diverged === -1" class="hint">same path — but identical steps do not mean identical words</div>
-      <div v-for="(_, i) in rowsN" :key="i" class="turnrow" :class="{ split: i === diverged }" @click="open = open === i ? -1 : i">
-        <div class="side">
-          <span v-for="(c, j) in sa[i]?.chips ?? []" :key="j" class="chip" :class="{ err: c.bad }">{{ c.label }}{{ c.truncated ? ' ↯' : '' }}</span>
-          <small v-if="sa[i]"> {{ mmss(sa[i].ms) }} · {{ sa[i].tokens }} tok ctx</small>
-        </div>
-        <div class="side">
-          <span v-for="(c, j) in sb[i]?.chips ?? []" :key="j" class="chip" :class="{ err: c.bad }">{{ c.label }}{{ c.truncated ? ' ↯' : '' }}</span>
-          <small v-if="sb[i]"> {{ mmss(sb[i].ms) }} · {{ sb[i].tokens }} tok ctx</small>
-        </div>
-        <div v-if="i === diverged" class="hint split-label">diverged here</div>
-      </div>
-      <div v-if="open >= 0" class="layout">
-        <div><Trace v-if="groups[0][open]" :events="groups[0][open]" :approvable="false" /></div>
-        <div><Trace v-if="groups[1][open]" :events="groups[1][open]" :approvable="false" /></div>
+      <div class="path table-wrap">
+        <div v-if="diverged === -1" class="split-label">same path all the way — but identical steps do not mean identical words</div>
+        <template v-for="(_, i) in rowsN" :key="i">
+          <div v-if="i === diverged" class="split-label"><b>paths split at t{{ i + 1 }}</b> · click a turn to read both sides</div>
+          <div class="turnrow" :class="{ same: diverged === -1 || i < diverged, split: i === diverged, on: open === i }" @click="open = open === i ? -1 : i">
+            <span class="tn">t{{ i + 1 }}</span>
+            <div v-for="(t, k) in [sa[i], sb[i]]" :key="k" class="cell">
+              <template v-if="t">
+                <span v-for="(c, j) in t.chips" :key="j" :class="['chip', { err: c.bad }]">{{ c.label }}{{ c.detail ? ` ${c.detail}` : '' }}{{ c.truncated ? ' ↯' : '' }}</span>
+                <small class="muted">{{ mmss(t.ms) }} · {{ t.tokens }} tok ctx</small>
+              </template>
+              <span v-else class="muted">— ended</span>
+            </div>
+          </div>
+          <div v-if="open === i" class="pair">
+            <div><Trace v-if="groups[0][i]" :events="groups[0][i]" :approvable="false" /></div>
+            <div><Trace v-if="groups[1][i]" :events="groups[1][i]" :approvable="false" /></div>
+          </div>
+        </template>
       </div>
     </template>
     <div v-else class="hint">one side's events have not loaded — nothing to draw the path from</div>
