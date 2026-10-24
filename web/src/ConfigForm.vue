@@ -3,6 +3,7 @@ import { ref, watch } from 'vue'
 import type { HarnessConfig, ServerInfo } from './api'
 import { PRESETS, FAMILIES, applyFamily, DEFAULT_PROMPTED_TEMPLATE, DEFAULT_PARSE_ERROR_HINT } from '../../src/core/prompts'
 import { TOOL_NAMES, keyNote } from '../../src/core/config'
+import { H } from './hints'
 
 const config = defineModel<HarnessConfig>({ required: true })
 const props = defineProps<{ models: string[]; modelsError: string; harnessNames: string[]; modelInfo?: ServerInfo }>()
@@ -109,7 +110,7 @@ function editMcp(text: string) {
 
 <template>
   <div>
-    <label>Harness</label>
+    <label :title="H.harness">Harness</label>
     <div class="row">
       <select @change="emit('load', ($event.target as HTMLSelectElement).value)">
         <option value="">— load —</option><option v-for="n in harnessNames" :key="n" :value="n">{{ n }}</option>
@@ -118,58 +119,58 @@ function editMcp(text: string) {
       <button @click="emit('saveAs', saveName)" :disabled="!!mcpErr">Save as</button>
     </div>
 
-    <label>Backend</label>
+    <label :title="H.backend">Backend</label>
     <div class="row">
       <select v-model="config.backend.kind"><option value="openai">openai-compatible</option><option value="ollama">ollama (native)</option><option value="anthropic">anthropic (native)</option></select>
       <input type="text" v-model.lazy="config.backend.baseUrl">
     </div>
     <div v-if="ollamaViaV1()" class="warn">Ollama via /v1 ignores num_ctx and silently truncates the prompt. Pick kind "ollama".</div>
     <div class="row">
-      <span title="name of the environment variable that holds a hosted API's key, like OPENROUTER_API_KEY: serve reads it from the environment it was started in, and a harness file never holds the key itself">key env</span>
+      <span :title="H.keyEnv">key env</span>
       <input type="text" :value="config.backend.apiKeyEnv ?? ''" placeholder="none (a local server)" @change="setKeyEnv(($event.target as HTMLInputElement).value)">
     </div>
     <div v-if="keyLine()" class="hint">{{ keyLine() }}</div>
     <div v-if="keyLine() && !models.length" class="hint">press ↻ to list the models: that request carries the key</div>
     <div class="row">
-      <select v-model="config.backend.model"><option v-for="m in models" :key="m" :value="m">{{ m }}</option></select>
+      <select v-model="config.backend.model" :title="H.model"><option v-for="m in models" :key="m" :value="m">{{ m }}</option></select>
       <input type="text" v-model.lazy="config.backend.model" placeholder="or type a model id">
       <button @click="emit('refreshModels')">↻</button>
     </div>
     <div v-if="modelsError" class="err">{{ modelsError }}</div>
     <div class="row">
-      <span>temp</span><input type="number" step="0.1" v-model.number="config.backend.temperature" :disabled="off('temperature')">
-      <span>num_ctx</span><input type="number" v-model.number="config.backend.numCtx" :disabled="config.backend.kind !== 'ollama'">
-      <span title="cap on generated tokens, thinking included; empty = no cap">max_tokens</span><input type="number" min="1" :value="config.backend.maxTokens ?? ''" :disabled="off('maxTokens')" @change="setMaxTokens(($event.target as HTMLInputElement).value)">
-      <span title="the chat template's thinking switch: chat_template_kwargs.enable_thinking on an OpenAI-compatible server, think on Ollama; — sends nothing, and the model does what its template does">think</span><select :value="config.backend.think === undefined ? '' : config.backend.think ? 'on' : 'off'" :disabled="off('think')" @change="setThink(($event.target as HTMLSelectElement).value)"><option value="">—</option><option>on</option><option>off</option></select>
+      <span :title="H.temp">temp</span><input type="number" step="0.1" v-model.number="config.backend.temperature" :disabled="off('temperature')">
+      <span :title="H.numCtx">num_ctx</span><input type="number" v-model.number="config.backend.numCtx" :disabled="config.backend.kind !== 'ollama'">
+      <span :title="H.maxTokens">max_tokens</span><input type="number" min="1" :value="config.backend.maxTokens ?? ''" :disabled="off('maxTokens')" @change="setMaxTokens(($event.target as HTMLInputElement).value)">
+      <span :title="H.think">think</span><select :value="config.backend.think === undefined ? '' : config.backend.think ? 'on' : 'off'" :disabled="off('think')" @change="setThink(($event.target as HTMLSelectElement).value)"><option value="">—</option><option>on</option><option>off</option></select>
     </div>
     <div v-if="locked()" class="hint">{{ locked() }}: this knob is not available for this model<span v-if="modelInfo?.takesFrom"> ({{ modelInfo.takesFrom }})</span></div>
 
-    <label>System prompt <span v-for="(_, k) in PRESETS" :key="k"><button @click="applyPreset(k)">{{ k }}</button> </span></label>
+    <label><span :title="H.systemPrompt">System prompt</span> <span v-for="(_, k) in PRESETS" :key="k"><button @click="applyPreset(k)">{{ k }}</button> </span></label>
     <textarea v-model="config.systemPrompt"></textarea>
-    <label>Model family <span v-for="(f, k) in FAMILIES" :key="k"><button :title="f.note" @click="family(k)">{{ k }}</button> </span></label>
+    <label><span :title="H.family">Model family</span> <span v-for="(f, k) in FAMILIES" :key="k"><button :title="f.note" @click="family(k)">{{ k }}</button> </span></label>
 
-    <label>Tools</label>
+    <label :title="H.tools">Tools</label>
     <div class="row" style="flex-wrap:wrap">
       <span v-for="n in TOOL_NAMES" :key="n"><input type="checkbox" :checked="config.tools.enabled.includes(n)" @change="toggleTool(n)"> {{ n }}</span>
     </div>
-    <div><input type="checkbox" v-model="config.tools.approveBash"> ask before running bash</div>
+    <div :title="H.approveBash"><input type="checkbox" v-model="config.tools.approveBash"> ask before running bash</div>
     <div v-if="config.tools.bashEnv?.length" class="hint">bash gets from your environment: {{ config.tools.bashEnv.join(', ') }}</div>
-    <div><input type="checkbox" :checked="!!config.tools.requireReadBeforeEdit" @change="toggleGuard(($event.target as HTMLInputElement).checked)"> refuse to edit a file that has not been read</div>
-    <div class="row"><span title="after this many failed edits of one file, each further failed edit tells the model to read the file again; a read or a change of the file starts the count over; empty = off">edit misses before a re-read note</span><input type="number" min="1" :value="config.tools.editMissEscalation ?? ''" @change="setEscalation(($event.target as HTMLInputElement).value)"></div>
-    <div class="row"><span title="read_file stops here and says so; empty = built-in limit">read_file max bytes</span><input type="number" min="1" placeholder="4194304 (default)" :value="config.tools.readMaxBytes ?? ''" @change="setToolLimit('readMaxBytes', ($event.target as HTMLInputElement).value)"></div>
-    <div class="row"><span title="bash output kept; empty = built-in limit">bash max bytes</span><input type="number" min="1" placeholder="1048576 (default)" :value="config.tools.bashMaxBytes ?? ''" @change="setToolLimit('bashMaxBytes', ($event.target as HTMLInputElement).value)"></div>
-    <div class="row"><span title="bash is killed after this many seconds; empty = built-in limit">bash timeout, s</span><input type="number" min="1" placeholder="30 (default)" :value="config.tools.bashTimeoutS ?? ''" @change="setToolLimit('bashTimeoutS', ($event.target as HTMLInputElement).value)"></div>
-    <details><summary>MCP servers ({{ mcpCount() }})</summary>
+    <div :title="H.guard"><input type="checkbox" :checked="!!config.tools.requireReadBeforeEdit" @change="toggleGuard(($event.target as HTMLInputElement).checked)"> refuse to edit a file that has not been read</div>
+    <div class="row"><span :title="H.escalation">edit misses before a re-read note</span><input type="number" min="1" :value="config.tools.editMissEscalation ?? ''" @change="setEscalation(($event.target as HTMLInputElement).value)"></div>
+    <div class="row"><span :title="H.readMax">read_file max bytes</span><input type="number" min="1" placeholder="4194304 (default)" :value="config.tools.readMaxBytes ?? ''" @change="setToolLimit('readMaxBytes', ($event.target as HTMLInputElement).value)"></div>
+    <div class="row"><span :title="H.bashMax">bash max bytes</span><input type="number" min="1" placeholder="1048576 (default)" :value="config.tools.bashMaxBytes ?? ''" @change="setToolLimit('bashMaxBytes', ($event.target as HTMLInputElement).value)"></div>
+    <div class="row"><span :title="H.bashTimeout">bash timeout, s</span><input type="number" min="1" placeholder="30 (default)" :value="config.tools.bashTimeoutS ?? ''" @change="setToolLimit('bashTimeoutS', ($event.target as HTMLInputElement).value)"></div>
+    <details><summary :title="H.mcp">MCP servers ({{ mcpCount() }})</summary>
       <textarea :value="mcpText" @input="editMcp(($event.target as HTMLTextAreaElement).value)" style="min-height:80px"
         placeholder='{"fs": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "."], "tools": ["read_text_file"]}}'></textarea>
       <div v-if="mcpErr" class="err">invalid JSON — not saved, Run disabled: {{ mcpErr }}</div>
     </details>
 
-    <label>Tool calls</label>
+    <label :title="H.toolCalls">Tool calls</label>
     <div class="row">
       <select v-model="config.toolCalls.mode"><option value="native">native (tools[] in API)</option><option value="prompted">prompted (in text)</option></select>
-      <select v-if="config.toolCalls.mode === 'prompted'" :value="config.toolCalls.format ?? 'json'" @change="config.toolCalls.format = ($event.target as HTMLSelectElement).value as 'json' | 'hermes'"><option value="json">json {calls, final}</option><option value="hermes">hermes &lt;tool_call&gt;</option></select>
-      <span v-if="config.toolCalls.mode === 'prompted' && !hermes()"><input type="checkbox" v-model="config.toolCalls.enforceSchema"> enforce schema</span>
+      <select v-if="config.toolCalls.mode === 'prompted'" :title="H.format" :value="config.toolCalls.format ?? 'json'" @change="config.toolCalls.format = ($event.target as HTMLSelectElement).value as 'json' | 'hermes'"><option value="json">json {calls, final}</option><option value="hermes">hermes &lt;tool_call&gt;</option></select>
+      <span v-if="config.toolCalls.mode === 'prompted' && !hermes()" :title="H.enforceSchema"><input type="checkbox" v-model="config.toolCalls.enforceSchema"> enforce schema</span>
     </div>
     <details v-if="config.toolCalls.mode === 'prompted'"><summary>prompted template / parse-error hint</summary>
       <textarea v-model="config.toolCalls.promptedTemplate"></textarea>
@@ -178,19 +179,19 @@ function editMcp(text: string) {
 
     <label>Context</label>
     <div class="row">
-      <span>max tool output chars (empty = no limit)</span><input type="number" min="1" :value="config.context?.maxToolOutputChars ?? ''" @change="setContext('maxToolOutputChars', ($event.target as HTMLInputElement).value)">
-      <span>budget tokens (empty = no budget)</span><input type="number" min="0" :value="config.context?.budgetTokens ?? ''" @change="setContext('budgetTokens', ($event.target as HTMLInputElement).value)">
+      <span :title="H.maxToolOutput">max tool output chars (empty = no limit)</span><input type="number" min="1" :value="config.context?.maxToolOutputChars ?? ''" @change="setContext('maxToolOutputChars', ($event.target as HTMLInputElement).value)">
+      <span :title="H.budget">budget tokens (empty = no budget)</span><input type="number" min="0" :value="config.context?.budgetTokens ?? ''" @change="setContext('budgetTokens', ($event.target as HTMLInputElement).value)">
     </div>
     <label>Loop</label>
-    <div class="row"><span>max turns</span><input type="number" v-model.number="config.loop.maxTurns"></div>
+    <div class="row"><span :title="H.maxTurns">max turns</span><input type="number" v-model.number="config.loop.maxTurns"></div>
     <div class="row">
-      <span title="a call (or a failed until-bash check) repeated more than this many times ends the run as repeat_loop; empty = no detector, 0 = the first repeat ends it">max repeats</span><input type="number" min="0" :value="config.loop.maxRepeats ?? ''" @change="setLoop('maxRepeats', ($event.target as HTMLInputElement).value)">
-      <span title="after this many repeats of one call the history is cleared back to the task, once per run; 1 to max repeats">fresh context</span><input type="number" min="1" :value="config.loop.freshContext ?? ''" @change="setLoop('freshContext', ($event.target as HTMLInputElement).value)">
+      <span :title="H.maxRepeats">max repeats</span><input type="number" min="0" :value="config.loop.maxRepeats ?? ''" @change="setLoop('maxRepeats', ($event.target as HTMLInputElement).value)">
+      <span :title="H.freshContext">fresh context</span><input type="number" min="1" :value="config.loop.freshContext ?? ''" @change="setLoop('freshContext', ($event.target as HTMLInputElement).value)">
     </div>
     <div class="row">
-      <span title="the turn after a repeat is sampled at this temperature, 0 to 2; needs max repeats">repeat temperature</span><input type="number" min="0" max="2" step="0.1" :value="config.loop.repeatTemperature ?? ''" :disabled="off('temperature')" @change="setLoop('repeatTemperature', ($event.target as HTMLInputElement).value)">
-      <span title="the turn after a repeat is sent with /think in place of the /no_think line, with this token cap; needs max repeats and a /no_think line in the system prompt">repeat think tokens</span><input type="number" min="1" :value="config.loop.repeatThinkTokens ?? ''" :disabled="lockedThinkTokens()" @change="setLoop('repeatThinkTokens', ($event.target as HTMLInputElement).value)">
+      <span :title="H.repeatTemp">repeat temperature</span><input type="number" min="0" max="2" step="0.1" :value="config.loop.repeatTemperature ?? ''" :disabled="off('temperature')" @change="setLoop('repeatTemperature', ($event.target as HTMLInputElement).value)">
+      <span :title="H.repeatThink">repeat think tokens</span><input type="number" min="1" :value="config.loop.repeatThinkTokens ?? ''" :disabled="lockedThinkTokens()" @change="setLoop('repeatThinkTokens', ($event.target as HTMLInputElement).value)">
     </div>
-    <div class="row"><span title="a final answer ends the run only when this command exits 0; it runs on files the model wrote, and is approved before the run">until bash</span><input type="text" :value="config.loop.untilBash ?? ''" @change="setUntilBash(($event.target as HTMLInputElement).value)"></div>
+    <div class="row"><span :title="H.untilBash">until bash</span><input type="text" :value="config.loop.untilBash ?? ''" @change="setUntilBash(($event.target as HTMLInputElement).value)"></div>
   </div>
 </template>

@@ -11,6 +11,8 @@ export type BenchRun = {
   toolChars?: number
   /** Dollars the run's replies cost: the sum of their costUsd. Absent when the harness has no price or the server reported no usage. */
   costUsd?: number
+  /** The biggest prompt + reply of the run, in the server's own tokens: how close it came to the window. Absent when the server reported no usage, and in older JSON. */
+  peakTokens?: number
   /** Tool results that came back as errors — mcp or built-in. */
   toolErrors?: number
   /** Edits the read-before-edit guard refused. Absent when the harness had the guard off. */

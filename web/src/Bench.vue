@@ -4,6 +4,7 @@ import { api, type ActiveTrace, type AnalysisCells, type BenchFile, type BenchHa
 import { cellsLine } from '../../src/core/analyze'
 import { formatTable, mmss, wilson } from '../../src/core/bench'
 import Trace from './Trace.vue'
+import { H } from './hints'
 import Diff from './Diff.vue'
 import type { DiffSide } from '../../src/core/diff'
 
@@ -68,6 +69,17 @@ const pct = (x: number) => `${(x * 100).toFixed(1)}%`
 const ci = (pass: number, n: number) => wilson(pass, n) ?? [0, 0]
 /** PASS ends green, a run that ran into a wall red, the rest (turns, loop, abort) amber. */
 const reasonTone = (r: string) => r === 'final' ? 'ok' : r.endsWith('error') ? 'err' : 'warn'
+/** The biggest prompt + reply of any run: the one that came closest to the window. */
+const hasPeak = computed(() => runs.value.some(r => r.peakTokens !== undefined))
+const peak = (h: BenchHarness) => Math.max(0, ...h.runs.map(r => r.peakTokens ?? 0)) || undefined
+const starting = ref(false)
+async function again() {
+  if (!confirm('Run this bench again: the same harnesses, task, n and timeout, into a new JSON.\n\nbench approves everything without asking: the model\'s commands and the harness files\' mcpServers and loop.untilBash, in fresh temp workdirs.')) return
+  starting.value = true; error.value = ''
+  try { openFile((await api.benchAgain(file.value)).file) }
+  catch (e) { error.value = (e as Error).message }
+  finally { starting.value = false }
+}
 const medCost = (h: BenchHarness) => { const c = h.runs.flatMap(r => r.costUsd ?? []).sort((a, b) => a - b); return c.length ? `$${Number(c[(c.length - 1) >> 1].toPrecision(3))}` : '-' }
 
 /**
@@ -188,13 +200,16 @@ onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer); unsub?.(); d
     <div class="col" ref="pane">
       <template v-if="result">
         <div class="bench-head">
+          <div>
           <h2>{{ result.taskName ?? 'bench' }}<template v-if="result.size"> · size {{ result.size }}</template> · {{ result.harnesses.length }} harnesses × {{ result.n }} runs</h2>
           <div class="muted">{{ backend?.model }} · {{ backend?.kind }} {{ backend?.baseUrl }}<template v-if="nCtx"> · window {{ nCtx.toLocaleString() }}</template> · timeout {{ mmss(result.timeoutS * 1000) }} · {{ new Date(result.date).toLocaleString() }}</div>
           <div class="muted">{{ runs.length }}/{{ total }} runs<template v-if="!result.complete"> · incomplete</template> · {{ mmss(msDone) }} in</div>
+          </div>
+          <button @click="again" :disabled="starting || !!active" :title="active ? H.againBusy : H.again">{{ starting ? 'Starting…' : 'Run bench again' }}</button>
         </div>
         <div v-if="runs.length" class="table-wrap">
           <table class="bench">
-            <thead><tr><th>harness</th><th class="n">pass</th><th>rate · 95% interval</th><th class="n">med turns</th><th class="n">med time</th><th v-if="hasCost" class="n">med cost</th><th>how runs ended</th></tr></thead>
+            <thead><tr><th>harness</th><th class="n" :title="H.pass">pass</th><th :title="H.rate">rate · 95% interval</th><th class="n" :title="H.medTurns">med turns</th><th class="n" :title="H.medTime">med time</th><th v-if="hasCost" class="n" :title="H.medCost">med cost</th><th v-if="hasPeak" class="n" :title="H.peak">peak tok</th><th :title="H.reasons">how runs ended</th></tr></thead>
             <tbody>
               <tr v-for="h in result.harnesses" :key="h.name" :class="{ on: h.name === openHarness }">
                 <td>{{ h.name }}</td>
@@ -208,6 +223,7 @@ onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer); unsub?.(); d
                 <td class="n">{{ h.median.turns }}</td>
                 <td class="n">{{ mmss(h.median.ms) }}</td>
                 <td v-if="hasCost" class="n">{{ medCost(h) }}</td>
+                <td v-if="hasPeak" class="n" :class="{ warn: nCtx && (peak(h) ?? 0) > nCtx * 0.9 }">{{ peak(h)?.toLocaleString() ?? '-' }}</td>
                 <td><span v-for="(v, k) in h.reasons" :key="k" :class="['chip', reasonTone(String(k))]">{{ k }} ×{{ v }}</span></td>
               </tr>
             </tbody>

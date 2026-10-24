@@ -3,6 +3,7 @@ import { createSSRApp } from 'vue'
 import { renderToString } from 'vue/server-renderer'
 // @ts-expect-error -- vue SFC, no .d.ts; typechecked separately by vue-tsc
 import ConfigForm from '../web/src/ConfigForm.vue'
+import { H } from '../web/src/hints'
 import type { HarnessConfig } from '../src/core/config.js'
 import { harness } from './helpers.js'
 
@@ -54,6 +55,7 @@ test('no non-English text ships in the source', async () => {
   const root = new URL('..', import.meta.url).pathname
   const files = execFileSync('git', ['ls-files', 'src', 'web/src', 'tests'], { cwd: root, encoding: 'utf8' })
     .split('\n').filter(Boolean)
+    .filter(f => f !== 'web/src/hints.ts') // the hover hints are Ukrainian on purpose: asked for, and kept in this one file
   const offenders: string[] = []
   for (const f of files) {
     const text = await readFile(new URL(`../${f}`, import.meta.url), 'utf8')
@@ -79,7 +81,7 @@ test('the optional loop knobs show the harness values, 0 included, and empty box
 })
 
 // SSR writes the bound value on the select itself; in a browser Vue sets it as the DOM property once the options exist.
-const formatSelect = (html: string) => /<select value="(\w+)"><option value="json">/.exec(html)?.[1]
+const formatSelect = (html: string) => /<select[^>]*value="(\w+)"><option value="json">/.exec(html)?.[1]
 
 test('a prompted harness without toolCalls.format shows json, and rendering it does not write the key', async () => {
   const { format: _, ...toolCalls } = base.toolCalls
@@ -99,8 +101,7 @@ test('think shows the harness value: on, off, and — when the harness sends not
 
 test('the edit-miss escalation box shows the value, and an empty box for a harness without it', async () => {
   const on = await render({ ...base, tools: { ...base.tools, editMissEscalation: 3 } })
-  expect(on).toContain('after this many failed edits of one file')
-  expect(on).toMatch(/title="after this many failed edits of one file[^"]*"[^>]*>edit misses before a re-read note<\/span><input type="number" min="1" value="3"/)
+  expect(on).toContain(`title="${H.escalation}">edit misses before a re-read note</span><input type="number" min="1" value="3"`)
   const off = await render(base)
   expect(off).toMatch(/edit misses before a re-read note<\/span><input type="number" min="1" value=""/)
 })
