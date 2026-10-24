@@ -138,7 +138,7 @@ watch(() => config.value.backend.model, () => {
         <label>Workdir (absolute path to a scratch project; not / or your home)</label>
         <input type="text" v-model="workdir" placeholder="/path/to/project">
         <label>Task</label>
-        <textarea v-model="task" style="min-height:50px"></textarea>
+        <textarea v-model="task" class="task"></textarea>
         <div v-if="refusal" class="warn">{{ refusal }}</div>
         <div class="row" style="margin:8px 0">
           <button @click="start" :disabled="!!running() || !!mcpError">Run</button>

@@ -97,3 +97,5 @@ details.inspector pre { max-height: 300px; overflow: auto; background: var(--sun
 .diff .layout { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; height: auto; }
 .analysis { color: var(--muted); font: 12px var(--mono); margin: 0 0 8px; }
 .stubbed { color: var(--stub); border: 1px dashed var(--stub); border-radius: 4px; padding: 0 5px; }
+/* The task box grows with its text (no JS); a browser without field-sizing keeps the min height and the resize handle. */
+textarea.task { field-sizing: content; min-height: 50px; }
