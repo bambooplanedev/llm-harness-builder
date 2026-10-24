@@ -63,8 +63,8 @@ const liveTok = computed(() => Math.ceil(liveText.value.length / 4))
   <div v-for="[turn, evs] in turns" :key="turn" class="turn">
     <template v-for="e in evs" :key="e.seq">
       <div v-if="e.type === 'llm_response'" class="ev assistant">
-        <div v-if="e.reasoning" style="color:#888">thinking: {{ e.reasoning }}</div>{{ e.content || '(empty content)' }}
-        <small style="color:#888"> · {{ e.latencyMs }}ms<template v-if="e.costUsd !== undefined"> · ${{ Number(e.costUsd.toPrecision(4)) }}</template></small>
+        <div v-if="e.reasoning" class="muted">thinking: {{ e.reasoning }}</div>{{ e.content || '(empty content)' }}
+        <small class="muted"> · {{ e.latencyMs }}ms<template v-if="e.costUsd !== undefined"> · ${{ Number(e.costUsd.toPrecision(4)) }}</template></small>
       </div>
       <div v-else-if="e.type === 'parse_error'" class="ev parse_error">parse error: {{ e.message }}<span v-if="e.droppedChars"> · {{ e.droppedChars }} chars kept out of the history, a marker went back instead</span></div>
       <div v-else-if="e.type === 'tool_call'" class="ev tool_call">{{ e.call.name }} {{ pretty(e.call.args) }}</div>
@@ -87,8 +87,8 @@ const liveTok = computed(() => Math.ceil(liveText.value.length / 4))
       <div v-else-if="e.type === 'done'" class="ev" :class="{ parse_error: e.reason === 'final' && e.toolCallCount === 0 }"><b>done: {{ e.reason }}</b> · {{ e.turns }} turns · {{ e.toolCallCount }} tool calls<span v-if="e.reason === 'final' && e.toolCallCount === 0"> · final after 0 tool calls: the model quit without doing anything</span></div>
     </template>
     <div v-if="turn === events.at(-1)?.turn && openTurn && (liveText || !done)" class="ev assistant">
-      <small style="color:#888">{{ live.content ? 'answering' : 'thinking' }}…<span v-if="liveText"> ~{{ liveTok }} tok</span><span v-if="done"> · partial, not in the trace</span></small>
-      <div v-if="live.reasoning" style="color:#888">thinking: {{ live.reasoning }}</div>{{ live.content }}<span v-if="!done">▍</span>
+      <small class="muted">{{ live.content ? 'answering' : 'thinking' }}…<span v-if="liveText"> ~{{ liveTok }} tok</span><span v-if="done"> · partial, not in the trace</span></small>
+      <div v-if="live.reasoning" class="muted">thinking: {{ live.reasoning }}</div>{{ live.content }}<span v-if="!done">▍</span>
     </div>
     <details class="inspector"><summary>{{ turn === 0 ? 'setup' : `turn ${turn}` }} — raw request / response</summary>
       <template v-for="e in evs" :key="'raw' + e.seq">

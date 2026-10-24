@@ -141,11 +141,13 @@ onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer); unsub?.(); d
         no benches yet: run <code>llm-harness-builder bench</code><br>
         this page reads only <code>runs/*.json</code> — a bench written with <code>--out</code> elsewhere will not show up here
       </div>
+      <details v-if="files.length" :open="!file"><summary class="hint">{{ file || 'pick a bench' }} · {{ files.length }} benches</summary>
       <div class="runs">
         <div v-for="f in files" :key="f.file" :class="{ on: f.file === file }" @click="openFile(f.file)">
-          {{ f.file }} · {{ f.model || '?' }} · {{ new Date(f.date).toLocaleString() }}<span v-if="!f.complete"> · incomplete</span>
+          <b>{{ f.file }}</b><div class="muted">{{ f.model || '?' }} · <span style="white-space:nowrap">{{ new Date(f.date).toLocaleString() }}</span><span v-if="!f.complete"> · incomplete</span></div>
         </div>
       </div>
+      </details>
 
       <template v-if="result">
         <div class="hint">
@@ -156,7 +158,6 @@ onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer); unsub?.(); d
           ● {{ active.harness }} #{{ active.round }} · {{ mmss(age) }} of {{ mmss(result.timeoutS * 1000) }} · silent {{ mmss(silence) }}
         </div>
         <div v-if="!runs.length" class="hint">round 1 still running, no results yet</div>
-        <pre v-else class="bench-table">{{ formatTable(result.harnesses) }}</pre>
         <div class="runs">
           <template v-for="h in result.harnesses" :key="h.name">
             <div v-for="r in h.runs" :key="h.name + '#' + r.round" :class="{ notrace: !r.trace, bad: r.verdict === 'FAIL' }"
@@ -178,6 +179,7 @@ onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer); unsub?.(); d
       <div class="err">{{ error }}</div>
     </div>
     <div class="col" ref="pane">
+      <pre v-if="result && runs.length" class="bench-table">{{ formatTable(result.harnesses) }}</pre>
       <Diff v-if="sideA && sideB" :a="sideA" :b="sideB" :task="result!.task" @close="closeDiff" />
       <Trace v-else-if="result && events.length" :events="events" :task="result.task" :approvable="false" />
     </div>
