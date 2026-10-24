@@ -45,6 +45,19 @@ test('a schema the model does not take refuses the run when the harness enforces
   expect(knobsOff({ ...c, toolCalls: { ...c.toolCalls, enforceSchema: false } }, { takes: { responseSchema: false } })).toEqual({ off: [] })
 })
 
+test('a native harness with no tools sends a schema only for a task with an answer schema', () => {
+  const c = { ...h, tools: { enabled: [], approveBash: false }, toolCalls: { ...h.toolCalls, enforceSchema: true } }
+  expect(knobsOff(c, { takes: { responseSchema: false } })).toEqual({ off: [] })
+  expect(knobsOff(c, { takes: { responseSchema: false } }, { type: 'object' }).refuse).toContain('enforceSchema: false')
+})
+
+test('loop.repeatThinkTokens is off when the model takes no thinking switch or no max_tokens', () => {
+  const c = { ...h, loop: { ...h.loop, maxRepeats: 2, repeatThinkTokens: 2048 } }
+  expect(knobsOff(c, { takes: { think: false } }).off.map(o => [o.knob, o.value])).toEqual([['repeatThinkTokens', 2048]])
+  expect(knobsOff(c, { takes: { maxTokens: false } }).off.map(o => o.knob)).toEqual(['repeatThinkTokens'])
+  expect(knobsOff(c, { takes: { temperature: false } }).off.map(o => o.knob)).toEqual(['temperature'])
+})
+
 test('anthropic needs a max_tokens: from the harness or from the server', () => {
   const a = { ...h, backend: { ...h.backend, kind: 'anthropic' as const, model: 'claude-haiku-5-5' } }
   expect(knobsOff(a, { router: false }).refuse).toContain('set backend.maxTokens')

@@ -109,7 +109,7 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
     if (mcp) for (const s of mcp.servers) yield ev({ type: 'mcp_server_start', ...s })
     // Once, before the first request: what the model does not take is not sent, or, when that would change the harness, nothing is.
     const info = await backend.serverInfo?.(config.backend.model)
-    const knobs = knobsOff(config, info), takes = info?.takes ?? {}
+    const knobs = knobsOff(config, info, answerSchema), takes = info?.takes ?? {}
     if (knobs.refuse) { yield ev({ type: 'error', message: knobs.refuse }); yield done('backend_error'); return }
     if (knobs.off.length) yield ev({ type: 'knobs_off', off: knobs.off })
     // Anthropic needs a max_tokens: absent from the harness, it is the model's own cap (knobsOff refused when neither is known).

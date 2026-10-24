@@ -6,9 +6,9 @@ import type { KnobOff } from './events.js'
 /**
  * `off`: soft knobs the harness sets and the server says the model does not take; they are not sent, and the file keeps
  * them, so another model gets them back. `refuse`: a knob without which the harness would silently be another one, so the
- * run does not start. No `takes` is unknown, and everything is sent as before.
+ * run does not start. No `takes` is unknown, and everything is sent as before. `answerSchema`: the run's, as run.ts gets it.
  */
-export function knobsOff(c: HarnessConfig, info: ServerInfo | undefined): { off: KnobOff[]; refuse?: string } {
+export function knobsOff(c: HarnessConfig, info: ServerInfo | undefined, answerSchema?: unknown): { off: KnobOff[]; refuse?: string } {
   const takes = info?.takes ?? {}, model = c.backend.model
   const why = (what: string) => `${model} takes no ${what}${info?.takesFrom ? ` (${info.takesFrom})` : ''}`
   const off: KnobOff[] = []
@@ -18,11 +18,15 @@ export function knobsOff(c: HarnessConfig, info: ServerInfo | undefined): { off:
   }
   if (takes.maxTokens === false && c.backend.maxTokens !== undefined) off.push({ knob: 'maxTokens', value: c.backend.maxTokens, reason: why('max_tokens') })
   if (takes.think === false && c.backend.think !== undefined) off.push({ knob: 'think', value: c.backend.think, reason: why('thinking switch') })
+  // repeatThinkTokens is a thinking turn with its own max_tokens: without either it does nothing.
+  const tt = c.loop.repeatThinkTokens
+  if (tt !== undefined && (takes.think === false || takes.maxTokens === false))
+    off.push({ knob: 'repeatThinkTokens', value: tt, reason: why(takes.think === false ? 'thinking switch' : 'max_tokens') })
 
   const native = c.toolCalls.mode === 'native'
   const hasTools = c.tools.enabled.length > 0 || Object.keys(c.mcpServers ?? {}).length > 0
-  // Where run.ts sends a schema: prompted JSON (not hermes), or a native run with no tools.
-  const sendsSchema = c.toolCalls.enforceSchema && (native ? !hasTools : c.toolCalls.format !== 'hermes')
+  // Where run.ts sends a schema: prompted JSON (not hermes), or a native run with no tools and an answer schema.
+  const sendsSchema = c.toolCalls.enforceSchema && (native ? !hasTools && answerSchema !== undefined : c.toolCalls.format !== 'hermes')
   if (takes.tools === false && native && hasTools) return { off, refuse: `${why('tools')}: set toolCalls.mode: "prompted"` }
   if (takes.responseSchema === false && sendsSchema) return { off, refuse: `${why('response schema')}: set toolCalls.enforceSchema: false` }
   if (c.backend.kind === 'anthropic' && c.backend.maxTokens === undefined && !info?.maxOutput)

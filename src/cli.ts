@@ -320,7 +320,7 @@ async function cmdBench(argv: string[]) {
       else {
         h.server = r.server
         // A knob without which the harness would be another one is a refusal before any run, like a model that is not there.
-        const refuse = knobsOff(h.config, r.server).refuse
+        const refuse = knobsOff(h.config, r.server, task.answerSchema?.(size)).refuse
         if (refuse) die(showable(`preflight: ${h.name}: ${refuse}`))
         const w = windowWarning(h.config, r.server.nCtx)
         if (w) console.error(w)
