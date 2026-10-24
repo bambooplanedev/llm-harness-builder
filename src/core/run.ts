@@ -220,7 +220,9 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
       const assistantText = hermes && calls.length && !res.content.includes('<tool_call>')
         ? [res.content, ...calls.map(c => `<tool_call>\n${JSON.stringify({ name: c.name, arguments: c.args })}\n</tool_call>`)].filter(Boolean).join('\n')
         : res.content
-      messages.push({ role: 'assistant', content: assistantText, toolCalls: prompted ? undefined : res.toolCalls })
+      // native only for a reply that goes back unchanged: a signature covers every block before it
+      const native = res.native && assistantText === res.content && calls === res.toolCalls ? res.native : undefined
+      messages.push({ role: 'assistant', content: assistantText, toolCalls: prompted ? undefined : res.toolCalls, ...native && { native } })
 
       if (calls.length === 0) {
         const command = config.loop.untilBash
@@ -303,7 +305,7 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
 
         if (hermes) wrapped.push(`<tool_response>\n${output}\n</tool_response>`)
         else if (prompted) wrapped.push(`<tool_result id="${call.callId}" name="${call.name}">\n${output}\n</tool_result>`)
-        else messages.push({ role: 'tool', content: output, toolCallId: call.backendId!, name: call.name, isToolResult: true })
+        else messages.push({ role: 'tool', content: output, toolCallId: call.backendId!, name: call.name, isToolResult: true, ...result.error && { isError: true } })
       }
       if (reset) {
         wasReset = true

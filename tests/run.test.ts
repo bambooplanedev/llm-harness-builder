@@ -909,3 +909,22 @@ test('llm_response.costUsd: only with a price and a usage', async () => {
   expect('costUsd' in await cost(undefined, usage)).toBe(false)
   expect('costUsd' in await cost({ input: 1, output: 1 })).toBe(false)
 })
+
+test('native blocks of an unchanged reply go back verbatim; a parse-error reply drops them', async () => {
+  const native = [{ type: 'thinking', thinking: 't', signature: 's' }]
+  const be = Fake([{ content: '', native, toolCalls: [{ backendId: 'id1', name: 'read_file', args: { path: 'a.txt' } }] }, { content: 'ok' }])
+  await collect({ config: base(), task: 'do', workdir: await wd() }, { backend: be })
+  expect(be.requests[1].messages.find(m => m.role === 'assistant')).toMatchObject({ native })
+
+  const cfg = base({ toolCalls: { ...base().toolCalls, mode: 'prompted' } })
+  const be2 = Fake([{ content: 'not json', native }, { content: '{"final":"x"}' }])
+  await collect({ config: cfg, task: 'do', workdir: await wd() }, { backend: be2 })
+  const a = be2.requests[1].messages.find(m => m.role === 'assistant') as any
+  expect(a.native).toBeUndefined()
+})
+
+test('a tool that errored goes back with isError', async () => {
+  const be = Fake([{ toolCalls: [{ backendId: 'id1', name: 'nope', args: {} }] }, { content: 'ok' }])
+  await collect({ config: base(), task: 'do', workdir: await wd() }, { backend: be })
+  expect(be.requests[1].messages.at(-1)).toMatchObject({ role: 'tool', isError: true })
+})
