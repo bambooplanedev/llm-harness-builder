@@ -53,18 +53,25 @@ export async function startServer(opts: ServerOpts) {
       const m = (method: string, re: RegExp) => req.method === method ? re.exec(url.pathname) : null
       let mm: RegExpExecArray | null
 
-      if (m('POST', /^\/api\/models$/)) {
+      const info = m('POST', /^\/api\/model-info$/)
+      if (info || m('POST', /^\/api\/models$/)) {
         // POST, not GET: a GET from another page carries no Origin, and this request may send a key.
         const body = await readBody(req) as Record<string, unknown>
-        const b = { kind: body.kind, baseUrl: body.baseUrl, model: '', temperature: 0, ...(body.apiKeyEnv !== undefined ? { apiKeyEnv: body.apiKeyEnv } : {}) }
+        const b = { kind: body.kind, baseUrl: body.baseUrl, model: info ? body.model : '', temperature: 0, ...(body.apiKeyEnv !== undefined ? { apiKeyEnv: body.apiKeyEnv } : {}) }
         const errors = backendErrors(b)
-        // Past backendErrors the fields are what a backend config holds; the model is not asked for here.
+        if (info && (typeof b.model !== 'string' || !b.model)) errors.push('backend.model is required')
+        // Past backendErrors the fields are what a backend config holds; only model-info asks for a model.
         const backend = b as unknown as HarnessConfig['backend']
         const problem = errors.length ? undefined : keyProblem(backend, process.env)
         if (problem) errors.push(`backend.apiKeyEnv: ${problem} in the environment serve was started from`)
         if (errors.length) return json(res, 400, { errors })
         const redact = redactor(apiKey(backend, process.env), backend.apiKeyEnv ?? '')
-        try { return json(res, 200, await backendFactory(backend).listModels()) }
+        try {
+          if (!info) return json(res, 200, await backendFactory(backend).listModels())
+          // Only what the form shows: undefined fields drop out of the JSON.
+          const { nCtx, maxOutput, takes, takesFrom } = await backendFactory(backend).serverInfo?.(backend.model) ?? {}
+          return json(res, 200, { nCtx, maxOutput, takes, takesFrom })
+        }
         catch (e) {
           const text = (e as { body?: string }).body
           return json(res, 502, { error: redact.text((e as Error).message), body: text === undefined ? undefined : redact.text(text) })

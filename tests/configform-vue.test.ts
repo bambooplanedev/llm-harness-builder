@@ -129,3 +129,29 @@ test('with a key and no models listed, the form says the list waits for the refr
   expect(await render(keyed, ['m'])).not.toContain(asks)
   expect(await render(base, [])).not.toContain(asks)
 })
+
+const anthropic = { ...base, backend: { kind: 'anthropic' as const, baseUrl: 'https://api.anthropic.com/v1', model: 'claude-x', temperature: 0.2, maxTokens: 1024, apiKeyEnv: 'ANTHROPIC_API_KEY' } }
+const withInfo = (c: HarnessConfig, modelInfo: unknown) =>
+  renderToString(createSSRApp(ConfigForm, { modelValue: c, models: [], modelsError: '', harnessNames: [], modelInfo }))
+
+test('the backend select offers anthropic, and a harness of that kind renders without a key written or removed', async () => {
+  const c = structuredClone(anthropic)
+  const html = await render(c)
+  expect(html).toMatch(/<option value="anthropic"[^>]*>anthropic \(native\)<\/option>/)
+  expect(c).toEqual(anthropic)
+})
+
+test('a knob the model does not take is a disabled box with a hint and where that was said; the value stays in the harness', async () => {
+  const c = structuredClone({ ...anthropic, loop: { ...anthropic.loop, repeatTemperature: 0.7 } })
+  const html = await withInfo(c, { takes: { temperature: false }, takesFrom: 'Anthropic API 2026-10-21' })
+  expect(html).toMatch(/temp<\/span><input[^>]*disabled/)
+  expect(html).toMatch(/repeat temperature<\/span><input[^>]*disabled/)
+  expect(html).not.toMatch(/max_tokens<\/span><input[^>]*disabled/)
+  expect(html).toContain('this knob is not available for this model')
+  expect(html).toContain('Anthropic API 2026-10-21')
+  expect(c.backend.temperature).toBe(0.2)
+  const free = await withInfo(c, undefined)
+  expect(free).not.toMatch(/temp<\/span><input[^>]*disabled/)
+  expect(free).not.toContain('not available for this model')
+})
+

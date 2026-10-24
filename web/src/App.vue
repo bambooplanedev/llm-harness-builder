@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
-import { api, type Delta, type HarnessConfig, type HarnessEvent, type RunSummary } from './api'
+import { ref, computed, onMounted, watch } from 'vue'
+import { api, type Delta, type HarnessConfig, type HarnessEvent, type RunSummary, type ServerInfo } from './api'
 import { PRESETS, DEFAULT_PROMPTED_TEMPLATE, DEFAULT_PARSE_ERROR_HINT, DEMO_TASK } from '../../src/core/prompts'
 import { isLoopbackUrl, listsModelsByItself } from '../../src/core/config'
+import { knobsOff } from '../../src/core/knobs'
 import ConfigForm from './ConfigForm.vue'
 import ContextBar from './ContextBar.vue'
 import Trace from './Trace.vue'
@@ -17,6 +18,8 @@ const config = ref<HarnessConfig>({
 })
 const harnessNames = ref<string[]>([])
 const models = ref<string[]>([]); const modelsError = ref('')
+/** What the server says the picked model takes; undefined is unknown, and nothing is locked. */
+const modelInfo = ref<ServerInfo>()
 const workdir = ref(''); const task = ref(DEMO_TASK)
 const runs = ref<RunSummary[]>([]); const runId = ref(''); const events = ref<HarnessEvent[]>([]); const error = ref('')
 /** Non-empty while the form's mcpServers box holds unparseable JSON: the config then still carries
@@ -48,7 +51,20 @@ async function refreshModels() {
     if (!b.model && !b.apiKeyEnv && isLoopbackUrl(b.baseUrl) && models.value[0]) b.model = models.value[0]
   }
   catch (e) { models.value = []; modelsError.value = `cannot list models: ${(e as Error).message}` }
+  await refreshInfo()
 }
+/** Asked where the list is and by the same rule, so with a key it waits for the refresh button too. */
+async function refreshInfo() {
+  const b = config.value.backend, model = b.model
+  modelInfo.value = undefined
+  if (!model) return
+  try {
+    const info = await api.modelInfo(b.kind, b.baseUrl, model, b.apiKeyEnv)
+    if (config.value.backend.model === model) modelInfo.value = info // a model typed since then is not this one
+  } catch (e) { modelsError.value ||= `cannot read what the model takes: ${(e as Error).message}` }
+}
+/** A structural knob the model does not take: the run would be refused, so the form says it before Run. */
+const refusal = computed(() => modelInfo.value && knobsOff(config.value, modelInfo.value).refuse) // unknown: nothing to say yet
 async function refreshLists() { harnessNames.value = (await api.harnesses()).map(h => h.name); runs.value = await api.runs() }
 /** Normalises a config from either door (saved harness, bench JSON) before it lands in the form. */
 /** A harness without toolCalls.format stays without it: the form shows json for a missing key, and only a choice made there writes one. */
@@ -92,7 +108,11 @@ watch(() => [config.value.backend.kind, config.value.backend.baseUrl, config.val
   // With a key, asking for the list sends the key to baseUrl: that waits for the refresh button, so opening a harness
   // or a bench run sends nothing, and a list from the previous host is not kept.
   if (listsModelsByItself(config.value.backend)) refreshModels()
-  else { models.value = []; modelsError.value = '' }
+  else { models.value = []; modelsError.value = ''; modelInfo.value = undefined }
+})
+watch(() => config.value.backend.model, () => {
+  if (listsModelsByItself(config.value.backend)) refreshInfo()
+  else modelInfo.value = undefined
 })
 </script>
 
@@ -105,13 +125,14 @@ watch(() => [config.value.backend.kind, config.value.backend.baseUrl, config.val
     <Bench v-if="tab === 'bench'" @to-workbench="toWorkbench" />
     <div class="layout" v-else>
       <div class="col left">
-        <ConfigForm v-model="config" v-model:mcp-error="mcpError" :models="models" :models-error="modelsError" :harness-names="harnessNames" @refresh-models="refreshModels" @load="load" @save-as="saveAs" />
+        <ConfigForm v-model="config" v-model:mcp-error="mcpError" :models="models" :models-error="modelsError" :model-info="modelInfo" :harness-names="harnessNames" @refresh-models="refreshModels" @load="load" @save-as="saveAs" />
       </div>
       <div class="col">
         <label>Workdir (absolute path to a scratch project; not / or your home)</label>
         <input type="text" v-model="workdir" placeholder="/path/to/project">
         <label>Task</label>
         <textarea v-model="task" style="min-height:50px"></textarea>
+        <div v-if="refusal" class="warn">{{ refusal }}</div>
         <div class="row" style="margin:8px 0">
           <button @click="start" :disabled="!!running() || !!mcpError">Run</button>
           <button @click="abort" :disabled="!canAbort()">Abort</button>

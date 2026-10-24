@@ -62,3 +62,27 @@ test('an empty trace shows no summary line', async () => {
   const html = await renderToString(createSSRApp(Trace, { events: [], task: 'x', approvable: false }))
   expect(html).not.toContain('no stub')
 })
+
+const replay = (evs: HarnessEvent[]) => renderToString(createSSRApp(Trace, { events: evs, task: 'x', approvable: false }))
+
+test('knobs the model does not take are said above the trace', async () => {
+  const html = await replay([{ seq: 0, turn: 0, ts: 0, type: 'knobs_off', off: [{ knob: 'temperature', value: 0.2, reason: 'm takes no temperature (src)' }] }])
+  expect(html).toContain('temperature 0.2 not sent: m takes no temperature (src)')
+  expect(html.indexOf('not sent')).toBeLessThan(html.indexOf('class="ev user"'))
+})
+
+test('a reply with a cost shows it in dollars; without one there is no $', async () => {
+  const reply = (costUsd?: number): HarnessEvent[] => [{ seq: 0, turn: 1, ts: 0, type: 'llm_response', raw: {}, content: 'hi', latencyMs: 5, ...costUsd === undefined ? {} : { costUsd } }]
+  expect(await replay(reply(0.0012))).toContain('$0.0012')
+  expect(await replay(reply())).not.toContain('$')
+})
+
+test('each turn says its request layers above the raw JSON, in either format', async () => {
+  const html = await replay([
+    { seq: 0, turn: 1, ts: 0, type: 'llm_request', payload: { system: 'abcd', tools: [{ name: 't', description: '', input_schema: {} }], messages: [{ role: 'user', content: 'do' }] } },
+    { seq: 1, turn: 2, ts: 0, type: 'llm_request', payload: { messages: [{ role: 'system', content: 'ab' }, { role: 'user', content: 'do' }, { role: 'assistant', content: 'x' }] } },
+  ])
+  expect(html).toContain('system 4 chars · tools 1 · messages 1 · anthropic')
+  expect(html).toContain('system 2 chars · tools 0 · messages 2 · openai')
+  expect(html.indexOf('· anthropic')).toBeLessThan(html.indexOf('&quot;system&quot;'))
+})

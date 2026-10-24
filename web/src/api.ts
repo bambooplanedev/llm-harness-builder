@@ -1,10 +1,10 @@
 import type { HarnessConfig } from '../../src/core/config'
 import type { HarnessEvent } from '../../src/core/events'
 import type { RunSummary } from '../../src/server/runs'
-import type { Delta } from '../../src/core/backends/types'
+import type { Delta, ServerInfo } from '../../src/core/backends/types'
 import type { BenchFile, BenchResult, BenchHarness, BenchRun, ActiveTrace } from '../../src/core/bench'
 import type { AnalysisCells } from '../../src/core/analyze'
-export type { HarnessConfig, HarnessEvent, RunSummary, Delta, BenchFile, BenchResult, BenchHarness, BenchRun, ActiveTrace, AnalysisCells }
+export type { HarnessConfig, HarnessEvent, RunSummary, Delta, ServerInfo, BenchFile, BenchResult, BenchHarness, BenchRun, ActiveTrace, AnalysisCells }
 
 async function j<T>(url: string, init?: RequestInit): Promise<T> {
   const r = await fetch(url, { headers: { 'content-type': 'application/json' }, ...init })
@@ -16,6 +16,8 @@ async function j<T>(url: string, init?: RequestInit): Promise<T> {
 export const api = {
   models: (kind: string, baseUrl: string, apiKeyEnv?: string) =>
     j<string[]>('/api/models', { method: 'POST', body: JSON.stringify({ kind, baseUrl, ...(apiKeyEnv ? { apiKeyEnv } : {}) }) }),
+  modelInfo: (kind: string, baseUrl: string, model: string, apiKeyEnv?: string) =>
+    j<ServerInfo>('/api/model-info', { method: 'POST', body: JSON.stringify({ kind, baseUrl, model, ...(apiKeyEnv ? { apiKeyEnv } : {}) }) }),
   harnesses: () => j<{ name: string }[]>('/api/harnesses'),
   harness: (name: string) => j<HarnessConfig>(`/api/harnesses/${name}`),
   saveHarness: (name: string, c: HarnessConfig) => j(`/api/harnesses/${name}`, { method: 'PUT', body: JSON.stringify(c) }),
