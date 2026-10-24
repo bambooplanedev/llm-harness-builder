@@ -3,7 +3,7 @@ import { isShowable } from './events.js'
 export type ToolName = 'list_dir' | 'read_file' | 'write_file' | 'edit_file' | 'bash'
 export const TOOL_NAMES: ToolName[] = ['list_dir', 'read_file', 'write_file', 'edit_file', 'bash']
 
-export type BackendKind = 'openai' | 'ollama'
+export type BackendKind = 'openai' | 'ollama' | 'anthropic'
 
 export type ToolCallFormat = 'json' | 'hermes'
 export const TOOL_CALL_FORMATS: ToolCallFormat[] = ['json', 'hermes']
@@ -22,8 +22,8 @@ const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]'])
 
 /** How the key's rules name the fields: the harness file's names, or replay's flags. */
 export type KeyWords = { key: string; kind: string; url: string }
-export const FILE_WORDS: KeyWords = { key: 'backend.apiKeyEnv', kind: 'kind openai', url: 'an https baseUrl' }
-export const FLAG_WORDS: KeyWords = { key: '--api-key-env', kind: '--kind openai', url: 'an https --base-url' }
+export const FILE_WORDS: KeyWords = { key: 'backend.apiKeyEnv', kind: 'kind openai or anthropic', url: 'an https baseUrl' }
+export const FLAG_WORDS: KeyWords = { key: '--api-key-env', kind: '--kind openai or anthropic', url: 'an https --base-url' }
 export const keyNameMessage = (field: string) => `${field} must be an upper-case variable name ending in _API_KEY (like OPENROUTER_API_KEY)`
 
 /** An http(s) URL that URL can parse: the prefix alone lets `https://` and `http://[::1` through, to fail later with a stack. */
@@ -35,18 +35,18 @@ export function isHttpUrl(s: unknown): s is string {
 type KeyFields = { kind?: unknown; baseUrl?: unknown; apiKeyEnv?: unknown; think?: unknown }
 
 /** The rules a key brings: its name, the kind it goes to, a URL it may cross the network to, and no `think`. A backend
- *  with a key is a hosted API, and gets only what the OpenAI API defines. An unparsable URL is backendErrors' to say. */
+ *  with a key is a hosted API; `think` is barred only for openai, whose API defines nothing of it. An unparsable URL is backendErrors' to say. */
 export function keyErrors(b: KeyFields, w: KeyWords = FILE_WORDS): string[] {
   if (b.apiKeyEnv === undefined) return []
   const e: string[] = []
   if (typeof b.apiKeyEnv !== 'string' || !KEY_ENV.test(b.apiKeyEnv)) e.push(keyNameMessage(w.key))
-  if (b.kind !== 'openai') e.push(`${w.key} needs ${w.kind}: a key goes only to an OpenAI-compatible API`)
+  if (b.kind !== 'openai' && b.kind !== 'anthropic') e.push(`${w.key} needs ${w.kind}: a key goes only to an OpenAI-compatible or the Anthropic API`)
   if (isHttpUrl(b.baseUrl)) {
     const u = new URL(b.baseUrl)
     if (u.protocol !== 'https:' && !LOOPBACK.has(u.hostname))
       e.push(`${w.key} needs ${w.url} (http only on localhost, 127.0.0.1 or [::1]): the key would cross the network in clear text`)
   }
-  if (b.think !== undefined) e.push(`backend.think cannot go with ${w.key}: a hosted API gets only what the OpenAI API defines`)
+  if (b.think !== undefined && b.kind === 'openai') e.push(`backend.think cannot go with ${w.key}: a hosted API gets only what the OpenAI API defines`)
   return e
 }
 
@@ -61,7 +61,7 @@ export const listsModelsByItself = (b: { apiKeyEnv?: unknown }): boolean => b.ap
 /** The checks of `backend` that need no model: kind, URL and the key's rules. POST /api/models runs these alone. */
 export function backendErrors(b: Record<string, unknown>): string[] {
   const e: string[] = []
-  if (b.kind !== 'openai' && b.kind !== 'ollama') e.push('backend.kind must be openai|ollama')
+  if (b.kind !== 'openai' && b.kind !== 'ollama' && b.kind !== 'anthropic') e.push('backend.kind must be openai|ollama|anthropic')
   if (!isHttpUrl(b.baseUrl)) e.push('backend.baseUrl must be an http(s) URL')
   return [...e, ...keyErrors(b)]
 }
@@ -151,6 +151,8 @@ export function validateConfig(c: unknown): string[] {
   if (!isObj(b)) e.push('backend is required')
   else {
     e.push(...backendErrors(b))
+    // Not in backendErrors: POST /api/models runs those alone, and the form has no key yet while it is being filled in.
+    if (b.kind === 'anthropic' && b.apiKeyEnv === undefined) e.push('backend.kind anthropic needs backend.apiKeyEnv')
     if (typeof b.model !== 'string' || !b.model) e.push('backend.model is required')
     if (typeof b.temperature !== 'number') e.push('backend.temperature must be a number')
     if (b.numCtx !== undefined && !(Number.isInteger(b.numCtx) && b.numCtx > 0)) e.push('backend.numCtx must be a positive integer')
@@ -188,6 +190,7 @@ export function validateConfig(c: unknown): string[] {
     if (typeof tc.promptedTemplate !== 'string') e.push('toolCalls.promptedTemplate must be a string')
     if (tc.mode === 'prompted' && !String(tc.promptedTemplate ?? '').includes('{{tools}}')) e.push('toolCalls.promptedTemplate must contain {{tools}} in prompted mode')
     if (typeof tc.parseErrorHint !== 'string') e.push('toolCalls.parseErrorHint must be a string')
+    if (isObj(b) && b.kind === 'anthropic' && tc.mode === 'prompted' && tc.enforceSchema === true) e.push('toolCalls.enforceSchema cannot go with prompted mode on kind anthropic: its schema leaves args free; use enforceSchema: false or mode: "native"')
   }
   const cx = c.context
   if (!isObj(cx) || !(cx.maxToolOutputChars > 0) || !(cx.budgetTokens >= 0)) e.push('context.maxToolOutputChars > 0 and budgetTokens >= 0 required')

@@ -13,7 +13,7 @@ const backend = { model: { type: 'string' }, 'base-url': { type: 'string' }, kin
 const backendDocs = {
   model: ['<m>', 'model name, overriding the harness file'],
   'base-url': ['<u>', 'server URL, overriding the harness file'],
-  kind: ['<k>', 'openai or ollama, overriding the harness file'],
+  kind: ['<k>', 'openai, ollama or anthropic, overriding the harness file'],
   'api-key-env': ['<NAME>', 'environment variable that holds the API key, overriding the harness file'],
 } as const
 

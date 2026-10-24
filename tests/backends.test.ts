@@ -432,3 +432,9 @@ test('usage carries cached_tokens as cacheReadTokens, only as a finite non-negat
   expect((await send(7)).usage).toEqual({ promptTokens: 9, completionTokens: 1, cacheReadTokens: 7 })
   expect((await send('7')).usage).toEqual({ promptTokens: 9, completionTokens: 1 })
 })
+
+test('createBackend: kind anthropic never falls through to OpenAIBackend', () => {
+  const b = { kind: 'anthropic' as const, baseUrl: 'https://api.anthropic.com', model: 'm', temperature: 0 }
+  expect(() => createBackend(b, {})).toThrow('backend.kind anthropic needs backend.apiKeyEnv')
+  expect(() => createBackend({ ...b, apiKeyEnv: 'LHB_T_API_KEY' }, { LHB_T_API_KEY: KEY })).toThrow('backend.kind anthropic: not implemented yet')
+})

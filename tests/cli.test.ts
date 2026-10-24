@@ -745,6 +745,7 @@ test('argument errors name the option, show the usage, exit 2 and print no stack
     [['bench', '--task', 'slug', '--size', '3'], /^error: --size: slug has no sizes$/m],
     [['bench', '--max-turns', '1.5'], /^error: --max-turns must be a positive integer$/m],
     [['replay', 'x.jsonl', '--turn', '0', '--kind', 'openai', '--base-url', 'http://x'], /^error: --turn must be a positive integer$/m],
+    [['replay', 'x.jsonl', '--turn', '1', '--kind', 'anthropic', '--base-url', 'http://x'], /^error: --kind anthropic is not yet supported by replay$/m],
     [['replay', 'x.jsonl', '--turn', '1', '--kind', 'vllm', '--base-url', 'http://x'], /^error: --kind must be openai or ollama$/m],
     [['replay', 'x.jsonl', '--turn', '1', '--kind', 'openai', '--base-url', 'x'], /^error: --base-url must be an http\(s\) URL$/m],
     [['analyze'], /^error: analyze needs at least one bench JSON, run id or trace file$/m],
@@ -1068,7 +1069,7 @@ test('a key with --kind ollama is an invalid harness, named so', async () => {
   const r = cli(['run', harness('bare'), '--workdir', await tmp('lhb-cli-'), '--yes', '--kind', 'ollama', '--base-url', 'http://127.0.0.1:9/v1', '--api-key-env', KEY_NAME, 'x'], { [KEY_NAME]: KEY })
   expect(r.status).toBe(2)
   expect(r.stderr).toContain('invalid harness')
-  expect(r.stderr).toContain('backend.apiKeyEnv needs kind openai: a key goes only to an OpenAI-compatible API')
+  expect(r.stderr).toContain('backend.apiKeyEnv needs kind openai or anthropic: a key goes only to an OpenAI-compatible or the Anthropic API')
 }, 30_000)
 
 test('a key variable that is not set or is empty stops run and demo before the trace, and says where the name came from', async () => {
@@ -1121,7 +1122,7 @@ test('replay --api-key-env sends the key to the server it names, says so on stde
     const unset = await cliAsync(at('openai', api.baseUrl), {}, cwd)
     expect(unset.status).toBe(2); expect(unset.stderr).toContain(`${KEY_NAME} is not set: --api-key-env names it as the API key`)
     const ollama = await cliAsync(at('ollama', api.baseUrl), { [KEY_NAME]: KEY }, cwd)
-    expect(ollama.status).toBe(2); expect(ollama.stderr).toContain('error: --api-key-env needs --kind openai: a key goes only to an OpenAI-compatible API')
+    expect(ollama.status).toBe(2); expect(ollama.stderr).toContain('error: --api-key-env needs --kind openai or anthropic: a key goes only to an OpenAI-compatible or the Anthropic API')
     const lan = await cliAsync(at('openai', 'http://192.168.1.5/v1'), { [KEY_NAME]: KEY }, cwd)
     expect(lan.status).toBe(2)
     expect(lan.stderr).toContain('error: --api-key-env needs an https --base-url (http only on localhost, 127.0.0.1 or [::1]): the key would cross the network in clear text')

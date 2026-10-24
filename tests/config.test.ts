@@ -309,18 +309,18 @@ test('backend.apiKeyEnv names an upper-case *_API_KEY variable: nothing else, an
 })
 
 test('backend.apiKeyEnv goes only with kind openai, and never with think', () => {
-  expect(keyed({ kind: 'ollama' })).toEqual(['backend.apiKeyEnv needs kind openai: a key goes only to an OpenAI-compatible API'])
+  expect(keyed({ kind: 'ollama' })).toEqual(['backend.apiKeyEnv needs kind openai or anthropic: a key goes only to an OpenAI-compatible or the Anthropic API'])
   expect(keyed({ think: false })).toEqual(['backend.think cannot go with backend.apiKeyEnv: a hosted API gets only what the OpenAI API defines'])
 })
 
 test('keyErrors with the flags\' words is what replay says; backendErrors checks kind, URL and key without a model', () => {
   expect(keyErrors({ kind: 'ollama', baseUrl: 'http://10.0.0.2/v1', apiKeyEnv: 'X_API_KEY' }, FLAG_WORDS)).toEqual([
-    '--api-key-env needs --kind openai: a key goes only to an OpenAI-compatible API',
+    '--api-key-env needs --kind openai or anthropic: a key goes only to an OpenAI-compatible or the Anthropic API',
     '--api-key-env needs an https --base-url (http only on localhost, 127.0.0.1 or [::1]): the key would cross the network in clear text',
   ])
   expect(keyErrors({ kind: 'openai', baseUrl: 'https://x.example/v1' })).toEqual([])
   expect(backendErrors({ kind: 'openai', baseUrl: 'https://x.example/v1', apiKeyEnv: 'X_API_KEY' })).toEqual([])
-  expect(backendErrors({ kind: 'nope', baseUrl: 'ftp://x' })).toEqual(['backend.kind must be openai|ollama', 'backend.baseUrl must be an http(s) URL'])
+  expect(backendErrors({ kind: 'nope', baseUrl: 'ftp://x' })).toEqual(['backend.kind must be openai|ollama|anthropic', 'backend.baseUrl must be an http(s) URL'])
 })
 
 test('keyProblem names what is wrong with the value and never prints it', () => {
@@ -373,4 +373,26 @@ test('backend.pricePerMTok: input and output, optional cache prices, finite non-
   expect(priced({ input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125 })).toEqual([])
   for (const p of [{ input: -1, output: 0.5 }, JSON.parse('{"input":1e400,"output":0.5}'), { input: 0.1, output: 0.5, extra: 1 }, { input: 0.1 }, 'cheap'])
     expect(priced(p).join()).toContain('backend.pricePerMTok')
+})
+
+test('kind anthropic: a key is required by validateConfig (not backendErrors), temperature stays, think is allowed with a key', () => {
+  const anth = { kind: 'anthropic', baseUrl: 'https://api.anthropic.com', apiKeyEnv: 'ANTHROPIC_API_KEY', temperature: 0.2 }
+  expect(keyed(anth)).toEqual([])
+  expect(keyed({ ...anth, think: true })).toEqual([])
+  expect(keyed({ kind: 'openai', think: true })).toEqual(['backend.think cannot go with backend.apiKeyEnv: a hosted API gets only what the OpenAI API defines'])
+  const { apiKeyEnv, ...bare } = anth
+  expect(validateConfig({ ...validConfig, backend: { ...validConfig.backend, ...bare } })).toEqual(['backend.kind anthropic needs backend.apiKeyEnv'])
+  expect(backendErrors(bare)).toEqual([])
+  // the key rules are openai's rules
+  expect(keyed({ ...anth, baseUrl: 'http://10.0.0.2' })).toEqual([expect.stringContaining('needs an https baseUrl')])
+  expect(keyed({ ...anth, apiKeyEnv: 'GITHUB_TOKEN' })).toEqual([expect.stringContaining('_API_KEY')])
+})
+
+test('kind anthropic refuses prompted mode with enforceSchema, and says what to do', () => {
+  const c = (toolCalls: object) => validateConfig({ ...validConfig, backend: { ...validConfig.backend, kind: 'anthropic', baseUrl: 'https://api.anthropic.com', apiKeyEnv: 'ANTHROPIC_API_KEY' }, toolCalls: { ...validConfig.toolCalls, ...toolCalls } })
+  const [msg, ...rest] = c({ mode: 'prompted', enforceSchema: true, promptedTemplate: '{{tools}}' })
+  expect(rest).toEqual([])
+  expect(msg).toMatch(/enforceSchema: false.*mode: "native"/)
+  expect(c({ mode: 'prompted', enforceSchema: false, promptedTemplate: '{{tools}}' })).toEqual([])
+  expect(c({ mode: 'native', enforceSchema: true })).toEqual([])
 })

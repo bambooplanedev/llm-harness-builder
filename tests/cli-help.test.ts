@@ -36,3 +36,7 @@ test('overview: the description first, then each command with its summary', () =
   // serve is what no arguments at all do; `--port 0` alone is an unknown command, so "no command" would overpromise
   expect(o).toContain('[options]   (no arguments: serve)')
 })
+
+test('--kind names anthropic in every command that takes it', () => {
+  for (const n of ['run', 'demo', 'bench'] as const) expect(commandHelp(n)).toMatch(/--kind[^\n]*anthropic/)
+})

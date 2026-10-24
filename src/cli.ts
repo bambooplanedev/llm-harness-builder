@@ -365,6 +365,7 @@ async function cmdReplay(argv: string[]) {
   if (!INT.test(values.turn ?? '')) argError('replay', '--turn must be a positive integer')
   if (!INT.test(values.n)) argError('replay', '--n must be a positive integer')
   if (values['max-tokens'] !== undefined && !INT.test(values['max-tokens'])) argError('replay', '--max-tokens must be a positive integer')
+  if (kind === 'anthropic') argError('replay', '--kind anthropic is not yet supported by replay')
   if (kind !== 'openai' && kind !== 'ollama') argError('replay', '--kind must be openai or ollama')
   // Not the prefix alone: `http://` has it, keyErrors does not judge a URL that does not parse, and the request would go to host "chat" (http:/chat/completions).
   if (!isHttpUrl(baseUrl)) argError('replay', '--base-url must be an http(s) URL')
