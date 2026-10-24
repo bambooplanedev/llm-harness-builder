@@ -1,35 +1,75 @@
-import { test, expect } from 'vitest'
+import { test, expect, describe } from 'vitest'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { runAgent } from '../src/core/run.js'
 import { analyzeTrace, type Stub } from '../src/core/analyze.js'
 import type { HarnessConfig, RunParams } from '../src/core/config.js'
 import type { HarnessEvent } from '../src/core/events.js'
+import type { ChatRequest } from '../src/core/backends/types.js'
+import { AnthropicBackend } from '../src/core/backends/anthropic.js'
 import { fakeBackend, harness, tmp, type FakeResponse } from './helpers.js'
 
 // Each event is frozen as it is yielded, the way TraceWriter serialises it: the fake backend hands
 // the live messages array to llm_request, and the budget stubs those objects in place on a later turn.
-async function trace(config: HarnessConfig, queue: FakeResponse[], opts = {}) {
+type Build = (r: ChatRequest) => unknown
+async function trace(config: HarnessConfig, queue: FakeResponse[], opts = {}, build?: Build) {
   const d = await tmp('lhb-an-'); await writeFile(join(d, 'a.txt'), 'A'.repeat(120)); await writeFile(join(d, 'b.txt'), 'B'.repeat(120))
   const ev: HarnessEvent[] = []
-  for await (const e of runAgent({ config, task: 'do', workdir: d } as RunParams, { backend: fakeBackend(queue), approve: async () => true, ...opts })) ev.push(JSON.parse(JSON.stringify(e)))
+  for await (const e of runAgent({ config, task: 'do', workdir: d } as RunParams, { backend: fakeBackend(queue, build), approve: async () => true, ...opts })) ev.push(JSON.parse(JSON.stringify(e)))
   return ev
 }
 const stubTurn = (ev: HarnessEvent[]) => (ev.find(e => e.type === 'context_stats' && e.droppedChars > 0) as any).turn
 const tools = { enabled: ['read_file', 'edit_file', 'bash'] as HarnessConfig['tools']['enabled'], approveBash: false }
 const ctx = (budgetTokens: number) => ({ maxToolOutputChars: 1000, budgetTokens })
 const read = (path: string) => ({ name: 'read_file', args: { path } })
+const bash = (command: string) => ({ name: 'bash', args: { command } })
 
-test('native: the stub is tied to the read it removed, and a later read of that path is a reread', async () => {
-  const cfg = harness({ tools, context: ctx(60), loop: { maxTurns: 6 } })
-  const ev = await trace(cfg, [{ toolCalls: [read('a.txt')] }, { toolCalls: [read('b.txt')] }, { toolCalls: [read('a.txt')] }, { content: 'fin' }])
-  const a = analyzeTrace(ev)
-  const stubs = a.stubs as Stub[]
-  expect(stubs[0]).toMatchObject({ turn: stubTurn(ev), status: 'matched', chars: 120, items: [{ callId: 'c1', what: 'read_file a.txt' }] })
-  // the stub fires on the request of the turn that reads a.txt again, so the reread is at or after it
-  expect(a.rereads.map(r => r.path)).toEqual(['a.txt'])
-  expect(a.rereads[0].turn).toBeGreaterThanOrEqual(stubTurn(ev))
+const anthropicBody: Build = r => new AnthropicBackend('http://x', fetch, 'k', 'K').buildPayload(r)
+
+// The same runs recorded as Anthropic bodies must read the same: the analyzer sees both through normalizeRequest.
+describe.each([['openai', undefined], ['anthropic', anthropicBody]] as [string, Build | undefined][])('%s body', (_, build) => {
+  /** The trace of `queue` in this format, after checking it analyzes exactly as the OpenAI one. */
+  async function both(cfg: HarnessConfig, queue: () => FakeResponse[]) {
+    const ev = await trace(cfg, queue(), {}, build)
+    expect(analyzeTrace(ev)).toEqual(analyzeTrace(await trace(cfg, queue())))
+    return ev
+  }
+
+  test('native: the stub is tied to the read it removed, and a later read of that path is a reread', async () => {
+    const cfg = harness({ tools, context: ctx(60), loop: { maxTurns: 6 } })
+    const ev = await both(cfg, () => [{ toolCalls: [read('a.txt')] }, { toolCalls: [read('b.txt')] }, { toolCalls: [read('a.txt')] }, { content: 'fin' }])
+    const a = analyzeTrace(ev)
+    const stubs = a.stubs as Stub[]
+    expect(stubs[0]).toMatchObject({ turn: stubTurn(ev), status: 'matched', chars: 120, items: [{ callId: 'c1', what: 'read_file a.txt' }] })
+    // the stub fires on the request of the turn that reads a.txt again, so the reread is at or after it
+    expect(a.rereads.map(r => r.path)).toEqual(['a.txt'])
+    expect(a.rereads[0].turn).toBeGreaterThanOrEqual(stubTurn(ev))
+  })
+
+  test('native: two read_file in one turn are two stubs, each tied to its own read', async () => {
+    const cfg = harness({ tools, context: ctx(70), loop: { maxTurns: 6 } })
+    const ev = await both(cfg, () => [{ toolCalls: [read('a.txt'), read('b.txt')] }, { toolCalls: [bash("printf '%0100d' 0")] }, { toolCalls: [read('a.txt')] }, { content: 'fin' }])
+    const items = (analyzeTrace(ev).stubs as Stub[]).flatMap(s => s.items)
+    expect(items.slice(0, 2)).toEqual([{ callId: 'c1', what: 'read_file a.txt' }, { callId: 'c2', what: 'read_file b.txt' }])
+  })
+
+  test('untilBash: the "not finished" message a stub removes is a final check', async () => {
+    const cfg = harness({ tools, context: ctx(80), loop: { maxTurns: 5, untilBash: "printf '%0200d' 0; exit 1" } })
+    const ev = await both(cfg, () => [{ content: 'a' }, { content: 'b' }, { content: 'c' }, { content: 'd' }, { content: 'e' }])
+    const items = (analyzeTrace(ev).stubs as Stub[]).flatMap(s => s.items)
+    expect(items[0]).toEqual({ what: 'final check' })
+  })
+
+  test('two identical outputs in one stubbed message are two items; nothing else is pulled in', async () => {
+    const cfg = harness({ tools, context: ctx(70), loop: { maxTurns: 5 },
+      toolCalls: { mode: 'prompted', enforceSchema: false, promptedTemplate: 'T:{{tools}}', parseErrorHint: 'HINT' } })
+    const j = (calls: unknown[]) => ({ content: JSON.stringify({ calls, final: null }) })
+    const ev = await both(cfg, () => [j([bash("printf '%0100d' 0"), bash("printf '%0100d' 0")]), j([read('a.txt')]), j([read('b.txt')]), { content: JSON.stringify({ calls: [], final: 'f' }) }])
+    const s = (analyzeTrace(ev).stubs as Stub[])[0]
+    expect(s.items.map(i => i.callId)).toEqual(['c1', 'c2'])
+  })
 })
+
 
 test('prompted json: one message holds a turn of results; every call in it is listed', async () => {
   const cfg = harness({ tools, context: ctx(90), loop: { maxTurns: 5 },
@@ -47,23 +87,6 @@ test('hermes: results inside <tool_response> are matched the same way', async ()
   const b = (path: string) => ({ content: `<tool_call>\n${JSON.stringify({ name: 'read_file', arguments: { path } })}\n</tool_call>` })
   const ev = await trace(cfg, [b('a.txt'), b('b.txt'), b('a.txt'), { content: 'fin' }])
   expect((analyzeTrace(ev).stubs as Stub[])[0]).toMatchObject({ status: 'matched', items: [{ what: 'read_file a.txt' }] })
-})
-
-test('untilBash: the "not finished" message a stub removes is a final check', async () => {
-  const cfg = harness({ tools, context: ctx(80), loop: { maxTurns: 5, untilBash: "printf '%0200d' 0; exit 1" } })
-  const ev = await trace(cfg, [{ content: 'a' }, { content: 'b' }, { content: 'c' }, { content: 'd' }, { content: 'e' }])
-  const items = (analyzeTrace(ev).stubs as Stub[]).flatMap(s => s.items)
-  expect(items[0]).toEqual({ what: 'final check' })
-})
-
-test('two identical outputs in one stubbed message are two items; nothing else is pulled in', async () => {
-  const cfg = harness({ tools, context: ctx(70), loop: { maxTurns: 5 },
-    toolCalls: { mode: 'prompted', enforceSchema: false, promptedTemplate: 'T:{{tools}}', parseErrorHint: 'HINT' } })
-  const j = (calls: unknown[]) => ({ content: JSON.stringify({ calls, final: null }) })
-  const bash = (command: string) => ({ name: 'bash', args: { command } })
-  const ev = await trace(cfg, [j([bash("printf '%0100d' 0"), bash("printf '%0100d' 0")]), j([read('a.txt')]), j([read('b.txt')]), { content: JSON.stringify({ calls: [], final: 'f' }) }])
-  const s = (analyzeTrace(ev).stubs as Stub[])[0]
-  expect(s.items.map(i => i.callId)).toEqual(['c1', 'c2'])
 })
 
 test('a context reset is not a stub', async () => {
@@ -108,7 +131,6 @@ test('native: the same file read twice in one turn — each stub is credited one
 
 test('native: a silent command next to another exit-0 command is not pulled into its stub', async () => {
   const cfg = harness({ tools, context: ctx(60), loop: { maxTurns: 6 } })
-  const bash = (command: string) => ({ name: 'bash', args: { command } })
   const ev = await trace(cfg, [{ toolCalls: [bash('true'), bash("printf '%0200d' 0")] }, { toolCalls: [read('a.txt')] }, { toolCalls: [read('b.txt')] }, { content: 'fin' }])
   const ids = (analyzeTrace(ev).stubs as Stub[]).flatMap(s => s.items.map(i => i.callId))
   expect(new Set(ids).size).toBe(ids.length)

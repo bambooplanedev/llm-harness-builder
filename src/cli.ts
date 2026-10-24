@@ -21,6 +21,7 @@ import { GUARD_BLOCKED, EDIT_MISS } from './core/tools/fs.js'
 import { createBackend } from './core/backends/index.js'
 import { redactor } from './core/redact.js'
 import { replayPayload, replySignature, recordedTurn } from './core/replay.js'
+import { normalizeRequest } from './core/normalize.js'
 import { analyzeTrace, formatAnalysisTable, type AnalyzedRun } from './core/analyze.js'
 import { preflight, windowWarning, type PreflightResult } from './core/preflight.js'
 import { knobsOff } from './core/knobs.js'
@@ -385,6 +386,7 @@ async function cmdReplay(argv: string[]) {
     rec = recordedTurn(lines, Number(values.turn))
   }
   catch (e) { return die(`cannot replay ${file}:\n  ${(e as Error).message}`) }
+  if (normalizeRequest(rec.payload)?.format === 'anthropic') die(`cannot replay ${file}:\n  a recorded Anthropic request is not yet supported by replay`)
   // Before the first request: check the value the name points at and say where it goes. A server's error can echo the key back, so that text is redacted.
   const keyed = { apiKeyEnv: keyEnv, baseUrl }
   const problem = keyProblem(keyed, process.env)

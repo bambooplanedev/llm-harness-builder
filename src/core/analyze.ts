@@ -1,4 +1,5 @@
 import type { HarnessEvent, DoneReason, ToolCall } from './events.js'
+import { normalizeRequest } from './normalize.js'
 import { EDIT_MISS, GUARD_BLOCKED, EDIT_IDENTICAL } from './tools/errors.js'
 
 /**
@@ -47,11 +48,8 @@ const of = <T extends HarnessEvent['type']>(events: HarnessEvent[], type: T) => 
 
 const DROPPED = /^\[dropped: (\d+) chars\]$/
 
-/** The message contents of a recorded request, or undefined when the payload has none. Non-string content (a proxy-recorded agent may send parts) reads as ''. */
-function contentsOf(payload: unknown): string[] | undefined {
-  const m = (payload as { messages?: { content?: unknown }[] } | undefined)?.messages
-  return Array.isArray(m) ? m.map(x => typeof x?.content === 'string' ? x.content : '') : undefined
-}
+/** The message texts of a recorded request in either format, or undefined when the payload has none. Non-string content (a proxy-recorded agent may send parts) reads as ''. */
+const contentsOf = (payload: unknown): string[] | undefined => normalizeRequest(payload)?.messages.map(m => m.text)
 
 /**
  * Compares each recorded request with the previous one, index by index: history only grows between

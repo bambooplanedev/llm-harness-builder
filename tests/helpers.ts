@@ -30,13 +30,14 @@ export type FakeResponse = Partial<NormalizedResponse> & { deltas?: Delta[]; wai
 
 export type FakeBackend = Backend & { requests: ChatRequest[] }
 
-/** A backend that plays `queue` in order and records every request it was asked to build. */
-export function fakeBackend(queue: FakeResponse[]): FakeBackend {
+/** A backend that plays `queue` in order and records every request it was asked to build. `build`: the body it
+ *  returns for one, the request itself by default. */
+export function fakeBackend(queue: FakeResponse[], build: (req: ChatRequest) => unknown = req => req): FakeBackend {
   const requests: ChatRequest[] = []
   return {
     requests,
     async listModels() { return ['fake-model'] },
-    buildPayload(req: ChatRequest) { requests.push(structuredClone(req)); return req },
+    buildPayload(req: ChatRequest) { requests.push(structuredClone(req)); return build(req) },
     async send(_payload, _signal, onDelta) {
       const r = queue.shift()
       if (!r) throw new Error('fake backend: no more responses')

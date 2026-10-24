@@ -609,6 +609,17 @@ test('replay reads a trace whose last line is half-written', async () => {
   expect(r.status).toBe(0); expect(r.stdout).toMatch(/1x same as recorded/)
 }, 30_000)
 
+test('replay of a recorded Anthropic request is refused as not yet supported', async () => {
+  const wd = await tmp('lhb-cli-')
+  const trace = join(wd, 't.jsonl')
+  await writeFile(trace, [
+    JSON.stringify({ meta: { id: 't', harness: 'p', task: 'x', workdir: '', started: 1 } }),
+    JSON.stringify({ seq: 0, turn: 1, ts: 1, type: 'llm_request', payload: { model: 'm', max_tokens: 5, system: 'S', messages: [{ role: 'user', content: 'U' }] } }),
+  ].join('\n'))
+  const r = cli(['replay', trace, '--turn', '1', '--base-url', 'http://x', '--kind', 'openai', '--n', '1'])
+  expect(r.status).toBe(2); expect(r.stderr).toContain('not yet')
+}, 30_000)
+
 const ev = (o: object) => JSON.stringify(o)
 /** A tiny trace: one failed and one good edit, a stub at turn 3 of the read from turn 1. */
 function analyzeFixture(dir: string, id: string, done = true) {
