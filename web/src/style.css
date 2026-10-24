@@ -78,9 +78,11 @@ label button { min-height: 24px; padding: 0 8px; font-size: 12px; font-weight: 5
 .runs > div:hover { border-color: var(--muted); }
 .runs .line { display: flex; justify-content: space-between; align-items: baseline; gap: 4px 16px; flex-wrap: wrap; }
 .runs .line > :last-child { margin-left: auto; color: var(--muted); white-space: nowrap; }
-.picker { margin: 6px 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); font: 12px var(--mono); }
+.browse { position: relative; }
+/* Drops over the page below it; nothing under it moves. */
+.picker { position: absolute; top: 100%; left: 0; right: 0; z-index: 10; margin-top: -2px; box-shadow: 0 8px 24px rgb(0 0 0 / .18); padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); font: 12px var(--mono); }
 .picker .row code { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.picker .dirs { max-height: 220px; overflow: auto; }
+.picker .dirs { max-height: 280px; overflow: auto; }
 .picker .dirs > div { padding: 3px 6px; border-radius: 4px; cursor: pointer; } .picker .dirs > div:hover { background: var(--sunk); }
 pre { font-family: var(--mono); }
 details.inspector pre { max-height: 300px; overflow: auto; background: var(--sunk); padding: 10px 12px; border-radius: 6px; font-size: 12px; line-height: 1.5; }

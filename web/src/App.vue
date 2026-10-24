@@ -102,6 +102,10 @@ const abort = () => api.abort(runId.value).catch(e => (error.value = e.message))
 /** The folder picker: the server lists folders, since a browser never tells a page an absolute path. */
 const browse = ref<Awaited<ReturnType<typeof api.dirs>> | null>(null)
 const browseTo = (p: string) => api.dirs(p).then(d => (browse.value = d)).catch(e => (error.value = e.message))
+/** A dropdown: a click anywhere else or Esc closes it. */
+const pickerEl = ref<HTMLElement>()
+document.addEventListener('mousedown', e => { if (!pickerEl.value?.contains(e.target as Node)) browse.value = null })
+document.addEventListener('keydown', e => { if (e.key === 'Escape') browse.value = null })
 
 /** v-model.number leaves numCtx as '' when the field is cleared; drop it so validateConfig sees undefined, not a bad number. */
 function outbound(c: HarnessConfig): HarnessConfig {
@@ -139,6 +143,7 @@ watch(() => config.value.backend.model, () => {
       </div>
       <div class="col">
         <label>Workdir (absolute path to a scratch project; not / or your home)</label>
+        <div class="browse" ref="pickerEl">
         <div class="row">
           <input type="text" v-model="workdir" placeholder="/path/to/project">
           <button @click="browse ? (browse = null) : browseTo(workdir)">{{ browse ? 'Close' : 'Browse…' }}</button>
@@ -150,6 +155,7 @@ watch(() => config.value.backend.model, () => {
             <div v-for="d in browse.dirs" :key="d.path" @click="browseTo(d.path)">{{ d.name }}/</div>
             <div v-if="!browse.dirs.length" class="muted">no folders here</div>
           </div>
+        </div>
         </div>
         <label>Task</label>
         <textarea v-model="task" class="task"></textarea>
