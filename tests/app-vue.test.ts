@@ -87,3 +87,23 @@ test('ollama without a key: model info once per committed model, not per keystro
   await app.type('gemma', true)
   expect(app.infos().map(c => c.body.model)).toEqual(['qwen3:8b', 'gemma'])
 })
+
+test('emptying a context box leaves the knob out of the saved harness, an emptied context goes too, and a number puts it back', async () => {
+  const answers: Record<string, unknown> = { '/api/harnesses': [{ name: 'c' }], '/api/harnesses/c': harness({ context: { maxToolOutputChars: 50, budgetTokens: 60 } }), '/api/runs': [], '/api/models': [] }
+  const app = await mount(answers)
+  await app.load('c')
+  const box = (label: string) => { const span = all(app.root).find(n => n.tag === 'span' && textOf(n).startsWith(label))!; return span.parent!.children[span.parent!.children.indexOf(span) + 1] }
+  const put = async (label: string, value: string) => { box(label).props.onChange({ target: { value } }); await settle() }
+  const saved = async () => {
+    all(app.root).find(n => n.tag === 'button' && textOf(n) === 'Save as')!.props.onClick(); await settle()
+    return app.calls.filter(c => c.url.startsWith('/api/harnesses/') && c.body).at(-1)!.body
+  }
+  await put('max tool output chars', '')
+  expect((await saved()).context).toEqual({ budgetTokens: 60 })
+  await put('budget tokens', '')
+  expect('context' in await saved()).toBe(false)
+  await put('budget tokens', '0')
+  expect((await saved()).context).toEqual({ budgetTokens: 0 })
+  await put('max tool output chars', '99')
+  expect((await saved()).context).toEqual({ maxToolOutputChars: 99, budgetTokens: 0 })
+})
