@@ -365,3 +365,12 @@ test('listsModelsByItself: only a backend without a key lists its models by itse
   expect(listsModelsByItself({ apiKeyEnv: 'OPENROUTER_API_KEY' })).toBe(false)
   expect(listsModelsByItself({ apiKeyEnv: '' })).toBe(false)
 })
+
+const priced = (p: unknown) => validateConfig({ ...validConfig, backend: { ...validConfig.backend, pricePerMTok: p } })
+
+test('backend.pricePerMTok: input and output, optional cache prices, finite non-negative, no other keys', () => {
+  expect(priced({ input: 0.1, output: 0.5 })).toEqual([])
+  expect(priced({ input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125 })).toEqual([])
+  for (const p of [{ input: -1, output: 0.5 }, JSON.parse('{"input":1e400,"output":0.5}'), { input: 0.1, output: 0.5, extra: 1 }, { input: 0.1 }, 'cheap'])
+    expect(priced(p).join()).toContain('backend.pricePerMTok')
+})

@@ -12,7 +12,7 @@ function parseCalls(calls: AccCall[]): NormalizedToolCall[] {
   })
 }
 
-const usageOf = (u: any) => u && typeof u === 'object' ? usageFrom(u.prompt_tokens, u.completion_tokens) : undefined
+const usageOf = (u: any) => u && typeof u === 'object' ? usageFrom(u.prompt_tokens, u.completion_tokens, u.prompt_tokens_details?.cached_tokens) : undefined
 /** Text a server sent, only when it is text: a number, an array or an object in its place is dropped, not printed. */
 const text = (x: unknown): string | undefined => typeof x === 'string' && x ? x : undefined
 

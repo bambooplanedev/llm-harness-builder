@@ -13,7 +13,8 @@ export type FetchLike = (
 const patient = new Agent({ headersTimeout: 0, bodyTimeout: 0 })
 export const defaultFetch: FetchLike = (url, init) => undiciFetch(url, { ...init, dispatcher: patient })
 
-export type Usage = { promptTokens: number; completionTokens: number }
+/** promptTokens is the whole prompt; the cache counts are the parts of it served from or written to the cache. */
+export type Usage = { promptTokens: number; completionTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number }
 
 /** A count as a server sent it: absent is 0, as it always was; anything but a finite non-negative number is not one. */
 const tokenCount = (x: unknown): number | undefined =>
@@ -21,9 +22,12 @@ const tokenCount = (x: unknown): number | undefined =>
 
 /** Usage from the two counts a server sent, or none at all: a server's text must never reach the terminal as a count,
  *  two lines above an approval question. */
-export function usageFrom(prompt: unknown, completion: unknown): Usage | undefined {
+export function usageFrom(prompt: unknown, completion: unknown, cacheRead?: unknown): Usage | undefined {
   const p = tokenCount(prompt), c = tokenCount(completion)
-  return p === undefined || c === undefined ? undefined : { promptTokens: p, completionTokens: c }
+  if (p === undefined || c === undefined) return undefined
+  // Unlike the two counts, an absent or bad cache count is no field at all: 0 would claim the server said "no hit".
+  const r = typeof cacheRead === 'number' && Number.isFinite(cacheRead) && cacheRead >= 0 ? cacheRead : undefined
+  return r === undefined ? { promptTokens: p, completionTokens: c } : { promptTokens: p, completionTokens: c, cacheReadTokens: r }
 }
 
 /** One streamed piece of the assistant turn; either field may be absent. */

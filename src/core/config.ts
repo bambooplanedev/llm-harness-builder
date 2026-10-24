@@ -100,11 +100,14 @@ export function keyNote(b: { apiKeyEnv?: unknown; baseUrl?: unknown }, env?: Rec
   return `the key in ${b.apiKeyEnv} goes to ${new URL(b.baseUrl).host}${short}`
 }
 
+/** Dollars per million tokens; cache prices default to input's. */
+export type Price = { input: number; output: number; cacheRead?: number; cacheWrite?: number }
+
 export type McpServerConfig = { command: string; args?: string[]; tools?: string[] }
 
 export type HarnessConfig = {
   name: string
-  backend: { kind: BackendKind; baseUrl: string; model: string; numCtx?: number; maxTokens?: number; think?: boolean; temperature: number; apiKeyEnv?: string }
+  backend: { kind: BackendKind; baseUrl: string; model: string; numCtx?: number; maxTokens?: number; think?: boolean; temperature: number; apiKeyEnv?: string; pricePerMTok?: Price }
   systemPrompt: string
   tools: { enabled: ToolName[]; approveBash: boolean; requireReadBeforeEdit?: boolean; explainEditMiss?: boolean; editMissEscalation?: number; bashEnv?: string[] }
   toolCalls: { mode: 'native' | 'prompted'; format?: ToolCallFormat; enforceSchema: boolean; promptedTemplate: string; parseErrorHint: string }
@@ -123,13 +126,14 @@ export const sendsAnswerSchema = (c: HarnessConfig): boolean =>
 // A misspelt key would be silently off, and every optional knob is off when absent. '' is the top level.
 const KEYS: Record<string, string[]> = {
   '': ['name', 'backend', 'systemPrompt', 'tools', 'toolCalls', 'context', 'loop', 'mcpServers'],
-  backend: ['kind', 'baseUrl', 'model', 'numCtx', 'maxTokens', 'think', 'temperature', 'apiKeyEnv'],
+  backend: ['kind', 'baseUrl', 'model', 'numCtx', 'maxTokens', 'think', 'temperature', 'apiKeyEnv', 'pricePerMTok'],
   tools: ['enabled', 'approveBash', 'requireReadBeforeEdit', 'explainEditMiss', 'editMissEscalation', 'bashEnv'],
   toolCalls: ['mode', 'format', 'enforceSchema', 'promptedTemplate', 'parseErrorHint'],
   context: ['maxToolOutputChars', 'budgetTokens'],
   loop: ['maxTurns', 'maxRepeats', 'repeatTemperature', 'repeatThinkTokens', 'freshContext', 'untilBash'],
 }
 const MCP_SERVER_KEYS = ['command', 'args', 'tools']
+const PRICE_KEYS = ['input', 'output', 'cacheRead', 'cacheWrite']
 /** The thinking switch `loop.repeatThinkTokens` flips: a line of its own, which is how the qwen3 family writes it. */
 export const NO_THINK_LINE = /^\/no_think$/m
 const isObj = (v: unknown): v is Record<string, any> => typeof v === 'object' && v !== null
@@ -152,6 +156,17 @@ export function validateConfig(c: unknown): string[] {
     if (b.numCtx !== undefined && !(Number.isInteger(b.numCtx) && b.numCtx > 0)) e.push('backend.numCtx must be a positive integer')
     if (b.maxTokens !== undefined && !(Number.isInteger(b.maxTokens) && b.maxTokens > 0)) e.push('backend.maxTokens must be a positive integer')
     if (b.think !== undefined && typeof b.think !== 'boolean') e.push('backend.think must be true or false')
+    const pr = b.pricePerMTok
+    if (pr !== undefined) {
+      if (!isObj(pr) || Array.isArray(pr)) e.push('backend.pricePerMTok must be an object')
+      else {
+        unknown(pr, PRICE_KEYS, 'backend.pricePerMTok.')
+        for (const k of PRICE_KEYS) {
+          const v = pr[k], ok = typeof v === 'number' && Number.isFinite(v) && v >= 0
+          if (v === undefined ? k === 'input' || k === 'output' : !ok) e.push(`backend.pricePerMTok.${k} must be a finite non-negative number${k === 'input' || k === 'output' ? '' : ' or absent'}`)
+        }
+      }
+    }
   }
   if (typeof c.systemPrompt !== 'string') e.push('systemPrompt must be a string')
   const t = c.tools

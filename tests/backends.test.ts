@@ -426,3 +426,9 @@ test('without a key nothing changes: no authorization, no redirect mode, llama-s
   expect(rec.paths()).toEqual(['POST /apply-template', 'POST /tokenize', 'GET /props'])
   expect(rec.log.every(r => r.init?.headers?.authorization === undefined && r.init?.redirect === undefined)).toBe(true)
 })
+
+test('usage carries cached_tokens as cacheReadTokens, only as a finite non-negative number', async () => {
+  const send = (cached: unknown) => new OpenAIBackend('http://x/v1', fakeFetch(200, { choices: [{ message: { content: 'hi' }, finish_reason: 'stop' }], usage: { prompt_tokens: 9, completion_tokens: 1, prompt_tokens_details: { cached_tokens: cached } } })).send({ stream: false })
+  expect((await send(7)).usage).toEqual({ promptTokens: 9, completionTokens: 1, cacheReadTokens: 7 })
+  expect((await send('7')).usage).toEqual({ promptTokens: 9, completionTokens: 1 })
+})
