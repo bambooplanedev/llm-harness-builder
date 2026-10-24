@@ -155,3 +155,12 @@ test('a knob the model does not take is a disabled box with a hint and where tha
   expect(free).not.toContain('not available for this model')
 })
 
+
+test('context boxes: show the harness values, and empty boxes when the harness sets no limit', async () => {
+  const none = { ...base } as any; delete none.context
+  expect(await render(none)).toMatch(/max tool output chars \(empty = no limit\)<\/span><input[^>]*value=""/)
+  expect(await render(none)).toMatch(/budget tokens \(empty = no budget\)<\/span><input[^>]*value=""/)
+  const set = { ...base, context: { maxToolOutputChars: 50, budgetTokens: 60 } } as HarnessConfig
+  expect(await render(set)).toMatch(/max tool output chars[^<]*<\/span><input[^>]*value="50"/)
+  expect(await render(set)).toMatch(/budget tokens[^<]*<\/span><input[^>]*value="60"/)
+})

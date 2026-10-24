@@ -124,8 +124,8 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
     // loop.repeatThinkTokens: the system message of a thinking turn. It is sent for that turn only and never enters the history.
     const thinkTokens = config.loop.repeatThinkTokens
     const systemThinking = system.replace(NO_THINK_LINE, '/think')
-    const max = config.context.maxToolOutputChars
-    const cut = (s: string) => s.length > max ? s.slice(0, max) + `\n[truncated: ${s.length - max} more chars]` : s
+    const max = config.context?.maxToolOutputChars
+    const cut = (s: string) => max !== undefined && s.length > max ? s.slice(0, max) + `\n[truncated: ${s.length - max} more chars]` : s
     const ctx = {
       workdir,
       maxToolOutputChars: max,
@@ -151,7 +151,7 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
       if (turn >= config.loop.maxTurns) { yield done('max_turns'); return }
       turn++
 
-      const droppedChars = applyBudget(messages, config.context.budgetTokens)
+      const droppedChars = applyBudget(messages, config.context?.budgetTokens ?? 0)
       const think = hot && thinkTokens !== undefined
       const req: ChatRequest = {
         model: config.backend.model, messages: think ? [{ role: 'system', content: systemThinking }, ...messages.slice(1)] : messages,
@@ -167,7 +167,7 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
       }
       const payload = backend.buildPayload(req)
       const exactTokens = await backend.countTokens?.(payload, opts.signal)
-      yield ev({ type: 'context_stats', estimatedTokens: estimateTokens(messages), exactTokens, budgetTokens: config.context.budgetTokens, droppedChars, usage: lastUsage })
+      yield ev({ type: 'context_stats', estimatedTokens: estimateTokens(messages), exactTokens, budgetTokens: config.context?.budgetTokens, droppedChars, usage: lastUsage })
       yield ev({ type: 'llm_request', payload })
 
       const t0 = Date.now()
@@ -281,7 +281,7 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
         }
         // Before the cut: a key the cut split would leave its first half behind.
         result = { ...result, output: redact.text(result.output) }
-        const truncated = result.output.length > max
+        const truncated = max !== undefined && result.output.length > max
         let output = cut(result.output)
         let repeats = 0
         if (config.loop.maxRepeats !== undefined) {

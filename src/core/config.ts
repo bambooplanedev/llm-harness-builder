@@ -111,7 +111,8 @@ export type HarnessConfig = {
   systemPrompt: string
   tools: { enabled: ToolName[]; approveBash: boolean; requireReadBeforeEdit?: boolean; explainEditMiss?: boolean; editMissEscalation?: number; bashEnv?: string[] }
   toolCalls: { mode: 'native' | 'prompted'; format?: ToolCallFormat; enforceSchema: boolean; promptedTemplate: string; parseErrorHint: string }
-  context: { maxToolOutputChars: number; budgetTokens: number }
+  /** Both limits are off when absent; budgetTokens 0 is off too. */
+  context?: { maxToolOutputChars?: number; budgetTokens?: number }
   loop: { maxTurns: number; maxRepeats?: number; repeatTemperature?: number; repeatThinkTokens?: number; freshContext?: number; untilBash?: string }
   mcpServers?: Record<string, McpServerConfig>
 }
@@ -193,7 +194,11 @@ export function validateConfig(c: unknown): string[] {
     if (isObj(b) && b.kind === 'anthropic' && tc.mode === 'prompted' && tc.enforceSchema === true) e.push('toolCalls.enforceSchema cannot go with prompted mode on kind anthropic: its schema leaves args free; use enforceSchema: false or mode: "native"')
   }
   const cx = c.context
-  if (!isObj(cx) || !(cx.maxToolOutputChars > 0) || !(cx.budgetTokens >= 0)) e.push('context.maxToolOutputChars > 0 and budgetTokens >= 0 required')
+  if (cx !== undefined && !isObj(cx)) e.push('context must be an object')
+  else if (cx) {
+    if (cx.maxToolOutputChars !== undefined && !(Number.isInteger(cx.maxToolOutputChars) && cx.maxToolOutputChars > 0)) e.push('context.maxToolOutputChars must be a positive integer')
+    if (cx.budgetTokens !== undefined && !(Number.isInteger(cx.budgetTokens) && cx.budgetTokens >= 0)) e.push('context.budgetTokens must be a non-negative integer')
+  }
   if (!isObj(c.loop) || !(Number.isInteger(c.loop.maxTurns) && c.loop.maxTurns > 0)) e.push('loop.maxTurns must be a positive integer')
   else {
     const l = c.loop

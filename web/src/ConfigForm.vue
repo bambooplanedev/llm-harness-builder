@@ -40,6 +40,14 @@ function setMaxTokens(text: string) {
   if (Number.isInteger(n) && n > 0) config.value.backend.maxTokens = n
   else delete config.value.backend.maxTokens
 }
+/** Same rule for the context limits; an emptied section goes too. */
+function setContext(k: 'maxToolOutputChars' | 'budgetTokens', text: string) {
+  const n = Number(text)
+  const cx = config.value.context ??= {}
+  if (text !== '' && Number.isInteger(n) && n >= (k === 'budgetTokens' ? 0 : 1)) cx[k] = n
+  else delete cx[k]
+  if (!Object.keys(cx).length) delete config.value.context
+}
 
 /** Three states, and the first is no key at all: absent, nothing about thinking is sent. */
 function setThink(text: string) {
@@ -161,8 +169,8 @@ function editMcp(text: string) {
 
     <label>Context</label>
     <div class="row">
-      <span>max tool output chars</span><input type="number" v-model.number="config.context.maxToolOutputChars">
-      <span>budget tokens (0=off)</span><input type="number" v-model.number="config.context.budgetTokens">
+      <span>max tool output chars (empty = no limit)</span><input type="number" min="1" :value="config.context?.maxToolOutputChars ?? ''" @change="setContext('maxToolOutputChars', ($event.target as HTMLInputElement).value)">
+      <span>budget tokens (empty = no budget)</span><input type="number" min="0" :value="config.context?.budgetTokens ?? ''" @change="setContext('budgetTokens', ($event.target as HTMLInputElement).value)">
     </div>
     <label>Loop</label>
     <div class="row"><span>max turns</span><input type="number" v-model.number="config.loop.maxTurns"></div>

@@ -410,6 +410,11 @@ one would otherwise be silently off.
 `backend.maxTokens` caps the tokens of one response, thinking included; without it a generation
 runs until the window is full. `numCtx` is sent to Ollama only.
 
+`context.maxToolOutputChars` and `context.budgetTokens` are optional, and so is `context`. Absent,
+the harness does not limit that thing: tool output is not truncated, and no budget stubs old results
+(`budgetTokens: 0` still means no budget, so older files keep working). Present, they must be a
+positive integer and a non-negative integer.
+
 `backend.think` sets the chat template's thinking switch: `chat_template_kwargs.enable_thinking` on
 an OpenAI-compatible server (llama-server reads it), `think` on Ollama. Absent, nothing is sent and
 the model's own default holds, so a harness without the key sends the request it always sent. It is

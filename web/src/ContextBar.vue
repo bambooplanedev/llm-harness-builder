@@ -16,7 +16,7 @@ const pct = computed(() => ceiling.value ? Math.min(100, (stats.value?.exactToke
       <span v-if="stats.budgetTokens"> · budget {{ stats.budgetTokens }}</span>
       <span v-if="numCtx"> · num_ctx {{ numCtx }}</span>
       <span v-if="stats.droppedChars" class="warn"> · dropped {{ stats.droppedChars }} chars</span>
-      <span v-if="numCtx && stats.budgetTokens > numCtx" class="warn"> · budget exceeds num_ctx</span>
+      <span v-if="numCtx && stats.budgetTokens && stats.budgetTokens > numCtx" class="warn"> · budget exceeds num_ctx</span>
     </small>
   </div>
 </template>

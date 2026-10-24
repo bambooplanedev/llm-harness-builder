@@ -976,3 +976,13 @@ test('a price with no usage reported: no cost on the response event', async () =
   const ev = await collect({ config, task: 'do', workdir: await wd() }, { backend: Fake([{ content: 'done!' }]) })
   expect(ev.find(e => e.type === 'llm_response')).not.toHaveProperty('costUsd')
 })
+
+test('no context limits: a long tool output is not truncated and nothing is stubbed', async () => {
+  const be = Fake([{ toolCalls: [{ name: 'read_file', args: { path: 'a.txt' } }] }, { toolCalls: [{ name: 'read_file', args: { path: 'a.txt' } }] }, { content: 'x' }])
+  const cfg = base(); delete (cfg as any).context
+  const ev = await collect({ config: cfg, task: 'do', workdir: await wd() }, { backend: be })
+  const tr = ev.filter(e => e.type === 'tool_result') as any[]
+  expect(tr.every(t => !t.truncated && t.output.includes('A'.repeat(120)))).toBe(true)
+  const stats = ev.filter(e => e.type === 'context_stats') as any[]
+  expect(stats.every(s => s.droppedChars === 0 && s.budgetTokens === undefined)).toBe(true)
+})

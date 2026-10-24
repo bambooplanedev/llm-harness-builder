@@ -73,3 +73,8 @@ test('anthropic: the window comes from serverInfo; a model the list lacks is ref
     .toEqual({ ok: true, server: { nCtx: 200000, maxOutput: 64000 } })
   expect(await preflight(be(['claude-haiku-5-5']), claude('claude-nope'))).toEqual({ ok: false, message: 'preflight: model claude-nope is not among the 1 models https://api.anthropic.com lists' })
 })
+
+test('windowWarning: a harness with no context section has no budget to warn about', () => {
+  const c = harness(); delete (c as any).context
+  expect(windowWarning(c, 5120)).toBeUndefined()
+})

@@ -3,7 +3,7 @@ import path from 'node:path'
 import { resolveInside } from './sandbox.js'
 import { GUARD_BLOCKED, EDIT_MISS, EDIT_IDENTICAL } from './errors.js'
 
-export type ToolCtx = { workdir: string; maxToolOutputChars: number; reads?: Set<string>; explainEditMiss?: boolean; /** Names from tools.bashEnv; absent: the base set only. */ bashEnv?: readonly string[] }
+export type ToolCtx = { workdir: string; maxToolOutputChars?: number; reads?: Set<string>; explainEditMiss?: boolean; /** Names from tools.bashEnv; absent: the base set only. */ bashEnv?: readonly string[] }
 type Args = Record<string, unknown>
 
 const str = (args: Args, key: string): string => {

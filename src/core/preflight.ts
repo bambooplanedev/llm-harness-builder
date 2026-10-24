@@ -38,7 +38,7 @@ export async function preflight(backend: Backend, b: HarnessConfig['backend']): 
 
 /** A budget that, with the response cap on top, does not fit the window cannot keep the run inside it. Off budget or unknown window → nothing to say. */
 export function windowWarning(c: HarnessConfig, nCtx: number | undefined): string | undefined {
-  const budget = c.context.budgetTokens, cap = c.backend.maxTokens ?? 0
+  const budget = c.context?.budgetTokens, cap = c.backend.maxTokens ?? 0
   if (!budget || !nCtx || budget + cap <= nCtx) return undefined
   const sum = cap ? `budgetTokens ${budget} + maxTokens ${cap} = ${budget + cap}` : `budgetTokens ${budget}`
   return `warning: ${c.name}: ${sum} is over the server window ${nCtx}; the budget cannot hold the window`

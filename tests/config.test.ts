@@ -396,3 +396,9 @@ test('kind anthropic refuses prompted mode with enforceSchema, and says what to 
   expect(c({ mode: 'prompted', enforceSchema: false, promptedTemplate: '{{tools}}' })).toEqual([])
   expect(c({ mode: 'native', enforceSchema: true })).toEqual([])
 })
+
+test('context limits are optional: absent means no limit, 0 budget still means off, bad values are refused', () => {
+  const put = (cx: unknown) => { const c = structuredClone(validConfig) as any; if (cx === undefined) delete c.context; else c.context = cx; return validateConfig(c) }
+  for (const ok of [undefined, {}, { maxToolOutputChars: 10 }, { budgetTokens: 0 }, { budgetTokens: 100 }]) expect(put(ok)).toEqual([])
+  for (const bad of [{ maxToolOutputChars: 0 }, { maxToolOutputChars: -1 }, { maxToolOutputChars: 1.5 }, { budgetTokens: -1 }, { budgetTokens: 1.5 }, { budgetTokens: '5' }, 3]) expect(put(bad).length).toBeGreaterThan(0)
+})
