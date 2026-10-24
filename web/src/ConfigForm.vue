@@ -118,7 +118,7 @@ function editMcp(text: string) {
     <div v-if="keyLine() && !models.length" class="hint">press ↻ to list the models: that request carries the key</div>
     <div class="row">
       <select v-model="config.backend.model"><option v-for="m in models" :key="m" :value="m">{{ m }}</option></select>
-      <input type="text" v-model="config.backend.model" placeholder="or type a model id">
+      <input type="text" v-model.lazy="config.backend.model" placeholder="or type a model id">
       <button @click="emit('refreshModels')">↻</button>
     </div>
     <div v-if="modelsError" class="err">{{ modelsError }}</div>

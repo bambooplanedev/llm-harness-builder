@@ -134,7 +134,7 @@ const anthropic = { ...base, backend: { kind: 'anthropic' as const, baseUrl: 'ht
 const withInfo = (c: HarnessConfig, modelInfo: unknown) =>
   renderToString(createSSRApp(ConfigForm, { modelValue: c, models: [], modelsError: '', harnessNames: [], modelInfo }))
 
-test('the backend select offers anthropic, and a harness of that kind renders without a key written or removed', async () => {
+test('the backend select offers anthropic, and rendering a harness of that kind neither writes nor removes a key', async () => {
   const c = structuredClone(anthropic)
   const html = await render(c)
   expect(html).toMatch(/<option value="anthropic"[^>]*>anthropic \(native\)<\/option>/)

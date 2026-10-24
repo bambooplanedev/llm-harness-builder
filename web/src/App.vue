@@ -43,7 +43,7 @@ const canAbort = () => !!runId.value && !isDone() && (running() || openActive.va
 
 async function refreshModels() {
   modelsError.value = ''
-  const b = config.value.backend
+  const b = config.value.backend, picked = b.model
   try {
     models.value = await api.models(b.kind, b.baseUrl, b.apiKeyEnv)
     // A list from elsewhere is hundreds of models at every price, and a hosted one is public, so it arrives before the key is typed:
@@ -51,17 +51,24 @@ async function refreshModels() {
     if (!b.model && !b.apiKeyEnv && isLoopbackUrl(b.baseUrl) && models.value[0]) b.model = models.value[0]
   }
   catch (e) { models.value = []; modelsError.value = `cannot list models: ${(e as Error).message}` }
-  await refreshInfo()
+  if (b.model === picked) await refreshInfo() // a model picked from the list above is asked for by the model watch
 }
-/** Asked where the list is and by the same rule, so with a key it waits for the refresh button too. */
+const INFO_ERROR = 'cannot read what the model takes: '
+let infoAsk = 0
+/** Also drops an answer still on its way: it is about the backend or model before this change. */
+function forgetInfo() { infoAsk++; modelInfo.value = undefined }
+/** With a key: on the refresh button only, as the list. Without one, only Ollama: an OpenAI-compatible server's answer
+ *  holds no `takes` (llama-server's /props), and a llama router loads the model it is asked about. */
 async function refreshInfo() {
-  const b = config.value.backend, model = b.model
-  modelInfo.value = undefined
-  if (!model) return
+  forgetInfo()
+  const b = config.value.backend, ask = infoAsk
+  if (!b.model || (listsModelsByItself(b) && b.kind !== 'ollama')) return
   try {
-    const info = await api.modelInfo(b.kind, b.baseUrl, model, b.apiKeyEnv)
-    if (config.value.backend.model === model) modelInfo.value = info // a model typed since then is not this one
-  } catch (e) { modelsError.value ||= `cannot read what the model takes: ${(e as Error).message}` }
+    const info = await api.modelInfo(b.kind, b.baseUrl, b.model, b.apiKeyEnv)
+    if (ask !== infoAsk) return // the backend or the model changed meanwhile: a later ask owns the answer
+    modelInfo.value = info
+    if (modelsError.value.startsWith(INFO_ERROR)) modelsError.value = ''
+  } catch (e) { if (ask === infoAsk) modelsError.value ||= INFO_ERROR + (e as Error).message }
 }
 /** A structural knob the model does not take: the run would be refused, so the form says it before Run. */
 const refusal = computed(() => modelInfo.value && knobsOff(config.value, modelInfo.value).refuse) // unknown: nothing to say yet
@@ -108,11 +115,11 @@ watch(() => [config.value.backend.kind, config.value.backend.baseUrl, config.val
   // With a key, asking for the list sends the key to baseUrl: that waits for the refresh button, so opening a harness
   // or a bench run sends nothing, and a list from the previous host is not kept.
   if (listsModelsByItself(config.value.backend)) refreshModels()
-  else { models.value = []; modelsError.value = ''; modelInfo.value = undefined }
+  else { models.value = []; modelsError.value = ''; forgetInfo() }
 })
 watch(() => config.value.backend.model, () => {
   if (listsModelsByItself(config.value.backend)) refreshInfo()
-  else modelInfo.value = undefined
+  else forgetInfo()
 })
 </script>
 
