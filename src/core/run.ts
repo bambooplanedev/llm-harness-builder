@@ -10,6 +10,7 @@ import { estimateTokens, applyBudget } from './tokens.js'
 import { normPath } from './analyze.js'
 import { startServers, type McpSession } from './mcp.js'
 import { redactor } from './redact.js'
+import { costOf } from './cost.js'
 
 export type RunOpts = {
   signal?: AbortSignal
@@ -171,7 +172,8 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
         yield done('backend_error'); return
       }
       lastUsage = res.usage
-      yield ev({ type: 'llm_response', raw: res.raw, content: res.content, reasoning: res.reasoning, usage: res.usage, latencyMs: Date.now() - t0 })
+      const cost = costOf(res.usage, config.backend.pricePerMTok)
+      yield ev({ type: 'llm_response', raw: res.raw, content: res.content, reasoning: res.reasoning, usage: res.usage, ...cost === undefined ? {} : { costUsd: cost }, latencyMs: Date.now() - t0 })
 
       // ---- parse -------------------------------------------------------------
       let calls: { name: string; args: Record<string, unknown>; backendId?: string; argsError?: string }[] = []

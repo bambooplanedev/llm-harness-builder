@@ -897,3 +897,15 @@ test('a key under 20 characters is not looked for', async () => {
     expect(last(ev).text).toBe(`say ${'k'.repeat(19)}`)
   } finally { delete process.env[KEY_NAME] }
 })
+
+test('llm_response.costUsd: only with a price and a usage', async () => {
+  const usage = { promptTokens: 1e6, completionTokens: 0 }
+  const cost = async (price: HarnessConfig['backend']['pricePerMTok'], u?: typeof usage) => {
+    const config = base(); config.backend = { ...config.backend, pricePerMTok: price }
+    const ev = await collect({ config, task: 'do', workdir: await wd() }, { backend: Fake([{ content: 'ok', usage: u }]) })
+    return ev.find(e => e.type === 'llm_response') as Extract<HarnessEvent, { type: 'llm_response' }>
+  }
+  expect((await cost({ input: 1, output: 1 }, usage)).costUsd).toBe(1)
+  expect('costUsd' in await cost(undefined, usage)).toBe(false)
+  expect('costUsd' in await cost({ input: 1, output: 1 })).toBe(false)
+})

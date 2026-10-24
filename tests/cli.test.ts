@@ -1136,3 +1136,15 @@ test('replay --api-key-env sends the key to the server it names, says so on stde
     expect(api.seen).toHaveLength(2)
   } finally { await api.close() }
 }, 60_000)
+
+test('the done line carries the run cost when the harness has a price, and no $ otherwise', async () => {
+  const wd = await tmp('lhb-cli-')
+  const fake = join(wd, 'fake.json'), file = join(wd, 'priced.json')
+  const plain = JSON.parse(await readFile(harness('bare'), 'utf8'))
+  await writeFile(file, JSON.stringify({ ...plain, backend: { ...plain.backend, pricePerMTok: { input: 1, output: 2 } } }))
+  await writeFile(fake, JSON.stringify([{ content: 'a', usage: { promptTokens: 1_000_000, completionTokens: 500_000 } }]))
+  expect(cli(['run', file, '--workdir', wd, '--yes', 'x'], { LHB_FAKE_BACKEND: fake }).stderr).toContain('done: final after 1 turns, 0 tool calls · $2 total')
+  const r = cli(['run', harness('bare'), '--workdir', wd, '--yes', 'x'], { LHB_FAKE_BACKEND: fake })
+  expect(r.stderr).toContain('done: final')
+  expect(r.stderr).not.toContain('$')
+}, 30_000)

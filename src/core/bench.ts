@@ -9,6 +9,8 @@ export type BenchRun = {
   trace?: string
   /** description + schema characters every mcp server put in front of the model. Absent when the harness has no mcp server. */
   toolChars?: number
+  /** Dollars the run's replies cost: the sum of their costUsd. Absent when the harness has no price or the server reported no usage. */
+  costUsd?: number
   /** Tool results that came back as errors — mcp or built-in. */
   toolErrors?: number
   /** Edits the read-before-edit guard refused. Absent when the harness had the guard off. */
@@ -51,10 +53,11 @@ export function formatTable(harnesses: BenchHarness[]): string {
   // The tool columns only earn their width when a run measured them: a bench of built-in harnesses
   // prints exactly the table it printed before mcp existed.
   const tools = harnesses.some(h => h.runs.some(r => r.toolChars))
+  const cost = harnesses.some(h => h.runs.some(r => r.costUsd !== undefined))
   const guard = harnesses.some(h => h.runs.some(r => r.guardBlocks !== undefined))
   const miss = harnesses.some(h => h.runs.some(r => r.editMiss !== undefined))
   const sum = (xs: (number | undefined)[]) => xs.reduce<number>((a, x) => a + (x ?? 0), 0)
-  const head = ['harness', 'PASS', '95% CI', 'reasons', 'med turns', 'med s', ...tools ? ['toolChars', 'med errs'] : [], ...guard ? ['guard'] : [], ...miss ? ['editMiss'] : []]
+  const head = ['harness', 'PASS', '95% CI', 'reasons', 'med turns', 'med s', ...tools ? ['toolChars', 'med errs'] : [], ...cost ? ['med $'] : [], ...guard ? ['guard'] : [], ...miss ? ['editMiss'] : []]
   const rows = harnesses.map(h => [
     h.name, `${h.pass}/${h.runs.length}`,
     wilson(h.pass, h.runs.length)?.map(x => x.toFixed(2)).join('–') ?? '-',
@@ -62,6 +65,7 @@ export function formatTable(harnesses: BenchHarness[]): string {
     String(h.median.turns), String(Math.round(h.median.ms / 1000)),
     // toolChars is the same in every run of a harness, so it is taken, not averaged.
     ...tools ? [String(h.runs.find(r => r.toolChars)?.toolChars ?? '-'), String(median(h.runs.map(r => r.toolErrors ?? 0)))] : [],
+    ...cost ? [h.runs.some(r => r.costUsd !== undefined) ? String(Number(median(h.runs.flatMap(r => r.costUsd ?? [])).toPrecision(4))) : '-'] : [],
     // Sums, not medians: a median of five small integers is 0 and hides the signal. An arm whose
     // runs never defined guardBlocks had the guard off and could not produce one — "-", not 0.
     ...guard ? [h.runs.some(r => r.guardBlocks !== undefined) ? String(sum(h.runs.map(r => r.guardBlocks))) : '-'] : [],
