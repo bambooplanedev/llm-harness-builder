@@ -22,7 +22,21 @@ function applyPreset(k: keyof typeof PRESETS) {
   if (!config.value.toolCalls.promptedTemplate) config.value.toolCalls.promptedTemplate = DEFAULT_PROMPTED_TEMPLATE
   if (!config.value.toolCalls.parseErrorHint) config.value.toolCalls.parseErrorHint = DEFAULT_PARSE_ERROR_HINT
 }
-function family(k: string) { config.value = applyFamily(config.value, k) }
+/** What the last family button changed, while the config is still the one it made; any other swap (load, a bench run) clears it. */
+const familyChanged = ref<{ key: string; changes: string[]; config: HarnessConfig } | null>(null)
+function family(k: keyof typeof FAMILIES) {
+  const a = config.value, b = applyFamily(a, k), suffix = FAMILIES[k].systemSuffix
+  const lastLine = (p: string) => p.trimEnd().split('\n').at(-1)!.trim()
+  const changes = [
+    a.toolCalls.mode !== b.toolCalls.mode && `tool calls ${a.toolCalls.mode} → ${b.toolCalls.mode}`,
+    b.toolCalls.mode === 'prompted' && (a.toolCalls.format ?? 'json') !== b.toolCalls.format && `format ${a.toolCalls.format ?? 'json'} → ${b.toolCalls.format}`,
+    a.toolCalls.promptedTemplate !== b.toolCalls.promptedTemplate && 'prompted template replaced',
+    a.toolCalls.parseErrorHint !== b.toolCalls.parseErrorHint && 'parse-error hint replaced',
+    lastLine(a.systemPrompt) !== lastLine(b.systemPrompt) && (suffix && lastLine(b.systemPrompt) === suffix ? `${suffix} added as the last line of the system prompt` : `${lastLine(a.systemPrompt)} removed from the end of the system prompt`),
+  ].filter((c): c is string => !!c)
+  config.value = b
+  familyChanged.value = { key: k, changes, config: b }
+}
 const hermes = () => config.value.toolCalls.format === 'hermes'
 function toggleTool(n: HarnessConfig['tools']['enabled'][number]) {
   const set = new Set(config.value.tools.enabled)
@@ -93,7 +107,7 @@ const mcpText = ref(fmtMcp(config.value.mcpServers))
 const mcpErr = defineModel<string>('mcpError', { default: '' })
 const mcpCount = () => Object.keys(config.value.mcpServers ?? {}).length
 // Not deep: fires when App replaces the whole config (load, a family button), never while typing here.
-watch(config, c => { mcpText.value = fmtMcp(c.mcpServers); mcpErr.value = '' })
+watch(config, c => { mcpText.value = fmtMcp(c.mcpServers); mcpErr.value = ''; if (c !== familyChanged.value?.config) familyChanged.value = null })
 /** Empty box means no servers at all, so a harness without MCP saves byte-for-byte as before. */
 function editMcp(text: string) {
   mcpText.value = text
@@ -147,7 +161,8 @@ function editMcp(text: string) {
 
     <div class="label"><span :title="H.systemPrompt">System prompt</span> <span v-for="(_, k) in PRESETS" :key="k"><button @click="applyPreset(k)">{{ k }}</button> </span></div>
     <textarea v-model="config.systemPrompt"></textarea>
-    <div class="label"><span :title="H.family">Model family</span> <span v-for="(f, k) in FAMILIES" :key="k"><button :title="f.note" @click="family(k)">{{ k }}</button> </span></div>
+    <div class="label"><span :title="H.family">Model family</span> <span v-for="(f, k) in FAMILIES" :key="k"><button :title="H.families[k]" @click="family(k)">{{ k }}</button> </span></div>
+    <div v-if="familyChanged" class="hint">{{ familyChanged.key }}: {{ familyChanged.changes.length ? familyChanged.changes.join('; ') : 'nothing to change, the form already matches it' }}</div>
 
     <label :title="H.tools">Tools</label>
     <div class="row" style="flex-wrap:wrap">
