@@ -145,9 +145,9 @@ function editMcp(text: string) {
     </div>
     <div v-if="locked()" class="hint">{{ locked() }}: this knob is not available for this model<span v-if="modelInfo?.takesFrom"> ({{ modelInfo.takesFrom }})</span></div>
 
-    <label><span :title="H.systemPrompt">System prompt</span> <span v-for="(_, k) in PRESETS" :key="k"><button @click="applyPreset(k)">{{ k }}</button> </span></label>
+    <div class="label"><span :title="H.systemPrompt">System prompt</span> <span v-for="(_, k) in PRESETS" :key="k"><button @click="applyPreset(k)">{{ k }}</button> </span></div>
     <textarea v-model="config.systemPrompt"></textarea>
-    <label><span :title="H.family">Model family</span> <span v-for="(f, k) in FAMILIES" :key="k"><button :title="f.note" @click="family(k)">{{ k }}</button> </span></label>
+    <div class="label"><span :title="H.family">Model family</span> <span v-for="(f, k) in FAMILIES" :key="k"><button :title="f.note" @click="family(k)">{{ k }}</button> </span></div>
 
     <label :title="H.tools">Tools</label>
     <div class="row" style="flex-wrap:wrap">
