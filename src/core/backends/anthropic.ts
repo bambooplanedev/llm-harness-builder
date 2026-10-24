@@ -8,7 +8,7 @@ const text = (x: unknown): string | undefined => typeof x === 'string' && x ? x 
 const part = (x: unknown): number => x === undefined || x === null ? 0 : typeof x === 'number' && Number.isFinite(x) && x >= 0 ? x : NaN
 
 /** Folds the SSE events of one Messages reply into a NormalizedResponse; `native` is its `content` blocks in their order.
- *  Shared with the proxy (П4), so the two cannot read a stream differently. */
+ *  Shared with the proxy, so the two cannot read a stream differently. */
 export async function collectAnthropic(chunks: AsyncIterable<any>, onDelta?: (d: Delta) => void): Promise<NormalizedResponse> {
   let content = '', reasoning = '', message: any = {}, usage: any = {}, stop: string | undefined, category: string | undefined, done = false
   // Indexed by the server's `index`, which only a small non-negative integer may be: nothing is keyed by server data.
@@ -38,7 +38,8 @@ export async function collectAnthropic(chunks: AsyncIterable<any>, onDelta?: (d:
   if (stop === 'refusal') throw new BackendError(category ? `refused: ${category}` : 'refused')
   const toolCalls: NormalizedToolCall[] = []
   const native = blocks.flatMap((b, i) => {
-    if (!b) return []
+    // An empty text block is a 400 when sent back; drop_block covers the signature it may have covered.
+    if (!b || (b.type === 'text' && !b.text)) return []
     if (b.type !== 'tool_use') return [b]
     // A call with no arguments may send no input_json_delta at all: then it is {}.
     const [call] = parseCalls([{ id: text(b.id), name: text(b.name), args: json[i] || JSON.stringify(b.input ?? {}) }])
@@ -73,7 +74,7 @@ export class AnthropicBackend implements Backend {
         if (last?.role === 'user' && Array.isArray(last.content) && last.content[0]?.type === 'tool_result') last.content.push(r)
         else messages.push({ role: 'user', content: [r] })
       } else if (m.role === 'assistant') {
-        if (m.native) { messages.push({ role: 'assistant', content: m.native }); continue }
+        if (m.native?.length) { messages.push({ role: 'assistant', content: m.native }); continue }
         // A blank text block is a 400, and so is an assistant with no blocks: a reply with neither text nor calls gets a marker.
         const calls = (m.toolCalls ?? []).map(c => ({ type: 'tool_use', id: c.backendId ?? c.name, name: c.name, input: c.args }))
         const said = m.content.trim() ? [{ type: 'text', text: m.content }] : calls.length ? [] : [{ type: 'text', text: '(empty reply)' }]

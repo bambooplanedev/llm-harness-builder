@@ -157,3 +157,15 @@ test('collectAnthropic: raw is the reply as one message, input_transformations i
     input_transformations: [{ type: 'x' }],
   })
 })
+
+test('buildPayload: an empty native takes the marker; blank text with calls is the calls alone', () => {
+  const p = body({ messages: [{ role: 'user', content: 'u' }, { role: 'assistant', content: '', native: [] }, { role: 'user', content: 'again' }] })
+  expect(p.messages[1].content).toEqual([{ type: 'text', text: '(empty reply)' }])
+  const calls = body({ messages: [{ role: 'user', content: 'u' }, { role: 'assistant', content: '  ', toolCalls: [{ backendId: 'tu_1', name: 'bash', args: {} }] }] })
+  expect(calls.messages[1].content).toEqual([{ type: 'tool_use', id: 'tu_1', name: 'bash', input: {} }])
+})
+
+test('collectAnthropic: a text block that got no deltas is left out of native', async () => {
+  const r = await read([start(), ...block(0, { type: 'text', text: '' }, []), ...block(1, { type: 'tool_use', id: 'tu_1', name: 'bash', input: {} }, []), ...end('tool_use')])
+  expect(r.native).toEqual([{ type: 'tool_use', id: 'tu_1', name: 'bash', input: {} }])
+})
