@@ -72,15 +72,23 @@ label button { min-height: 24px; padding: 0 8px; font-size: 12px; font-weight: 5
 .turn summary { cursor: pointer; color: var(--muted); font: 12px var(--mono); padding: 4px 0; }
 .bar { height: 10px; background: var(--sunk); border-radius: 5px; overflow: hidden; margin: 4px 0; }
 .bar > div { height: 100%; background: var(--accent); }
-.runs { font: 12px var(--mono); } .runs > div { cursor: pointer; padding: 6px 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
-.runs div div { border: 0; padding: 0; } .runs > div:hover { background: var(--sunk); }
+.runs { font: 12px var(--mono); }
+/* One card per run: what it is on the left, how it went (turns, tool calls, time) on the right. */
+.runs > div { cursor: pointer; margin: 6px 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); overflow-wrap: anywhere; }
+.runs > div:hover { border-color: var(--muted); }
+.runs .line { display: flex; justify-content: space-between; align-items: baseline; gap: 4px 16px; flex-wrap: wrap; }
+.runs .line > :last-child { margin-left: auto; color: var(--muted); white-space: nowrap; }
+.picker { margin: 6px 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); font: 12px var(--mono); }
+.picker .row code { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.picker .dirs { max-height: 220px; overflow: auto; }
+.picker .dirs > div { padding: 3px 6px; border-radius: 4px; cursor: pointer; } .picker .dirs > div:hover { background: var(--sunk); }
 pre { font-family: var(--mono); }
 details.inspector pre { max-height: 300px; overflow: auto; background: var(--sunk); padding: 10px 12px; border-radius: 6px; font-size: 12px; line-height: 1.5; }
 .hint { font-size: 12px; color: var(--muted); margin: 8px 0; }
 .bench-table { font: 12px var(--mono); background: var(--sunk); padding: 10px 12px; border-radius: 6px; overflow: auto; }
-.runs div.on { font-weight: 600; }
-.runs div.bad { color: var(--err); }
-.runs div.notrace { cursor: default; } .runs div.notrace:hover { background: none; }
+.runs div.on { border-color: var(--accent); box-shadow: inset 3px 0 var(--accent); }
+.runs div.bad { border-color: var(--err); color: var(--err); }
+.runs div.notrace { cursor: default; } .runs div.notrace:hover { border-color: var(--line); }
 .runs .clip { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--warn); }
 
 .diff { font-size: 12px; }

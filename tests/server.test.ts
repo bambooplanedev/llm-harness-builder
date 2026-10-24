@@ -532,3 +532,14 @@ test('model-info: POST with the backend fields and a model gives what the server
     expect((await fetch(`${u}/api/model-info`)).status).toBe(404)
   } finally { await s.close(); delete process.env.LHB_SRV_INFO_API_KEY }
 })
+
+test('GET /api/dirs lists subfolders by name and full path, no files, no dot folders', async () => {
+  const { mkdir } = await import('node:fs/promises')
+  const d = await tmp('lhb-dirs-')
+  await mkdir(join(d, 'b')); await mkdir(join(d, 'a')); await mkdir(join(d, '.git')); await writeFile(join(d, 'f.txt'), '')
+  const r = await (await fetch(`${base}/api/dirs?path=${encodeURIComponent(d)}`)).json()
+  expect(r.path).toBe(d)
+  expect(r.dirs).toEqual([{ name: 'a', path: join(d, 'a') }, { name: 'b', path: join(d, 'b') }])
+  expect(r.parent).toBe(join(d, '..'))
+  expect((await fetch(`${base}/api/dirs?path=${encodeURIComponent(join(d, 'nope'))}`)).status).toBe(400)
+})

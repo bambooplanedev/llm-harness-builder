@@ -144,7 +144,8 @@ onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer); unsub?.(); d
       <details v-if="files.length" :open="!file"><summary class="hint">{{ file || 'pick a bench' }} · {{ files.length }} benches</summary>
       <div class="runs">
         <div v-for="f in files" :key="f.file" :class="{ on: f.file === file }" @click="openFile(f.file)">
-          <b>{{ f.file }}</b><div class="muted">{{ f.model || '?' }} · <span style="white-space:nowrap">{{ new Date(f.date).toLocaleString() }}</span><span v-if="!f.complete"> · incomplete</span></div>
+          <b>{{ f.file }}</b>
+          <div class="line muted"><span>{{ f.model || '?' }}<span v-if="!f.complete"> · incomplete</span></span><span>{{ new Date(f.date).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) }}</span></div>
         </div>
       </div>
       </details>
@@ -162,8 +163,8 @@ onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer); unsub?.(); d
           <template v-for="h in result.harnesses" :key="h.name">
             <div v-for="r in h.runs" :key="h.name + '#' + r.round" :class="{ notrace: !r.trace, bad: r.verdict === 'FAIL' }"
                  @click="r.trace && (sel = { id: r.trace })">
-              {{ h.name }} #{{ r.round }} {{ r.verdict }} {{ r.reason }} {{ mmss(r.ms) }}<span
-                v-if="r.verdict === 'FAIL' && r.reason === 'final'"> — the model answered, tests are red</span>
+              <div class="line"><span><b>{{ h.name }} #{{ r.round }}</b> · {{ r.verdict }} · {{ r.reason }}</span><span>{{ r.turns }} turns · {{ r.toolCalls }} tool calls · {{ mmss(r.ms) }}</span></div>
+              <div v-if="r.verdict === 'FAIL' && r.reason === 'final'">the model answered, tests are red</div>
               <div v-if="r.lastError" class="clip" :title="r.lastError">{{ r.lastError }}</div>
               <div v-if="r.trace && analysis[r.trace]" class="analysis">{{ cellsLine(analysis[r.trace]) }}</div>
               <small>

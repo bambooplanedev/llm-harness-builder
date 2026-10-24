@@ -93,6 +93,14 @@ export async function startServer(opts: ServerOpts) {
         await writeFile(path.join(opts.harnessesDir, `${mm[1]}.json`), JSON.stringify(body, null, 2) + '\n')
         return json(res, 200, { ok: true })
       }
+      if (m('GET', /^\/api\/dirs$/)) {
+        // The page's folder picker: names of subfolders only, never file contents. A browser cannot hand a page an absolute path.
+        const dir = path.resolve(url.searchParams.get('path') || process.cwd())
+        let entries
+        try { entries = await readdir(dir, { withFileTypes: true }) } catch (e) { return json(res, 400, { error: (e as Error).message }) }
+        const dirs = entries.filter(e => e.isDirectory() && !e.name.startsWith('.')).map(e => ({ name: e.name, path: path.join(dir, e.name) })).sort((a, b) => a.name.localeCompare(b.name))
+        return json(res, 200, { path: dir, parent: path.dirname(dir) === dir ? null : path.dirname(dir), dirs })
+      }
       if (m('GET', /^\/api\/runs$/)) return json(res, 200, await store.list())
       if (m('GET', /^\/api\/bench$/)) {
         const file = url.searchParams.get('file')

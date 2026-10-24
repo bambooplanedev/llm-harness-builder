@@ -99,6 +99,9 @@ async function start() {
 }
 const approve = (callId: string, ok: boolean) => api.approve(runId.value, callId, ok).catch(e => (error.value = e.message))
 const abort = () => api.abort(runId.value).catch(e => (error.value = e.message))
+/** The folder picker: the server lists folders, since a browser never tells a page an absolute path. */
+const browse = ref<Awaited<ReturnType<typeof api.dirs>> | null>(null)
+const browseTo = (p: string) => api.dirs(p).then(d => (browse.value = d)).catch(e => (error.value = e.message))
 
 /** v-model.number leaves numCtx as '' when the field is cleared; drop it so validateConfig sees undefined, not a bad number. */
 function outbound(c: HarnessConfig): HarnessConfig {
@@ -136,7 +139,18 @@ watch(() => config.value.backend.model, () => {
       </div>
       <div class="col">
         <label>Workdir (absolute path to a scratch project; not / or your home)</label>
-        <input type="text" v-model="workdir" placeholder="/path/to/project">
+        <div class="row">
+          <input type="text" v-model="workdir" placeholder="/path/to/project">
+          <button @click="browse ? (browse = null) : browseTo(workdir)">{{ browse ? 'Close' : 'Browse…' }}</button>
+        </div>
+        <div v-if="browse" class="picker">
+          <div class="row"><code>{{ browse.path }}</code><button @click="workdir = browse.path; browse = null">Use this folder</button></div>
+          <div class="dirs">
+            <div v-if="browse.parent" @click="browseTo(browse.parent)">..</div>
+            <div v-for="d in browse.dirs" :key="d.path" @click="browseTo(d.path)">{{ d.name }}/</div>
+            <div v-if="!browse.dirs.length" class="muted">no folders here</div>
+          </div>
+        </div>
         <label>Task</label>
         <textarea v-model="task" class="task"></textarea>
         <div v-if="refusal" class="warn">{{ refusal }}</div>
@@ -150,7 +164,7 @@ watch(() => config.value.backend.model, () => {
         <h4>Runs</h4>
         <div class="runs">
           <div v-for="r in runs" :key="r.id" @click="open(r.id, r.task, r.active)">
-            <b>{{ r.harness }}</b> · {{ r.reason ?? 'running' }} · {{ r.turns ?? '-' }} turns · {{ r.toolCallCount ?? '-' }} tool calls · {{ new Date(r.started).toLocaleTimeString() }}
+            <div class="line"><span><b>{{ r.harness }}</b> · {{ r.reason ?? 'running' }}</span><span>{{ r.turns ?? '-' }} turns · {{ r.toolCallCount ?? '-' }} tool calls · {{ new Date(r.started).toLocaleTimeString() }}</span></div>
             <div class="muted">{{ r.task.slice(0, 60) }}</div>
           </div>
         </div>
