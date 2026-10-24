@@ -260,7 +260,7 @@ async function benchOnce(config: HarnessConfig, round: number, timeoutS: number,
   } catch (e) {
     run = { round, verdict: 'FAIL', reason: 'error', turns: 0, toolCalls: 0, parseErrors, lastError: redact.text(String(e)), ms: Date.now() - t0, workdir, toolChars: toolChars || undefined, costUsd, toolErrors, guardBlocks: config.tools.requireReadBeforeEdit ? guardBlocks : undefined, editMiss }
   }
-  const tail = (run.reason === 'error' || run.reason === 'aborted') && run.lastError ? `  ${run.lastError.replace(/\s+/g, ' ').slice(0, 200)}` : ''
+  const tail = (run.reason === 'error' || run.reason === 'aborted') && run.lastError ? `  ${showable(run.lastError.replace(/\s+/g, ' ').slice(0, 200))}` : ''
   process.stderr.write(`${run.verdict}  reason=${run.reason} turns=${run.turns} toolCalls=${run.toolCalls} parseErrors=${run.parseErrors} ${Math.round(run.ms / 1000)}s${run.trace ? ` trace=${run.trace}` : ''}${tail}\n`)
   return run
 }
@@ -314,7 +314,7 @@ async function cmdBench(argv: string[]) {
         asked.set(key, r = await preflight(createBackend(b), b))
         if (r.ok) console.error(`preflight: ${b.baseUrl} ${b.model}: window ${r.server.nCtx ?? 'unknown'}${r.server.build ? `, build ${r.server.build}` : ''}`)
       }
-      if (!r.ok) die(redactor(apiKey(b, process.env), b.apiKeyEnv ?? '').text(r.message))
+      if (!r.ok) die(showable(redactor(apiKey(b, process.env), b.apiKeyEnv ?? '').text(r.message)))
       else {
         h.server = r.server
         const w = windowWarning(h.config, r.server.nCtx)
@@ -392,7 +392,7 @@ async function cmdReplay(argv: string[]) {
   const recorded = rec.raw === undefined ? undefined : replySignature(rec.raw)
   const replies = new Map<string, { count: number; sameAsRecorded: boolean; promptTokens?: number; truncated: boolean }>()
   for (let i = 0; i < Number(values.n); i++) {
-    const r = await backend.send(payload).catch(e => die(redact.text(`backend: ${(e as Error).message}${(e as { body?: string }).body ? `\n${(e as { body?: string }).body}` : ''}`)))
+    const r = await backend.send(payload).catch(e => die(`backend: ${showable(redact.text((e as Error).message))}${(e as { body?: string }).body ? `\n${showableText(redact.text((e as { body?: string }).body!))}` : ''}`))
     const sig = replySignature(r.raw), seen = replies.get(sig)
     if (seen) seen.count++
     else replies.set(sig, { count: 1, sameAsRecorded: sig === recorded, promptTokens: r.usage?.promptTokens, truncated: !!r.truncated })

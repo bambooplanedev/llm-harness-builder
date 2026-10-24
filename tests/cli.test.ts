@@ -1022,6 +1022,18 @@ test('bench against the Anthropic API: preflight asks the model, the window is i
   } finally { await api.close() }
 }, 60_000)
 
+test('bench against the Anthropic API: an error the server words with a terminal escape is printed escaped', async () => {
+  const srv = http.createServer((_req, res) => { res.writeHead(400, { 'content-type': 'application/json' }); res.end(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'bad \x1b[31mred' } })) })
+  await new Promise<void>(r => srv.listen(0, '127.0.0.1', r))
+  try {
+    const wd = await tmp('lhb-cli-'), file = await claudeHarness(wd, `http://127.0.0.1:${(srv.address() as AddressInfo).port}`)
+    const r = await cliAsync(['bench', '--n', '1', '--out', join(wd, 'b.json'), file], { [KEY_NAME]: KEY })
+    expect(r.status).not.toBe(0)
+    expect(r.stderr).toContain('GET /v1/models: 400 invalid_request_error: bad \\u001b[31mred')
+    expect(r.stderr).not.toContain('\x1b')
+  } finally { await new Promise<void>(r => { srv.closeAllConnections(); srv.close(() => r()) }) }
+}, 30_000)
+
 test('a key typed into the task is redacted in the trace\'s first line', async () => {
   const api = await fakeOpenAI([textTurn('done')])
   try {

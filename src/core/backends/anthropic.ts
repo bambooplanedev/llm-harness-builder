@@ -88,7 +88,7 @@ export class AnthropicBackend implements Backend {
     if (!r.ok) throw await this.failed('GET /v1/models', r)
     const j = await readJson(r, 'GET /v1/models')
     this.partialList = j?.has_more === true
-    return (Array.isArray(j?.data) ? j.data : []).map((m: any) => m?.id)
+    return (Array.isArray(j?.data) ? j.data : []).flatMap((m: any) => typeof m?.id === 'string' ? [m.id] : [])
   }
 
   async serverInfo(model: string): Promise<ServerInfo | undefined> {
