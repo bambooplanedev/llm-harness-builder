@@ -930,7 +930,7 @@ test('a tool that errored goes back with isError', async () => {
 })
 
 test('a knob the model does not take is not sent and the run says so first; the harness keeps its value', async () => {
-  const config = base({ backend: { kind: 'openai', baseUrl: 'http://x/v1', model: 'fake-model', temperature: 0.2 } })
+  const config = base({ backend: { kind: 'ollama', baseUrl: 'http://x', model: 'fake-model', temperature: 0.2 } })
   const be = Object.assign(Fake([{ content: 'done!' }]), { async serverInfo() { return { takes: { temperature: false as const }, takesFrom: 'test' } } })
   const ev = await collect({ config, task: 'do', workdir: await wd() }, { backend: be })
   expect(ev[0]).toMatchObject({ type: 'knobs_off', turn: 0, off: [{ knob: 'temperature', value: 0.2 }] })
@@ -941,7 +941,8 @@ test('a knob the model does not take is not sent and the run says so first; the 
 
 test('a structural knob the model does not take refuses the run before any request', async () => {
   const be = Object.assign(Fake([{ content: 'x' }]), { async serverInfo() { return { takes: { tools: false as const }, takesFrom: 'test' } } })
-  const ev = await collect({ config: base(), task: 'do', workdir: await wd() }, { backend: be })
+  const config = base({ backend: { kind: 'ollama', baseUrl: 'http://x', model: 'fake-model', temperature: 0 } })
+  const ev = await collect({ config, task: 'do', workdir: await wd() }, { backend: be })
   expect(types(ev)).toEqual(['error', 'done'])
   expect((ev[0] as any).message).toContain('mode: "prompted"')
   expect(last(ev).reason).toBe('backend_error')
@@ -953,4 +954,25 @@ test('anthropic without maxTokens sends the model\'s own output cap', async () =
   const be = Object.assign(Fake([{ content: 'done!' }]), { async serverInfo() { return { maxOutput: 64000, router: false } } })
   await collect({ config, task: 'do', workdir: await wd() }, { backend: be })
   expect(be.requests[0].maxTokens).toBe(64000)
+})
+
+test('keyless openai: serverInfo is not asked (a router would load the model; its answer has no takes)', async () => {
+  let asked = 0
+  const be = Object.assign(Fake([{ content: 'done!' }]), { async serverInfo() { asked++; return undefined } })
+  await collect({ config: base(), task: 'do', workdir: await wd() }, { backend: be })
+  expect(asked).toBe(0)
+})
+
+test('anthropic with no maxTokens and no answer from the server: the refusal names the failed lookup', async () => {
+  const config = base({ backend: { kind: 'anthropic', baseUrl: 'https://api.anthropic.com', model: 'claude-haiku-5-5', temperature: 0 } })
+  const be = Object.assign(Fake([]), { async serverInfo() { return undefined } })
+  const ev = await collect({ config, task: 'do', workdir: await wd() }, { backend: be })
+  expect((ev[0] as any).message).toContain('GET /v1/models/claude-haiku-5-5 failed or the model is unknown')
+  expect(be.requests).toHaveLength(0)
+})
+
+test('a price with no usage reported: no cost on the response event', async () => {
+  const config = base({ backend: { kind: 'openai', baseUrl: 'http://x/v1', model: 'fake-model', temperature: 0, pricePerMTok: { input: 1, output: 1 } } })
+  const ev = await collect({ config, task: 'do', workdir: await wd() }, { backend: Fake([{ content: 'done!' }]) })
+  expect(ev.find(e => e.type === 'llm_response')).not.toHaveProperty('costUsd')
 })

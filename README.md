@@ -173,6 +173,10 @@ a knob missing from it is reliably unsupported, while one present is no guarante
 your request reaches takes it. In the form the knob is locked with "this knob is not available for
 this model" (Ollama is asked about the model when it is committed in the box, the others on ↻), and
 unlocks when you pick another model.
+A knob that would change the harness itself is not dropped but refused before the first request:
+`toolCalls.mode: "native"` on a model whose server says it takes no tools, and `enforceSchema` on a
+model that takes no response schema (the same sources). The message names the fix: set
+`toolCalls.mode: "prompted"`, or `toolCalls.enforceSchema: false`.
 
 **Thinking.** Without `think`, or with `think: true`, the request asks for adaptive thinking with
 a summary, and sets `block_binding.prefix_mismatch_behavior` to `drop_block` (beta

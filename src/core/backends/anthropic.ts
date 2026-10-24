@@ -10,7 +10,7 @@ const part = (x: unknown): number => x === undefined || x === null ? 0 : typeof 
 /** Folds the SSE events of one Messages reply into a NormalizedResponse; `native` is its `content` blocks in their order.
  *  Shared with the proxy, so the two cannot read a stream differently. */
 export async function collectAnthropic(chunks: AsyncIterable<any>, onDelta?: (d: Delta) => void): Promise<NormalizedResponse> {
-  let content = '', reasoning = '', message: any = {}, usage: any = {}, stop: string | undefined, category: string | undefined, done = false
+  let content = '', reasoning = '', message: any = {}, usage: any, stop: string | undefined, category: string | undefined, done = false
   // Indexed by the server's `index`, which only a small non-negative integer may be: nothing is keyed by server data.
   const blocks: any[] = [], json: string[] = []
   for await (const c of chunks) {
@@ -31,7 +31,7 @@ export async function collectAnthropic(chunks: AsyncIterable<any>, onDelta?: (d:
     } else if (c?.type === 'message_delta') {
       if (text(c.delta?.stop_reason)) stop = c.delta.stop_reason
       category = text(c.delta?.stop_details?.category)?.slice(0, 100)
-      if (c.usage && typeof c.usage === 'object') usage = { ...usage, ...c.usage }
+      if (c.usage && typeof c.usage === 'object') usage = { ...usage ?? {}, ...c.usage }
     } else if (c?.type === 'message_stop') done = true
   }
   if (!done) throw new BackendError('POST /v1/messages: stream ended before message_stop')
@@ -49,7 +49,8 @@ export async function collectAnthropic(chunks: AsyncIterable<any>, onDelta?: (d:
   const { id, model, role, input_transformations } = message
   return {
     content, reasoning: reasoning || undefined, toolCalls, native,
-    usage: usageFrom(part(usage.input_tokens) + part(usage.cache_read_input_tokens) + part(usage.cache_creation_input_tokens),
+    // No usage object in either event is no usage: 0 would price a run at $0.
+    usage: usage && usageFrom(part(usage.input_tokens) + part(usage.cache_read_input_tokens) + part(usage.cache_creation_input_tokens),
       usage.output_tokens, usage.cache_read_input_tokens, usage.cache_creation_input_tokens),
     truncated: stop === 'max_tokens' || undefined,
     raw: { id, model, role, content: native, stop_reason: stop ?? null, usage, ...(input_transformations !== undefined ? { input_transformations } : {}) },

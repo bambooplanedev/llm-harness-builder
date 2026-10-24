@@ -315,7 +315,7 @@ async function cmdBench(argv: string[]) {
       let r = asked.get(key)
       if (!r) {
         asked.set(key, r = await preflight(createBackend(b), b))
-        if (r.ok) console.error(`preflight: ${b.baseUrl} ${b.model}: window ${r.server.nCtx ?? 'unknown'}${r.server.build ? `, build ${r.server.build}` : ''}`)
+        if (r.ok) console.error(`preflight: ${b.baseUrl} ${b.model}: window ${r.server.nCtx ?? 'unknown'}${r.server.build ? `, build ${showable(r.server.build)}` : ''}`)
       }
       if (!r.ok) die(showable(redactor(apiKey(b, process.env), b.apiKeyEnv ?? '').text(r.message)))
       else {

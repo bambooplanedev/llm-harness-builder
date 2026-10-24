@@ -30,6 +30,6 @@ export function knobsOff(c: HarnessConfig, info: ServerInfo | undefined, answerS
   if (takes.tools === false && native && hasTools) return { off, refuse: `${why('tools')}: set toolCalls.mode: "prompted"` }
   if (takes.responseSchema === false && sendsSchema) return { off, refuse: `${why('response schema')}: set toolCalls.enforceSchema: false` }
   if (c.backend.kind === 'anthropic' && c.backend.maxTokens === undefined && !info?.maxOutput)
-    return { off, refuse: `${model}: the server did not say how many tokens a reply may have, and the API needs a number: set backend.maxTokens` }
+    return { off, refuse: `${model}: the server did not say this model's max_tokens (GET /v1/models/${model} failed or the model is unknown), and the API needs a number: set backend.maxTokens` }
   return { off }
 }

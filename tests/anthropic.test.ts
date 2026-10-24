@@ -110,6 +110,11 @@ test('collectAnthropic: usage is the whole prompt, the cache parts and the outpu
   expect(r.usage).toEqual({ promptTokens: 240, completionTokens: 42, cacheReadTokens: 200, cacheWriteTokens: 30 })
 })
 
+test('collectAnthropic: no usage in either event is no usage, not zero', async () => {
+  const r = await read([{ type: 'message_start', message: { id: 'm', role: 'assistant', model: 'x' } }, { type: 'message_delta', delta: { stop_reason: 'end_turn' } }, { type: 'message_stop' }])
+  expect(r.usage).toBeUndefined()
+})
+
 test('collectAnthropic: max_tokens is truncated; pause_turn is not', async () => {
   const text = block(0, { type: 'text', text: '' }, [{ type: 'text_delta', text: 'x' }])
   expect((await read([start(), ...text, ...end('max_tokens')])).truncated).toBe(true)

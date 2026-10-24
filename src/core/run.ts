@@ -1,4 +1,4 @@
-import { NO_THINK_LINE, apiKey, type HarnessConfig, type RunParams } from './config.js'
+import { NO_THINK_LINE, apiKey, listsModelsByItself, type HarnessConfig, type RunParams } from './config.js'
 import { mcpApprovalName, UNTIL_BASH, type HarnessEvent, type ToolCall, type DoneReason } from './events.js'
 import { createBackend, type Backend, type ChatMessage, type ChatRequest, type Delta, type NormalizedResponse, type Usage } from './backends/index.js'
 import { TOOL_SCHEMAS, runTool } from './tools/index.js'
@@ -108,7 +108,8 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
   try {
     if (mcp) for (const s of mcp.servers) yield ev({ type: 'mcp_server_start', ...s })
     // Once, before the first request: what the model does not take is not sent, or, when that would change the harness, nothing is.
-    const info = await backend.serverInfo?.(config.backend.model)
+    // Not for keyless openai (llama-server): its answer holds no `takes`, and a router loads the model it is asked about.
+    const info = listsModelsByItself(config.backend) && config.backend.kind === 'openai' ? undefined : await backend.serverInfo?.(config.backend.model)
     const knobs = knobsOff(config, info, answerSchema), takes = info?.takes ?? {}
     if (knobs.refuse) { yield ev({ type: 'error', message: knobs.refuse }); yield done('backend_error'); return }
     if (knobs.off.length) yield ev({ type: 'knobs_off', off: knobs.off })
