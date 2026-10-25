@@ -34,10 +34,10 @@ No GPU: the same commands run on a hosted API, as in the README's
 `bench`:
 
     --kind openai --base-url https://openrouter.ai/api/v1 \
-      --api-key-env OPENROUTER_API_KEY --model nvidia/nemotron-3-super-120b-a12b:free
+      --api-key-env OPENROUTER_API_KEY --model nvidia/nemotron-3.5-lightning:free
 
 A free OpenRouter account is enough: models whose id ends in `:free` cost nothing, but OpenRouter
-allows them 20 requests a minute and 50 a day. A hosted API refuses `backend.think`. Every number
+allows them 20 requests a minute and 50 a day. Free models on OpenRouter come and go: if this one is gone, pick any free model with tool support. A hosted API refuses `backend.think`. Every number
 in this kit is from qwen3:8b on Ollama: your numbers on the cloud will differ.
 
 ### Safety, before any exercise with a model

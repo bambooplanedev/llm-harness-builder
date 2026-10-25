@@ -66,3 +66,25 @@ test('the lab is on GitHub, not in the npm package', () => {
 test('both READMEs link the lab kit by its GitHub URL', () => {
   for (const f of ['README.md', 'README.uk.md']) expect([f, read(f).includes(`https://github.com/${repo}/tree/main/docs/lab`)]).toEqual([f, true])
 })
+
+const flat = (o: any, p = ''): Record<string, unknown> =>
+  Object.entries(o).reduce((a, [k, v]) => v && typeof v === 'object' && !Array.isArray(v) ? { ...a, ...flat(v, `${p}${k}.`) } : { ...a, [`${p}${k}`]: v }, {})
+
+test('every harness in the lab validates', () => {
+  for (const f of labFiles('.json')) expect([f, validateConfig(JSON.parse(read(f)))]).toEqual([f, []])
+})
+
+test('the cloud solution loads on a hosted API and has no backend.think', () => {
+  const sol = JSON.parse(read('docs/lab/02-make-bare-pass/solution-cloud.json'))
+  expect(sol.name).toBe('lab-solution-cloud')
+  expect(sol.backend.think).toBeUndefined()
+  const cloud = { ...sol, backend: { ...sol.backend, kind: 'openai', baseUrl: 'https://openrouter.ai/api/v1', apiKeyEnv: 'OPENROUTER_API_KEY', model: 'm' } }
+  expect(validateConfig(cloud)).toEqual([])
+})
+
+test('the solution is the starter plus the measured changes only', () => {
+  const a = flat(without(JSON.parse(read('docs/lab/02-make-bare-pass/start.json')))), b = flat(without(JSON.parse(read('docs/lab/02-make-bare-pass/solution.json'))))
+  const differ = [...new Set([...Object.keys(a), ...Object.keys(b)])].filter(k => JSON.stringify(a[k]) !== JSON.stringify(b[k])).sort()
+  expect(differ).toEqual(['backend.think'])
+  expect(JSON.parse(read('docs/lab/02-make-bare-pass/solution.json')).name).toBe('lab-solution')
+})

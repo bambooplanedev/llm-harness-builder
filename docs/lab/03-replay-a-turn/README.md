@@ -30,4 +30,4 @@ what the recorded reply was.
 From what you see: would a second run of `tuned-nothink` take the same path at turn 2? And what
 does a replay not tell you about how that second run would end?
 
-Solution: `solution.md` (not written yet: it waits for a measurement).
+Solution: [solution.md](solution.md).

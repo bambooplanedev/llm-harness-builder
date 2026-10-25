@@ -34,7 +34,7 @@
 
     npx llm-harness-builder bench start.json --task slug --n 3 --timeout 600 \
       --kind openai --base-url https://openrouter.ai/api/v1 \
-      --api-key-env OPENROUTER_API_KEY --model nvidia/nemotron-3-super-120b-a12b:free
+      --api-key-env OPENROUTER_API_KEY --model nvidia/nemotron-3.5-lightning:free
 
 Хмарний API відхиляє `backend.think`, тож файл, який його задає, там не запуститься. Три прогони до
 15 ходів кожен плюс один запит попередньої перевірки `bench` — це близько 46 запитів, майже 50 на
@@ -71,10 +71,12 @@
 <details>
 <summary>Підказка 3</summary>
 
-Один ключ `backend` обмежує довжину однієї відповіді. Знайдіть його в таблиці
+На цій моделі thinking може з'їсти цілий хід. Один ключ `backend` його вимикає. Знайдіть його в таблиці
 [Файл харнесу](https://github.com/bambooplanedev/llm-harness-builder/blob/main/README.uk.md#файл-харнесу)
 в README. Чи задає його `start.json`?
 
 </details>
 
-Розв'язок: `solution.uk.md` (ще не написаний: чекає на замір).
+Очікуване: на локальному стенді виміряний розв'язок пройшов 8 з 10 (медіана 12 с на прогін); див. [розв'язок](solution.uk.md), там і файл.
+
+Розв'язок: [solution.uk.md](solution.uk.md).

@@ -34,10 +34,10 @@
 Додайте до `bench` ці чотири прапорці:
 
     --kind openai --base-url https://openrouter.ai/api/v1 \
-      --api-key-env OPENROUTER_API_KEY --model nvidia/nemotron-3-super-120b-a12b:free
+      --api-key-env OPENROUTER_API_KEY --model nvidia/nemotron-3.5-lightning:free
 
 Досить безкоштовного акаунта OpenRouter: моделі, чий id закінчується на `:free`, нічого не коштують,
-але OpenRouter дозволяє їм 20 запитів на хвилину і 50 на день. Хмарний API відхиляє `backend.think`.
+але OpenRouter дозволяє їм 20 запитів на хвилину і 50 на день. Безкоштовні моделі OpenRouter з'являються й зникають: якщо цієї вже нема, оберіть будь-яку безкоштовну модель з підтримкою інструментів. Хмарний API відхиляє `backend.think`.
 Усі числа в цьому наборі — з qwen3:8b на Ollama: у хмарі ваші числа будуть іншими.
 
 ### Безпека перед будь-якою вправою з моделлю

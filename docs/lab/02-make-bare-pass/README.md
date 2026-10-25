@@ -34,7 +34,7 @@ key is in it, and add the four flags:
 
     npx llm-harness-builder bench start.json --task slug --n 3 --timeout 600 \
       --kind openai --base-url https://openrouter.ai/api/v1 \
-      --api-key-env OPENROUTER_API_KEY --model nvidia/nemotron-3-super-120b-a12b:free
+      --api-key-env OPENROUTER_API_KEY --model nvidia/nemotron-3.5-lightning:free
 
 A hosted API refuses `backend.think`, so a file that sets it does not run there. Three runs of up to
 15 turns each, plus the one request of `bench`'s preflight, are about 46 requests, near the free
@@ -70,10 +70,12 @@ about the tools?
 <details>
 <summary>Hint 3</summary>
 
-One key of `backend` caps the length of one reply. Find it in the README's
+On this model, thinking can eat a whole turn. One key of `backend` switches it off. Find it in the README's
 [Harness file](https://github.com/bambooplanedev/llm-harness-builder#harness-file) table. Does
 `start.json` set it?
 
 </details>
 
-Solution: `solution.md` (not written yet: it waits for a measurement).
+Expected: on the local setup, the measured solution passed 8 of 10 (median 12 s a run); see the [solution](solution.md), which also has the file.
+
+Solution: [solution.md](solution.md).
