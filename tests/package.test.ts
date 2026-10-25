@@ -61,7 +61,7 @@ test('the docs hold nothing that ties them to a machine, an account or the priva
   expect(existsSync('docs/curator.md') && existsSync('docs/curator.uk.md')).toBe(true)
   for (const f of files('docs').filter(f => f.endsWith('.md'))) {
     const s = readFileSync(f, 'utf8')
-    expect([f, /\/Users\/|\/home\/|\/var\/folders|\/private\/|\.superpowers|https?:\/\/(?!github\.com\/|127\.0\.0\.1|ollama\.com|nodejs\.org)\S+/.exec(s)?.[0]]).toEqual([f, undefined])
+    expect([f, /\/Users\/|\/home\/|\/var\/folders|\/private\/|\.superpowers|https?:\/\/(?!github\.com\/(bambooplanedev\/llm-harness-builder|coleam00\/Archon)|127\.0\.0\.1)\S+/.exec(s)?.[0]]).toEqual([f, undefined])
     for (const e of emails) expect([f, s.includes(e)]).toEqual([f, false])
   }
 })

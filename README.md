@@ -195,12 +195,11 @@ line: system prompt, tool descriptions, history and tool results, measured in ch
 scaled to the server's `prompt_tokens`. When the server sent no usage the count is an estimate and
 starts with "≈". In prompted mode the tool descriptions are part of the system text, so the two
 show as one `system + tools` layer, and the results it sends back as user text still count as tool
-results. Anthropic thinking blocks are counted in no layer, and the line
-says so.
+results. Anthropic thinking blocks are counted in no layer, and the line says so.
 
-`?film=1` (for example `http://127.0.0.1:7331/?film=1`) is for filming or showing the screen: larger, higher-contrast
-type, and model names, server addresses and absolute paths replaced on display. The trace files
-are not changed. It is a convenience for showing a screen, **not a privacy guard**: text it does
+`?film=1` (for example `http://127.0.0.1:7331/?film=1`) is for filming or showing the screen:
+larger, higher-contrast type, and model names, server addresses and paths under /tmp, /Users,
+/home, /var, /private replaced on display. The trace files are not changed. It is a convenience for showing a screen, **not a privacy guard**: text it does
 not recognise still shows, and an approval shows its command exactly as it will run.
 
 On a first open, with no runs yet, **Start here** in the Runs list walks through three steps: open a

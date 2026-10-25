@@ -81,3 +81,18 @@ test('anthropic without usage: an estimate shown with ≈', () => {
   expect([a.format, a.exact, a.total]).toEqual(['anthropic', false, Math.ceil(42 / 4)])
   expect(anatomyLine(a)).toContain('≈11 tok')
 })
+
+test('prompted results in an OpenAI content-part array count as results; a tag mid-text stays history', () => {
+  const tagged = anatomy({ messages: [{ role: 'user', content: [{ type: 'text', text: '<tool_result id="1">' }, { type: 'text', text: R }] }] })!
+  expect([tagged.chars.results, tagged.chars.history]).toEqual([20 + R.length, 0])
+  const mid = anatomy({ messages: [{ role: 'user', content: 'see <tool_result> here' }] })!
+  expect([mid.chars.results, mid.chars.history]).toEqual([0, 22])
+})
+
+test('a recorded Claude Code session (proxy, anthropic): estimates with ≈, tools their own layer when sent, results from tool_result blocks', () => {
+  const steps: { payload: any }[] = JSON.parse(readFileSync('tests/fixtures/claude-code-session.json', 'utf8'))
+  const xs = steps.map(s => anatomy(s.payload)!)
+  expect(xs.every(a => a.format === 'anthropic' && !a.exact && anatomyLine(a).includes('≈'))).toBe(true)
+  xs.forEach((a, i) => expect([i, a.toolsInSystem, a.chars.tools > 0]).toEqual([i, !steps[i].payload.tools, !!steps[i].payload.tools]))
+  expect(xs.map(a => a.chars.results > 0)).toEqual([false, false, false, true, true, true, false])
+})

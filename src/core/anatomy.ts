@@ -32,10 +32,11 @@ export function anatomy(payload: unknown, usage?: Usage): Anatomy | undefined {
   n.messages.forEach((m, i) => {
     // normalize reads an OpenAI content-part array as empty; the messages map 1:1 by index in that branch
     const content = n.format === 'openai' ? raw[i]?.content : undefined
-    const text = Array.isArray(content) ? content.reduce((s, p) => s + (p?.type === 'text' && typeof p.text === 'string' ? p.text.length : 0), 0) : m.text.length
+    const str = Array.isArray(content) ? content.map(p => p?.type === 'text' && typeof p.text === 'string' ? p.text : '').join('') : m.text
+    const text = str.length
     if (m.role === 'system' || m.role === 'developer') chars.system += text
     // prompted mode sends results back as user text wrapped in <tool_result …> (json) or <tool_response> (hermes)
-    else if (m.role === 'tool' || (m.role === 'user' && /^\s*<tool_(result|response>)/.test(m.text))) chars.results += text
+    else if (m.role === 'tool' || (m.role === 'user' && /^\s*<tool_(result|response>)/.test(str))) chars.results += text
     else if (m.role === 'user' || m.role === 'assistant') {
       chars.history += text
       for (const c of m.toolCalls ?? []) chars.history += c.name.length + (JSON.stringify(c.args)?.length ?? 0)

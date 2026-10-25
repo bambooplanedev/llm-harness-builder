@@ -116,7 +116,7 @@ function editMcp(text: string) {
       <input type="text" v-model="saveName" placeholder="name" style="width:120px">
       <button @click="emit('saveAs', saveName)" :disabled="!!mcpErr">Save as</button>
     </div>
-    <div v-if="config.description" class="hint">{{ config.description }}</div>
+    <div v-if="config.description" class="hint film-hide">{{ config.description }}</div>
 
     <label class="film-hide" :title="t('h.backend')">Backend</label>
     <div class="row film-hide">

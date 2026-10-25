@@ -68,12 +68,13 @@ the schema goes with the request. A step of your own takes the same route throug
   8 of 9 keyed decisions right, no false DROP, one false KEEP (`8002`, a release announcement).
   The harness changed the time and the reasoning, not one verdict. After the rules sentences were
   edited, the same fixture went 10 of 10 and then 9 of 9.
-- **triage on the real feed, a backtest.** 12 past days rebuilt into windows, 147 posts, 67 of them
+- **triage on the real feed, a backtest.** 12 past days rebuilt into windows, one run per window, 147 posts, 67 of them
   reached a digest. Five rounds, `curator` in the agent loop for the first four, prompt edited
   between them; topics lost went 8 (and 14 with no verdict, a window cut at `maxTokens`), 8, 4
   (and 2), then 2 (and 7). Along the way the model, at temperature 0: re-read a one-post file
-  until the run ended; after the repeat stop, wrote a keyword script in place of the judgement;
-  wrote ids nobody had shown it; wrote ids as strings, so the window counted as no verdict. Which
+  until the run ended; after one repeat note, wrote a script holding ids nobody had shown it;
+  following the prompt's "use shell tools" line, wrote a keyword script in place of the judgement,
+  with ids as strings, so that window counted as no verdict. Which
   of these happened flipped with a one-sentence edit of the prompt. Told to keep every hand-added
   post, it dropped 15 of 105; taking those posts out of triage made it 0 by construction.
 - **judge on the same windows.** One request with the schema: 10 of 10 windows ended in one turn,
@@ -105,7 +106,7 @@ the schema goes with the request. A step of your own takes the same route throug
 
 Open the bench in `serve` and press a run. A `sift` or `triage` run shows the usual strip above the
 trace, one column per request, its layers growing with the tool results. A `judge` run has one
-column: one request, system prompt and task text only, no tool descriptions and no history. Its
+column: one request, the system prompt and the task (counted as history), no tool descriptions. Its
 `llm_request` payload carries the schema (`response_format` on an OpenAI-style server), and the
 `done` event holds the answer. Where a step's columns grow turn by turn, there is a loop to read;
 where there is one, the only thing left to read is the verdicts.

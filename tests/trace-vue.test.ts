@@ -175,7 +175,15 @@ test('film mode: the Diff config table hides both models and servers', async () 
 test('film mode: an error that echoes the server url hides it once the url is passed in', async () => {
   setFilm(true)
   const evs: HarnessEvent[] = [{ seq: 0, turn: 1, ts: 0, type: 'error', message: 'fetch failed: http://localhost:11434/api/chat', body: 'localhost:11434 refused' }]
-  const html = await renderToString(createSSRApp(Trace, { events: evs, approvable: false, urls: ['http://localhost:11434'] }))
+  const html = await renderToString(createSSRApp(Trace, { events: evs, approvable: false, names: { models: [], urls: ['http://localhost:11434'] } }))
   expect(html).toContain('server/api/chat')
   expect(html).not.toMatch(/localhost|11434/)
+})
+
+test('film mode: a live knobs_off before the first request hides the model the page passes in', async () => {
+  setFilm(true)
+  const evs: HarnessEvent[] = [{ seq: 0, turn: 0, ts: 0, type: 'knobs_off', off: [{ knob: 'temperature', value: 0.2, reason: 'qwen3:8b takes no temperature (src)' }] }]
+  const html = await renderToString(createSSRApp(Trace, { events: evs, names: { models: ['qwen3:8b'], urls: [] } }))
+  expect(html).toContain('model takes no temperature')
+  expect(html).not.toContain('qwen3')
 })

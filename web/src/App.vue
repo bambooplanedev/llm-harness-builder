@@ -199,7 +199,7 @@ watch(() => config.value.backend.model, () => {
           <span v-if="verdict" :class="['chip', 'solid', verdict === 'PASS' ? 'ok' : 'err']">{{ verdict }}</span>
         </div>
         <ContextBar :events="events" :num-ctx="config.backend.kind === 'ollama' ? config.backend.numCtx : undefined" />
-        <Trace v-if="runId" :events="events" :live="live" :task="runTask" :urls="[config.backend.baseUrl]" @approve="approve" />
+        <Trace v-if="runId" :events="events" :live="live" :task="runTask" :names="names" @approve="approve" />
         <h4>Runs <button class="link" @click="openExamples">Examples</button></h4>
         <div v-if="!runs.length" class="start">
           <h5 class="group">{{ t('start.title') }}</h5>

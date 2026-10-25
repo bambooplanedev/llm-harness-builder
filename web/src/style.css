@@ -170,6 +170,7 @@ button.link:hover:not(:disabled) { background: none; }
 .acols { display: flex; align-items: flex-end; gap: 2px; height: 72px; overflow-x: auto; }
 .acol { flex: 1 0 6px; max-width: 28px; min-height: 2px; padding: 0; border: 0; border-radius: 0; background: none; display: flex; flex-direction: column-reverse; cursor: pointer; }
 .acol.est { outline: 1px dashed var(--muted); }
+.acol:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .acol:hover:not(:disabled) { background: none; opacity: .8; }
 .l-system { background: var(--l-system); } .l-tools { background: var(--l-tools); } .l-history { background: var(--l-history); } .l-results { background: var(--l-results); }
 /* ?film=1: bigger type and stronger contrast for a recording; .film-hide is what names the machine. */
