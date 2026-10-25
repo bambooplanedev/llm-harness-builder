@@ -156,6 +156,8 @@ of it `bare`.
 
 No GPU? See [Cloud](#cloud): a free OpenRouter account runs the demo.
 
+Try it by hand: the [lab kit](https://github.com/bambooplanedev/llm-harness-builder/tree/main/docs/lab) has three short exercises, one of them with no model.
+
 Why `tuned-nothink` and not `tuned`:
 
 | harness | what differs from `tuned` | PASS | how runs ended | time per run |
