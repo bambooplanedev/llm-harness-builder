@@ -34,7 +34,8 @@ export function anatomy(payload: unknown, usage?: Usage): Anatomy | undefined {
     const content = n.format === 'openai' ? raw[i]?.content : undefined
     const text = Array.isArray(content) ? content.reduce((s, p) => s + (p?.type === 'text' && typeof p.text === 'string' ? p.text.length : 0), 0) : m.text.length
     if (m.role === 'system' || m.role === 'developer') chars.system += text
-    else if (m.role === 'tool') chars.results += text
+    // prompted mode sends results back as user text wrapped in <tool_result …> (json) or <tool_response> (hermes)
+    else if (m.role === 'tool' || (m.role === 'user' && /^\s*<tool_(result|response>)/.test(m.text))) chars.results += text
     else if (m.role === 'user' || m.role === 'assistant') {
       chars.history += text
       for (const c of m.toolCalls ?? []) chars.history += c.name.length + (JSON.stringify(c.args)?.length ?? 0)

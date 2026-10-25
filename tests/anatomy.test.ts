@@ -51,6 +51,14 @@ test('prompted ollama (shipped example): one system + tools layer, every turn ex
   expect(anatomyLine(xs[0].a)).toMatch(/^system \+ tools \d+% · history \d+% · tool results \d+% · 651 tok$/)
 })
 
+test('prompted mode: user messages that carry tool results count as results, from turn 2 on and growing', () => {
+  const xs = anatomies(trace('059867d3'))
+  expect(xs[0].a.chars.results).toBe(0)
+  for (let i = 1; i < xs.length; i++) expect(xs[i].a.chars.results).toBeGreaterThan(xs[i - 1].a.chars.results)
+  const hermes = { model: 'm', messages: [{ role: 'system', content: S }, { role: 'user', content: U }, { role: 'user', content: '\n<tool_response>\n' + R + '\n</tool_response>' }] }
+  expect(anatomy(hermes)!.chars).toEqual({ system: 40, tools: 0, history: 20, results: R.length + 34 })
+})
+
 test('native ollama (shipped example): tools are their own layer', () => {
   const xs = anatomies(trace('590eb245'))
   expect(xs).toHaveLength(8)

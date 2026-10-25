@@ -33,9 +33,9 @@ JSON line per event; here is turn 3 of that run, abbreviated:
     {"seq":28,"turn":5,"type":"done","reason":"final","text":"Fixed slugify.js to strip leading and trailing dashes, and all tests passed.","turns":5,"toolCallCount":5}
 
 and what the request of that turn was made of, as the UI prints it (prompted mode, so the tool
-results went back as user text and count as history):
+descriptions are part of the system prompt; each share is rounded on its own):
 
-    system + tools 75% · history 25% · tool results 0% · 871 tok
+    system + tools 75% · history 15% · tool results 11% · 871 tok
 
 **What it found so far** — one model and one task each, small n ([how to read](#how-to-read-the-results)):
 
@@ -194,7 +194,8 @@ colours the layers; a click opens that turn. Each request in the trace carries t
 line: system prompt, tool descriptions, history and tool results, measured in characters and
 scaled to the server's `prompt_tokens`. When the server sent no usage the count is an estimate and
 starts with "≈". In prompted mode the tool descriptions are part of the system text, so the two
-show as one `system + tools` layer. Anthropic thinking blocks are counted in no layer, and the line
+show as one `system + tools` layer, and the results it sends back as user text still count as tool
+results. Anthropic thinking blocks are counted in no layer, and the line
 says so.
 
 `?film=1` (for example `http://127.0.0.1:7331/?film=1`) is for filming or showing the screen: larger, higher-contrast
