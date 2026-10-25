@@ -344,3 +344,69 @@ test('anthropic: the upstream dying mid-stream, and the client leaving, are erro
   expect(errors.find(e => e.message === 'POST /v1/messages: the upstream closed the connection mid-reply')?.body).toContain('half text')
   expect(errors.find(e => e.message === 'client closed the connection')?.body).toContain('half text')
 })
+
+test('anthropic: a streamed event: error is recorded as an error event', async () => {
+  const up = await upstream((_q, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    res.end(`event: error\ndata: ${JSON.stringify({ type: 'error', error: { type: 'overloaded_error', message: 'Overloaded' } })}\n\n`)
+  })
+  const px = await proxy(up.url)
+  await (await msgs(px.base, ANT)).text()
+  await px.stop()
+  const [t] = await traces(px.runsDir)
+  expect(t.events.map(e => e.type)).toEqual(['llm_request', 'error', 'done'])
+  expect(t.events[1].message + t.events[1].body).toMatch(/Overloaded/)
+})
+
+const KEY = 'sk-ant-test-' + 'k'.repeat(30), TOKEN = 'oauth-test-' + 't'.repeat(30)
+/** Every file in runs/: none may contain the key or the token. */
+async function noSecretOnDisk(runsDir: string) {
+  for (const f of await readdir(runsDir)) {
+    const s = await readFile(join(runsDir, f), 'utf8')
+    expect([f, s.includes(KEY), s.includes(TOKEN)]).toEqual([f, false, false])
+  }
+}
+
+test('anthropic: the key and the bearer token reach the upstream and nothing else: not runs/, not the log', async () => {
+  let n = 0
+  const up = await upstream((_q, res) => {
+    if (n++ === 0) { res.writeHead(200, { 'content-type': 'text/event-stream' }); return void res.end(textReply(`echo ${KEY}`)) }
+    res.writeHead(401, { 'content-type': 'application/json' }); res.end(JSON.stringify({ type: 'error', error: { type: 'authentication_error', message: `bad ${TOKEN}` } }))
+  })
+  const px = await proxy(up.url)
+  // Both headers on every request; both values in the user message, the first reply and the 401 body.
+  const both = { 'x-api-key': KEY, authorization: `Bearer ${TOKEN}` }
+  const body = (who: string) => JSON.stringify({ model: 'm', stream: true, system: 'sys', messages: [{ role: 'user', content: `${who} ${KEY} ${TOKEN}` }] })
+  await (await msgs(px.base, body('a'), both)).text()
+  expect((await msgs(px.base, body('b'), both)).status).toBe(401)
+  expect(up.seen[0].headers['x-api-key']).toBe(KEY); expect(up.seen[1].headers.authorization).toBe(`Bearer ${TOKEN}`)
+  await px.stop()
+  await noSecretOnDisk(px.runsDir)
+  expect(px.lines.length).toBeGreaterThan(0)
+  expect(px.lines.join('\n')).not.toContain(KEY); expect(px.lines.join('\n')).not.toContain(TOKEN)
+  const all = JSON.stringify(await traces(px.runsDir))
+  expect(all).toContain('[redacted: x-api-key]'); expect(all).toContain('[redacted: authorization]')
+})
+
+test('anthropic: a subscription request (bearer + anthropic-beta) reaches the upstream unchanged', async () => {
+  const up = await upstream((_q, res) => { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(textReply('ok')) })
+  const px = await proxy(up.url)
+  const h = { authorization: `Bearer ${TOKEN}`, 'anthropic-beta': 'oauth-2025-04-20,claude-code-20250219', 'anthropic-version': '2023-06-01' }
+  await (await msgs(px.base, ANT, h)).text()
+  expect(up.seen[0].headers).toMatchObject(h)
+  await px.stop()
+  expect(await traces(px.runsDir)).toHaveLength(1)
+  await noSecretOnDisk(px.runsDir)
+})
+
+test('anthropic: count_tokens and other /v1 paths are forwarded and not recorded', async () => {
+  const up = await upstream((_q, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"input_tokens":12}') })
+  const px = await proxy(up.url)
+  const r = await fetch(`${px.base}/v1/messages/count_tokens`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: ANT })
+  expect(await r.json()).toEqual({ input_tokens: 12 })
+  expect(up.seen[0].url).toBe('/v1/messages/count_tokens')
+  expect((await fetch(`${px.base}/v1/models`)).status).toBe(200)
+  expect(up.seen[1]).toMatchObject({ method: 'GET', url: '/v1/models' })
+  await px.stop()
+  expect(await traces(px.runsDir)).toEqual([])
+})

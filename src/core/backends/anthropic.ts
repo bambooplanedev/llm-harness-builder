@@ -57,7 +57,7 @@ export async function collectAnthropic(chunks: AsyncIterable<any>, onDelta?: (d:
 /** A non-streamed Messages reply, read by turning it into the events of a stream: one reader for both shapes, so they cannot drift. */
 export function fromAnthropicJson(m: unknown): Promise<NormalizedResponse> {
   const j = m as any
-  if (j?.type === 'error') throw new BackendError(`POST /v1/messages: ${j.error?.type}: ${j.error?.message}`, JSON.stringify(m))
+  if (j?.type === 'error') throw new BackendError(`POST /v1/messages: ${[j.error?.type, j.error?.message].filter(Boolean).join(': ') || 'error'}`, JSON.stringify(m))
   const blocks: any[] = Array.isArray(j?.content) ? j.content : []
   const events = [
     { type: 'message_start', message: { ...j, content: [] } },

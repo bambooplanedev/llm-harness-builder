@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest'
-import { AnthropicBackend, collectAnthropic } from '../src/core/backends/anthropic.js'
+import { AnthropicBackend, collectAnthropic, fromAnthropicJson } from '../src/core/backends/anthropic.js'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { BackendError, defaultFetch, jsonChunks, type ChatRequest, type Delta, type FetchLike } from '../src/core/backends/types.js'
@@ -265,4 +265,9 @@ test('a 307 from any keyed request is not followed: no second address is asked',
     expect(await net.serverInfo('claude-haiku-5-5')).toBeUndefined()
     expect(hits).toEqual(['/v1/messages', '/v1/models?limit=1000', '/v1/models/claude-haiku-5-5'])
   } finally { await new Promise<void>(r => { srv.closeAllConnections(); srv.close(() => r()) }) }
+})
+
+test('fromAnthropicJson: an error body without type or message reads "error", not "undefined: undefined"', async () => {
+  await expect(async () => fromAnthropicJson({ type: 'error', error: {} })).rejects.toThrow(/^POST \/v1\/messages: error$/)
+  await expect(async () => fromAnthropicJson({ type: 'error', error: { message: 'busy' } })).rejects.toThrow(/^POST \/v1\/messages: busy$/)
 })

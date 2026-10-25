@@ -10,6 +10,7 @@ import { collectAnthropic, fromAnthropicJson } from '../backends/anthropic.js'
 import { BackendError, jsonChunks, type NormalizedResponse } from '../backends/types.js'
 import type { HarnessEvent } from '../events.js'
 import { Sessions, type ReplyOutcome, type RunMeta } from './sessions.js'
+import { redactor } from '../redact.js'
 
 export type ProxyOpts = {
   /** Server root, e.g. http://127.0.0.1:8080; a path prefix, if any, is kept. */
@@ -66,6 +67,13 @@ const LABEL: Record<Api, string> = { openai: 'POST /chat/completions', anthropic
 const apiOf = (method: string | undefined, pathname: string): Api | undefined =>
   method !== 'POST' ? undefined : pathname.endsWith('/chat/completions') ? 'openai' : pathname.endsWith('/v1/messages') ? 'anthropic' : undefined
 
+/** Takes this request's x-api-key and bearer token out of whatever is recorded from it; headers themselves never are. */
+const scrubberOf = (h: http.IncomingHttpHeaders) => {
+  const key = redactor(String(h['x-api-key'] ?? ''), 'x-api-key')
+  const token = redactor(String(h.authorization ?? '').replace(/^Bearer\s+/i, ''), 'authorization')
+  return <T>(x: T): T => token.deep(key.deep(x))
+}
+
 /** The reply as the backend itself would read it: a JSON body or an SSE stream, by content-type. */
 async function readReply(chunks: Buffer[], contentType: string, api: Api): Promise<NormalizedResponse> {
   if (/^application\/json/i.test(contentType)) {
@@ -116,12 +124,13 @@ export async function startProxy(o: ProxyOpts): Promise<ProxyServer> {
 
     let rec: { run: string; turn: number; api: Api } | undefined
     const api = apiOf(req.method, target.pathname)
+    const scrub = scrubberOf(req.headers)
     if (api) {
       let payload: unknown
       if (body.length > cap) log(`not recorded: a ${body.length}-byte request is over the ${cap}-byte cap`)
       else try { payload = JSON.parse(body.toString('utf8')) } catch { log('not recorded: the request body is not JSON') }
       if (payload && typeof payload === 'object') {
-        const out = sessions.onRequest(payload)
+        const out = sessions.onRequest(scrub(payload))
         if (out.meta) log(`run ${out.run}: ${out.meta.task.slice(0, 80).replace(/\n/g, ' ')}`)
         record(out.run, out.events, out.meta)
         rec = { run: out.run, turn: out.turn, api }
@@ -182,7 +191,7 @@ export async function startProxy(o: ProxyOpts): Promise<ProxyServer> {
         outcome = e instanceof BackendError ? { ok: false, message: e.message, body: e.body } : { ok: false, message: `could not read the reply: ${(e as Error).message}` }
       }
     }
-    record(rec.run, sessions.onReply(rec.run, rec.turn, outcome))
+    record(rec.run, sessions.onReply(rec.run, rec.turn, scrub(outcome)))
   }
 
   const server = http.createServer((req, res) => {
