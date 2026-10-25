@@ -44,6 +44,7 @@ export const uk: Record<Key, string> = {
   'trace.askRun': 'запустити {cmd}?',
   'trace.autoApproved': 'bench: схвалено автоматично',
   'trace.checkFailed': 'перевірку не пройдено — прогін триває',
+  'trace.compaction': 'Тут Claude Code стиснув історію; наступний запит починається з цього підсумку.',
   'trace.quit': 'final після 0 викликів інструментів: модель здалася, нічого не зробивши',
   'diff.closeTitle': 'закрити порівняння',
   'diff.samePath': 'шлях однаковий до кінця — але однакові кроки не означають однакових слів',

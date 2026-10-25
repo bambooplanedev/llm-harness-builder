@@ -10,7 +10,7 @@ import type { Backend, Delta } from '../core/backends/types.js'
 import type { BenchResult, BenchFile, ActiveTrace } from '../core/bench.js'
 import { analyzeTrace, analysisCells, type AnalysisCells } from '../core/analyze.js'
 
-export type RunSummary = { id: string; harness: string; task: string; workdir: string; started: number; reason?: string; turns?: number; toolCallCount?: number; active: boolean }
+export type RunSummary = { id: string; harness: string; task: string; workdir: string; started: number; reason?: string; turns?: number; toolCallCount?: number; active: boolean; session?: string; agent?: string; parent?: string; agentType?: string }
 export type Meta = { meta: {
   id: string; harness: string; task: string; workdir: string; started: number
   /** Only on runs started by `bench`: the bench JSON's basename (a label, not a key) and the round. */
@@ -228,7 +228,9 @@ export class RunStore {
         const meta = (JSON.parse(first) as Meta).meta
         const lastEv = last !== first ? JSON.parse(last) : null
         const done = lastEv?.type === 'done' ? lastEv : undefined
-        out.push({ id: meta.id, harness: meta.harness, task: meta.task, workdir: meta.workdir, started: meta.started, reason: done?.reason, turns: done?.turns, toolCallCount: done?.toolCallCount, active: this.isActive(meta.id) })
+        const r: RunSummary = { id: meta.id, harness: meta.harness, task: meta.task, workdir: meta.workdir, started: meta.started, reason: done?.reason, turns: done?.turns, toolCallCount: done?.toolCallCount, active: this.isActive(meta.id) }
+        for (const k of ['session', 'agent', 'parent', 'agentType'] as const) if (typeof meta[k] === 'string') r[k] = meta[k]
+        out.push(r)
       } catch {
         // Unreadable or malformed run file (e.g. truncated write, stray empty file): skip it
         // rather than failing the whole listing.

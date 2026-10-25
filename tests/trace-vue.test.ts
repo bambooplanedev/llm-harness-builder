@@ -4,6 +4,7 @@ import { renderToString } from 'vue/server-renderer'
 // @ts-expect-error -- vue SFC, no .d.ts; typechecked separately by vue-tsc
 import Trace from '../web/src/Trace.vue'
 import type { HarnessEvent } from '../src/core/events.js'
+import { en } from '../web/src/i18n'
 
 const events: HarnessEvent[] = [
   { seq: 0, turn: 0, ts: 0, type: 'approval_required', call: { callId: 'mcp1', name: 'mcp:fs', args: { command: 'npx server' } } },
@@ -90,4 +91,12 @@ test('each turn says its request layers above the raw JSON, in either format', a
 test('an mcp approval keeps the server and the command as <code> inside the question', async () => {
   const html = (await render({})).replace(/<!--[\s\S]*?-->/g, '')
   expect(html).toContain('start mcp server <code>fs</code>: <code>npx server</code>?')
+})
+
+test('proxy notes render: auxiliary with model, tokens and time; compaction with its explanation', async () => {
+  const html = await renderToString(createSSRApp(Trace, { live: {}, task: 'x', events: [
+    { seq: 0, turn: 0, ts: 0, type: 'proxy_note', kind: 'auxiliary', model: 'claude-haiku-fixture', usage: { promptTokens: 12, completionTokens: 3 }, latencyMs: 40 },
+    { seq: 1, turn: 1, ts: 1, type: 'proxy_note', kind: 'compaction' },
+  ] as HarnessEvent[] }))
+  for (const s of ['auxiliary', 'claude-haiku-fixture', '12+3 tok', '40ms', 'compaction', en['trace.compaction']]) expect(html).toContain(s)
 })

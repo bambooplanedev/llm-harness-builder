@@ -179,3 +179,25 @@ test('the family note says what the button changed, and follows a language switc
   lang.value = 'uk'; await settle()
   expect(textOf(app.root)).toContain(uk['family.mode'].replace('{a}', 'native').replace('{b}', 'prompted'))
 })
+
+test('a Claude Code session is one group: main first, subagents indented under it; a group without main still groups', async () => {
+  const run = (id: string, started: number, task: string, extra: object = {}) => ({ id, harness: 'oc', task, workdir: '', started, active: false, ...extra })
+  const A = 'aaaa1111-0000', B = 'bbbb2222-0000'
+  const app = await mount({ '/api/harnesses': [], '/api/models': [], '/api/runs': [
+    run('p1', 9, 'plain task'),
+    run('s1', 8, 'sub gp', { session: A, agent: 'agent-1', parent: 'main', agentType: 'general-purpose' }),
+    run('s2', 7, 'sub ex', { session: A, agent: 'agent-2', parent: 'main', agentType: 'Explore' }),
+    run('m1', 6, 'main two', { session: A, agent: 'main' }),
+    run('m0', 5, 'main one', { session: A, agent: 'main' }),
+    run('s3', 4, 'sub plan', { session: B, agent: 'agent-3', parent: 'main', agentType: 'Plan' }),
+  ] })
+  const cards = all(app.root).filter(n => n.tag === 'div' && n.props.class?.includes?.('runs')).flatMap(n => n.children)
+  const text = textOf(app.root)
+  const order = ['plain task', 'session aaaa…', 'main one', 'main two', '↳ subagent Explore', '↳ subagent general-purpose', 'session bbbb…', '↳ subagent Plan'].map(s => text.indexOf(s))
+  expect(order.every(i => i >= 0)).toBe(true)
+  expect(order).toEqual([...order].sort((a, b) => a - b))
+  expect(textOf(cards.find(c => textOf(c).includes('session aaaa…'))!)).toContain('2 subagents')
+  const cls = (s: string) => String(cards.find(c => textOf(c).includes(s))!.props.class)
+  expect(cls('sub ex')).toContain('sub'); expect(cls('main one')).toContain('session'); expect(cls('sub plan')).toMatch(/session/); expect(cls('plain task')).not.toContain('session')
+  expect(cards.filter(c => /session/.test(String(c.props.class)))).toHaveLength(5)
+})

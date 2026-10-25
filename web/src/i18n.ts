@@ -49,6 +49,7 @@ export const en = {
   'trace.askRun': 'run {cmd}?',
   'trace.autoApproved': 'bench: auto-approved',
   'trace.checkFailed': 'failed, the run goes on',
+  'trace.compaction': 'Claude Code summarized the history here; the next request starts from that summary.',
   'trace.quit': 'final after 0 tool calls: the model quit without doing anything',
   'diff.closeTitle': 'close the comparison',
   'diff.samePath': 'same path all the way — but identical steps do not mean identical words',
