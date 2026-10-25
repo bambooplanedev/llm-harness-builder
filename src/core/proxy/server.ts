@@ -136,7 +136,7 @@ export async function startProxy(o: ProxyOpts): Promise<ProxyServer> {
       if (body.length > cap) log(`not recorded: a ${body.length}-byte request is over the ${cap}-byte cap`)
       else try { payload = JSON.parse(body.toString('utf8')) } catch { log('not recorded: the request body is not JSON') }
       if (payload && typeof payload === 'object') {
-        const out = sessions.onRequest(scrub(payload))
+        const out = sessions.onRequest(scrub(payload), api)
         if (out.meta) log(`run ${out.run}: ${out.meta.task.slice(0, 80).replace(/\n/g, ' ')}`)
         record(out.run, out.events, out.meta)
         rec = { run: out.run, turn: out.turn, api }

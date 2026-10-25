@@ -2,7 +2,6 @@
 // Pure: no sockets, no files, no clock of its own. Every event is read off the wire; nothing is inferred.
 import type { Ev, HarnessEvent, ToolCall } from '../events.js'
 import type { NormalizedResponse } from '../backends/types.js'
-import { normalizeRequest } from '../normalize.js'
 
 /** The meta line of a proxy run; `proxy` marks the file as a transcription, `pid` lets serve tell a live writer from a killed one. */
 export type RunMeta = { id: string; harness: string; task: string; workdir: string; started: number; proxy: { upstream: string; pid: number } }
@@ -27,9 +26,9 @@ export function textOf(content: unknown): string {
   return ''
 }
 
-/** The task as the agent typed it: Claude Code wraps context into the first user message as system-reminders. */
+/** The task as the agent typed it: Claude Code wraps context into the first user message as system-reminders; an unclosed one runs to the end. */
 export function taskOf(text: string): string {
-  return text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim()
+  return text.replace(/<system-reminder>[\s\S]*?(?:<\/system-reminder>|$)/g, '').trim()
 }
 
 /** JSON with object keys sorted, so the same message serialized twice compares equal. */
@@ -52,13 +51,13 @@ export class Sessions {
    * One request: the run it continues, or a new one. A run is keyed by its first system-like message and its
    * first user message; a request joins the most recently joined open run with that key whose last request had
    * no more messages than this one. Call it before any await, so two requests of one run keep their seq order.
-   * Anthropic: the key is text only, the top-level system without its first block (Claude Code's attribution
+   * `api` comes from the route the request took. Anthropic: the key is text only, the top-level system without its first block (Claude Code's attribution
    * block changes) and the first user text, since Claude Code moves cache_control markers between turns.
    */
-  onRequest(payload: object): { run: string; turn: number; meta?: RunMeta; events: HarnessEvent[] } {
+  onRequest(payload: object, api: 'openai' | 'anthropic' = 'openai'): { run: string; turn: number; meta?: RunMeta; events: HarnessEvent[] } {
     const raw = (payload as { messages?: unknown }).messages
     const msgs: any[] = Array.isArray(raw) ? raw : []
-    const anthropic = normalizeRequest(payload)?.format === 'anthropic'
+    const anthropic = api === 'anthropic'
     const user = msgs.find(m => m?.role === 'user')
     let key: string, task: string
     if (anthropic) {
@@ -97,7 +96,6 @@ export class Sessions {
     for (let i = msgs.length - 1; i >= 0; i--) if (msgs[i]?.role === 'assistant') { last = i; break }
     const replied = run.replied
     if (last < 0 || !replied) return []
-    const echoed: unknown[] = Array.isArray(msgs[last].tool_calls) ? msgs[last].tool_calls.map((t: any) => t?.id) : []
     const out: HarnessEvent[] = []
     if (anthropic) {
       for (const m of msgs.slice(last + 1)) {
@@ -111,6 +109,7 @@ export class Sessions {
       }
       return out
     }
+    const echoed: unknown[] = Array.isArray(msgs[last].tool_calls) ? msgs[last].tool_calls.map((t: any) => t?.id) : []
     for (const m of msgs.slice(last + 1)) {
       if (m?.role !== 'tool') continue
       const i = echoed.indexOf(m.tool_call_id)
