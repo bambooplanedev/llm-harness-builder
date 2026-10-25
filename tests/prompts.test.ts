@@ -179,7 +179,7 @@ test('tuned-openrouter is tuned with a hosted backend: the same file in every ot
   const load = async (n: string) => JSON.parse(await readFile(new URL(`../harnesses/${n}.json`, import.meta.url), 'utf8'))
   const tuned = await load('tuned'), cloud = await load('tuned-openrouter')
   expect(cloud.name).toBe('tuned-openrouter')
-  expect(cloud.backend).toEqual({ kind: 'openai', baseUrl: 'https://openrouter.ai/api/v1', apiKeyEnv: 'OPENROUTER_API_KEY', model: 'nvidia/nemotron-3-super-120b-a12b:free', maxTokens: 1024, temperature: 0.2 })
+  expect(cloud.backend).toEqual({ kind: 'openai', baseUrl: 'https://openrouter.ai/api/v1', apiKeyEnv: 'OPENROUTER_API_KEY', model: 'nvidia/nemotron-3.5-super-vl:free', maxTokens: 1024, temperature: 0.2 })
   const { name: _a, description: _e, backend: _b, ...rest } = cloud
   const { name: _c, description: _f, backend: _d, ...tunedRest } = tuned
   expect(rest).toEqual(tunedRest)

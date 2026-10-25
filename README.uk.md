@@ -623,7 +623,7 @@ rewrite it with write_file`. `read_file` цього файлу, вдале ре�
 
     "backend": { "kind": "openai", "baseUrl": "https://openrouter.ai/api/v1",
                  "apiKeyEnv": "OPENROUTER_API_KEY",
-                 "model": "nvidia/nemotron-3-super-120b-a12b:free", "temperature": 0.2 }
+                 "model": "nvidia/nemotron-3.5-super-vl:free", "temperature": 0.2 }
 
 Демо в хмарі, без GPU — досить безкоштовного акаунта OpenRouter: моделі, чий id закінчується на
 `:free`, нічого не коштують, але OpenRouter дозволяє їм 20 запитів на хвилину і 50 на день, доки ви
@@ -633,7 +633,7 @@ rewrite it with write_file`. `read_file` цього файлу, вдале ре�
 
     export OPENROUTER_API_KEY=...
     npx llm-harness-builder demo --kind openai --base-url https://openrouter.ai/api/v1 \
-      --api-key-env OPENROUTER_API_KEY --model nvidia/nemotron-3-super-120b-a12b:free
+      --api-key-env OPENROUTER_API_KEY --model nvidia/nemotron-3.5-super-vl:free
 
 `harnesses/tuned-openrouter.json` — це `tuned` на цьому бекенді; у старішій копії `harnesses/`, яку
 зробив `serve`, його немає, тож скопіюйте його вручну.
