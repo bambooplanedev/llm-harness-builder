@@ -4,6 +4,7 @@ import type { HarnessConfig, ServerInfo } from './api'
 import { PRESETS, FAMILIES, applyFamily, DEFAULT_PROMPTED_TEMPLATE, DEFAULT_PARSE_ERROR_HINT } from '../../src/core/prompts'
 import { TOOL_NAMES, keyNote } from '../../src/core/config'
 import { H } from './hints'
+import { t } from './i18n'
 import { advancedSet } from './advanced'
 
 const config = defineModel<HarnessConfig>({ required: true })
@@ -121,13 +122,13 @@ function editMcp(text: string) {
       <select v-model="config.backend.kind"><option value="openai">openai-compatible</option><option value="ollama">ollama (native)</option><option value="anthropic">anthropic (native)</option></select>
       <input type="text" v-model.lazy="config.backend.baseUrl">
     </div>
-    <div v-if="ollamaViaV1()" class="warn">Ollama via /v1 ignores num_ctx and silently truncates the prompt. Pick kind "ollama".</div>
+    <div v-if="ollamaViaV1()" class="warn">{{ t('form.ollamaV1') }}</div>
     <div class="row">
       <span :title="H.keyEnv">key env</span>
       <input type="text" :value="config.backend.apiKeyEnv ?? ''" placeholder="none (a local server)" @change="setKeyEnv(($event.target as HTMLInputElement).value)">
     </div>
     <div v-if="keyLine()" class="hint">{{ keyLine() }}</div>
-    <div v-if="keyLine() && !models.length" class="hint">press ↻ to list the models: that request carries the key</div>
+    <div v-if="keyLine() && !models.length" class="hint">{{ t('form.refreshKey') }}</div>
     <div class="row">
       <select v-model="config.backend.model" :title="H.model"><option v-for="m in models" :key="m" :value="m">{{ m }}</option></select>
       <input type="text" v-model.lazy="config.backend.model" placeholder="or type a model id">
@@ -140,19 +141,19 @@ function editMcp(text: string) {
       <span :title="H.maxTokens">max_tokens</span><input type="number" min="1" :value="config.backend.maxTokens ?? ''" :disabled="off('maxTokens')" @change="setMaxTokens(($event.target as HTMLInputElement).value)">
       <span :title="H.think">think</span><select :value="config.backend.think === undefined ? '' : config.backend.think ? 'on' : 'off'" :disabled="off('think')" @change="setThink(($event.target as HTMLSelectElement).value)"><option value="">—</option><option>on</option><option>off</option></select>
     </div>
-    <div v-if="locked()" class="hint">{{ locked() }}: this knob is not available for this model<span v-if="modelInfo?.takesFrom"> ({{ modelInfo.takesFrom }})</span></div>
+    <div v-if="locked()" class="hint">{{ t('form.locked', { knobs: locked() }) }}<span v-if="modelInfo?.takesFrom"> ({{ modelInfo.takesFrom }})</span></div>
 
     <div class="label"><span :title="H.systemPrompt">System prompt</span> <span v-for="(_, k) in PRESETS" :key="k"><button @click="applyPreset(k)">{{ k }}</button> </span></div>
     <textarea v-model="config.systemPrompt"></textarea>
     <div class="label"><span :title="H.family">Model family</span> <span v-for="(f, k) in FAMILIES" :key="k"><button :title="H.families[k]" @click="family(k)">{{ k }}</button> </span></div>
-    <div v-if="familyChanged" class="hint">{{ familyChanged.key }}: {{ familyChanged.changes.length ? familyChanged.changes.join('; ') : 'nothing to change, the form already matches it' }}</div>
+    <div v-if="familyChanged" class="hint">{{ familyChanged.key }}: {{ familyChanged.changes.length ? familyChanged.changes.join('; ') : t('form.familyNone') }}</div>
 
     <label :title="H.tools">Tools</label>
     <div class="row" style="flex-wrap:wrap">
       <span v-for="n in TOOL_NAMES" :key="n"><input type="checkbox" :checked="config.tools.enabled.includes(n)" @change="toggleTool(n)"> {{ n }}</span>
     </div>
     <div :title="H.approveBash"><input type="checkbox" v-model="config.tools.approveBash"> ask before running bash</div>
-    <div v-if="config.tools.bashEnv?.length" class="hint">bash gets from your environment: {{ config.tools.bashEnv.join(', ') }}</div>
+    <div v-if="config.tools.bashEnv?.length" class="hint">{{ t('form.bashEnv', { list: config.tools.bashEnv.join(', ') }) }}</div>
     <label :title="H.toolCalls">Tool calls</label>
     <div class="row">
       <select v-model="config.toolCalls.mode"><option value="native">native (tools[] in API)</option><option value="prompted">prompted (in text)</option></select>
@@ -192,7 +193,7 @@ function editMcp(text: string) {
       <span :title="H.repeatThink">repeat think tokens</span><input type="number" min="1" :value="config.loop.repeatThinkTokens ?? ''" :disabled="lockedThinkTokens()" @change="setLoop('repeatThinkTokens', ($event.target as HTMLInputElement).value)">
     </div>
     <div class="row"><span :title="H.untilBash">until bash</span><input type="text" :value="config.loop.untilBash ?? ''" @change="setUntilBash(($event.target as HTMLInputElement).value)"></div>
-      <div v-if="lockedRepeat()" class="hint">{{ locked() }}: this knob is not available for this model<span v-if="modelInfo?.takesFrom"> ({{ modelInfo.takesFrom }})</span></div>
+      <div v-if="lockedRepeat()" class="hint">{{ t('form.locked', { knobs: locked() }) }}<span v-if="modelInfo?.takesFrom"> ({{ modelInfo.takesFrom }})</span></div>
     </details>
   </div>
 </template>

@@ -3,6 +3,9 @@ import { createSSRApp } from 'vue'
 import { renderToString } from 'vue/server-renderer'
 // @ts-expect-error -- vue SFC, no .d.ts; typechecked separately by vue-tsc
 import App from '../web/src/App.vue'
+// @ts-expect-error -- vue SFC, no .d.ts; typechecked separately by vue-tsc
+import Bench from '../web/src/Bench.vue'
+import { NEW_HARNESS } from '../web/src/advanced'
 import { lang, initialLang, readLang, setLang, langName, t } from '../web/src/i18n'
 
 afterEach(() => { lang.value = 'en' })
@@ -37,4 +40,31 @@ test('Settings: a native dialog with one radio per language, each named in its o
   const uk = await renderToString(createSSRApp(App))
   expect(uk).toMatch(/value="uk"[^>]*checked/)
   expect(uk).toContain(t('settings.title'))
+})
+
+const plain = (html: string) => html.replace(/<!--[\s\S]*?-->/g, '')
+
+test('t fills {params}; a {name} with no param stays as written', () => {
+  expect(t('bench.runsUnasked', { cmd: 'loop.untilBash: npm test' })).toBe('runs unasked · loop.untilBash: npm test')
+  expect(t('bench.runsUnasked')).toBe('runs unasked · {cmd}')
+})
+
+test('Start here keeps its buttons inside the sentence, word for word as before', async () => {
+  const html = plain(await renderToString(createSSRApp(App)))
+  expect(html).toContain('Open an example run: <button class="link">PASS</button> and <button class="link">FAIL</button> — no model needed.')
+  expect(html).toContain('Open the <button class="link">example bench</button>: the PASS table, intervals, ⇄ Diff.')
+})
+
+test('the empty Bench page keeps its <code> and its button inside the sentence', async () => {
+  const html = plain(await renderToString(createSSRApp(Bench, { backend: NEW_HARNESS.backend, example: false })))
+  expect(html).toContain('no benches yet: run <code>llm-harness-builder bench</code> or New bench, or open the <button class="link">Examples</button>')
+  expect(html).toContain('this page reads only <code>runs/*.json</code> — a bench written with <code>--out</code> elsewhere will not show up here')
+})
+
+test('no v-html and no innerHTML in the page source: translated text never becomes markup', async () => {
+  const { readFile } = await import('node:fs/promises')
+  const { execFileSync } = await import('node:child_process')
+  const root = new URL('..', import.meta.url).pathname
+  const files = execFileSync('git', ['ls-files', 'web/src'], { cwd: root, encoding: 'utf8' }).split('\n').filter(Boolean)
+  for (const f of files) expect(await readFile(new URL(`../${f}`, import.meta.url), 'utf8'), f).not.toMatch(/v-html|innerHTML/)
 })

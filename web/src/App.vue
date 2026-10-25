@@ -10,7 +10,7 @@ import ContextBar from './ContextBar.vue'
 import Trace from './Trace.vue'
 import Bench from './Bench.vue'
 import { H } from './hints'
-import { t, lang, LANGS, langName, setLang } from './i18n'
+import { t, T, lang, LANGS, langName, setLang } from './i18n'
 
 const tab = ref<'workbench' | 'bench'>('workbench')
 /** The Bench tab shows the recorded bench shipped with the package instead of ./runs: read-only, no model. */
@@ -96,7 +96,7 @@ const openExample = (id: string) => api.runs(true).then(rs => open(id, rs.find(r
 async function start() {
   error.value = ''
   try { const { runId: id } = await api.startRun(outbound(config.value), task.value, workdir.value); ownRun.value = id; open(id, task.value, true) }
-  catch (e) { const m = (e as Error).message; error.value = m === 'backend.model is required' ? 'pick or type a model first' : m }
+  catch (e) { const m = (e as Error).message; error.value = m === 'backend.model is required' ? t('app.pickModel') : m }
 }
 const approve = (callId: string, ok: boolean) => api.approve(runId.value, callId, ok).catch(e => (error.value = e.message))
 const abort = () => api.abort(runId.value).catch(e => (error.value = e.message))
@@ -161,7 +161,7 @@ watch(() => config.value.backend.model, () => {
           <div class="dirs">
             <div v-if="browse.parent" @click="browseTo(browse.parent)">..</div>
             <div v-for="d in browse.dirs" :key="d.path" @click="browseTo(d.path)">{{ d.name }}/</div>
-            <div v-if="!browse.dirs.length" class="muted">no folders here</div>
+            <div v-if="!browse.dirs.length" class="muted">{{ t('app.noFolders') }}</div>
           </div>
         </div>
         </div>
@@ -175,18 +175,18 @@ watch(() => config.value.backend.model, () => {
         </div>
         <div v-if="canCheck()" class="row" style="margin:8px 0">
           <button @click="check">Check</button>
-          <span class="muted">runs node --test on the code the model wrote</span>
+          <span class="muted">{{ t('app.checkNote') }}</span>
           <span v-if="verdict" :class="['chip', 'solid', verdict === 'PASS' ? 'ok' : 'err']">{{ verdict }}</span>
         </div>
         <ContextBar :events="events" :num-ctx="config.backend.kind === 'ollama' ? config.backend.numCtx : undefined" />
         <Trace v-if="runId" :events="events" :live="live" :task="runTask" @approve="approve" />
         <h4>Runs <button class="link" @click="openExamples">Examples</button></h4>
         <div v-if="!runs.length" class="start">
-          <h5 class="group">Start here</h5>
+          <h5 class="group">{{ t('start.title') }}</h5>
           <ol>
-            <li>Open an example run: <button class="link" @click="openExample('059867d3')">PASS</button> and <button class="link" @click="openExample('d63e9548')">FAIL</button> — no model needed.</li>
-            <li>Open the <button class="link" @click="openExamples">example bench</button>: the PASS table, intervals, ⇄ Diff.</li>
-            <li>Pick a model on the left, then Create demo project → Run.</li>
+            <li><T k="start.example"><template #pass><button class="link" @click="openExample('059867d3')">PASS</button></template><template #fail><button class="link" @click="openExample('d63e9548')">FAIL</button></template></T></li>
+            <li><T k="start.bench"><template #bench><button class="link" @click="openExamples">{{ t('start.benchLink') }}</button></template></T></li>
+            <li>{{ t('start.run') }}</li>
           </ol>
         </div>
         <div class="runs">

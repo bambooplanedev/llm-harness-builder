@@ -86,3 +86,8 @@ test('each turn says its request layers above the raw JSON, in either format', a
   expect(html).toContain('system 2 chars · tools 0 · messages 2 · openai')
   expect(html.indexOf('· anthropic')).toBeLessThan(html.indexOf('&quot;system&quot;'))
 })
+
+test('an mcp approval keeps the server and the command as <code> inside the question', async () => {
+  const html = (await render({})).replace(/<!--[\s\S]*?-->/g, '')
+  expect(html).toContain('start mcp server <code>fs</code>: <code>npx server</code>?')
+})
