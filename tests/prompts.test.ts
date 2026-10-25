@@ -101,28 +101,39 @@ test('guard-hint is guard-only plus explainEditMiss and nothing else', async () 
   const load = async (n: string) => JSON.parse(await readFile(new URL(`../harnesses/${n}.json`, import.meta.url), 'utf8'))
   const only = await load('guard-only'), hint = await load('guard-hint')
   expect(validateConfig(hint)).toEqual([])
-  expect(hint).toEqual({ ...only, name: 'guard-hint', tools: { ...only.tools, explainEditMiss: true } })
+  expect(hint).toEqual({ ...only, name: 'guard-hint', description: hint.description, tools: { ...only.tools, explainEditMiss: true } })
 })
 
 test('guard-repeat is guard-only plus loop.maxRepeats and nothing else', async () => {
   const load = async (n: string) => JSON.parse(await readFile(new URL(`../harnesses/${n}.json`, import.meta.url), 'utf8'))
   const only = await load('guard-only'), rep = await load('guard-repeat')
   expect(validateConfig(rep)).toEqual([])
-  expect(rep).toEqual({ ...only, name: 'guard-repeat', loop: { ...only.loop, maxRepeats: 3 } })
+  expect(rep).toEqual({ ...only, name: 'guard-repeat', description: rep.description, loop: { ...only.loop, maxRepeats: 3 } })
 })
 
 test('tuned-repeat is tuned plus loop.maxRepeats and nothing else', async () => {
   const load = async (n: string) => JSON.parse(await readFile(new URL(`../harnesses/${n}.json`, import.meta.url), 'utf8'))
   const tuned = await load('tuned'), rep = await load('tuned-repeat')
   expect(validateConfig(rep)).toEqual([])
-  expect(rep).toEqual({ ...tuned, name: 'tuned-repeat', loop: { ...tuned.loop, maxRepeats: 3 } })
+  expect(rep).toEqual({ ...tuned, name: 'tuned-repeat', description: rep.description, loop: { ...tuned.loop, maxRepeats: 3 } })
+})
+
+test('tuned-nothink is tuned with thinking off and edit-miss help, and is the harness of the shipped example bench', async () => {
+  const load = async (n: string) => JSON.parse(await readFile(new URL(`../harnesses/${n}.json`, import.meta.url), 'utf8'))
+  const tuned = await load('tuned'), nt = await load('tuned-nothink')
+  expect(validateConfig(nt)).toEqual([])
+  expect(nt).toEqual({ ...tuned, name: 'tuned-nothink', description: nt.description, backend: { ...tuned.backend, think: false },
+    tools: { ...tuned.tools, explainEditMiss: true, editMissEscalation: 2 } })
+  const bench = JSON.parse(await readFile(new URL('../example-runs/bench-example.json', import.meta.url), 'utf8'))
+  const { description: _, ...rest } = nt
+  expect(bench.harnesses.find((h: { name: string }) => h.name === 'tuned-nothink').config).toEqual(rest)
 })
 
 test('tuned-budget is tuned-repeat plus context.budgetTokens and nothing else', async () => {
   const load = async (n: string) => JSON.parse(await readFile(new URL(`../harnesses/${n}.json`, import.meta.url), 'utf8'))
   const rep = await load('tuned-repeat'), bud = await load('tuned-budget')
   expect(validateConfig(bud)).toEqual([])
-  expect(bud).toEqual({ ...rep, name: 'tuned-budget', context: { ...rep.context, budgetTokens: 2670 } })
+  expect(bud).toEqual({ ...rep, name: 'tuned-budget', description: bud.description, context: { ...rep.context, budgetTokens: 2670 } })
 })
 
 // A /no_think harness answers in under 200 tokens on the old task and the MCP pair, but a batch of edits is 486 tokens on pool at size 7
@@ -169,8 +180,8 @@ test('tuned-openrouter is tuned with a hosted backend: the same file in every ot
   const tuned = await load('tuned'), cloud = await load('tuned-openrouter')
   expect(cloud.name).toBe('tuned-openrouter')
   expect(cloud.backend).toEqual({ kind: 'openai', baseUrl: 'https://openrouter.ai/api/v1', apiKeyEnv: 'OPENROUTER_API_KEY', model: 'nvidia/nemotron-3-super-120b-a12b:free', maxTokens: 1024, temperature: 0.2 })
-  const { name: _a, backend: _b, ...rest } = cloud
-  const { name: _c, backend: _d, ...tunedRest } = tuned
+  const { name: _a, description: _e, backend: _b, ...rest } = cloud
+  const { name: _c, description: _f, backend: _d, ...tunedRest } = tuned
   expect(rest).toEqual(tunedRest)
   expect(validateConfig(cloud)).toEqual([])
 })

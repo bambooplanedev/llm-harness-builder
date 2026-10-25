@@ -37,7 +37,7 @@ export const COMMANDS = {
     },
   }),
   demo: command({
-    summary: 'Run bare, tuned and tuned-hermes on the demo task and print PASS or FAIL for each.',
+    summary: 'Run bare, tuned-nothink and tuned-hermes on the demo task and print PASS or FAIL for each (tuned instead of tuned-nothink with --kind openai and --api-key-env: a hosted API refuses thinking off).',
     args: '',
     options: { json: { type: 'boolean', default: false }, ...backend, help },
     docs: { json: ['', 'print the event stream as JSONL on stdout'], ...backendDocs },

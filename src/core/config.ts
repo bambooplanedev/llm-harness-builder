@@ -107,6 +107,8 @@ export type McpServerConfig = { command: string; args?: string[]; tools?: string
 
 export type HarnessConfig = {
   name: string
+  /** One line on what the harness is for; a label, so a diff ignores it. */
+  description?: string
   backend: { kind: BackendKind; baseUrl: string; model: string; numCtx?: number; maxTokens?: number; think?: boolean; temperature: number; apiKeyEnv?: string; pricePerMTok?: Price }
   systemPrompt: string
   tools: { enabled: ToolName[]; approveBash: boolean; requireReadBeforeEdit?: boolean; explainEditMiss?: boolean; editMissEscalation?: number; bashEnv?: string[]; readMaxBytes?: number; bashMaxBytes?: number; bashTimeoutS?: number }
@@ -126,7 +128,7 @@ export const sendsAnswerSchema = (c: HarnessConfig): boolean =>
 
 // A misspelt key would be silently off, and every optional knob is off when absent. '' is the top level.
 const KEYS: Record<string, string[]> = {
-  '': ['name', 'backend', 'systemPrompt', 'tools', 'toolCalls', 'context', 'loop', 'mcpServers'],
+  '': ['name', 'description', 'backend', 'systemPrompt', 'tools', 'toolCalls', 'context', 'loop', 'mcpServers'],
   backend: ['kind', 'baseUrl', 'model', 'numCtx', 'maxTokens', 'think', 'temperature', 'apiKeyEnv', 'pricePerMTok'],
   tools: ['enabled', 'approveBash', 'requireReadBeforeEdit', 'explainEditMiss', 'editMissEscalation', 'bashEnv', 'readMaxBytes', 'bashMaxBytes', 'bashTimeoutS'],
   toolCalls: ['mode', 'format', 'enforceSchema', 'promptedTemplate', 'parseErrorHint'],
@@ -148,6 +150,7 @@ export function validateConfig(c: unknown): string[] {
   if (typeof c.name !== 'string' || !c.name) e.push('name is required')
   // The name is printed on the terminal (bench's progress lines and table); this message does not print it back.
   else if (!isShowable(c.name)) e.push('name must not contain control or format characters')
+  if (c.description !== undefined && typeof c.description !== 'string') e.push('description must be a string')
   const b = c.backend
   if (!isObj(b)) e.push('backend is required')
   else {

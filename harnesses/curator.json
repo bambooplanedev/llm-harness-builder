@@ -1,5 +1,6 @@
 {
   "name": "curator",
+  "description": "One file-based step of a news-curation pipeline on a local Gemma model, with a repeated-call stop.",
   "backend": { "kind": "openai", "baseUrl": "http://127.0.0.1:8080/v1", "model": "unsloth/gemma-4-12B-it-qat-GGUF:Q4_K_XL", "maxTokens": 4096, "think": false, "temperature": 0 },
   "systemPrompt": "You run one step of a news-curation pipeline inside a working directory. The files are data: move text between files with shell tools (grep, jq, python) instead of retyping it, so that every character survives. Follow the output format the task gives, exactly. When the step is done, answer with the short summary the task asks for and make no further tool calls.",
   "tools": { "enabled": ["list_dir", "read_file", "write_file", "bash"], "approveBash": true },

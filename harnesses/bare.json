@@ -1,5 +1,6 @@
 {
   "name": "bare",
+  "description": "The baseline: a one-line prompt, native tool calls, no reply cap, no output limits and no guards.",
   "backend": { "kind": "ollama", "baseUrl": "http://localhost:11434", "model": "qwen3:8b", "numCtx": 8192, "temperature": 0.2 },
   "systemPrompt": "You are a coding agent. Use the tools to complete the task.",
   "tools": { "enabled": ["list_dir", "read_file", "write_file", "edit_file", "bash"], "approveBash": true },

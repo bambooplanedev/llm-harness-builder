@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // src/cli.ts
 import { parseArgs } from 'node:util'
-import { readFile, cp, writeFile, rename, access, mkdir } from 'node:fs/promises'
-import { existsSync, readFileSync } from 'node:fs'
+import { readFile, cp, mkdir } from 'node:fs/promises'
+import { existsSync, readFileSync, writeFileSync, renameSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline/promises'
 import path from 'node:path'
@@ -16,7 +16,7 @@ import { startServer } from './server/index.js'
 import { TraceWriter, type Meta } from './server/runs.js'
 import { TASKS, type Task } from './core/tasks.js'
 import { childEnv, bashEnvNote } from './core/tools/env.js'
-import { median, formatTable, benchFileName, type BenchRun, type BenchHarness, type BenchResult } from './core/bench.js'
+import { median, formatTable, benchFileName, autoApproves, type BenchRun, type BenchHarness, type BenchResult } from './core/bench.js'
 import { GUARD_BLOCKED, EDIT_MISS } from './core/tools/fs.js'
 import { createBackend } from './core/backends/index.js'
 import { redactor } from './core/redact.js'
@@ -41,7 +41,9 @@ function keyFlag(cmd: CommandName, v: string | undefined): void {
 }
 const PORT = (s: string) => /^\d+$/.test(s) && Number(s) <= 65535
 
-const DEMO_HARNESSES = ['bare', 'tuned', 'tuned-hermes']
+const DEMO_HARNESSES = ['bare', 'tuned-nothink', 'tuned-hermes']
+/** tuned-nothink sets backend.think, which config.ts refuses on a hosted API (openai kind with a key): there demo runs tuned. */
+const demoHarnesses = (kind?: string, apiKeyEnv?: string): string[] => kind === 'openai' && apiKeyEnv ? DEMO_HARNESSES.map(h => h === 'tuned-nothink' ? 'tuned' : h) : DEMO_HARNESSES
 
 let fakeCache: Promise<Backend | undefined> | undefined
 /** Test hook: LHB_FAKE_BACKEND=<file.json> with an array of Partial<NormalizedResponse>; an entry may carry `deltas` as well, which stream to the terminal before its reply returns. One shared queue per process. */
@@ -169,8 +171,6 @@ async function execRun(config: HarnessConfig, task: string, workdir: string, o: 
 }
 
 const NO_TTY = 'stdin is not a terminal, so nothing can answer an approval prompt: pass --yes to approve every command, or run in a terminal'
-/** demo and bench pass yes: true — that approves the harness files' mcpServers and loop.untilBash too, not only the model's commands. */
-const autoApproves = (cmd: 'demo' | 'bench') => `${cmd} approves everything without asking: the model's commands and the harness files' mcpServers and loop.untilBash, in fresh temp workdirs`
 
 async function cmdRun(argv: string[]) {
   const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: COMMANDS.run.options })
@@ -204,14 +204,43 @@ async function cmdRun(argv: string[]) {
   process.exitCode = ok ? 0 : 1
 }
 
+/**
+ * Asks each distinct backend once, before any run: down, no such model, a knob the harness cannot do without. Prints the window it found; returns the refusal, if any.
+ * The test backend is the network itself; there is no server behind it to ask.
+ */
+async function preflightAll(hs: { name: string; config: HarnessConfig; server?: BenchHarness['server'] }[], task: Task, size?: number): Promise<string | undefined> {
+  if (await fakeBackendFromEnv()) return undefined
+  const asked = new Map<string, PreflightResult>()
+  for (const h of hs) {
+    const b = h.config.backend, key = `${b.kind} ${b.baseUrl} ${b.model} ${b.numCtx ?? ''} ${b.apiKeyEnv ?? ''}`
+    let r = asked.get(key)
+    if (!r) {
+      asked.set(key, r = await preflight(createBackend(b), b))
+      if (r.ok) console.error(`preflight: ${b.baseUrl} ${b.model}: window ${r.server.nCtx ?? 'unknown'}${r.server.build ? `, build ${showable(r.server.build)}` : ''}`)
+    }
+    if (!r.ok) return showable(redactor(apiKey(b, process.env), b.apiKeyEnv ?? '').text(r.message))
+    h.server = r.server
+    // A knob without which the harness would be another one is a refusal before any run, like a model that is not there.
+    const refuse = knobsOff(h.config, r.server, task.answerSchema?.(size)).refuse
+    if (refuse) return showable(`preflight: ${h.name}: ${refuse}`)
+    const w = windowWarning(h.config, r.server.nCtx)
+    if (w) console.error(w)
+  }
+}
+
 async function cmdDemo(argv: string[]) {
   const { values } = parseArgs({ args: argv, options: COMMANDS.demo.options })
   if (values.help) return printHelp('demo')
   keyFlag('demo', values['api-key-env'])
   console.error(autoApproves('demo'))
+  const names = demoHarnesses(values.kind, values['api-key-env'])
+  const configs = await Promise.all(names.map(name => loadHarness(path.join(PKG_ROOT, 'harnesses', `${name}.json`), { model: values.model, baseUrl: values['base-url'], kind: values.kind, apiKeyEnv: values['api-key-env'] })))
+  // Not die(): exit 2 is for a bad command line; a server that is not up yet is the newcomer's first stumble.
+  const no = await preflightAll(configs.map(config => ({ name: config.name, config })), TASKS.slug)
+  if (no) { console.error(no); process.exitCode = 1; return }
   const rows: string[] = []
-  for (const name of DEMO_HARNESSES) {
-    const config = await loadHarness(path.join(PKG_ROOT, 'harnesses', `${name}.json`), { model: values.model, baseUrl: values['base-url'], kind: values.kind, apiKeyEnv: values['api-key-env'] })
+  for (const [i, name] of names.entries()) {
+    const config = configs[i]
     const note = bashEnvNote(config.tools.bashEnv)
     if (note) console.error(`${name}: ${note}`)
     const key = keyNote(config.backend, process.env)
@@ -291,8 +320,9 @@ async function cmdBench(argv: string[]) {
   const n = Number(values.n), timeoutS = Number(values.timeout)
   const started = new Date()
   const out = values.out ?? path.join('runs', benchFileName(started))
+  // Per file: a ./harnesses copied by an older version lacks the newer shipped ones.
   const localDir = path.join(process.cwd(), 'harnesses')
-  const files = positionals.length ? positionals : DEMO_HARNESSES.map(h => path.join(existsSync(localDir) ? localDir : path.join(PKG_ROOT, 'harnesses'), `${h}.json`))
+  const files = positionals.length ? positionals : demoHarnesses(values.kind, values['api-key-env']).map(h => [path.join(localDir, `${h}.json`), path.join(PKG_ROOT, 'harnesses', `${h}.json`)].find(existsSync)!)
   const over = { model: values.model, baseUrl: values['base-url'], kind: values.kind, apiKeyEnv: values['api-key-env'], maxTurns: values['max-turns'] === undefined ? undefined : Number(values['max-turns']) }
   console.error(autoApproves('bench'))
   const harnesses: BenchHarness[] = []
@@ -307,33 +337,15 @@ async function cmdBench(argv: string[]) {
     if (key) console.error(`${h.name}: ${key}`)
   }
   // Before any JSON exists: a server that is down, or lacks the model, is a typo to report, not 90 minutes of 'error' rows.
-  // The test backend is the network itself; there is no server behind it to ask.
-  if (!(await fakeBackendFromEnv())) {
-    const asked = new Map<string, PreflightResult>()
-    for (const h of harnesses) {
-      const b = h.config.backend, key = `${b.kind} ${b.baseUrl} ${b.model} ${b.numCtx ?? ''} ${b.apiKeyEnv ?? ''}`
-      let r = asked.get(key)
-      if (!r) {
-        asked.set(key, r = await preflight(createBackend(b), b))
-        if (r.ok) console.error(`preflight: ${b.baseUrl} ${b.model}: window ${r.server.nCtx ?? 'unknown'}${r.server.build ? `, build ${showable(r.server.build)}` : ''}`)
-      }
-      if (!r.ok) die(showable(redactor(apiKey(b, process.env), b.apiKeyEnv ?? '').text(r.message)))
-      else {
-        h.server = r.server
-        // A knob without which the harness would be another one is a refusal before any run, like a model that is not there.
-        const refuse = knobsOff(h.config, r.server, task.answerSchema?.(size)).refuse
-        if (refuse) die(showable(`preflight: ${h.name}: ${refuse}`))
-        const w = windowWarning(h.config, r.server.nCtx)
-        if (w) console.error(w)
-      }
-    }
-  }
+  const no = await preflightAll(harnesses, task, size)
+  if (no) die(no)
   await mkdir(path.dirname(out), { recursive: true })
   const result: BenchResult = { version: 1, date: started.toISOString(), task: task.prompt, taskName: values.task, size, node: process.version, n, timeoutS, complete: false, harnesses }
   // tmp + rename in the same directory: the SIGINT handler exits immediately, and a half-written
   // JSON would be the only thing left of a 90-minute run. `.tmp`, not `.json`, so /api/bench skips it.
   const tmpOut = `${out}.${process.pid}.tmp`
-  const save = async () => { await writeFile(tmpOut, JSON.stringify(result, null, 2) + '\n'); await rename(tmpOut, out) }
+  // Synchronous: the SIGINT handler saves too, and can then never land between another save's write and rename.
+  const save = () => { writeFileSync(tmpOut, JSON.stringify(result, null, 2) + '\n'); renameSync(tmpOut, out) }
   // write() with a callback, not console.log: on a pipe stdout is async, and the SIGINT handler's
   // exit() below would drop the table of a 90-minute run on the floor.
   const finish = (code?: number) => {
@@ -342,20 +354,21 @@ async function cmdBench(argv: string[]) {
   }
   // The first save happens before any run, so an unwritable --out (a directory, a bad path) is a
   // typo to report, not a crash after 90 minutes.
-  await save().catch(e => die(`cannot write ${out}:\n  ${(e as Error).message}`))
+  try { save() } catch (e) { die(`cannot write ${out}:\n  ${(e as Error).message}`) }
   console.error(`bench: ${files.length} harnesses × ${n} runs, timeout ${timeoutS}s per run, writing ${out}`)
   files.forEach((f, i) => console.error(`  ${harnesses[i].name.padEnd(13)} ${f}`))
-  process.once('SIGINT', () => finish(130))
+  // A failed write still prints the table: the terminal then holds what the JSON could not.
+  process.once('SIGINT', () => { result.stopped = true; try { save() } catch (e) { console.error(`cannot write ${out}: ${(e as Error).message}`) } finish(130) })
   for (let round = 1; round <= n; round++) {
     console.error(`--- round ${round}/${n}`)
     for (const h of harnesses) {
       h.runs.push(await benchOnce(h.config, round, timeoutS, out, task, size))
       rollup(h)
-      await save()
+      save()
     }
   }
   result.complete = true
-  await save()
+  save()
   finish()
 }
 
@@ -459,10 +472,11 @@ async function cmdServe(argv: string[]) {
   if (!PORT(values.port)) argError('serve', '--port must be an integer from 0 to 65535')
   const cwd = process.cwd()
   const harnessesDir = path.join(cwd, 'harnesses')
-  try { await access(harnessesDir) } catch { await cp(path.join(PKG_ROOT, 'harnesses'), harnessesDir, { recursive: true }) }
+  // Adds the shipped harnesses that are missing; never overwrites an edited copy.
+  await cp(path.join(PKG_ROOT, 'harnesses'), harnessesDir, { recursive: true, force: false, errorOnExist: false })
   const fake = await fakeBackendFromEnv()
   const srv = await startServer({
-    port: Number(values.port), runsDir: path.join(cwd, 'runs'), harnessesDir,
+    port: Number(values.port), runsDir: path.join(cwd, 'runs'), harnessesDir, examplesDir: path.join(PKG_ROOT, 'example-runs'),
     staticDir: path.join(PKG_ROOT, 'web', 'dist'), backendFactory: fake ? () => fake : undefined,
     // This very CLI, under the same node flags (tsx in development), in serve's cwd: its traces land in the runs/ serve reads.
     bench: args => spawn(process.execPath, [...process.execArgv, fileURLToPath(import.meta.url), 'bench', ...args], { cwd, stdio: ['ignore', 'ignore', 'pipe'] }),

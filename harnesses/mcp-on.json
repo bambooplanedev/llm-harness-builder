@@ -1,5 +1,6 @@
 {
   "name": "mcp-on",
+  "description": "Bash plus the files of the working directory through an MCP filesystem server instead of the built-in file tools.",
   "backend": {
     "kind": "ollama",
     "baseUrl": "http://localhost:11434",

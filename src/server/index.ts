@@ -1,5 +1,5 @@
 import http from 'node:http'
-import { readFile, readdir, writeFile, mkdir, mkdtemp, rm, stat } from 'node:fs/promises'
+import { readFile, readdir, writeFile, mkdir, mkdtemp, rm, stat, realpath } from 'node:fs/promises'
 import type { ChildProcess } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -9,11 +9,15 @@ import { validateConfig, backendErrors, keyProblem, apiKey, type HarnessConfig, 
 import { validateWorkdir } from '../core/tools/sandbox.js'
 import { createBackend, type Backend } from '../core/backends/index.js'
 import { redactor } from '../core/redact.js'
+import { unreachable } from '../core/preflight.js'
 import type { HarnessEvent } from '../core/events.js'
 import { benchFileName } from '../core/bench.js'
+import { TASKS, checkSlug } from '../core/tasks.js'
+import { childEnv } from '../core/tools/env.js'
 
-/** `bench` starts `llm-harness-builder bench <args>` with its stderr piped; without it the page cannot start one. */
-export type ServerOpts = { port: number; runsDir: string; harnessesDir: string; staticDir?: string; backendFactory?: (b: HarnessConfig['backend']) => Backend; bench?: (args: string[]) => ChildProcess }
+/** `bench` starts `llm-harness-builder bench <args>` with its stderr piped; without it the page cannot start one.
+ *  `examplesDir`: recorded runs the three GET routes read with `?example=1`; nothing ever writes there. */
+export type ServerOpts = { port: number; runsDir: string; harnessesDir: string; examplesDir?: string; staticDir?: string; backendFactory?: (b: HarnessConfig['backend']) => Backend; bench?: (args: string[]) => ChildProcess }
 
 const MIME: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml' }
 const MAX_BODY_BYTES = 5e6
@@ -50,10 +54,43 @@ const readBody = (req: http.IncomingMessage) => new Promise<any>((resolve, rejec
 
 export async function startServer(opts: ServerOpts) {
   const store = new RunStore(opts.runsDir)
+  const examples = opts.examplesDir ? new RunStore(opts.examplesDir) : undefined
   const backendFactory = opts.backendFactory ?? createBackend
   await mkdir(opts.harnessesDir, { recursive: true })
   /** The bench this server started: one at a time, both would share one model server. */
   let benching: ChildProcess | undefined
+  /** Stop bench reached `benching` before its JSON existed: the start that waits says so, not a raw 502. */
+  let stopping = false
+  /** The JSON `benching` writes: GET /api/bench names it while it runs, so a reloaded page still offers Stop. */
+  let benchingFile = ''
+  const running = () => !!benching && benching.exitCode === null && benching.signalCode === null
+  /** Realpaths of the demo projects this server created: Check runs only in one of them, never in a folder the page names. */
+  const demoDirs = new Set<string>()
+
+  const exists = (f: string) => stat(f).then(() => true, () => false)
+  /** The one bench start: 409 while one runs, else spawns `opts.bench(args + --out)`; 201 once its JSON exists (past preflight), else 502 with its stderr. */
+  async function startBench(args: string[], cleanup?: () => void): Promise<{ status: 201 | 409 | 502; body: { file?: string; error?: string } }> {
+    if (running()) return { status: 409, body: { error: 'a bench started from this page is still running' } }
+    const first = benchFileName(new Date())
+    let out = first
+    for (let i = 2; await exists(path.join(opts.runsDir, out)); i++) out = first.replace(/\.json$/, `-${i}.json`) // two in one second must not share a JSON
+    const outPath = path.join(opts.runsDir, out)
+    const i = args.findIndex(a => !a.startsWith('--')) // flags first, then the harness files
+    const k2 = i < 0 ? args.length : i
+    stopping = false; benchingFile = out
+    const child = benching = opts.bench!([...args.slice(0, k2), `--out=${outPath}`, ...args.slice(k2)])
+    let tail = ''
+    child.stderr?.on('data', (c: Buffer) => { tail = (tail + c).slice(-2000) }) // read to the end, or a full pipe stalls the bench
+    if (cleanup) child.once('exit', cleanup)
+    // Answered once the JSON exists, that is past preflight; a bench that dies before it (server down, no such model) is its stderr.
+    const started = await new Promise<boolean>(resolve => {
+      const done = (y: boolean) => { clearInterval(t); resolve(y) }
+      const t = setInterval(() => void exists(outPath).then(y => y && done(true)), 200)
+      child.once('exit', () => void exists(outPath).then(done))
+      child.once('error', () => done(false))
+    })
+    return started ? { status: 201, body: { file: out } } : { status: 502, body: { error: stopping ? 'stopped before it started' : tail.trim() || 'bench exited before it wrote its JSON' } }
+  }
 
   const server = http.createServer(async (req, res) => {
     try {
@@ -88,12 +125,18 @@ export async function startServer(opts: ServerOpts) {
         }
         catch (e) {
           const text = (e as { body?: string }).body
-          return json(res, 502, { error: redact.text((e as Error).message), body: text === undefined ? undefined : redact.text(text) })
+          // No body = no HTTP answer at all: say what to start, not just "fetch failed".
+          return json(res, 502, { error: redact.text(text === undefined ? unreachable(backend, e) : (e as Error).message), body: text === undefined ? undefined : redact.text(text) })
         }
       }
       if (m('GET', /^\/api\/harnesses$/)) {
-        const names = (await readdir(opts.harnessesDir)).filter(f => f.endsWith('.json')).map(f => ({ name: f.slice(0, -5) }))
-        return json(res, 200, names)
+        const files = (await readdir(opts.harnessesDir)).filter(f => f.endsWith('.json'))
+        // An unreadable file is still listed, by name only.
+        const list = await Promise.all(files.map(async f => {
+          const name = f.slice(0, -5)
+          try { const d = JSON.parse(await readFile(path.join(opts.harnessesDir, f), 'utf8')).description; return typeof d === 'string' ? { name, description: d } : { name } } catch { return { name } }
+        }))
+        return json(res, 200, list)
       }
       if ((mm = m('GET', /^\/api\/harnesses\/([^/]+)$/))) {
         if (!safeName(mm[1])) return json(res, 400, { error: 'bad name' })
@@ -115,14 +158,19 @@ export async function startServer(opts: ServerOpts) {
         const dirs = entries.filter(e => e.isDirectory() && !e.name.startsWith('.')).map(e => ({ name: e.name, path: path.join(dir, e.name) })).sort((a, b) => a.name.localeCompare(b.name))
         return json(res, 200, { path: dir, parent: path.dirname(dir) === dir ? null : path.dirname(dir), dirs })
       }
-      if (m('GET', /^\/api\/runs$/)) return json(res, 200, await store.list())
+      // `?example=1` on the three GET routes below reads the shipped examples; no POST route looks at it.
+      const example = url.searchParams.get('example') === '1'
+      const reads = example ? examples : store
+      if (!reads && (m('GET', /^\/api\/runs$/) || m('GET', /^\/api\/bench$/) || m('GET', /^\/api\/runs\/[^/]+\/events$/))) return json(res, 404, { error: 'no examples here' })
+      if (m('GET', /^\/api\/runs$/)) return json(res, 200, await reads!.list())
       if (m('GET', /^\/api\/bench$/)) {
         const file = url.searchParams.get('file')
-        if (file === null) return json(res, 200, { files: await store.benchList() })
+        const own = !example && running() ? benchingFile : undefined
+        if (file === null) return json(res, 200, { files: await reads!.benchList(), own })
         if (!benchName(file)) return json(res, 400, { error: 'bad name' })
-        const opened = await store.benchOpen(file)
+        const opened = await reads!.benchOpen(file)
         if (!opened) return json(res, 404, { error: 'not a bench file' })
-        return json(res, 200, { files: await store.benchList(), ...opened, analysis: await store.benchAnalysis(opened.result) })
+        return json(res, 200, { files: await reads!.benchList(), own, ...opened, analysis: await reads!.benchAnalysis(opened.result) })
       }
       if (opts.bench && m('POST', /^\/api\/bench\/again$/)) {
         // The same bench once more, from its own JSON: the harnesses as recorded, the task, size, n and timeout. A new JSON, the old one stays.
@@ -130,29 +178,72 @@ export async function startServer(opts: ServerOpts) {
         if (!benchName(file)) return json(res, 400, { error: 'bad name' })
         const opened = await store.benchOpen(file)
         if (!opened) return json(res, 404, { error: 'not a bench file' })
-        if (benching && benching.exitCode === null && benching.signalCode === null) return json(res, 409, { error: 'a bench started from this page is still running' })
         const r = opened.result
         const dir = await mkdtemp(path.join(tmpdir(), 'lhb-again-'))
         const harnesses = await Promise.all(r.harnesses.map(async (h, i) => { const f = path.join(dir, `${i}.json`); await writeFile(f, JSON.stringify(h.config)); return f }))
-        const exists = (f: string) => stat(f).then(() => true, () => false)
-        const first = benchFileName(new Date())
-        let out = first
-        for (let i = 2; await exists(path.join(opts.runsDir, out)); i++) out = first.replace(/\.json$/, `-${i}.json`) // two in one second must not share a JSON
-        const outPath = path.join(opts.runsDir, out)
+        const cleanup = () => void rm(dir, { recursive: true, force: true })
         // `--x=value`: a value from the file that starts with `-` stays a value. The CLI checks every one of them.
-        const child = benching = opts.bench([`--task=${r.taskName ?? 'slug'}`, ...r.size ? [`--size=${r.size}`] : [], `--n=${r.n}`, `--timeout=${r.timeoutS}`, `--out=${outPath}`, ...harnesses])
-        let tail = ''
-        child.stderr?.on('data', (c: Buffer) => { tail = (tail + c).slice(-2000) }) // read to the end, or a full pipe stalls the bench
-        child.once('exit', () => void rm(dir, { recursive: true, force: true }))
-        // Answered once the JSON exists, that is past preflight; a bench that dies before it (server down, no such model) is its stderr.
-        const started = await new Promise<boolean>(resolve => {
-          const done = (y: boolean) => { clearInterval(t); resolve(y) }
-          const t = setInterval(() => void exists(outPath).then(y => y && done(true)), 200)
-          child.once('exit', () => void exists(outPath).then(done))
-          child.once('error', () => done(false))
-        })
-        if (!started) return json(res, 502, { error: tail.trim() || 'bench exited before it wrote its JSON' })
-        return json(res, 201, { file: out })
+        const { status, body } = await startBench([`--task=${r.taskName ?? 'slug'}`, ...r.size ? [`--size=${r.size}`] : [], `--n=${r.n}`, `--timeout=${r.timeoutS}`, ...harnesses], cleanup)
+        if (status === 409) cleanup() // no child, so no exit to clean up on
+        return json(res, status, body)
+      }
+      if (opts.bench && m('POST', /^\/api\/bench\/new$/)) {
+        // The bench approves everything it runs: only fields checked here reach its argv, each as `--x=value`.
+        const body = await readBody(req) as Record<string, unknown>
+        const errors: string[] = []
+        const names = Array.isArray(body.harnesses) ? [...new Set(body.harnesses)] : []
+        if (names.length < 1 || names.length > 8) errors.push('harnesses: pick 1 to 8')
+        const task = typeof body.task === 'string' && Object.hasOwn(TASKS, body.task) ? TASKS[body.task as keyof typeof TASKS] : undefined
+        if (!task) errors.push(`task must be one of ${Object.keys(TASKS).join('|')}`)
+        const { size, n } = body
+        // As the CLI wants it: a task with sizes needs one in range, a task without takes none.
+        if (task && (task.max ? !(Number.isInteger(size) && (size as number) >= 1 && (size as number) <= task.max) : size !== undefined))
+          errors.push(task.max ? `size must be an integer from 1 to ${task.max} for ${body.task}` : `size: ${body.task} has no sizes`)
+        if (!(Number.isInteger(n) && (n as number) >= 1 && (n as number) <= 50)) errors.push('n must be an integer from 1 to 50')
+        const f = (body.backend ?? {}) as Record<string, unknown>
+        const b = { kind: f.kind, baseUrl: f.baseUrl, model: f.model, temperature: 0, ...(f.apiKeyEnv !== undefined ? { apiKeyEnv: f.apiKeyEnv } : {}) }
+        const backErrs = backendErrors(b)
+        // An empty --model= would silently keep each harness file's own model.
+        if (typeof b.model !== 'string' || !b.model) backErrs.push('backend.model is required')
+        const backend = b as unknown as HarnessConfig['backend']
+        const missing = backErrs.length ? undefined : keyMissing(backend)
+        errors.push(...backErrs, ...missing ? [missing] : [])
+        const files: string[] = []
+        for (const name of names) {
+          if (typeof name !== 'string' || !safeName(name) || name.includes('..')) { errors.push('harnesses: a name is not a plain file name'); continue }
+          const file = path.resolve(opts.harnessesDir, `${name}.json`)
+          let cfg: { backend?: { apiKeyEnv?: unknown } }
+          try { cfg = JSON.parse(await readFile(file, 'utf8')) } catch { errors.push(`${name}: no readable harness file of that name`); continue }
+          // loadHarness keeps a file's own apiKeyEnv unless --api-key-env overrides it: with no form key, the file's key would go to the form's URL.
+          if (!backend.apiKeyEnv && cfg?.backend?.apiKeyEnv !== undefined) errors.push(`${name}: its backend.apiKeyEnv differs from the form's`)
+          files.push(file)
+        }
+        if (errors.length) return json(res, 400, { errors })
+        const { status, body: out } = await startBench([`--task=${body.task}`, ...size !== undefined ? [`--size=${size}`] : [], `--n=${n}`,
+          `--model=${backend.model}`, `--base-url=${backend.baseUrl}`, `--kind=${backend.kind}`, ...backend.apiKeyEnv ? [`--api-key-env=${backend.apiKeyEnv}`] : [], ...files])
+        return json(res, status, out)
+      }
+      if (opts.bench && m('POST', /^\/api\/bench\/stop$/)) {
+        // Only the child this server holds: no pid or name from the page. SIGINT = Ctrl-C, the finished runs stay in its JSON.
+        if (!running()) return json(res, 409, { error: 'no bench started from this page is running' })
+        stopping = true
+        benching!.kill('SIGINT')
+        return json(res, 200, { ok: true })
+      }
+      if (m('POST', /^\/api\/demo$/)) {
+        const dir = await realpath(await TASKS.slug.prepare())
+        demoDirs.add(dir)
+        return json(res, 201, { workdir: dir })
+      }
+      if (m('POST', /^\/api\/demo\/check$/)) {
+        const body = await readBody(req) as { workdir?: unknown; config?: unknown }
+        const errs = validateConfig(body.config)
+        if (errs.length) return json(res, 400, { errors: errs })
+        const dir = typeof body.workdir === 'string' ? await realpath(body.workdir).catch(() => '') : ''
+        if (!demoDirs.has(dir)) return json(res, 404, { error: 'not a demo project this server created' })
+        // The model's code runs here: the environment the harness names, never serve's own (keys live there).
+        const ok = await checkSlug(dir, childEnv((body.config as HarnessConfig).tools.bashEnv))
+        return json(res, 200, { verdict: ok ? 'PASS' : 'FAIL' })
       }
       if (m('POST', /^\/api\/runs$/)) {
         const body = await readBody(req) as Partial<RunParams>
@@ -174,6 +265,7 @@ export async function startServer(opts: ServerOpts) {
       }
       if ((mm = m('GET', /^\/api\/runs\/([^/]+)\/events$/))) {
         const id = mm[1]
+        if (example && !safeName(id)) return json(res, 404, { error: 'not found' })
         const rawLastId = Number(req.headers['last-event-id'])
         let sent = Number.isInteger(rawLastId) ? rawLastId : -1
         let ended = false
@@ -191,19 +283,20 @@ export async function startServer(opts: ServerOpts) {
         // duplicates between the snapshot and the buffer are harmless since emit() dedupes on `sent`.
         const buffered: HarnessEvent[] = []
         let replaying = true
-        const unsub = store.subscribe(id, e => {
+        const unsub = reads!.subscribe(id, e => {
           // Deltas are live-only: no id (Last-Event-ID stays on real events), dropped while replaying (headers not sent yet).
           if (e.type === 'delta') { if (!replaying && !ended) res.write(`event: delta\ndata: ${JSON.stringify(e)}\n\n`) }
           else if (replaying) buffered.push(e); else emit(e)
         })
         req.on('close', unsub) // before the first await: a client that drops mid-read must not leave a listener behind
         let past: HarnessEvent[]
-        try { past = await store.read(id) } catch { return json(res, 404, { error: 'not found' }) }
+        try { past = await reads!.read(id) } catch { return json(res, 404, { error: 'not found' }) }
         res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' })
         for (const e of past) emit(e)
         for (const e of buffered) emit(e)
         replaying = false
-        if (!store.isActive(id) && !ended) {
+        if (example) endOnce() // a shipped trace already ends with done: never ensureDone, nothing is written there
+        else if (!store.isActive(id) && !ended) {
           const synthetic = await store.ensureDone(id)
           if (synthetic) emit(synthetic)
           else endOnce()

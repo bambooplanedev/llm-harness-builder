@@ -278,11 +278,17 @@ test('plain names and keys pass, letters of any script included', () => {
   }
 })
 
+test('description is an optional string', () => {
+  expect(validateConfig({ ...validConfig, description: 5 }).some(e => e.includes('description'))).toBe(true)
+  expect(validateConfig({ ...validConfig, description: 'what it is for' })).toEqual([])
+})
+
 test('every shipped harness still validates', () => {
   const dir = fileURLToPath(new URL('../harnesses/', import.meta.url))
   const files = readdirSync(dir).filter(f => f.endsWith('.json'))
   expect(files.length).toBeGreaterThan(10)
   for (const f of files) expect([f, validateConfig(JSON.parse(readFileSync(join(dir, f), 'utf8')))]).toEqual([f, []])
+  for (const f of files) expect([f, typeof JSON.parse(readFileSync(join(dir, f), 'utf8')).description]).toEqual([f, 'string'])
 })
 
 const keyed = (b: Record<string, unknown>) =>

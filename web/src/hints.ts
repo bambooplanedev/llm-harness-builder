@@ -1,5 +1,6 @@
 // Hover hints for the names on the page, for someone who opens it for the first time: what it is, what it is for, what it takes.
 export const H = {
+  advanced: 'Тут рідші ручки: ліміти інструментів, MCP, шаблони prompted, контекст і петля.\nЧисло — скільки з них задано інакше, ніж у нового харнесу.',
   harness: 'Харнес — один файл налаштувань: бекенд, промпти, інструменти, ліміти.\nЗавантажте готовий зі списку (тека harnesses/) або збережіть поточний під новою назвою.',
   backend: 'Куди йдуть запити до моделі.\nopenai-compatible — будь-який сервер з /v1/chat/completions: llama-server, vLLM, LM Studio, OpenRouter.\nollama (native) — рідний API Ollama; лише він чує num_ctx.\nanthropic (native) — Messages API від Anthropic.\nПоруч — адреса сервера.',
   keyEnv: 'Назва змінної оточення з ключем хмарного API, наприклад OPENROUTER_API_KEY.\nserve читає її з оточення, в якому його запустили; сам ключ у файл харнесу не потрапляє.\nПорожньо — локальний сервер без ключа.',

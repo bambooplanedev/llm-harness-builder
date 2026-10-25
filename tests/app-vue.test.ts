@@ -124,3 +124,48 @@ test('emptying a tools limit box leaves the key out of the saved harness, and a 
   await put('bash timeout', '')
   expect(await saved()).toEqual({ enabled: ['bash'], approveBash: false, bashMaxBytes: 99 })
 })
+
+test('a decimal comma in the temp box is a decimal point; text that is no number leaves it alone', async () => {
+  const app = await mount({ '/api/harnesses': [{ name: 'c' }], '/api/harnesses/c': harness({ backend: { kind: 'ollama', baseUrl: 'http://localhost:11434', model: 'm', temperature: 0.7 } }), '/api/runs': [], '/api/models': [] })
+  await app.load('c')
+  const span = all(app.root).find(n => n.tag === 'span' && textOf(n) === 'temp')!
+  const box = span.parent!.children[span.parent!.children.indexOf(span) + 1]
+  const put = async (value: string) => { box.props.onChange({ target: { value } }); await settle() }
+  const temp = () => {
+    all(app.root).find(n => n.tag === 'button' && textOf(n) === 'Save as')!.props.onClick()
+    return settle().then(() => app.calls.filter(c => c.url.startsWith('/api/harnesses/') && c.body).at(-1)!.body.backend.temperature)
+  }
+  await put('0,2')
+  expect(await temp()).toBe(0.2)
+  await put('abc')
+  expect(await temp()).toBe(0.2)
+})
+
+test('Run without a model says to pick one, not the server\'s field name', async () => {
+  const app = await mount({ '/api/harnesses': [], '/api/runs': [], '/api/models': [] })
+  globalThis.fetch = (async () => new Response(JSON.stringify({ errors: ['backend.model is required'] }), { status: 400 })) as typeof fetch
+  all(app.root).find(n => n.tag === 'button' && textOf(n) === 'Run')!.props.onClick(); await settle()
+  expect(textOf(app.root)).toContain('pick or type a model first')
+})
+
+test('Create demo project fills Workdir; once the run is done, Check shows its verdict as a chip', async () => {
+  const answers: Record<string, unknown> = { '/api/harnesses': [], '/api/runs': [], '/api/models': [], '/api/demo': { workdir: '/tmp/lhb-demo-x' }, '/api/demo/check': { verdict: 'FAIL' } }
+  const app = await mount(answers)
+  let es: { onmessage?: (m: { data: string }) => void } = {}
+  const savedES = globalThis.EventSource
+  globalThis.EventSource = class { static CLOSED = 2; constructor() { es = this } addEventListener() {} close() {} } as unknown as typeof EventSource
+  try {
+    const button = (t: string) => all(app.root).find(n => n.tag === 'button' && textOf(n) === t)
+    button('Create demo project')!.props.onClick(); await settle()
+    expect(all(app.root).find(n => n.props.placeholder === '/path/to/project')!.value).toBe('/tmp/lhb-demo-x')
+    answers['/api/runs'] = { runId: 'r1' }
+    button('Run')!.props.onClick(); await settle()
+    answers['/api/runs'] = []
+    expect(button('Check')).toBeUndefined() // not before the run is done
+    es.onmessage!({ data: JSON.stringify({ seq: 0, turn: 0, ts: 0, type: 'done', reason: 'final' }) }); await settle()
+    expect(textOf(app.root)).toContain('runs node --test on the code the model wrote')
+    button('Check')!.props.onClick(); await settle()
+    expect(app.calls.find(c => c.url === '/api/demo/check')?.body.workdir).toBe('/tmp/lhb-demo-x')
+    expect(all(app.root).find(n => n.tag === 'span' && n.props.class?.includes?.('chip') && textOf(n) === 'FAIL')).toBeDefined()
+  } finally { globalThis.EventSource = savedES }
+})

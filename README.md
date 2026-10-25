@@ -1,3 +1,5 @@
+**English** · [Українська](README.uk.md)
+
 <div align="center">
 
 # llm-harness-builder
@@ -9,11 +11,12 @@
 [![Node](https://img.shields.io/node/v/llm-harness-builder)](https://nodejs.org)
 [![License: MIT](https://img.shields.io/npm/l/llm-harness-builder)](LICENSE)
 
-![The Bench tab: two harnesses on one task, and a passing run compared with a failing one](docs/screenshot.png)
+![The Bench tab on the example bench shipped with the package: two harnesses on one task, and a passing run compared with a failing one](docs/screenshot.png)
 
 </div>
 
-A small workbench for the model layer of an agent: system prompt, tool description format, native
+An agent harness is the code around a model: the system prompt, the tools it may call, and the loop that feeds
+results back. This is a small workbench for the model layer of that harness: system prompt, tool description format, native
 vs prompted tool calls, schema enforcement, tool-output truncation, context budget. Every run is a
 JSONL trace of exactly what went to the model and what came back.
 
@@ -69,7 +72,8 @@ Or install it globally:
 
 ## Quick start
 
-    npx llm-harness-builder demo --model qwen3:8b        # needs Ollama running
+    ollama pull qwen3:8b                                 # once; needs Ollama running
+    npx llm-harness-builder demo --model qwen3:8b
     npx llm-harness-builder                              # opens the workbench UI
 
 Against anything that speaks the OpenAI API (llama-server, LM Studio, vLLM):
@@ -78,18 +82,40 @@ Against anything that speaks the OpenAI API (llama-server, LM Studio, vLLM):
       --kind openai --base-url http://127.0.0.1:8080/v1 \
       --model unsloth/Qwen3-8B-GGUF:Q4_K_M
 
-`demo` runs the same task once with each of three harnesses, `bare`, `tuned` and `tuned-hermes`, on
-the same model, and prints PASS/FAIL from a check script. `bench` repeats it and reports PASS rates:
+`demo` runs the same task once with each of three harnesses, `bare`, `tuned-nothink` and
+`tuned-hermes`, on the same model, and prints PASS/FAIL from a check script. On a hosted API
+(`--kind openai` with `--api-key-env`, OpenRouter for one) `tuned` takes the place of
+`tuned-nothink`, because such an API refuses `backend.think`. `bench` repeats it and reports PASS
+rates:
 
     npx llm-harness-builder bench --n 5 \
       --kind openai --base-url http://127.0.0.1:8080/v1 \
       --model unsloth/Qwen3-8B-GGUF:Q4_K_M
+
+From zero to a first PASS:
+
+1. Install [Ollama](https://ollama.com) and start it.
+2. `ollama pull qwen3:8b`
+3. `npx llm-harness-builder demo`, or open the UI and follow Start here.
 
 Run `demo` first: it takes a few minutes and shows you the trace and that the backend is alive.
 `bench --n 5` on the setup of [Bench results](docs/findings.md#bench-results) took 96 minutes, most
 of it `bare`.
 
 No GPU? See [Cloud](#cloud): a free OpenRouter account runs the demo.
+
+Why `tuned-nothink` and not `tuned`:
+
+| harness | what differs from `tuned` | PASS | how runs ended | time per run |
+|---|---|---|---|---|
+| `tuned` | — (thinking on, the model's default) | 0/2 | `parse_failed` ×2: thinking eats the 1024-token cap, empty replies | — |
+| `tuned` + `think: false` | thinking off | 0/2 | `max_turns` ×2: the same failing `edit_file` repeated | — |
+| `tuned-nothink` | thinking off, `explainEditMiss`, `editMissEscalation: 2` | 5/5 | `final` ×5 | 5–18 s |
+| `bare` | one-line prompt, native tool calls, no reply cap, no output limits | 2/4 | across three benches; two runs aborted at 1800 s after endless generation | — |
+
+qwen3:8b on Ollama (RTX 4070 laptop), `slug` task, n = 2–5: this model on this task, small n.
+`tuned` fails on a thinking model because its `maxTokens: 1024` covers the thinking too: qwen3 on
+Ollama thinks unless told not to, spends the whole cap there and sends back an empty reply.
 
 ## Usage
 
@@ -107,9 +133,22 @@ Running the package with no command does the same. The page has two tabs:
   new JSON. Press `⇄` on a run to compare it with the open one — which config knobs differ, the
   per-turn path of both with the first divergence marked, and the time and tokens each turn cost.
 
+On a first open, with no runs yet, **Start here** in the Runs list walks through three steps: open a
+recorded PASS run and a FAIL one, open the example bench, then make a run of your own. **Examples**
+opens the recorded runs and bench that ship with the package: read-only, no model needed.
+
+- **Create demo project** makes a fresh copy of the demo task in a temp folder and points the
+  workdir at it; after the run, **Check** runs `node --test` on the code the model wrote and shows
+  PASS or FAIL. The verdict is shown on the page only, never written to the trace.
+- **Advanced** folds the rarer knobs of the form. Nothing is removed, and the fold shows how many of
+  them are set. Each shipped harness carries a `description`, shown beside the picker.
+- **New bench** on the Bench tab starts a bench from the page: harnesses from `./harnesses`, a task,
+  `--n`, and the model of the Workbench form. **Stop bench** stops it the way Ctrl-C does: the
+  finished runs stay in the JSON.
+
 Every run, from the UI or the CLI, is kept in `./runs/*.jsonl`. Start `serve` from the same
-directory to browse them, and reload the list after a CLI run. `serve` copies the shipped
-`harnesses/` into its working directory when there is none there yet.
+directory to browse them, and reload the list after a CLI run. On every start `serve` adds the shipped
+`harnesses/` that are missing from its working directory and never overwrites an existing file; `bench` and `demo` fall back to the package's file.
 
 ### CLI
 
@@ -137,8 +176,8 @@ directory to browse them, and reload the list after a CLI run. `serve` copies th
 
 **Exit codes.** 0 for help. `run` exits 0 when the model ended with a final answer (with
 `--answer-schema`, one that parses as JSON) and 1 when it did not; `demo` and `bench` exit 0
-whatever the verdicts. 2 for an argument a command cannot take (the message names it and the usage
-follows), for a file it cannot read, for a key variable that is not set, is empty or holds what a
+whatever the verdicts; `demo` exits 1 when the server is not up or lacks the model, or when a harness needs something the model lacks (a knob it refuses), with a hint.
+2 for an argument a command cannot take (the message names it and the usage follows), for a file it cannot read, for a key variable that is not set, is empty or holds what a
 key cannot (see [Cloud](#cloud)), and for the refusal below. 130 for Ctrl-C in `run`, `demo` and
 `bench`, which keeps the trace. `proxy` exits 0 when stopped.
 
@@ -157,7 +196,8 @@ stderr.
 #### bench
 
 `bench` runs a task (`slug`, the demo's, by default) `--n` times per harness, round-robin, with a
-per-run `--timeout` in seconds. With no files it takes `bare`, `tuned` and `tuned-hermes` from
+per-run `--timeout` in seconds. With no files it takes `bare`, `tuned-nothink` and `tuned-hermes`
+(`tuned` instead of `tuned-nothink` on a hosted API, as in `demo`) from
 `./harnesses` (the copies `serve` made, i.e. what you edited in the UI) or from the package. It
 prints a PASS-rate table and writes a JSON to `runs/` after every run, so Ctrl-C keeps what
 finished.
@@ -362,6 +402,7 @@ silently off.
 | `backend.think` | the chat template's thinking switch (below) |
 | `backend.apiKeyEnv` | the variable that holds a hosted API's key — see [Cloud](#cloud) |
 | `backend.pricePerMTok` | prices per million tokens, for `$` per reply and per run — see [Anthropic](#anthropic) |
+| `description` | one line on what the harness is for; shown beside the picker, ignored by diffs |
 | `systemPrompt` | the first message of every request |
 | `tools.enabled` | built-in tools: `list_dir`, `read_file`, `write_file`, `edit_file`, `bash` |
 | `tools.approveBash` | ask before each `bash` command |

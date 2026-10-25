@@ -4,6 +4,7 @@ import { api, type Delta, type HarnessConfig, type HarnessEvent, type RunSummary
 import { PRESETS, DEFAULT_PROMPTED_TEMPLATE, DEFAULT_PARSE_ERROR_HINT, DEMO_TASK } from '../../src/core/prompts'
 import { isLoopbackUrl, listsModelsByItself } from '../../src/core/config'
 import { knobsOff } from '../../src/core/knobs'
+import { NEW_HARNESS } from './advanced'
 import ConfigForm from './ConfigForm.vue'
 import ContextBar from './ContextBar.vue'
 import Trace from './Trace.vue'
@@ -11,12 +12,10 @@ import Bench from './Bench.vue'
 import { H } from './hints'
 
 const tab = ref<'workbench' | 'bench'>('workbench')
-const config = ref<HarnessConfig>({
-  name: 'new', backend: { kind: 'ollama', baseUrl: 'http://localhost:11434', model: '', numCtx: 8192, temperature: 0.2 },
-  systemPrompt: PRESETS.minimal, tools: { enabled: ['list_dir', 'read_file', 'write_file', 'edit_file', 'bash'], approveBash: true },
-  toolCalls: { mode: 'native', format: 'json', enforceSchema: false, promptedTemplate: DEFAULT_PROMPTED_TEMPLATE, parseErrorHint: DEFAULT_PARSE_ERROR_HINT },
-  context: { maxToolOutputChars: 4000 }, loop: { maxTurns: 15 },
-})
+/** The Bench tab shows the recorded bench shipped with the package instead of ./runs: read-only, no model. */
+const benchExample = ref(false)
+const openExamples = () => { benchExample.value = true; tab.value = 'bench' }
+const config = ref<HarnessConfig>(structuredClone(NEW_HARNESS))
 const harnessNames = ref<string[]>([])
 const models = ref<string[]>([]); const modelsError = ref('')
 /** What the server says the picked model takes; undefined is unknown, and nothing is locked. */
@@ -83,23 +82,31 @@ async function load(name: string) {
   config.value = { ...c, backend: config.value.backend.model ? config.value.backend : c.backend }
 }
 async function saveAs(name: string) { error.value = ''; try { config.value.name = name; await api.saveHarness(name, outbound(config.value)); await refreshLists() } catch (e) { error.value = (e as Error).message } }
-function open(id: string, runTaskText: string, active = false) {
-  unsub?.(); events.value = []; live.value = {}; runId.value = id; runTask.value = runTaskText; openActive.value = active
+function open(id: string, runTaskText: string, active = false, example = false) {
+  unsub?.(); events.value = []; live.value = {}; verdict.value = ''; runId.value = id; runTask.value = runTaskText; openActive.value = active
   unsub = api.events(id,
     e => { events.value.push(e); if (e.type === 'done') refreshLists(); else if (e.type !== 'error') live.value = {} }, // keep partial text visible after an abort
     msg => (error.value = msg),
-    d => { live.value = { reasoning: (live.value.reasoning ?? '') + (d.reasoning ?? ''), content: (live.value.content ?? '') + (d.content ?? '') } })
+    d => { live.value = { reasoning: (live.value.reasoning ?? '') + (d.reasoning ?? ''), content: (live.value.content ?? '') + (d.content ?? '') } },
+    example)
 }
+/** Start here, step 1: a recorded trace in this panel, read-only. */
+const openExample = (id: string) => api.runs(true).then(rs => open(id, rs.find(r => r.id === id)?.task ?? '', false, true)).catch(e => (error.value = e.message))
 async function start() {
   error.value = ''
   try { const { runId: id } = await api.startRun(outbound(config.value), task.value, workdir.value); ownRun.value = id; open(id, task.value, true) }
-  catch (e) { error.value = (e as Error).message }
+  catch (e) { const m = (e as Error).message; error.value = m === 'backend.model is required' ? 'pick or type a model first' : m }
 }
 const approve = (callId: string, ok: boolean) => api.approve(runId.value, callId, ok).catch(e => (error.value = e.message))
 const abort = () => api.abort(runId.value).catch(e => (error.value = e.message))
 /** The folder picker: the server lists folders, since a browser never tells a page an absolute path. */
 const browse = ref<Awaited<ReturnType<typeof api.dirs>> | null>(null)
 const browseTo = (p: string) => api.dirs(p).then(d => (browse.value = d)).catch(e => (error.value = e.message))
+/** The demo project made from this page, and Check's verdict on it: shown here only, never written to the trace. */
+const demoDir = ref(''); const verdict = ref<'PASS' | 'FAIL' | ''>('')
+const createDemo = () => api.demo().then(d => { workdir.value = demoDir.value = d.workdir; browse.value = null }).catch(e => (error.value = e.message))
+const canCheck = () => isDone() && runId.value === ownRun.value && !!demoDir.value && workdir.value === demoDir.value && runTask.value === DEMO_TASK
+const check = () => { verdict.value = ''; api.demoCheck(workdir.value, outbound(config.value)).then(r => (verdict.value = r.verdict)).catch(e => (error.value = e.message)) }
 
 /** v-model.number leaves numCtx as '' when the field is cleared; drop it so validateConfig sees undefined, not a bad number. */
 function outbound(c: HarnessConfig): HarnessConfig {
@@ -132,7 +139,7 @@ watch(() => config.value.backend.model, () => {
       <button :class="{ on: tab === 'workbench' }" @click="tab = 'workbench'">Workbench</button>
       <button :class="{ on: tab === 'bench' }" @click="tab = 'bench'">Bench</button>
     </div>
-    <Bench v-if="tab === 'bench'" @to-workbench="toWorkbench" />
+    <Bench v-if="tab === 'bench'" :key="String(benchExample)" :backend="config.backend" :example="benchExample" @example="v => (benchExample = v)" @to-workbench="toWorkbench" />
     <div class="layout" v-else>
       <div class="col left">
         <ConfigForm v-model="config" v-model:mcp-error="mcpError" :models="models" :models-error="modelsError" :model-info="modelInfo" :harness-names="harnessNames" @refresh-models="refreshModels" @load="load" @save-as="saveAs" />
@@ -143,6 +150,7 @@ watch(() => config.value.backend.model, () => {
         <div class="row">
           <input type="text" v-model="workdir" placeholder="/path/to/project">
           <button @click="browse ? (browse = null) : browseTo(workdir)">{{ browse ? 'Close' : 'Browse…' }}</button>
+          <button @click="createDemo">Create demo project</button>
         </div>
         <div v-if="browse" class="backdrop" @click="browse = null"></div><!-- a click anywhere else closes the dropdown -->
         <div v-if="browse" class="picker">
@@ -162,9 +170,22 @@ watch(() => config.value.backend.model, () => {
           <button @click="abort" :disabled="!canAbort()">Abort</button>
           <span class="err">{{ error }}</span>
         </div>
+        <div v-if="canCheck()" class="row" style="margin:8px 0">
+          <button @click="check">Check</button>
+          <span class="muted">runs node --test on the code the model wrote</span>
+          <span v-if="verdict" :class="['chip', 'solid', verdict === 'PASS' ? 'ok' : 'err']">{{ verdict }}</span>
+        </div>
         <ContextBar :events="events" :num-ctx="config.backend.kind === 'ollama' ? config.backend.numCtx : undefined" />
         <Trace v-if="runId" :events="events" :live="live" :task="runTask" @approve="approve" />
-        <h4>Runs</h4>
+        <h4>Runs <button class="link" @click="openExamples">Examples</button></h4>
+        <div v-if="!runs.length" class="start">
+          <h5 class="group">Start here</h5>
+          <ol>
+            <li>Open an example run: <button class="link" @click="openExample('059867d3')">PASS</button> and <button class="link" @click="openExample('d63e9548')">FAIL</button> — no model needed.</li>
+            <li>Open the <button class="link" @click="openExamples">example bench</button>: the PASS table, intervals, ⇄ Diff.</li>
+            <li>Pick a model on the left, then Create demo project → Run.</li>
+          </ol>
+        </div>
         <div class="runs">
           <div v-for="r in runs" :key="r.id" @click="open(r.id, r.task, r.active)">
             <div class="line"><span><b>{{ r.harness }}</b> · {{ r.reason ?? 'running' }}</span><span>{{ r.turns ?? '-' }} turns · {{ r.toolCallCount ?? '-' }} tool calls · {{ new Date(r.started).toLocaleTimeString() }}</span></div>

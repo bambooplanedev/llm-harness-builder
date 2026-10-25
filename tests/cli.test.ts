@@ -60,10 +60,21 @@ test('demo prints PASS/FAIL per harness', async () => {
   const r = cli(['demo'], { LHB_FAKE_BACKEND: fake })
   expect(r.status).toBe(0)
   expect(r.stdout).toMatch(/bare\s+FAIL/)
-  expect(r.stdout).toMatch(/tuned\s+PASS/)
+  expect(r.stdout).toMatch(/tuned-nothink\s+PASS/)
   expect(r.stdout).toMatch(/tuned-hermes\s+PASS/)
   expect(r.stderr).toContain("demo approves everything without asking: the model's commands and the harness files' mcpServers and loop.untilBash, in fresh temp workdirs")
   expect(r.stdout).not.toContain('approves everything')
+}, 60_000)
+
+test('demo runs tuned-nothink, or tuned on a hosted API where backend.think is refused', async () => {
+  const fake = join(await tmp('lhb-cli-'), 'fake.json')
+  await writeFile(fake, JSON.stringify(Array(8).fill({ content: 'Done.' })))
+  const local = cli(['demo'], { LHB_FAKE_BACKEND: fake })
+  expect(local.stderr).toContain('=== tuned-nothink')
+  const hosted = cli(['demo', '--kind', 'openai', '--base-url', 'https://api.example.com/v1', '--api-key-env', 'X_API_KEY'], { LHB_FAKE_BACKEND: fake, X_API_KEY: 'k' })
+  expect(hosted.stderr).not.toContain('invalid harness')
+  expect(hosted.stderr).toMatch(/=== tuned \(/)
+  expect(hosted.stderr).not.toContain('=== tuned-nothink')
 }, 60_000)
 
 test('demo --json keeps stdout pure JSONL and prints the summary on stderr', async () => {
@@ -81,7 +92,7 @@ test('demo --json keeps stdout pure JSONL and prints the summary on stderr', asy
   for (const l of lines) expect(() => JSON.parse(l)).not.toThrow()
   expect(r.stdout).not.toMatch(/PASS|FAIL/)
   expect(r.stderr).toMatch(/bare\s+FAIL/)
-  expect(r.stderr).toMatch(/tuned\s+PASS/)
+  expect(r.stderr).toMatch(/tuned-nothink\s+PASS/)
   expect(r.stderr).toMatch(/tuned-hermes\s+PASS/)
   expect(r.stderr).toContain('demo approves everything without asking')
   for (const l of r.stdout.trim().split('\n')) expect(() => JSON.parse(l)).not.toThrow()
@@ -221,16 +232,40 @@ test('bench without files uses ./harnesses in demo order, round-robin', async ()
   const r = cli(['bench', '--n', '1', '--out', out], { LHB_FAKE_BACKEND: fake }, wd)
   expect(r.status).toBe(0)
   expect(r.stdout).toMatch(/^bare\s+0\/1\s/m)
-  expect(r.stdout).toMatch(/^tuned\s+1\/1\s/m)
+  expect(r.stdout).toMatch(/^tuned-nothink\s+1\/1\s/m)
   expect(r.stdout).toMatch(/^tuned-hermes\s+1\/1\s/m)
   expect(r.stderr).toMatch(/--- round 1\/1/)
   expect(r.stderr).toContain(join(wd, 'harnesses', 'bare.json'))
   const j = JSON.parse(await readFile(out, 'utf8'))
-  expect(j.harnesses.map((h: any) => h.name)).toEqual(['bare', 'tuned', 'tuned-hermes'])
+  expect(j.harnesses.map((h: any) => h.name)).toEqual(['bare', 'tuned-nothink', 'tuned-hermes'])
   expect(j.harnesses.flatMap((h: any) => h.runs.map((x: any) => x.reason))).toEqual(['final', 'final', 'final'])
   expect(r.stderr).toContain("bench approves everything without asking: the model's commands and the harness files' mcpServers and loop.untilBash, in fresh temp workdirs")
   expect(r.stdout).not.toContain('approves everything')
 }, 90_000)
+
+test('bench without files falls back to the package per harness file', async () => {
+  const wd = await tmp('lhb-cli-')
+  const fake = join(wd, 'fake.json'); const out = join(wd, 'b.json')
+  for (const n of ['bare', 'tuned-hermes']) await cp(harness(n), join(wd, 'harnesses', `${n}.json`))
+  await writeFile(fake, JSON.stringify(Array(8).fill({ content: 'Done.' })))
+  const r = cli(['bench', '--n', '1', '--out', out], { LHB_FAKE_BACKEND: fake }, wd)
+  expect(r.status).toBe(0)
+  expect(r.stderr).not.toContain('ENOENT')
+  expect(JSON.parse(await readFile(out, 'utf8')).harnesses.map((h: any) => h.name)).toEqual(['bare', 'tuned-nothink', 'tuned-hermes'])
+}, 90_000)
+
+test('serve adds the shipped harnesses that are missing and keeps an edited copy', async () => {
+  const wd = await tmp('lhb-cli-')
+  mkdirSync(join(wd, 'harnesses'))
+  const edited = JSON.stringify({ ...JSON.parse(await readFile(harness('bare'), 'utf8')), description: 'mine' })
+  await writeFile(join(wd, 'harnesses', 'bare.json'), edited)
+  const p = spawn(join(ROOT, 'node_modules', '.bin', 'tsx'), [join(ROOT, 'src', 'cli.ts'), 'serve', '--port', '0', '--no-open'], { cwd: wd, stdio: ['ignore', 'ignore', 'pipe'] })
+  try {
+    await new Promise<void>(res => p.stderr!.on('data', d => String(d).includes('serving on') && res()))
+    expect(readdirSync(join(wd, 'harnesses')).sort()).toEqual(readdirSync(join(ROOT, 'harnesses')).sort())
+    expect(await readFile(join(wd, 'harnesses', 'bare.json'), 'utf8')).toBe(edited)
+  } finally { p.kill() }
+}, 30_000)
 
 test('bench against a server that does not answer stops before the first run, with no JSON written', async () => {
   const wd = await tmp('lhb-cli-'); const out = join(wd, 'b.json')
@@ -239,6 +274,14 @@ test('bench against a server that does not answer stops before the first run, wi
   expect(r.stderr).toMatch(/^preflight: http:\/\/127\.0\.0\.1:1\/v1 \(openai\) does not answer: /m)
   expect(r.stderr).not.toMatch(/--- round/)
   expect(existsSync(out)).toBe(false)
+}, 30_000)
+
+test('demo against a server that does not answer stops before any run, exit 1, no trace', () => {
+  const r = cli(['demo', '--kind', 'openai', '--base-url', 'http://127.0.0.1:1/v1'])
+  expect(r.status).toBe(1)
+  expect(r.stderr).toMatch(/^preflight: http:\/\/127\.0\.0\.1:1\/v1 \(openai\) does not answer: /m)
+  expect(r.stderr).not.toContain('=== bare')
+  expect(!existsSync(join(r.cwd, 'runs')) || readdirSync(join(r.cwd, 'runs')).length === 0).toBe(true)
 }, 30_000)
 
 test('bench rejects non-positive-integer --n and --timeout with usage', () => {
@@ -341,6 +384,7 @@ test('Ctrl-C during bench with a live mcp server leaves the PASS table intact an
     expect(code).toBe(130)
     expect(stdout).toMatch(/^harness\s+PASS/m)
     expect(stdout).toMatch(/^mcp-bench\s+0\/0/m)
+    expect(JSON.parse(readFileSync(out, 'utf8'))).toMatchObject({ complete: false, stopped: true })
     const deadline2 = Date.now() + 2000
     while (count() > 0 && Date.now() < deadline2) await new Promise(r => setTimeout(r, 50))
     expect(count()).toBe(0)
@@ -349,6 +393,39 @@ test('Ctrl-C during bench with a live mcp server leaves the PASS table intact an
     try { execSync(`pkill -9 -f ${marker}`) } catch {}
   }
 }, 15_000)
+
+// Stop bench on the page is this SIGINT: a command the model started must not outlive the bench.
+test('SIGINT to bench takes a long command the model started with it', async () => {
+  const wd = await tmp('lhb-cli-')
+  const fake = join(wd, 'fake.json'); const out = join(wd, 'b.json')
+  // A duration no other process has: pgrep finds this sleep and nothing else (on Linux the shell around it too).
+  const secs = `300.${process.pid}${Date.now() % 100000}`
+  await writeFile(fake, JSON.stringify([{ toolCalls: [{ name: 'bash', args: { command: `sleep ${secs}` } }] }]))
+  const harnessFile = join(wd, 'sleepy.json')
+  await writeFile(harnessFile, JSON.stringify({
+    name: 'sleepy', backend: { kind: 'openai', baseUrl: 'http://x/v1', model: 'm', temperature: 0 }, systemPrompt: 'sys',
+    tools: { enabled: ['bash'], approveBash: true, bashTimeoutS: 600 },
+    toolCalls: { mode: 'native', enforceSchema: false, promptedTemplate: 'T:{{tools}}', parseErrorHint: 'HINT' },
+    context: { maxToolOutputChars: 1000, budgetTokens: 0 }, loop: { maxTurns: 5 },
+  }))
+  const count = () => spawnSync('pgrep', ['-f', `sleep ${secs}`]).stdout.toString().split('\n').filter(Boolean).length
+  const p = spawn(join(ROOT, 'node_modules', '.bin', 'tsx'), [join(ROOT, 'src', 'cli.ts'), 'bench', '--n', '1', '--out', out, harnessFile],
+    { cwd: mkdtempSync(join(tmpdir(), 'lhb-cwd-')), env: { ...process.env, LHB_FAKE_BACKEND: fake }, stdio: ['ignore', 'pipe', 'pipe'] })
+  try {
+    p.stdout.resume(); p.stderr.resume()
+    const deadline1 = Date.now() + 10_000
+    while (count() === 0 && Date.now() < deadline1) await new Promise(r => setTimeout(r, 50))
+    expect(count()).toBeGreaterThan(0)
+    expect(await new Promise(done => { p.on('exit', done); p.kill('SIGINT') })).toBe(130)
+    const deadline2 = Date.now() + 2000
+    while (count() > 0 && Date.now() < deadline2) await new Promise(r => setTimeout(r, 50))
+    expect(count()).toBe(0)
+    expect(JSON.parse(readFileSync(out, 'utf8'))).toMatchObject({ complete: false, stopped: true })
+  } finally {
+    try { p.kill('SIGKILL') } catch {}
+    try { execSync(`pkill -9 -f 'sleep ${secs}'`) } catch {}
+  }
+}, 20_000)
 
 // The two numbers README quotes for the mcp-off/mcp-on pair: what the server put in front of the
 // model, and how many tool results came back as errors. Measured on a real server child, not a mock.

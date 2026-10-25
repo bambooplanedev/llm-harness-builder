@@ -1,5 +1,6 @@
 import { test, expect, afterAll } from 'vitest'
-import { writeFile, readFile, appendFile } from 'node:fs/promises'
+import { writeFile, readFile, appendFile, realpath, stat, cp, chmod, readdir } from 'node:fs/promises'
+import { fileURLToPath } from 'node:url'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import http from 'node:http'
@@ -183,11 +184,26 @@ test('the Vite dev proxy keeps the browser\'s Host, or serve would refuse every 
 test('harnesses and models', async () => {
   await writeFile(join(harnessesDir, 'x.json'), JSON.stringify(config({ name: 'x' })))
   expect(await (await fetch(`${base}/api/harnesses`)).json()).toEqual([{ name: 'x' }])
+  await writeFile(join(harnessesDir, 'z.json'), JSON.stringify(config({ name: 'z', description: 'says what it is for' })))
+  await writeFile(join(harnessesDir, 'broken.json'), '{')
+  const listing = await (await fetch(`${base}/api/harnesses`)).json()
+  expect(listing).toContainEqual({ name: 'z', description: 'says what it is for' })
+  expect(listing).toContainEqual({ name: 'broken' })
   const put = await fetch(`${base}/api/harnesses/y`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(config({ name: 'y' })) })
   expect(put.status).toBe(200)
   expect((await (await fetch(`${base}/api/harnesses/y`)).json()).name).toBe('y')
   const listed = await fetch(`${base}/api/models`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind: 'openai', baseUrl: 'http://x/v1' }) })
   expect(await listed.json()).toEqual(['fake-model'])
+})
+
+test('/api/models on a server that does not answer says what to do', async () => {
+  const real = await startServer({ port: 0, runsDir, harnessesDir })
+  try {
+    const r = await fetch(`http://127.0.0.1:${real.port}/api/models`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind: 'ollama', baseUrl: 'http://127.0.0.1:1' }) })
+    expect(r.status).toBe(502)
+    const { error } = await r.json()
+    expect(error).toContain('does not answer'); expect(error).toContain('ollama serve')
+  } finally { await real.close() }
 })
 
 test('concurrent POST /api/runs for the same workdir: exactly one 201, one 409', async () => {
@@ -590,4 +606,176 @@ test('POST /api/bench/again starts bench from the JSON\'s own harnesses and answ
     // a server that was not given a way to start one has no such route
     expect((await postJson(`${base}/api/bench/again`, { file: 'b1.json' })).status).toBe(404)
   } finally { await s.close() }
+})
+
+test('Create demo project: a slug workdir under tmp, and Check runs its tests only there', async () => {
+  const r = await fetch(`${base}/api/demo`, { method: 'POST' })
+  expect(r.status).toBe(201)
+  const { workdir: demo } = await r.json()
+  expect(demo.startsWith(await realpath(tmpdir()))).toBe(true)
+  expect((await stat(join(demo, 'data', 'app.log'))).isFile()).toBe(true)
+  const check = (wd: unknown, c: unknown = config()) => postJson(`${base}/api/demo/check`, { workdir: wd, config: c })
+  const fail = await check(demo)
+  expect(fail.status).toBe(200)
+  expect(await fail.json()).toEqual({ verdict: 'FAIL' }) // the shipped bug is still there
+  const other = await check(workdir)
+  expect(other.status).toBe(404)
+  expect(await other.json()).toEqual({ error: 'not a demo project this server created' })
+  expect((await check(join(demo, 'missing'))).status).toBe(404)
+  expect((await check(demo, {})).status).toBe(400)
+})
+
+test('a page of another origin can neither create a demo project nor run Check', async () => {
+  const headers = { host: `localhost:${srv.port}`, origin: 'http://evil.example', 'content-type': 'text/plain' }
+  expect(await rawReq('POST', '/api/demo', headers)).toBe(403)
+  expect(await rawReq('POST', '/api/demo/check', headers, JSON.stringify({ workdir, config: config() }))).toBe(403)
+})
+
+/** A server whose bench is `node -e <script>`, OUT = its --out; `children` holds every one it started. */
+async function benchServer(script: () => string) {
+  const { spawn } = await import('node:child_process')
+  const runs = await tmp('lhb-new-runs-'), hdir = await tmp('lhb-new-h-')
+  const got: string[][] = [], children: import('node:child_process').ChildProcess[] = []
+  const s = await startServer({ port: 0, runsDir: runs, harnessesDir: hdir, backendFactory: () => fake([]), bench: args => {
+    got.push(args)
+    const out = args.find(a => a.startsWith('--out='))!.slice(6)
+    const c = spawn(process.execPath, ['-e', script().replace('OUT', JSON.stringify(out))], { stdio: ['ignore', 'ignore', 'pipe'] })
+    children.push(c); return c
+  } })
+  return { s, u: `http://127.0.0.1:${s.port}`, runs, hdir, got, children }
+}
+const exited = (c: import('node:child_process').ChildProcess) => c.exitCode !== null || c.signalCode !== null ? Promise.resolve() : new Promise(r => c.once('exit', r))
+const form = { kind: 'openai', baseUrl: 'http://127.0.0.1:9/v1', model: 'm' }
+
+test('POST /api/bench/new validates and passes only what it checked', async () => {
+  const b = await benchServer(() => `require('fs').writeFileSync(OUT, '{}'); setTimeout(() => {}, 200)`)
+  await writeFile(join(b.hdir, 'tuned.json'), JSON.stringify(config({ name: 'tuned' })))
+  await writeFile(join(b.hdir, 'keyed.json'), JSON.stringify(config({ name: 'keyed', backend: { ...config().backend, apiKeyEnv: 'X_API_KEY' } })))
+  const ok = { harnesses: ['tuned'], task: 'slug', n: 2, backend: form }
+  const post = (over: object) => postJson(`${b.u}/api/bench/new`, { ...ok, ...over })
+  process.env.LHB_NEW_SET_API_KEY = 'k'.repeat(24)
+  try {
+    for (const bad of [{ harnesses: ['../x'] }, { harnesses: [5] }, { harnesses: ['nope'] }, { harnesses: [] }, { task: 'nope' }, { size: 2 }, { n: 0 }, { n: 51 }, { n: 1.5 },
+      { task: 'pool', size: 0 }, { backend: { ...form, kind: 'x' } }, { backend: { ...form, model: '' } }, { backend: { ...form, apiKeyEnv: 'LHB_NEW_UNSET_API_KEY' } }]) {
+      const r = await post(bad)
+      expect(r.status, JSON.stringify(bad)).toBe(400)
+      expect((await r.json()).errors.length).toBeGreaterThan(0)
+    }
+    const keyed = await post({ harnesses: ['keyed'] })
+    expect(keyed.status).toBe(400)
+    expect((await keyed.json()).errors).toEqual(["keyed: its backend.apiKeyEnv differs from the form's"])
+    expect(b.got).toEqual([])
+    const r = await post({ harnesses: ['tuned', 'tuned'], evil: '--yes', backend: { ...form, extra: '--out=/x' } })
+    expect(r.status).toBe(201)
+    const { file } = await r.json()
+    expect(b.got).toEqual([['--task=slug', '--n=2', '--model=m', '--base-url=http://127.0.0.1:9/v1', '--kind=openai', `--out=${join(b.runs, file)}`, join(b.hdir, 'tuned.json')]])
+    await exited(b.children[0])
+    // the form's key overrides the file's (--api-key-env), whether the file has none or another
+    expect((await post({ task: 'pool', size: 3, backend: { ...form, apiKeyEnv: 'LHB_NEW_SET_API_KEY' } })).status).toBe(201)
+    await exited(b.children[1])
+    expect((await post({ harnesses: ['keyed'], backend: { ...form, apiKeyEnv: 'LHB_NEW_SET_API_KEY' } })).status).toBe(201)
+    expect(b.got[1].slice(0, 7)).toEqual(['--task=pool', '--size=3', '--n=2', '--model=m', '--base-url=http://127.0.0.1:9/v1', '--kind=openai', '--api-key-env=LHB_NEW_SET_API_KEY'])
+    const headers = { host: `localhost:${b.s.port}`, origin: 'http://evil.example', 'content-type': 'text/plain' }
+    expect(await rawReq('POST', '/api/bench/new', headers, JSON.stringify(ok), b.s.port)).toBe(403)
+    expect(b.got[2]).toContain('--api-key-env=LHB_NEW_SET_API_KEY')
+    expect(b.got).toHaveLength(3)
+  } finally { await b.s.close(); delete process.env.LHB_NEW_SET_API_KEY }
+})
+
+test('POST /api/bench/stop signals only the bench this server started', async () => {
+  const marker = join(await tmp('lhb-stop-'), 'got-sigint')
+  let script = `require('fs').writeFileSync(OUT, '{}'); process.on('SIGINT', () => { require('fs').writeFileSync(${JSON.stringify(marker)}, ''); process.exit(130) }); setInterval(() => {}, 1000)`
+  const b = await benchServer(() => script)
+  await writeFile(join(b.hdir, 'tuned.json'), JSON.stringify(config({ name: 'tuned' })))
+  const stop = () => fetch(`${b.u}/api/bench/stop`, { method: 'POST' })
+  try {
+    const none = await stop()
+    expect(none.status).toBe(409)
+    expect(await none.json()).toEqual({ error: 'no bench started from this page is running' })
+    expect((await postJson(`${b.u}/api/bench/new`, { harnesses: ['tuned'], task: 'slug', n: 1, backend: form })).status).toBe(201)
+    const headers = { host: `localhost:${b.s.port}`, origin: 'http://evil.example' }
+    expect(await rawReq('POST', '/api/bench/stop', headers, '', b.s.port)).toBe(403)
+    expect(b.children[0].exitCode).toBe(null)
+    const r = await stop()
+    expect(r.status).toBe(200); expect(await r.json()).toEqual({ ok: true })
+    await exited(b.children[0])
+    expect(b.children[0].exitCode).toBe(130)
+    expect((await stat(marker)).isFile()).toBe(true)
+    expect((await stop()).status).toBe(409)
+    // Stop while the start still waits for its JSON (preflight): a plain answer, not a raw 502
+    script = `process.on('SIGINT', () => process.exit(130)); setInterval(() => {}, 1000)`
+    const waiting = postJson(`${b.u}/api/bench/new`, { harnesses: ['tuned'], task: 'slug', n: 1, backend: form })
+    while (b.children.length < 2) await new Promise(r => setTimeout(r, 20))
+    expect((await stop()).status).toBe(200)
+    const w = await waiting
+    expect(w.status).toBe(502)
+    expect(await w.json()).toEqual({ error: 'stopped before it started' })
+  } finally { for (const c of b.children) c.kill('SIGKILL'); await b.s.close() }
+})
+
+test('GET /api/bench?file= on a stopped bench shows no live run, though its .part is still there', async () => {
+  const dir = await tmp('lhb-stopped-')
+  const s = await startServer({ port: 0, runsDir: dir, harnessesDir, backendFactory: () => fake([]) })
+  try {
+    await writeFile(join(dir, 'b4.json'), benchJson({ stopped: true }))
+    await writeFile(join(dir, 'live0004.jsonl.part'), [JSON.stringify({ meta: { id: 'live0004', harness: 'tuned', task: 't', workdir: '/tmp/wd', started: B1_STARTED, bench: { file: 'b4.json', round: 1 } } }),
+      JSON.stringify({ seq: 0, turn: 0, ts: B1_STARTED + 1000, type: 'llm_request', payload: {} })].join('\n') + '\n')
+    const r = await (await fetch(`http://127.0.0.1:${s.port}/api/bench?file=b4.json`)).json()
+    expect(r.result.stopped).toBe(true)
+    expect(r.active).toBeUndefined()
+  } finally { await s.close() }
+})
+
+test('GET /api/bench names the bench this server started while it runs, so a reloaded page can still stop it', async () => {
+  const b = await benchServer(() => `require('fs').writeFileSync(OUT, ${JSON.stringify(benchJson({ date: new Date().toISOString() }))}); process.on('SIGINT', () => process.exit(130)); setInterval(() => {}, 1000)`)
+  await writeFile(join(b.hdir, 'tuned.json'), JSON.stringify(config({ name: 'tuned' })))
+  try {
+    expect((await (await fetch(`${b.u}/api/bench`)).json()).own).toBeUndefined()
+    const { file } = await (await postJson(`${b.u}/api/bench/new`, { harnesses: ['tuned'], task: 'slug', n: 1, backend: form })).json()
+    expect((await (await fetch(`${b.u}/api/bench`)).json()).own).toBe(file)
+    expect((await (await fetch(`${b.u}/api/bench?file=${file}`)).json()).own).toBe(file)
+    b.children[0].kill('SIGINT'); await exited(b.children[0])
+    expect((await (await fetch(`${b.u}/api/bench`)).json()).own).toBeUndefined()
+  } finally { for (const c of b.children) c.kill('SIGKILL'); await b.s.close() }
+})
+
+test('examples are served read-only', async () => {
+  const ex = await tmp('lhb-ex-'), dir = await tmp('lhb-exruns-')
+  await cp(fileURLToPath(new URL('../example-runs/', import.meta.url)), ex, { recursive: true })
+  const snap = async () => Promise.all((await readdir(ex)).sort().map(async f => [f, (await stat(join(ex, f))).mtimeMs]))
+  const files = (await readdir(ex)).map(f => join(ex, f))
+  for (const f of files) await chmod(f, 0o444)
+  await chmod(ex, 0o555)
+  const before = await snap()
+  const s = await startServer({ port: 0, runsDir: dir, harnessesDir, examplesDir: ex, backendFactory: () => fake([]) })
+  const u = `http://127.0.0.1:${s.port}`
+  try {
+    const ids = ((await (await fetch(`${u}/api/runs?example=1`)).json()) as { id: string }[]).map(r => r.id).sort()
+    expect(ids).toEqual(['059867d3', '590eb245', '6f1fb37b', 'd63e9548'])
+    expect(await (await fetch(`${u}/api/runs`)).json()).toEqual([])
+    const b = await (await fetch(`${u}/api/bench?example=1&file=bench-example.json`)).json()
+    expect(b.result.harnesses.map((h: { name: string }) => h.name)).toEqual(['bare', 'tuned-nothink'])
+    expect(Object.keys(b.analysis).sort()).toEqual(ids)
+    expect((await (await fetch(`${u}/api/bench`)).json()).files).toEqual([])
+    const events = await collectSSE(`${u}/api/runs/d63e9548/events?example=1`)
+    expect(events.at(-1).type).toBe('done')
+    expect((await fetch(`${u}/api/runs/d63e9548/events`)).status).toBe(404)
+    expect(await snap()).toEqual(before)
+    expect(await readdir(dir)).toEqual([])
+  } finally { await s.close(); await chmod(ex, 0o755); for (const f of files) await chmod(f, 0o644) }
+  // A trace with no done line at the end: opening it must not write one (ensureDone is for live runs only).
+  const cut = await tmp('lhb-excut-'), cutFile = join(cut, 'd63e9548.jsonl')
+  const lines = (await readFile(join(ex, 'd63e9548.jsonl'), 'utf8')).trimEnd().split('\n')
+  expect(JSON.parse(lines.at(-1)!).type).toBe('done')
+  await writeFile(cutFile, lines.slice(0, -1).join('\n') + '\n')
+  await chmod(cutFile, 0o444); await chmod(cut, 0o555)
+  const before2 = await stat(cutFile)
+  const s2 = await startServer({ port: 0, runsDir: dir, harnessesDir, examplesDir: cut, backendFactory: () => fake([]) })
+  try {
+    await collectSSE(`http://127.0.0.1:${s2.port}/api/runs/d63e9548/events?example=1`)
+    const after2 = await stat(cutFile)
+    expect([after2.size, after2.mtimeMs]).toEqual([before2.size, before2.mtimeMs])
+  } finally { await s2.close(); await chmod(cut, 0o755); await chmod(cutFile, 0o644) }
+  // No examples folder given: the switch is a 404, never the runs dir.
+  expect((await fetch(`${base}/api/runs?example=1`)).status).toBe(404)
 })

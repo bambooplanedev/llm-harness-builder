@@ -14,19 +14,25 @@ const ollama = (model: string, numCtx?: number) => ({ kind: 'ollama' as const, b
 
 test('a server that does not answer fails with the url and the error, before any generation', async () => {
   const r = await preflight(be(new Error('fetch failed')), openai())
-  expect(r).toEqual({ ok: false, message: 'preflight: http://127.0.0.1:8080/v1 (openai) does not answer: fetch failed' })
+  expect(r).toEqual({ ok: false, message: 'preflight: http://127.0.0.1:8080/v1 (openai) does not answer: fetch failed; check that the server is running at that URL' })
   const b = await preflight(be(new BackendError('GET /models: 404', 'Not Found')), openai())
   expect(b.ok).toBe(false); expect(!b.ok && b.message).toContain('GET /models: 404')
 })
 
 test('ollama: the model has to be pulled; a name without a tag is :latest', async () => {
   expect(await preflight(be(['qwen3:8b', 'gemma3:latest']), ollama('qwen3:14b'))).toEqual({
-    ok: false, message: 'preflight: model qwen3:14b is not on http://localhost:11434 (ollama); it has: qwen3:8b, gemma3:latest',
+    ok: false, message: 'preflight: model qwen3:14b is not on http://localhost:11434 (ollama); it has: qwen3:8b, gemma3:latest; pull it with "ollama pull qwen3:14b"',
   })
   expect(await preflight(be(['qwen3:8b', 'gemma3:latest']), ollama('gemma3'))).toMatchObject({ ok: true })
   expect(await preflight(be(['qwen3:8b']), ollama('qwen3:8b', 8192))).toEqual({ ok: true, server: { nCtx: 8192 } })
   // no numCtx: Ollama's own default holds, and the harness does not know it
   expect(await preflight(be(['qwen3:8b']), ollama('qwen3:8b'))).toEqual({ ok: true, server: {} })
+})
+
+test('ollama that does not answer says to start it', async () => {
+  expect(await preflight(be(new Error('fetch failed')), ollama('qwen3:8b'))).toEqual({
+    ok: false, message: 'preflight: http://localhost:11434 (ollama) does not answer: fetch failed; start Ollama with "ollama serve" (get it at https://ollama.com)',
+  })
 })
 
 test('openai: one-model llama-server ignores the model name, a router does not', async () => {
@@ -64,7 +70,7 @@ test('with a key the model is checked by id, or by id without a routing suffix; 
 
 test('a server that does not answer: the cause, when there is one, is in the message', async () => {
   const e = Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:8080'), { code: 'ECONNREFUSED' }) })
-  expect(await preflight(be(e), openai())).toEqual({ ok: false, message: 'preflight: http://127.0.0.1:8080/v1 (openai) does not answer: fetch failed (ECONNREFUSED)' })
+  expect(await preflight(be(e), openai())).toEqual({ ok: false, message: 'preflight: http://127.0.0.1:8080/v1 (openai) does not answer: fetch failed (ECONNREFUSED); check that the server is running at that URL' })
 })
 
 test('anthropic: the window comes from serverInfo; a model the list lacks is refused', async () => {

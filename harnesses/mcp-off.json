@@ -1,5 +1,6 @@
 {
   "name": "mcp-off",
+  "description": "The control for mcp-on: the same prompt and the built-in file and bash tools, no MCP server.",
   "backend": {
     "kind": "ollama",
     "baseUrl": "http://localhost:11434",

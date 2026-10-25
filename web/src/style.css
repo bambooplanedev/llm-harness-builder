@@ -97,6 +97,7 @@ details.inspector pre { max-height: 300px; overflow: auto; background: var(--sun
 .bench-head h2 { margin: 0; font-size: 20px; font-weight: 600; }
 .bench-head .muted { font: 12px var(--mono); }
 .bench-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+.new-bench { padding: 4px 14px 12px; }
 .table-wrap { margin: 14px 0 6px; overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; }
 table.bench { border-collapse: collapse; width: 100%; font: 13px var(--mono); }
 table.bench th { text-align: left; font: 600 11px var(--sans); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); padding: 8px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
@@ -151,3 +152,8 @@ h5.group { margin: 16px 0 4px; font: 600 11px var(--sans); letter-spacing: .06em
 .stubbed { color: var(--stub); border: 1px dashed var(--stub); border-radius: 4px; padding: 0 5px; }
 /* The task box grows with its text (no JS); a browser without field-sizing keeps the min height and the resize handle. */
 textarea.task { field-sizing: content; min-height: 50px; }
+/* A button that reads as a link: Examples, Start here's steps. */
+button.link { min-height: 0; padding: 0; border: 0; background: none; color: var(--accent); font-size: inherit; text-decoration: underline; }
+button.link:hover:not(:disabled) { background: none; }
+.start ol { margin: 4px 0 8px; padding-left: 20px; }
+.start li { margin: 4px 0; }

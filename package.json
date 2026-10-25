@@ -1,7 +1,7 @@
 {
   "name": "llm-harness-builder",
   "version": "0.3.0",
-  "description": "See what your agent harness really sends to a local LLM, and why it fails",
+  "description": "See what your agent harness really sends to the model — local or cloud — and why it fails",
   "license": "MIT",
   "author": "bambooplanedev <vk@bambooplane.dev>",
   "repository": { "type": "git", "url": "git+https://github.com/bambooplanedev/llm-harness-builder.git" },
@@ -19,7 +19,8 @@
     "examples",
     "examples-pool",
     "examples-sift",
-    "examples-triage"
+    "examples-triage",
+    "example-runs"
   ],
   "scripts": {
     "test": "vitest run",
