@@ -61,3 +61,15 @@ test('an empty body has no anatomy and no entry', () => {
   expect(anatomy({})).toBeUndefined()
   expect(anatomies([{ seq: 0, turn: 1, ts: 0, type: 'llm_request', payload: {} }])).toEqual([])
 })
+
+test('no text and no usage: nothing to estimate; with usage the anatomy stays', () => {
+  expect(anatomy({ messages: [] })).toBeUndefined()
+  expect(anatomies([{ seq: 0, turn: 1, ts: 0, type: 'llm_request', payload: { messages: [] } }])).toEqual([])
+  expect(anatomy({ messages: [] }, { promptTokens: 7, completionTokens: 1 })?.total).toBe(7)
+})
+
+test('anthropic without usage: an estimate shown with ≈', () => {
+  const a = anatomy({ system: 'x'.repeat(40), messages: [{ role: 'user', content: 'hi' }] })!
+  expect([a.format, a.exact, a.total]).toEqual(['anthropic', false, Math.ceil(42 / 4)])
+  expect(anatomyLine(a)).toContain('≈11 tok')
+})

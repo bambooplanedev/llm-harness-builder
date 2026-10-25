@@ -42,6 +42,7 @@ export function anatomy(payload: unknown, usage?: Usage): Anatomy | undefined {
   })
   const sum = LAYERS.reduce((s, l) => s + chars[l], 0)
   const exact = (usage?.promptTokens ?? 0) > 0
+  if (!exact && sum === 0) return undefined // nothing to estimate: no "≈0 tok"
   const total = exact ? usage!.promptTokens : Math.ceil(sum / 4)
   const tokens = Object.fromEntries(LAYERS.map(l => [l, sum ? Math.round(total * chars[l] / sum) : 0])) as Record<Layer, number>
   const thinkingBlocks = n.format === 'anthropic'
@@ -57,7 +58,8 @@ export function anatomies(events: HarnessEvent[]): TurnAnatomy[] {
   events.forEach((e, i) => {
     if (e.type !== 'llm_request') return
     let usage: Usage | undefined
-    for (const f of events.slice(i + 1)) {
+    for (let j = i + 1; j < events.length; j++) {
+      const f = events[j]
       if (f.type === 'llm_request') break
       if (f.type === 'llm_response' && f.turn === e.turn) { usage = f.usage; break }
     }
