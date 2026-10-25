@@ -71,7 +71,10 @@ async function refreshInfo() {
   } catch (e) { if (ask === infoAsk) modelsError.value ||= INFO_ERROR + (e as Error).message }
 }
 /** A structural knob the model does not take: the run would be refused, so the form says it before Run. */
-const refusal = computed(() => modelInfo.value && knobsOff(config.value, modelInfo.value).refuse) // unknown: nothing to say yet
+const refusal = computed(() => {
+  const r = modelInfo.value && knobsOff(config.value, modelInfo.value) // unknown: nothing to say yet
+  return r?.refuseKind && t(`refuse.${r.refuseKind}`, { model: config.value.backend.model, from: modelInfo.value!.takesFrom ? ` (${modelInfo.value!.takesFrom})` : '' })
+})
 async function refreshLists() { harnessNames.value = (await api.harnesses()).map(h => h.name); runs.value = await api.runs() }
 /** A harness describes how the agent thinks; the backend is what it runs on. Switching the first
  *  leaves the second alone — unless no model is picked yet (models never listed), when the

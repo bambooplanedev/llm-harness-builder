@@ -8,6 +8,11 @@ import Bench from '../web/src/Bench.vue'
 import { NEW_HARNESS } from '../web/src/advanced'
 import { lang, initialLang, readLang, setLang, langName, t, tn, en, type Key } from '../web/src/i18n'
 import { uk } from '../web/src/uk'
+import { keyNote, type HarnessConfig } from '../src/core/config.js'
+import { knobsOff } from '../src/core/knobs.js'
+import { autoApproves } from '../src/core/bench.js'
+import type { ServerInfo } from '../src/core/backends/types.js'
+import { harness } from './helpers.js'
 
 afterEach(() => { lang.value = 'en' })
 
@@ -114,4 +119,21 @@ test('tn: English one/other; Ukrainian one/few/many on 1, 2, 5, 11, 21', () => {
   lang.value = 'uk'
   const f = (form: 'one' | 'few' | 'many', n: number) => uk[`diff.knobs.${form}`].replace('{n}', String(n))
   expect([1, 2, 5, 11, 21].map(n => tn('diff.knobs', n))).toEqual([f('one', 1), f('few', 2), f('many', 5), f('many', 11), f('one', 21)])
+  expect([22, 25, 0].map(n => tn('diff.knobs', n))).toEqual([f('few', 22), f('many', 25), f('many', 0)])
+})
+
+test("the page's own copies of CLI lines read, in English, exactly as the CLI prints them", () => {
+  expect(t('bench.autoApproves')).toBe(autoApproves('bench'))
+  expect(t('form.keyNote', { env: 'X_API_KEY', host: '127.0.0.1:8080' })).toBe(keyNote({ apiKeyEnv: 'X_API_KEY', baseUrl: 'http://127.0.0.1:8080/v1' }))
+  const h = harness() // native, tools on, model 'fake-model'
+  const cases: [HarnessConfig, ServerInfo | undefined][] = [
+    [h, { takes: { tools: false }, takesFrom: 'src' }],
+    [h, { takes: { tools: false } }],
+    [{ ...h, toolCalls: { ...h.toolCalls, mode: 'prompted', enforceSchema: true } }, { takes: { responseSchema: false }, takesFrom: 'src' }],
+    [{ ...h, backend: { ...h.backend, kind: 'anthropic' } }, undefined],
+  ]
+  for (const [c, info] of cases) {
+    const r = knobsOff(c, info)
+    expect(t(`refuse.${r.refuseKind!}`, { model: 'fake-model', from: info?.takesFrom ? ` (${info.takesFrom})` : '' })).toBe(r.refuse)
+  }
 })

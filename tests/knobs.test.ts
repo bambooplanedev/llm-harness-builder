@@ -65,3 +65,10 @@ test('anthropic needs a max_tokens: from the harness or from the server', () => 
   expect(knobsOff(a, { maxOutput: 64000 }).refuse).toBeUndefined()
   expect(knobsOff({ ...a, backend: { ...a.backend, maxTokens: 1024 } }, undefined).refuse).toBeUndefined()
 })
+
+test('a refusal says which one it is, for a page that words it in its own language', () => {
+  expect(knobsOff(h, { takes: { tools: false } }).refuseKind).toBe('tools')
+  expect(knobsOff({ ...h, toolCalls: { ...h.toolCalls, mode: 'prompted', enforceSchema: true } }, { takes: { responseSchema: false } }).refuseKind).toBe('schema')
+  expect(knobsOff({ ...h, backend: { ...h.backend, kind: 'anthropic' } }, undefined).refuseKind).toBe('maxTokens')
+  expect(knobsOff(h, { takes: {} }).refuseKind).toBeUndefined()
+})

@@ -77,7 +77,7 @@ const setThink = (text: string) => put(config.value.backend, 'think', text === '
 /** An empty box removes the key: the backend is keyless again, as before. */
 const setKeyEnv = (text: string) => put(config.value.backend, 'apiKeyEnv', text.trim() || undefined)
 /** Where the key goes; nothing for a name or a URL validation would refuse, so a key pasted as a name is never shown. */
-const keyLine = () => keyNote(config.value.backend)
+const keyLine = () => keyNote(config.value.backend) && t('form.keyNote', { env: config.value.backend.apiKeyEnv!, host: new URL(config.value.backend.baseUrl).host })
 
 /** The optional loop knobs: what a value may be is validateConfig's to say, its message names the knob and what it needs. */
 const finite = (text: string) => text.trim() && Number.isFinite(Number(text)) ? Number(text) : undefined
