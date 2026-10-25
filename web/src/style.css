@@ -168,6 +168,13 @@ button.link:hover:not(:disabled) { background: none; }
 .alegend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; margin-bottom: 6px; }
 .alegend .sw { display: inline-block; width: 10px; height: 10px; margin-right: 4px; border-radius: 2px; }
 .acols { display: flex; align-items: flex-end; gap: 2px; height: 72px; overflow-x: auto; }
-.acol { flex: 1 0 6px; max-width: 28px; min-height: 2px; padding: 0; border: 0; display: flex; flex-direction: column-reverse; cursor: pointer; }
+.acol { flex: 1 0 6px; max-width: 28px; min-height: 2px; padding: 0; border: 0; border-radius: 0; background: none; display: flex; flex-direction: column-reverse; cursor: pointer; }
 .acol.est { outline: 1px dashed var(--muted); }
+.acol:hover:not(:disabled) { background: none; opacity: .8; }
 .l-system { background: var(--l-system); } .l-tools { background: var(--l-tools); } .l-history { background: var(--l-history); } .l-results { background: var(--l-results); }
+/* ?film=1: bigger type and stronger contrast for a recording; .film-hide is what names the machine. */
+:root[data-film] { --muted: #3A3F47; --line: #B9BBB3; }
+@media (prefers-color-scheme: dark) { :root[data-film] { --muted: #C4CAD2; --line: #3C434D; } }
+:root[data-film] body { zoom: 1.25; }
+:root[data-film] .app { height: 80vh; } /* 100vh / zoom */
+:root[data-film] .film-hide { display: none; }

@@ -4,11 +4,17 @@ import { configDiff, lineDiff, skeleton, turnsOf, type DiffSide } from '../../sr
 import { mmss } from '../../src/core/bench'
 import Trace from './Trace.vue'
 import { t, tn, T } from './i18n'
+import { namesIn, shown } from './film'
 
 const props = defineProps<{ a: DiffSide; b: DiffSide; task: string }>()
 defineEmits<{ close: [] }>()
 
 const rows = computed(() => configDiff(props.a.config, props.b.config))
+/** Film mode hides both sides' models and servers, and every model their traces name. */
+const names = computed(() => {
+  const ev = [namesIn(props.a.events), namesIn(props.b.events)], be = [props.a.config.backend, props.b.config.backend]
+  return { models: [...be.map(b => b.model), ...ev.flatMap(n => n.models)], urls: be.map(b => b.baseUrl) }
+})
 /** Leaves are JSON text, so a multi-line string shows up as a literal \n escape inside it. */
 const lines = (r: { a: string; b: string }) => r.a.includes('\\n') || r.b.includes('\\n')
 /** A key missing on one side is the literal 'undefined', which JSON.parse would throw on. */
@@ -50,17 +56,17 @@ const hasEvents = computed(() => props.a.events.length > 0 && props.b.events.len
         <td><code>{{ r.path }}</code></td>
         <template v-if="lines(r)">
           <td colspan="2">
-            <div v-for="l in onlyIn(r).onlyA" :key="'a' + l" class="onlyA">− {{ l }}</div>
-            <div v-for="l in onlyIn(r).onlyB" :key="'b' + l" class="onlyB">+ {{ l }}</div>
+            <div v-for="l in onlyIn(r).onlyA" :key="'a' + l" class="onlyA">− {{ shown(l, names) }}</div>
+            <div v-for="l in onlyIn(r).onlyB" :key="'b' + l" class="onlyB">+ {{ shown(l, names) }}</div>
             <details><summary>full text</summary>
-              <pre>{{ text(r.a) }}</pre>
-              <pre>{{ text(r.b) }}</pre>
+              <pre>{{ shown(text(r.a), names) }}</pre>
+              <pre>{{ shown(text(r.b), names) }}</pre>
             </details>
           </td>
         </template>
         <template v-else>
-          <td class="onlyA">A {{ r.a }}</td>
-          <td class="onlyB">B {{ r.b }}</td>
+          <td class="onlyA">A {{ shown(r.a, names) }}</td>
+          <td class="onlyB">B {{ shown(r.b, names) }}</td>
         </template>
       </tr>
     </table>
@@ -75,7 +81,7 @@ const hasEvents = computed(() => props.a.events.length > 0 && props.b.events.len
             <span class="tn">t{{ i + 1 }}</span>
             <div v-for="(side, k) in [sa[i], sb[i]]" :key="k" class="cell">
               <template v-if="side">
-                <span v-for="(c, j) in side.chips" :key="j" :class="['chip', { err: c.bad }]">{{ c.label }}{{ c.detail ? ` ${c.detail}` : '' }}{{ c.truncated ? ' ↯' : '' }}</span>
+                <span v-for="(c, j) in side.chips" :key="j" :class="['chip', { err: c.bad }]">{{ c.label }}{{ c.detail ? ` ${shown(c.detail, names)}` : '' }}{{ c.truncated ? ' ↯' : '' }}</span>
                 <small class="muted">{{ mmss(side.ms) }} · {{ side.tokens }} tok ctx</small>
               </template>
               <span v-else class="muted">— ended</span>

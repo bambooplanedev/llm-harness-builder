@@ -118,24 +118,24 @@ function editMcp(text: string) {
     </div>
     <div v-if="config.description" class="hint">{{ config.description }}</div>
 
-    <label :title="t('h.backend')">Backend</label>
-    <div class="row">
+    <label class="film-hide" :title="t('h.backend')">Backend</label>
+    <div class="row film-hide">
       <select v-model="config.backend.kind"><option value="openai">openai-compatible</option><option value="ollama">ollama (native)</option><option value="anthropic">anthropic (native)</option></select>
       <input type="text" v-model.lazy="config.backend.baseUrl">
     </div>
     <div v-if="ollamaViaV1()" class="warn">{{ t('form.ollamaV1') }}</div>
-    <div class="row">
+    <div class="row film-hide">
       <span :title="t('h.keyEnv')">key env</span>
       <input type="text" :value="config.backend.apiKeyEnv ?? ''" placeholder="none (a local server)" @change="setKeyEnv(($event.target as HTMLInputElement).value)">
     </div>
-    <div v-if="keyLine()" class="hint">{{ keyLine() }}</div>
-    <div v-if="keyLine() && !models.length" class="hint">{{ t('form.refreshKey') }}</div>
-    <div class="row">
+    <div v-if="keyLine()" class="hint film-hide">{{ keyLine() }}</div>
+    <div v-if="keyLine() && !models.length" class="hint film-hide">{{ t('form.refreshKey') }}</div>
+    <div class="row film-hide">
       <select v-model="config.backend.model" :title="t('h.model')"><option v-for="m in models" :key="m" :value="m">{{ m }}</option></select>
       <input type="text" v-model.lazy="config.backend.model" placeholder="or type a model id">
       <button @click="emit('refreshModels')">↻</button>
     </div>
-    <div v-if="modelsError" class="err">{{ modelsError }}</div>
+    <div v-if="modelsError" class="err film-hide">{{ modelsError }}</div>
     <div class="row">
       <span :title="t('h.temp')">temp</span><input type="text" inputmode="decimal" :value="config.backend.temperature" :disabled="off('temperature')" @change="setTemp(($event.target as HTMLInputElement).value)">
       <span :title="t('h.numCtx')">num_ctx</span><input type="number" v-model.number="config.backend.numCtx" :disabled="config.backend.kind !== 'ollama'">

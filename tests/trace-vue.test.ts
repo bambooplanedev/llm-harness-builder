@@ -1,8 +1,12 @@
-import { test, expect } from 'vitest'
+import { test, expect, afterEach } from 'vitest'
 import { createSSRApp } from 'vue'
 import { renderToString } from 'vue/server-renderer'
 // @ts-expect-error -- vue SFC, no .d.ts; typechecked separately by vue-tsc
 import Trace from '../web/src/Trace.vue'
+// @ts-expect-error -- vue SFC, no .d.ts; typechecked separately by vue-tsc
+import Diff from '../web/src/Diff.vue'
+import { setFilm } from '../web/src/film'
+import { harness } from './helpers'
 import type { HarnessEvent } from '../src/core/events.js'
 import { readFileSync } from 'node:fs'
 import { en } from '../web/src/i18n'
@@ -141,4 +145,29 @@ test('proxy notes render: auxiliary with model, tokens and time; compaction with
     { seq: 1, turn: 1, ts: 1, type: 'proxy_note', kind: 'compaction' },
   ] as HarnessEvent[] }))
   for (const s of ['auxiliary', 'claude-haiku-fixture', '12+3 tok', '40ms', 'compaction', en['trace.compaction']]) expect(html).toContain(s)
+})
+
+afterEach(() => setFilm(false))
+
+test('film mode: no model name or machine path anywhere in a rendered example trace', async () => {
+  setFilm(true)
+  const html = await renderToString(createSSRApp(Trace, { events: example('590eb245'), task: 'fix /tmp/lhb-example-590eb245/src', approvable: false }))
+  expect(html).not.toMatch(/qwen3:8b|\/tmp\//)
+  expect(html).toContain('class="acol') // the strip still shows
+})
+
+test('film mode: a live approval shows the command exactly as it will run', async () => {
+  setFilm(true)
+  const html = await render({ events: [{ seq: 0, turn: 1, ts: 0, type: 'approval_required', call: { callId: 'b1', name: 'bash', args: { command: 'cat /tmp/x/y' } } }] })
+  expect(html).toContain('cat /tmp/x/y')
+  expect(html).toContain('<button>Run</button>')
+})
+
+test('film mode: the Diff config table hides both models and servers', async () => {
+  setFilm(true)
+  const run = { round: 1, verdict: 'PASS', reason: 'final', turns: 1, toolCalls: 0, parseErrors: 0, ms: 1, workdir: 'w' }
+  const side = (model: string, baseUrl: string) => ({ name: 'h', run, events: [], config: harness({ backend: { kind: 'openai', baseUrl, model } }) })
+  const html = await renderToString(createSSRApp(Diff, { a: side('qwen3:8b', 'http://localhost:11434'), b: side('other-model', 'http://127.0.0.1:8080/v1'), task: 'x' }))
+  expect(html).toContain('backend.model')
+  expect(html).not.toMatch(/qwen3:8b|other-model|localhost:11434|127\.0\.0\.1:8080/)
 })

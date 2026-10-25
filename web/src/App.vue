@@ -10,6 +10,7 @@ import ContextBar from './ContextBar.vue'
 import Trace from './Trace.vue'
 import Bench from './Bench.vue'
 import { t, T, lang, LANGS, langName, setLang } from './i18n'
+import { shown } from './film'
 
 const tab = ref<'workbench' | 'bench'>('workbench')
 /** The Bench tab shows the recorded bench shipped with the package instead of ./runs: read-only, no model. */
@@ -165,8 +166,8 @@ watch(() => config.value.backend.model, () => {
         <ConfigForm v-model="config" v-model:mcp-error="mcpError" :models="models" :models-error="modelsError" :model-info="modelInfo" :harness-names="harnessNames" @refresh-models="refreshModels" @load="load" @save-as="saveAs" />
       </div>
       <div class="col">
-        <label :title="t('h.workdir')">Workdir</label>
-        <div class="browse" @keydown.esc="browse = null">
+        <label class="film-hide" :title="t('h.workdir')">Workdir</label>
+        <div class="browse film-hide" @keydown.esc="browse = null">
         <div class="row">
           <input type="text" v-model="workdir" placeholder="/path/to/project">
           <button @click="browse ? (browse = null) : browseTo(workdir)">{{ browse ? 'Close' : 'Browse…' }}</button>
@@ -209,7 +210,7 @@ watch(() => config.value.backend.model, () => {
         <div class="runs">
           <div v-for="{ r, head, sub } in listed" :key="r.id" :class="{ session: r.session, sub }" @click="open(r.id, r.task, r.active)">
             <div class="line"><span><b>{{ r.harness }}</b><template v-if="head"> · session {{ head.session.slice(0, 4) }}…</template><template v-if="sub"> · ↳ subagent {{ r.agentType ?? r.agent }}</template><template v-else-if="head"> · main</template> · {{ r.reason ?? 'running' }}</span><span><template v-if="head?.subagents">{{ head.subagents }} subagent{{ head.subagents === 1 ? '' : 's' }} · </template>{{ r.turns ?? '-' }} turns · {{ r.toolCallCount ?? '-' }} tool calls · {{ new Date(r.started).toLocaleTimeString(lang) }}</span></div>
-            <div class="muted">{{ r.task.slice(0, 60) }}</div>
+            <div class="muted">{{ shown(r.task, { models: [config.backend.model], urls: [config.backend.baseUrl] }).slice(0, 60) }}</div>
           </div>
         </div>
       </div>
