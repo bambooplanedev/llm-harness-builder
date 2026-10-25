@@ -18,7 +18,8 @@ fields, and a hosted API gets it as it was recorded.
 
 ## What the output says
 
-The first line says how many samples were sent and how many **distinct** replies came back. Then one
+While it runs, a line `sample i/n: same as recorded` or `differs` per sample goes to stderr. After
+them, the first line of the result says how many samples were sent and how many **distinct** replies came back. Then one
 line per distinct reply: how many samples gave it, whether it is `same as recorded` (the reply the
 run got at that turn) or `differs`, and the start of the reply. Replies are compared by their
 content and tool calls, not by thinking text or call ids. Open turn 2 of `059867d3` in the UI to see

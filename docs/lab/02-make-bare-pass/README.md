@@ -37,7 +37,8 @@ key is in it, and add the four flags:
       --api-key-env OPENROUTER_API_KEY --model nvidia/nemotron-3-super-120b-a12b:free
 
 A hosted API refuses `backend.think`, so a file that sets it does not run there. Three runs of up to
-15 turns each are up to 45 model requests, near the free tier's 50 a day.
+15 turns each, plus the one request of `bench`'s preflight, are about 46 requests, near the free
+tier's 50 a day.
 
 The exercise is passed at 2 or more PASS out of 3. Three runs are noisy: 2 of 3 has a 95% Wilson
 interval of 0.21–0.94, so a pass says your file can work, not how often.

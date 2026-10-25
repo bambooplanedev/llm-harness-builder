@@ -10,8 +10,10 @@ it. Run `059867d3` is `tuned-nothink` passing the same task with the same model.
 ## Ways in
 
 **The UI.** Run `npx llm-harness-builder serve` in an empty folder (see [Setup](../README.md#setup)).
-Under **Start here** (or **Examples**), open the FAIL `bare` run `d63e9548` and the PASS
-`tuned-nothink` run `059867d3`. Then open the example bench and press `⇄` to compare a `bare` run
+Under **Start here**, open the FAIL `bare` run `d63e9548` and the PASS `tuned-nothink` run
+`059867d3` (**Examples** opens the example bench, where both are listed). Optionally, look at the
+strip above the turns of `d63e9548`: turn 6 still has a column, an estimate (≈), so you can see what
+was sent on the turn that never got a reply. Then open the example bench and press `⇄` to compare a `bare` run
 with a `tuned-nothink` one: the knobs that differ are listed first.
 
 **The terminal.** Download the two traces into the current folder (or into `./runs`, so the id alone

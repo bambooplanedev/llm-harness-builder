@@ -60,8 +60,10 @@ environment. So:
 ## How to read a trace
 
 **In the UI.** On a first open, with no runs yet, **Start here** in the Runs list opens a recorded
-PASS run and a FAIL one; **Examples** opens the same runs at any time, no model needed. A run shows
-its turns: what was sent, what came back, each tool call and its result. **Start here** also opens
+PASS run and a FAIL one; **Examples** opens the example bench, where those runs are listed, at any
+time, no model needed. A run shows its turns: what was sent, what came back, each tool call and its
+result. The strip above the turns shows what each request was made of (system prompt, tool
+descriptions, history, tool results), with ≈ where the server sent no usage. **Start here** also opens
 the example bench: press `⇄` on one of its runs to compare it with the open one — which config knobs
 differ, and the path of both turn by turn with the first divergence marked.
 
@@ -76,7 +78,8 @@ one row per run. A run id is looked up in `./runs`. The columns:
 - `ate`: which tool results that stub removed.
 - `edit@`: the turn of the first edit that applied.
 - `loop on`: the file with the most failed edits, how many edits and writes it got (`×4`), and the
-  failures by kind (`zero 2`: two edits whose `old` text occurred nowhere).
+  failures by kind (`zero 2`: two edits whose `old` text occurred nowhere). Filled only when a file
+  has at least two failed edits, so one failed edit still shows `—`.
 - `reread`: the first time the model read a file again after its earlier read was stubbed.
 - `unanswered`: how long the last request of the run waited with no reply.
 
