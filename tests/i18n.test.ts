@@ -81,5 +81,30 @@ test('all 44 hover hints have both sides, with the same line breaks', () => {
 })
 
 test('a hint keeps its key names, commands and product names: every Latin word of the uk side is in the en side', () => {
-  for (const k of hintKeys) for (const w of uk[k]!.match(/[A-Za-z_][\w./<>{}]*/g) ?? []) expect(en[k], `${k}: ${w}`).toContain(w)
+  for (const k of hintKeys) for (const w of (uk[k]!.match(/[A-Za-z_][\w./<>{}]*/g) ?? []).map(w => w.replace(/\.+$/, ''))) expect(en[k], `${k}: ${w}`).toContain(w)
+})
+
+test('uk and en have exactly the same keys', () => expect(Object.keys(uk).sort()).toEqual(Object.keys(en).sort()))
+
+test('every {placeholder} of a key is in both languages', () => {
+  const ph = (s: string) => [...s.matchAll(/\{(\w+)\}/g)].map(m => m[1]).sort()
+  for (const k of Object.keys(en) as Key[]) expect(ph(uk[k]), k).toEqual(ph(en[k]))
+})
+
+test('under uk, Start here and a hint read in Ukrainian; buttons and labels stay English', async () => {
+  lang.value = 'uk'
+  const html = plain(await renderToString(createSSRApp(App)))
+  expect(html).toContain(uk['start.title'])
+  expect(html).toContain(`title="${uk['h.task']}">Task</label>`)
+  expect(html).toContain('<button class="link">PASS</button>')
+  expect(html).toContain('>Run</button>')
+})
+
+test('t falls back to English for a key the current language lacks, and still fills its {params}', () => {
+  const u = uk as Partial<Record<Key, string>>, saved = u['bench.runsUnasked']
+  delete u['bench.runsUnasked']
+  try {
+    lang.value = 'uk'
+    expect(t('bench.runsUnasked', { cmd: 'npm test' })).toBe('runs unasked · npm test')
+  } finally { u['bench.runsUnasked'] = saved }
 })
