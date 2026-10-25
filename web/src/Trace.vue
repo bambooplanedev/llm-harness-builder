@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import Anatomy from './Anatomy.vue'
 import { t, tn, T } from './i18n'
 import type { Delta, HarnessEvent } from './api'
 import { mcpApprovalServer, mcpCounts, UNTIL_BASH } from '../../src/core/events'
@@ -9,7 +10,7 @@ import { anatomies, anatomyLine } from '../../src/core/anatomy'
 // App.vue's live Workbench never passes this prop and needs the opposite default -- only a
 // finished/replayed trace (Bench.vue, Diff.vue) opts out by passing `false` explicitly.
 // `live` is only ever set by the live Workbench; a replayed trace (Bench.vue, Diff.vue) omits it.
-const props = withDefaults(defineProps<{ events: HarnessEvent[]; live?: Delta; task?: string; approvable?: boolean }>(), { approvable: true, live: () => ({}) })
+const props = withDefaults(defineProps<{ events: HarnessEvent[]; live?: Delta; task?: string; approvable?: boolean; bars?: boolean }>(), { approvable: true, bars: true, live: () => ({}) })
 const emit = defineEmits<{ approve: [callId: string, ok: boolean] }>()
 
 const turns = computed(() => {
@@ -43,6 +44,14 @@ const pretty = (v: unknown) => JSON.stringify(v, null, 2)
 const knobsOff = computed(() => props.events.flatMap(e => e.type === 'knobs_off' ? e.off.map(o => `${o.knob} ${JSON.stringify(o.value)} not sent: ${o.reason}`) : []))
 /** The anatomy of every request the trace shows, and the same by event seq. */
 const anat = computed(() => anatomies(props.events))
+/** Strip column click: open that turn's inspector (view A) and scroll to it. */
+const turnEls = new Map<number, HTMLElement>()
+function pick(turn: number) {
+  const el = turnEls.get(turn)
+  const d = el?.querySelector('details.inspector') as HTMLDetailsElement | null
+  if (d) d.open = true
+  el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
 const anatBySeq = computed(() => new Map(anat.value.map(x => [x.seq, x.a])))
 // The current turn is "open" from its llm_request until its llm_response; the live bubble shows the streamed text meanwhile,
 // and stays (without the cursor) if the run ended first, since that text is not in the trace.
@@ -58,8 +67,9 @@ const liveTok = computed(() => Math.ceil(liveText.value.length / 4))
 <template>
   <div v-if="summary" class="analysis">{{ summary }}</div>
   <div v-for="k in knobsOff" :key="k" class="warn">{{ k }}</div>
+  <Anatomy v-if="bars" :items="anat" @pick="pick" />
   <div v-if="task" class="ev user">{{ task }}</div>
-  <div v-for="[turn, evs] in turns" :key="turn" class="turn">
+  <div v-for="[turn, evs] in turns" :key="turn" class="turn" :ref="(el: any) => { el ? turnEls.set(turn, el) : turnEls.delete(turn) }">
     <template v-for="e in evs" :key="e.seq">
       <div v-if="e.type === 'llm_response'" class="ev assistant">
         <div v-if="e.reasoning" class="muted">thinking: {{ e.reasoning }}</div>{{ e.content || '(empty content)' }}

@@ -4,7 +4,9 @@ import { renderToString } from 'vue/server-renderer'
 // @ts-expect-error -- vue SFC, no .d.ts; typechecked separately by vue-tsc
 import Trace from '../web/src/Trace.vue'
 import type { HarnessEvent } from '../src/core/events.js'
+import { readFileSync } from 'node:fs'
 import { en } from '../web/src/i18n'
+import { uk } from '../web/src/uk'
 import { anatomy, anatomyLine } from '../src/core/anatomy.js'
 
 const events: HarnessEvent[] = [
@@ -66,6 +68,7 @@ test('an empty trace shows no summary line', async () => {
 })
 
 const replay = (evs: HarnessEvent[]) => renderToString(createSSRApp(Trace, { events: evs, task: 'x', approvable: false }))
+const noBars = (evs: HarnessEvent[]) => renderToString(createSSRApp(Trace, { events: evs, task: 'x', approvable: false, bars: false }))
 
 test('knobs the model does not take are said above the trace', async () => {
   const html = await replay([{ seq: 0, turn: 0, ts: 0, type: 'knobs_off', off: [{ knob: 'temperature', value: 0.2, reason: 'm takes no temperature (src)' }] }])
@@ -82,7 +85,7 @@ test('a reply with a cost shows it in dollars; without one there is no $', async
 test('each request says its anatomy above the raw JSON, in either format; an empty body says nothing', async () => {
   const pa = { system: 'abcd', tools: [{ name: 't', description: '', input_schema: {} }], messages: [{ role: 'user', content: 'do' }] }
   const po = { messages: [{ role: 'system', content: 'ab' }, { role: 'user', content: 'do' }, { role: 'assistant', content: 'x' }] }
-  const html = await replay([
+  const html = await noBars([
     { seq: 0, turn: 1, ts: 0, type: 'llm_request', payload: pa },
     { seq: 1, turn: 1, ts: 0, type: 'llm_response', raw: {}, content: '', latencyMs: 1, usage: { promptTokens: 40, completionTokens: 1 } },
     { seq: 2, turn: 2, ts: 0, type: 'llm_request', payload: po },
@@ -93,8 +96,38 @@ test('each request says its anatomy above the raw JSON, in either format; an emp
   expect(html).toContain(lo)
   expect(lo).toContain('≈')
   expect(html).toContain(en['trace.anatomyEstimate'])
+  expect((html.match(new RegExp(en['trace.anatomyEstimate'], 'g')) ?? []).length).toBe(1) // not for the exact turn
   expect(html.indexOf(la)).toBeLessThan(html.indexOf('&quot;system&quot;'))
   expect(html.match(/ tok</g)?.length).toBe(2) // nothing for the empty body
+})
+
+test('the hints for prompted mode and for thinking blocks show up on their requests', async () => {
+  const req = (payload: unknown): HarnessEvent[] => [{ seq: 0, turn: 1, ts: 0, type: 'llm_request', payload }]
+  const th = await noBars(req({ messages: [{ role: 'user', content: 'do' }, { role: 'assistant', content: [{ type: 'thinking', thinking: 'hm' }, { type: 'text', text: 'ok' }] }] }))
+  expect(th).toContain(en['trace.anatomyThinking'])
+  const plain = await noBars(req({ messages: [{ role: 'user', content: 'do' }], tools: [{ type: 'function', function: { name: 't', parameters: {} } }] }))
+  expect(plain).not.toContain(en['trace.anatomyToolsInSystem'])
+  expect(plain).not.toContain(en['trace.anatomyThinking'])
+  expect(await noBars(req({ messages: [{ role: 'user', content: 'do' }] }))).toContain(en['trace.anatomyToolsInSystem'])
+})
+
+test('the uk hints read the way the review asked', () => {
+  expect(uk['trace.anatomySplit'].endsWith('\u043f\u0440\u0438\u0431\u043b\u0438\u0437\u043d\u043e \u0434\u043b\u044f \u043a\u043e\u0436\u043d\u043e\u0433\u043e \u0448\u0430\u0440\u0443, \u0442\u043e\u0447\u043d\u043e \u0432 \u0441\u0443\u043c\u0456.')).toBe(true)
+  expect(uk['trace.anatomyToolsInSystem']).toContain('\u0440\u0435\u0436\u0438\u043c \u043f\u0440\u043e\u043c\u043f\u0442\u043e\u0432\u0438\u0445 \u0432\u0438\u043a\u043b\u0438\u043a\u0456\u0432')
+})
+
+const example = (id: string) => readFileSync(`example-runs/${id}.jsonl`, 'utf8').trim().split('\n').map(l => JSON.parse(l)).filter(e => !('meta' in e))
+
+test('the strip above the trace has one column per request, and comes before the first turn', async () => {
+  const html = await replay(example('059867d3'))
+  expect(html.match(/class="acol[ "]/g)?.length).toBe(5)
+  expect(html.indexOf('class="anatomy"')).toBeLessThan(html.indexOf('class="turn"'))
+  expect(html).toContain(en['trace.anatomyHow'])
+})
+
+test('no strip with bars off (Diff), and none for a trace without a readable request', async () => {
+  expect(await noBars(example('059867d3'))).not.toContain('class="anatomy"')
+  expect(await replay([{ seq: 0, turn: 1, ts: 0, type: 'llm_request', payload: {} }])).not.toContain('class="anatomy"')
 })
 
 test('an mcp approval keeps the server and the command as <code> inside the question', async () => {

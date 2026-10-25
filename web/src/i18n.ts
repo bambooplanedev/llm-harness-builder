@@ -49,6 +49,7 @@ export const en = {
   'trace.anatomySplit': "Shares are split by characters and scaled to the server's prompt_tokens: approximate per layer, exact in total.",
   'trace.anatomyEstimate': '≈: the server sent no usage for this turn, so the total is characters / 4.',
   'trace.anatomyToolsInSystem': 'No tools[] in this request: tool descriptions, if any, are inside system (prompted mode).',
+  'trace.anatomyHow': 'Each column is one request: height = its prompt tokens, colours = its layers. Click a column to open that turn.',
   'trace.anatomyThinking': 'Thinking blocks in this request are not counted in any layer.',
   'trace.askRun': 'run {cmd}?',
   'trace.autoApproved': 'bench: auto-approved',
