@@ -305,7 +305,8 @@ list says it is incomplete, and the window comes from that list — see [Cloud](
 fails) and `median` (the input array must come back as it was, so a sort in place fails). At
 `--size 7` the two differ in `parseDuration` only; `median` is the eighth unit. Its rows do not
 compare with `pool2`'s. `sift`, `triage` and `judge` are steps of a news curator on synthetic
-fixtures (`examples-sift`, `examples-triage`).
+fixtures (`examples-sift`, `examples-triage`). How they were measured and what they showed:
+[docs/curator.md](docs/curator.md).
 
 #### replay
 

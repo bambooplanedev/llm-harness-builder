@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest'
-import { readFileSync, readdirSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { execSync } from 'node:child_process'
 
@@ -53,4 +53,15 @@ test('the Claude Code fixture is hand-built: no path, email, key, bearer, git na
 test('the README GIF is small enough for a first screen', () => {
   expect(statSync('docs/demo.gif').size).toBeLessThanOrEqual(2_000_000)
   for (const f of ['README.md', 'README.uk.md']) expect([f, readFileSync(f, 'utf8').includes('](docs/demo.gif)')]).toEqual([f, true])
+})
+
+test('the docs hold nothing that ties them to a machine, an account or the private material', () => {
+  const emails = [/<(.+)>/.exec(pkg.author)![1]]
+  try { const e = execSync('git config user.email', { encoding: 'utf8' }).trim(); if (e) emails.push(e) } catch {} // CI may have none
+  expect(existsSync('docs/curator.md') && existsSync('docs/curator.uk.md')).toBe(true)
+  for (const f of files('docs').filter(f => f.endsWith('.md'))) {
+    const s = readFileSync(f, 'utf8')
+    expect([f, /\/Users\/|\/home\/|\/var\/folders|\/private\/|\.superpowers|https?:\/\/(?!github\.com\/|127\.0\.0\.1|ollama\.com|nodejs\.org)\S+/.exec(s)?.[0]]).toEqual([f, undefined])
+    for (const e of emails) expect([f, s.includes(e)]).toEqual([f, false])
+  }
 })
