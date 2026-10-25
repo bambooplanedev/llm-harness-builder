@@ -5,6 +5,7 @@ import { renderToString } from 'vue/server-renderer'
 import Trace from '../web/src/Trace.vue'
 import type { HarnessEvent } from '../src/core/events.js'
 import { en } from '../web/src/i18n'
+import { anatomy, anatomyLine } from '../src/core/anatomy.js'
 
 const events: HarnessEvent[] = [
   { seq: 0, turn: 0, ts: 0, type: 'approval_required', call: { callId: 'mcp1', name: 'mcp:fs', args: { command: 'npx server' } } },
@@ -78,14 +79,22 @@ test('a reply with a cost shows it in dollars; without one there is no $', async
   expect(await replay(reply())).not.toContain('$')
 })
 
-test('each turn says its request layers above the raw JSON, in either format', async () => {
+test('each request says its anatomy above the raw JSON, in either format; an empty body says nothing', async () => {
+  const pa = { system: 'abcd', tools: [{ name: 't', description: '', input_schema: {} }], messages: [{ role: 'user', content: 'do' }] }
+  const po = { messages: [{ role: 'system', content: 'ab' }, { role: 'user', content: 'do' }, { role: 'assistant', content: 'x' }] }
   const html = await replay([
-    { seq: 0, turn: 1, ts: 0, type: 'llm_request', payload: { system: 'abcd', tools: [{ name: 't', description: '', input_schema: {} }], messages: [{ role: 'user', content: 'do' }] } },
-    { seq: 1, turn: 2, ts: 0, type: 'llm_request', payload: { messages: [{ role: 'system', content: 'ab' }, { role: 'user', content: 'do' }, { role: 'assistant', content: 'x' }] } },
+    { seq: 0, turn: 1, ts: 0, type: 'llm_request', payload: pa },
+    { seq: 1, turn: 1, ts: 0, type: 'llm_response', raw: {}, content: '', latencyMs: 1, usage: { promptTokens: 40, completionTokens: 1 } },
+    { seq: 2, turn: 2, ts: 0, type: 'llm_request', payload: po },
+    { seq: 3, turn: 3, ts: 0, type: 'llm_request', payload: {} },
   ])
-  expect(html).toContain('system 4 chars · tools 1 · messages 1 · anthropic')
-  expect(html).toContain('system 2 chars · tools 0 · messages 2 · openai')
-  expect(html.indexOf('· anthropic')).toBeLessThan(html.indexOf('&quot;system&quot;'))
+  const la = anatomyLine(anatomy(pa, { promptTokens: 40, completionTokens: 1 })!), lo = anatomyLine(anatomy(po)!)
+  expect(html).toContain(la)
+  expect(html).toContain(lo)
+  expect(lo).toContain('≈')
+  expect(html).toContain(en['trace.anatomyEstimate'])
+  expect(html.indexOf(la)).toBeLessThan(html.indexOf('&quot;system&quot;'))
+  expect(html.match(/ tok</g)?.length).toBe(2) // nothing for the empty body
 })
 
 test('an mcp approval keeps the server and the command as <code> inside the question', async () => {

@@ -4,7 +4,7 @@ import { t, tn, T } from './i18n'
 import type { Delta, HarnessEvent } from './api'
 import { mcpApprovalServer, mcpCounts, UNTIL_BASH } from '../../src/core/events'
 import { analyzeTrace, summaryLine } from '../../src/core/analyze'
-import { normalizeRequest } from '../../src/core/normalize'
+import { anatomies, anatomyLine } from '../../src/core/anatomy'
 // approvable is a Boolean-typed prop, so Vue casts an ABSENT value to `false` (not `undefined`).
 // App.vue's live Workbench never passes this prop and needs the opposite default -- only a
 // finished/replayed trace (Bench.vue, Diff.vue) opts out by passing `false` explicitly.
@@ -41,11 +41,9 @@ const stubbedAt = computed(() => {
 const pretty = (v: unknown) => JSON.stringify(v, null, 2)
 /** The CLI's knobs_off line: what the file sets and was not sent, and who said so. */
 const knobsOff = computed(() => props.events.flatMap(e => e.type === 'knobs_off' ? e.off.map(o => `${o.knob} ${JSON.stringify(o.value)} not sent: ${o.reason}`) : []))
-/** One line of what a request holds, read the same way whatever API it went to. */
-function layers(payload: unknown): string {
-  const n = normalizeRequest(payload)
-  return n ? `system ${n.system.length} chars · tools ${n.tools.length} · messages ${n.messages.filter(m => m.role !== 'system').length} · ${n.format}` : ''
-}
+/** The anatomy of every request the trace shows, and the same by event seq. */
+const anat = computed(() => anatomies(props.events))
+const anatBySeq = computed(() => new Map(anat.value.map(x => [x.seq, x.a])))
 // The current turn is "open" from its llm_request until its llm_response; the live bubble shows the streamed text meanwhile,
 // and stays (without the cursor) if the run ended first, since that text is not in the trace.
 const done = computed(() => props.events.some(e => e.type === 'done'))
@@ -97,7 +95,10 @@ const liveTok = computed(() => Math.ceil(liveText.value.length / 4))
     </div>
     <details class="inspector"><summary>{{ turn === 0 ? 'setup' : `turn ${turn}` }} — raw request / response</summary>
       <template v-for="e in evs" :key="'raw' + e.seq">
-        <template v-if="e.type === 'llm_request'"><div class="hint">{{ layers(e.payload) }}</div><pre>{{ pretty(e.payload) }}</pre></template>
+        <template v-if="e.type === 'llm_request'"><template v-if="anatBySeq.get(e.seq)"><div class="hint" :title="t('trace.anatomySplit')">{{ anatomyLine(anatBySeq.get(e.seq)!) }}</div>
+          <div v-if="!anatBySeq.get(e.seq)!.exact" class="hint">{{ t('trace.anatomyEstimate') }}</div>
+          <div v-if="anatBySeq.get(e.seq)!.toolsInSystem" class="hint">{{ t('trace.anatomyToolsInSystem') }}</div>
+          <div v-if="anatBySeq.get(e.seq)!.thinkingBlocks" class="hint">{{ t('trace.anatomyThinking') }}</div></template><pre>{{ pretty(e.payload) }}</pre></template>
         <pre v-if="e.type === 'llm_response'">{{ pretty(e.raw) }}</pre>
       </template>
     </details>
