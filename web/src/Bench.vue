@@ -259,14 +259,14 @@ onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer); unsub?.(); d
           </template>
         </div>
       </template>
-      <div class="err">{{ error }}</div>
+      <div class="err">{{ shown(error, names) }}</div>
     </div>
     <div class="col" ref="pane">
       <div v-if="newOpen" class="table-wrap new-bench">
         <h5 class="group">Harnesses <span class="muted">· {{ t('bench.fromHarnesses') }}</span></h5>
         <div v-for="h in list" :key="h.name">
-          <label><input type="checkbox" :value="h.name" v-model="picked"> <b>{{ h.name }}</b></label> <span v-if="h.description" class="muted">{{ h.description }}</span>
-          <div v-for="c in picked.includes(h.name) ? runsUnasked[h.name] ?? [] : []" :key="c" class="hint clip" :title="c">{{ t('bench.runsUnasked', { cmd: c }) }}</div>
+          <label><input type="checkbox" :value="h.name" v-model="picked"> <b>{{ h.name }}</b></label> <span v-if="h.description" class="muted">{{ shown(h.description, names) }}</span>
+          <div v-for="c in picked.includes(h.name) ? runsUnasked[h.name] ?? [] : []" :key="c" class="hint clip" :title="shown(c, names)">{{ shown(t('bench.runsUnasked', { cmd: c }), names) }}</div>
         </div>
         <div class="row"><b>Model</b> <span class="muted">{{ shown(t('bench.modelFrom', { model: props.backend.model || '(none picked)' }), names) }} · {{ props.backend.kind }} {{ shown(props.backend.baseUrl, names) }}<template v-if="props.backend.apiKeyEnv"> · key {{ props.backend.apiKeyEnv }}</template></span></div>
         <div class="row">
@@ -314,7 +314,7 @@ onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer); unsub?.(); d
       </template>
       <h5 v-if="result && events.length && !(sideA && sideB)" class="group">{{ sideA ? `${sideA.name} #${sideA.run.round} · ${sideA.run.verdict} · trace` : `${active?.harness ?? ''} #${active?.round ?? ''} · live trace` }}</h5>
       <Diff v-if="sideA && sideB" :a="sideA" :b="sideB" :task="result!.task" @close="closeDiff" />
-      <Trace v-else-if="result && events.length" :events="events" :task="result.task" :approvable="false" />
+      <Trace v-else-if="result && events.length" :events="events" :task="result.task" :approvable="false" :urls="names.urls" />
     </div>
   </div>
 </template>

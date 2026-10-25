@@ -171,3 +171,11 @@ test('film mode: the Diff config table hides both models and servers', async () 
   expect(html).toContain('backend.model')
   expect(html).not.toMatch(/qwen3:8b|other-model|localhost:11434|127\.0\.0\.1:8080/)
 })
+
+test('film mode: an error that echoes the server url hides it once the url is passed in', async () => {
+  setFilm(true)
+  const evs: HarnessEvent[] = [{ seq: 0, turn: 1, ts: 0, type: 'error', message: 'fetch failed: http://localhost:11434/api/chat', body: 'localhost:11434 refused' }]
+  const html = await renderToString(createSSRApp(Trace, { events: evs, approvable: false, urls: ['http://localhost:11434'] }))
+  expect(html).toContain('server/api/chat')
+  expect(html).not.toMatch(/localhost|11434/)
+})

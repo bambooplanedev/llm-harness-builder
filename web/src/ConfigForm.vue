@@ -170,7 +170,7 @@ function editMcp(text: string) {
     <div class="row"><span :title="t('h.bashMax')">bash max bytes</span><input type="number" min="1" placeholder="1048576 (default)" :value="config.tools.bashMaxBytes ?? ''" @change="setToolLimit('bashMaxBytes', ($event.target as HTMLInputElement).value)"></div>
     <div class="row"><span :title="t('h.bashTimeout')">bash timeout, s</span><input type="number" min="1" placeholder="30 (default)" :value="config.tools.bashTimeoutS ?? ''" @change="setToolLimit('bashTimeoutS', ($event.target as HTMLInputElement).value)"></div>
     <details><summary :title="t('h.mcp')">MCP servers ({{ mcpCount() }})</summary>
-      <textarea :value="mcpText" @input="editMcp(($event.target as HTMLTextAreaElement).value)" style="min-height:80px"
+      <textarea class="film-hide" :value="mcpText" @input="editMcp(($event.target as HTMLTextAreaElement).value)" style="min-height:80px"
         placeholder='{"fs": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "."], "tools": ["read_text_file"]}}'></textarea>
       <div v-if="mcpErr" class="err">invalid JSON — not saved, Run disabled: {{ mcpErr }}</div>
     </details>

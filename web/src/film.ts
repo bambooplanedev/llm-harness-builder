@@ -14,9 +14,9 @@ export function setFilm(on: boolean): void {
 }
 
 const replace = (s: string, from: string, to: string) => from && s.includes(from) ? s.split(from).join(to) : s
-/** Absolute paths of two segments or more, a file:// url's too; one-segment ones (/no_think, /v1), relative paths, regex
- *  literals and other urls stay. */
-const PATH = /(?:(?<![\w.:/~-])|(?<=file:\/\/))\/(?:[\w.@+-]+\/)+[\w.@+-]*/g
+/** A path after file://, or one under a machine root (/tmp, /Users, /home, /var, /private); routes (/api/users/42),
+ *  /no_think, relative paths, regex literals and other urls stay. */
+const PATH = /(?<=file:\/\/)\/[\w.@+\/-]*|(?<![\w.:/~-])\/(?:tmp|Users|home|var|private)(?:\/[\w.@+-]*)+/g
 
 /** `s` with every url (and its host) as `server`, every model name of 3+ chars (longest first) as `model`, and absolute paths as `…/`. */
 export function filmText(s: string, n: FilmNames): string {

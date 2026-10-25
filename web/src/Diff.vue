@@ -88,8 +88,8 @@ const hasEvents = computed(() => props.a.events.length > 0 && props.b.events.len
             </div>
           </div>
           <div v-if="open === i" class="pair">
-            <div><Trace v-if="groups[0][i]" :events="groups[0][i]" :approvable="false" :bars="false" /></div>
-            <div><Trace v-if="groups[1][i]" :events="groups[1][i]" :approvable="false" :bars="false" /></div>
+            <div><Trace v-if="groups[0][i]" :events="groups[0][i]" :approvable="false" :bars="false" :urls="names.urls" /></div>
+            <div><Trace v-if="groups[1][i]" :events="groups[1][i]" :approvable="false" :bars="false" :urls="names.urls" /></div>
           </div>
         </template>
       </div>

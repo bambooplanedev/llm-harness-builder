@@ -11,9 +11,10 @@ import { film, filmDeep, namesIn, shown } from './film'
 // App.vue's live Workbench never passes this prop and needs the opposite default -- only a
 // finished/replayed trace (Bench.vue, Diff.vue) opts out by passing `false` explicitly.
 // `live` is only ever set by the live Workbench; a replayed trace (Bench.vue, Diff.vue) omits it.
-const props = withDefaults(defineProps<{ events: HarnessEvent[]; live?: Delta; task?: string; approvable?: boolean; bars?: boolean }>(), { approvable: true, bars: true, live: () => ({}) })
+const props = withDefaults(defineProps<{ events: HarnessEvent[]; live?: Delta; task?: string; approvable?: boolean; bars?: boolean; urls?: string[] }>(), { approvable: true, bars: true, live: () => ({}) })
 const emit = defineEmits<{ approve: [callId: string, ok: boolean] }>()
-const names = computed(() => namesIn(props.events))
+/** `urls`: the servers the page knows of (the trace itself names none). */
+const names = computed(() => ({ ...namesIn(props.events), urls: props.urls ?? [] }))
 /** What the screen shows: in film mode a copy with model names, servers and paths replaced. */
 const shownEvents = computed(() => film.value ? filmDeep(props.events, names.value) : props.events)
 /** A live approval shows the command exactly as it will run, film mode or not: you approve what executes. */
