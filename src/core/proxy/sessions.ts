@@ -2,6 +2,7 @@
 // Pure: no sockets, no files, no clock of its own. Every event is read off the wire; nothing is inferred.
 import type { Ev, HarnessEvent, ToolCall } from '../events.js'
 import type { NormalizedResponse } from '../backends/types.js'
+import { normalizeRequest } from '../normalize.js'
 
 /** The meta line of a proxy run; `proxy` marks the file as a transcription, `pid` lets serve tell a live writer from a killed one. */
 export type RunMeta = { id: string; harness: string; task: string; workdir: string; started: number; proxy: { upstream: string; pid: number } }
@@ -26,6 +27,11 @@ export function textOf(content: unknown): string {
   return ''
 }
 
+/** The task as the agent typed it: Claude Code wraps context into the first user message as system-reminders. */
+export function taskOf(text: string): string {
+  return text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim()
+}
+
 /** JSON with object keys sorted, so the same message serialized twice compares equal. */
 function stable(v: unknown): string {
   if (Array.isArray(v)) return `[${v.map(stable).join(',')}]`
@@ -46,23 +52,35 @@ export class Sessions {
    * One request: the run it continues, or a new one. A run is keyed by its first system-like message and its
    * first user message; a request joins the most recently joined open run with that key whose last request had
    * no more messages than this one. Call it before any await, so two requests of one run keep their seq order.
+   * Anthropic: the key is text only, the top-level system without its first block (Claude Code's attribution
+   * block changes) and the first user text, since Claude Code moves cache_control markers between turns.
    */
   onRequest(payload: object): { run: string; turn: number; meta?: RunMeta; events: HarnessEvent[] } {
     const raw = (payload as { messages?: unknown }).messages
     const msgs: any[] = Array.isArray(raw) ? raw : []
-    const sys = msgs.find(m => m?.role === 'system' || m?.role === 'developer')
+    const anthropic = normalizeRequest(payload)?.format === 'anthropic'
     const user = msgs.find(m => m?.role === 'user')
-    const key = stable([sys ?? null, user ?? null])
+    let key: string, task: string
+    if (anthropic) {
+      const system = (payload as { system?: unknown }).system
+      const userText = textOf(Array.isArray(user?.content) ? user.content.filter((b: any) => b?.type === 'text') : user?.content)
+      key = stable([Array.isArray(system) ? textOf(system.slice(1)) : textOf(system), userText])
+      task = taskOf(userText)
+    } else {
+      const sys = msgs.find(m => m?.role === 'system' || m?.role === 'developer')
+      key = stable([sys ?? null, user ?? null])
+      task = taskOf(textOf(user?.content))
+    }
     let run = this.runs.filter(r => r.open && r.key === key && r.len <= msgs.length).sort((a, b) => b.active - a.active)[0]
     let meta: RunMeta | undefined
     if (!run) {
       run = { id: this.d.newId(), key, len: 0, active: 0, seq: 0, turn: 0, callSeq: 0, toolCallCount: 0, resulted: new Set(), open: true }
       this.runs.push(run)
-      meta = { id: run.id, harness: this.d.harness, task: textOf(user?.content), workdir: '', started: this.d.now(), proxy: { upstream: this.d.upstream, pid: this.d.pid } }
+      meta = { id: run.id, harness: this.d.harness, task, workdir: '', started: this.d.now(), proxy: { upstream: this.d.upstream, pid: this.d.pid } }
     }
     run.len = msgs.length
     run.active = ++this.tick
-    const events = this.results(run, msgs)
+    const events = this.results(run, msgs, anthropic)
     const turn = ++run.turn
     events.push(this.ev(run, turn, { type: 'llm_request', payload }))
     return { run: run.id, turn, meta, events }
@@ -72,14 +90,27 @@ export class Sessions {
    * tool_result for each tool message after the request's last assistant message. The i-th call that message
    * echoes is the i-th call recorded on the run's latest replied turn, so ids the agent invented (the server
    * sent none) and ids reused across turns both match. A call already resulted is skipped: a retry repeats them.
+   * Anthropic: the tool_result blocks of the user messages after it, matched to the replied calls by tool_use_id.
    */
-  private results(run: Run, msgs: any[]): HarnessEvent[] {
+  private results(run: Run, msgs: any[], anthropic: boolean): HarnessEvent[] {
     let last = -1
     for (let i = msgs.length - 1; i >= 0; i--) if (msgs[i]?.role === 'assistant') { last = i; break }
     const replied = run.replied
     if (last < 0 || !replied) return []
     const echoed: unknown[] = Array.isArray(msgs[last].tool_calls) ? msgs[last].tool_calls.map((t: any) => t?.id) : []
     const out: HarnessEvent[] = []
+    if (anthropic) {
+      for (const m of msgs.slice(last + 1)) {
+        if (m?.role !== 'user' || !Array.isArray(m.content)) continue
+        for (const b of m.content) {
+          const call = b?.type === 'tool_result' && b.tool_use_id !== undefined ? replied.calls.find(c => c.backendId === b.tool_use_id) : undefined
+          if (!call || run.resulted.has(call.callId)) continue
+          run.resulted.add(call.callId)
+          out.push(this.ev(run, replied.turn, { type: 'tool_result', callId: call.callId, name: call.name, output: textOf(b.content), ...(b.is_error === true ? { error: true } : {}) }))
+        }
+      }
+      return out
+    }
     for (const m of msgs.slice(last + 1)) {
       if (m?.role !== 'tool') continue
       const i = echoed.indexOf(m.tool_call_id)

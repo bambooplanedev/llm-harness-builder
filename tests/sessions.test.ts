@@ -95,3 +95,35 @@ test('a failed reply is an error event; close() ends every open run with aborted
   expect(closed[0].events).toEqual([{ seq: 8, turn: 2, ts: expect.any(Number), type: 'done', reason: 'aborted', turns: 2, toolCallCount: 2 }])
   expect(s.close()).toEqual([])
 })
+
+const A = (system: unknown, messages: object[]) => ({ model: 'm', system, messages })
+const ublk = (...texts: string[]) => ({ role: 'user', content: texts.map(text => ({ type: 'text', text })) })
+const tu = (id: string) => ({ role: 'assistant', content: [{ type: 'thinking', thinking: 'hm', signature: 's' }, { type: 'tool_use', id, name: 'Read', input: {} }] })
+const res = (id: string, content: unknown, is_error?: boolean) => ({ type: 'tool_result', tool_use_id: id, content, ...(is_error ? { is_error } : {}) })
+const tr = (...blocks: object[]) => ({ role: 'user', content: blocks })
+
+test('anthropic without headers: key is system minus its first block plus the first user text; the task skips system-reminders', () => {
+  const s = mk()
+  const a = s.onRequest(A([{ type: 'text', text: 'attr v1' }, { type: 'text', text: 'sys' }], [ublk('<system-reminder>ctx</system-reminder>', 'fix the bug')]))
+  expect(a.meta!.task).toBe('fix the bug')
+  // the attribution block changes and cache_control moves: same run
+  expect(s.onRequest(A([{ type: 'text', text: 'attr v2' }, { type: 'text', text: 'sys', cache_control: { type: 'ephemeral' } }], [ublk('<system-reminder>ctx</system-reminder>', 'fix the bug'), { role: 'assistant', content: 'ok' }, ublk('more')])).run).toBe('run1')
+  expect(s.onRequest(A('other', [ublk('fix the bug')])).run).toBe('run2')
+})
+
+test('anthropic: tool_result blocks match calls by tool_use_id; is_error and block content carry over', () => {
+  const s = mk()
+  s.onRequest(A('sys', [ublk('t')]))
+  s.onReply('run1', 1, ok(reply([{ id: 'toolu_a' }, { id: 'toolu_b' }])))
+  const b = s.onRequest(A('sys', [ublk('t'), tu('toolu_a'), tr(res('toolu_b', [{ type: 'text', text: 'B' }], true), res('toolu_a', 'A'), res('nope', 'Z'))]))
+  expect(b.events.filter(e => e.type === 'tool_result').map((e: any) => [e.callId, e.output, e.error])).toEqual([['c2', 'B', true], ['c1', 'A', undefined]])
+})
+
+test('anthropic: a mid-conversation system entry and thinking blocks in history neither split the run nor break matching', () => {
+  const s = mk()
+  s.onRequest(A('sys', [ublk('t')]))
+  s.onReply('run1', 1, ok(reply([{ id: 'toolu_a' }])))
+  const b = s.onRequest(A('sys', [ublk('t'), tu('toolu_a'), { role: 'system', content: 'note' }, tr(res('toolu_a', 'A'))]))
+  expect(b).toMatchObject({ run: 'run1', turn: 2 })
+  expect(b.events.filter(e => e.type === 'tool_result').map((e: any) => [e.callId, e.output])).toEqual([['c1', 'A']])
+})

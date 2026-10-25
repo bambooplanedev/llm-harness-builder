@@ -293,8 +293,8 @@ test('anthropic: the stream passes byte for byte; the trace has request, reply, 
   await (await msgs(px.base, JSON.stringify(second))).text()
   await px.stop()
   const [t] = await traces(px.runsDir)
-  // Task 4 inserts 'tool_result' after 'tool_call' here and asserts it is { callId: 'c1', output: 'AAA' }.
-  expect(t.events.map(e => e.type)).toEqual(['llm_request', 'llm_response', 'tool_call', 'llm_request', 'llm_response', 'done'])
+  expect(t.events.map(e => e.type)).toEqual(['llm_request', 'llm_response', 'tool_call', 'tool_result', 'llm_request', 'llm_response', 'done'])
+  expect(t.events[3]).toMatchObject({ callId: 'c1', output: 'AAA' })
   expect(normalizeRequest(t.events[0].payload)?.format).toBe('anthropic')
   expect(t.events[2].call).toMatchObject({ name: 'Read', args: { file_path: 'a.txt' }, backendId: 'toolu_1' })
   expect(t.events[1].usage).toMatchObject({ promptTokens: expect.any(Number), completionTokens: 5 })
