@@ -6,7 +6,8 @@ import App from '../web/src/App.vue'
 // @ts-expect-error -- vue SFC, no .d.ts; typechecked separately by vue-tsc
 import Bench from '../web/src/Bench.vue'
 import { NEW_HARNESS } from '../web/src/advanced'
-import { lang, initialLang, readLang, setLang, langName, t } from '../web/src/i18n'
+import { lang, initialLang, readLang, setLang, langName, t, en, type Key } from '../web/src/i18n'
+import { uk } from '../web/src/uk'
 
 afterEach(() => { lang.value = 'en' })
 
@@ -67,4 +68,18 @@ test('no v-html and no innerHTML in the page source: translated text never becom
   const root = new URL('..', import.meta.url).pathname
   const files = execFileSync('git', ['ls-files', 'web/src'], { cwd: root, encoding: 'utf8' }).split('\n').filter(Boolean)
   for (const f of files) expect(await readFile(new URL(`../${f}`, import.meta.url), 'utf8'), f).not.toMatch(/v-html|innerHTML/)
+})
+
+const hintKeys = (Object.keys(en) as Key[]).filter(k => k.startsWith('h.'))
+
+test('all 44 hover hints have both sides, with the same line breaks', () => {
+  expect(hintKeys).toHaveLength(44)
+  for (const k of hintKeys) {
+    expect(uk[k], k).toBeTruthy()
+    expect(en[k].split('\n').length, k).toBe(uk[k]!.split('\n').length)
+  }
+})
+
+test('a hint keeps its key names, commands and product names: every Latin word of the uk side is in the en side', () => {
+  for (const k of hintKeys) for (const w of uk[k]!.match(/[A-Za-z_][\w./<>{}]*/g) ?? []) expect(en[k], `${k}: ${w}`).toContain(w)
 })

@@ -9,7 +9,6 @@ import ConfigForm from './ConfigForm.vue'
 import ContextBar from './ContextBar.vue'
 import Trace from './Trace.vue'
 import Bench from './Bench.vue'
-import { H } from './hints'
 import { t, T, lang, LANGS, langName, setLang } from './i18n'
 
 const tab = ref<'workbench' | 'bench'>('workbench')
@@ -148,7 +147,7 @@ watch(() => config.value.backend.model, () => {
         <ConfigForm v-model="config" v-model:mcp-error="mcpError" :models="models" :models-error="modelsError" :model-info="modelInfo" :harness-names="harnessNames" @refresh-models="refreshModels" @load="load" @save-as="saveAs" />
       </div>
       <div class="col">
-        <label :title="H.workdir">Workdir (absolute path to a scratch project; not / or your home)</label>
+        <label :title="t('h.workdir')">Workdir</label>
         <div class="browse" @keydown.esc="browse = null">
         <div class="row">
           <input type="text" v-model="workdir" placeholder="/path/to/project">
@@ -165,7 +164,7 @@ watch(() => config.value.backend.model, () => {
           </div>
         </div>
         </div>
-        <label :title="H.task">Task</label>
+        <label :title="t('h.task')">Task</label>
         <textarea v-model="task" class="task"></textarea>
         <div v-if="refusal" class="warn">{{ refusal }}</div>
         <div class="row" style="margin:8px 0">

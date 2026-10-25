@@ -73,10 +73,10 @@ const hasEvents = computed(() => props.a.events.length > 0 && props.b.events.len
           <div v-if="i === diverged" class="split-label"><T k="diff.split"><template #at><b>{{ t('diff.splitAt', { n: i + 1 }) }}</b></template></T></div>
           <div class="turnrow" :class="{ same: diverged === -1 || i < diverged, split: i === diverged, on: open === i }" @click="open = open === i ? -1 : i">
             <span class="tn">t{{ i + 1 }}</span>
-            <div v-for="(t, k) in [sa[i], sb[i]]" :key="k" class="cell">
-              <template v-if="t">
-                <span v-for="(c, j) in t.chips" :key="j" :class="['chip', { err: c.bad }]">{{ c.label }}{{ c.detail ? ` ${c.detail}` : '' }}{{ c.truncated ? ' ↯' : '' }}</span>
-                <small class="muted">{{ mmss(t.ms) }} · {{ t.tokens }} tok ctx</small>
+            <div v-for="(side, k) in [sa[i], sb[i]]" :key="k" class="cell">
+              <template v-if="side">
+                <span v-for="(c, j) in side.chips" :key="j" :class="['chip', { err: c.bad }]">{{ c.label }}{{ c.detail ? ` ${c.detail}` : '' }}{{ c.truncated ? ' ↯' : '' }}</span>
+                <small class="muted">{{ mmss(side.ms) }} · {{ side.tokens }} tok ctx</small>
               </template>
               <span v-else class="muted">— ended</span>
             </div>

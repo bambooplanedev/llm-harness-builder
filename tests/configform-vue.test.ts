@@ -3,7 +3,7 @@ import { createSSRApp } from 'vue'
 import { renderToString } from 'vue/server-renderer'
 // @ts-expect-error -- vue SFC, no .d.ts; typechecked separately by vue-tsc
 import ConfigForm from '../web/src/ConfigForm.vue'
-import { H } from '../web/src/hints'
+import { t } from '../web/src/i18n'
 import type { HarnessConfig } from '../src/core/config.js'
 import { DEFAULT_PROMPTED_TEMPLATE, DEFAULT_PARSE_ERROR_HINT } from '../src/core/prompts.js'
 import { harness } from './helpers.js'
@@ -56,7 +56,7 @@ test('no non-English text ships in the source', async () => {
   const root = new URL('..', import.meta.url).pathname
   const files = execFileSync('git', ['ls-files', 'src', 'web/src', 'tests'], { cwd: root, encoding: 'utf8' })
     .split('\n').filter(Boolean)
-    .filter(f => !['web/src/hints.ts', 'web/src/uk.ts'].includes(f)) // Ukrainian on purpose: the hover hints, and the Ukrainian catalog in uk.ts
+    .filter(f => f !== 'web/src/uk.ts') // Ukrainian on purpose: the Ukrainian catalog
   const offenders: string[] = []
   for (const f of files) {
     const text = await readFile(new URL(`../${f}`, import.meta.url), 'utf8')
@@ -102,7 +102,7 @@ test('think shows the harness value: on, off, and — when the harness sends not
 
 test('the edit-miss escalation box shows the value, and an empty box for a harness without it', async () => {
   const on = await render({ ...base, tools: { ...base.tools, editMissEscalation: 3 } })
-  expect(on).toContain(`title="${H.escalation}">edit misses before a re-read note</span><input type="number" min="1" value="3"`)
+  expect(on).toContain(`title="${t('h.escalation')}">edit misses before a re-read note</span><input type="number" min="1" value="3"`)
   const off = await render(base)
   expect(off).toMatch(/edit misses before a re-read note<\/span><input type="number" min="1" value=""/)
 })
@@ -160,8 +160,8 @@ test('a knob the model does not take is a disabled box with a hint and where tha
 
 test('context boxes: show the harness values, and empty boxes when the harness sets no limit', async () => {
   const none = { ...base } as any; delete none.context
-  expect(await render(none)).toMatch(/max tool output chars \(empty = no limit\)<\/span><input[^>]*value=""/)
-  expect(await render(none)).toMatch(/budget tokens \(empty = no budget\)<\/span><input[^>]*value=""/)
+  expect(await render(none)).toMatch(/max tool output chars<\/span><input[^>]*value=""/)
+  expect(await render(none)).toMatch(/budget tokens<\/span><input[^>]*value=""/)
   const set = { ...base, context: { maxToolOutputChars: 50, budgetTokens: 60 } } as HarnessConfig
   expect(await render(set)).toMatch(/max tool output chars[^<]*<\/span><input[^>]*value="50"/)
   expect(await render(set)).toMatch(/budget tokens[^<]*<\/span><input[^>]*value="60"/)

@@ -4,7 +4,6 @@ import { api, type ActiveTrace, type AnalysisCells, type BenchFile, type BenchHa
 import { cellsLine } from '../../src/core/analyze'
 import { formatTable, mmss, wilson, BENCH_TASKS } from '../../src/core/bench'
 import Trace from './Trace.vue'
-import { H } from './hints'
 import { t, T } from './i18n'
 import Diff from './Diff.vue'
 import type { DiffSide } from '../../src/core/diff'
@@ -265,7 +264,7 @@ onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer); unsub?.(); d
         </div>
         <div class="row"><b>Model</b> <span class="muted">{{ t('bench.modelFrom', { model: props.backend.model || '(none picked)' }) }} · {{ props.backend.kind }} {{ props.backend.baseUrl }}<template v-if="props.backend.apiKeyEnv"> · key {{ props.backend.apiKeyEnv }}</template></span></div>
         <div class="row">
-          <label><b>Task</b> <select v-model="task"><option v-for="(_, t) in BENCH_TASKS" :key="t" :value="t">{{ t }}</option></select></label>
+          <label><b>Task</b> <select v-model="task"><option v-for="(_, name) in BENCH_TASKS" :key="name" :value="name">{{ name }}</option></select></label>
           <label v-if="BENCH_TASKS[task]"><b>size</b> <input type="number" min="1" :max="BENCH_TASKS[task]" v-model.number="size"></label>
           <label><b>runs per harness</b> <input type="number" min="1" max="50" v-model.number="runsPer"></label>
         </div>
@@ -280,11 +279,11 @@ onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer); unsub?.(); d
           <div class="muted">{{ backend?.model }} · {{ backend?.kind }} {{ backend?.baseUrl }}<template v-if="nCtx"> · window {{ nCtx.toLocaleString() }}</template> · timeout {{ mmss(result.timeoutS * 1000) }} · {{ new Date(result.date).toLocaleString() }}</div>
           <div class="muted">{{ runs.length }}/{{ total }} runs<template v-if="!result.complete"> · {{ result.stopped ? 'stopped' : 'incomplete' }}</template> · {{ mmss(msDone) }} in</div>
           </div>
-          <button v-if="!example" @click="again" :disabled="starting || !!active" :title="active ? H.againBusy : H.again">{{ starting ? 'Starting…' : 'Run bench again' }}</button>
+          <button v-if="!example" @click="again" :disabled="starting || !!active" :title="active ? t('h.againBusy') : t('h.again')">{{ starting ? 'Starting…' : 'Run bench again' }}</button>
         </div>
         <div v-if="runs.length" class="table-wrap">
           <table class="bench">
-            <thead><tr><th>harness</th><th class="n" :title="H.pass">pass</th><th :title="H.rate">rate · 95% interval</th><th class="n" :title="H.medTurns">med turns</th><th class="n" :title="H.medTime">med time</th><th v-if="hasCost" class="n" :title="H.medCost">med cost</th><th v-if="hasPeak" class="n" :title="H.peak">peak tok</th><th :title="H.reasons">how runs ended</th></tr></thead>
+            <thead><tr><th>harness</th><th class="n" :title="t('h.pass')">pass</th><th :title="t('h.rate')">rate · 95% interval</th><th class="n" :title="t('h.medTurns')">med turns</th><th class="n" :title="t('h.medTime')">med time</th><th v-if="hasCost" class="n" :title="t('h.medCost')">med cost</th><th v-if="hasPeak" class="n" :title="t('h.peak')">peak tok</th><th :title="t('h.reasons')">how runs ended</th></tr></thead>
             <tbody>
               <tr v-for="h in result.harnesses" :key="h.name" :class="{ on: h.name === openHarness }">
                 <td>{{ h.name }}</td>
