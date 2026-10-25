@@ -9,6 +9,7 @@ import { validateConfig, backendErrors, keyProblem, apiKey, type HarnessConfig, 
 import { validateWorkdir } from '../core/tools/sandbox.js'
 import { createBackend, type Backend } from '../core/backends/index.js'
 import { redactor } from '../core/redact.js'
+import { unreachable } from '../core/preflight.js'
 import type { HarnessEvent } from '../core/events.js'
 import { benchFileName } from '../core/bench.js'
 
@@ -88,7 +89,8 @@ export async function startServer(opts: ServerOpts) {
         }
         catch (e) {
           const text = (e as { body?: string }).body
-          return json(res, 502, { error: redact.text((e as Error).message), body: text === undefined ? undefined : redact.text(text) })
+          // No body = no HTTP answer at all: say what to start, not just "fetch failed".
+          return json(res, 502, { error: redact.text(text === undefined ? unreachable(backend, e) : (e as Error).message), body: text === undefined ? undefined : redact.text(text) })
         }
       }
       if (m('GET', /^\/api\/harnesses$/)) {

@@ -93,7 +93,7 @@ function open(id: string, runTaskText: string, active = false) {
 async function start() {
   error.value = ''
   try { const { runId: id } = await api.startRun(outbound(config.value), task.value, workdir.value); ownRun.value = id; open(id, task.value, true) }
-  catch (e) { error.value = (e as Error).message }
+  catch (e) { const m = (e as Error).message; error.value = m === 'backend.model is required' ? 'pick or type a model first' : m }
 }
 const approve = (callId: string, ok: boolean) => api.approve(runId.value, callId, ok).catch(e => (error.value = e.message))
 const abort = () => api.abort(runId.value).catch(e => (error.value = e.message))

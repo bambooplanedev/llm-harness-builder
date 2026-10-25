@@ -241,6 +241,14 @@ test('bench against a server that does not answer stops before the first run, wi
   expect(existsSync(out)).toBe(false)
 }, 30_000)
 
+test('demo against a server that does not answer stops before any run, exit 1, no trace', () => {
+  const r = cli(['demo', '--kind', 'openai', '--base-url', 'http://127.0.0.1:1/v1'])
+  expect(r.status).toBe(1)
+  expect(r.stderr).toMatch(/^preflight: http:\/\/127\.0\.0\.1:1\/v1 \(openai\) does not answer: /m)
+  expect(r.stderr).not.toContain('=== bare')
+  expect(!existsSync(join(r.cwd, 'runs')) || readdirSync(join(r.cwd, 'runs')).length === 0).toBe(true)
+}, 30_000)
+
 test('bench rejects non-positive-integer --n and --timeout with usage', () => {
   for (const args of [['bench', '--n', '0'], ['bench', '--n', '2.5'], ['bench', '--n', '1', '--timeout', 'x']]) {
     const r = cli(args)

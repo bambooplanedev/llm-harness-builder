@@ -13,7 +13,8 @@
 
 </div>
 
-A small workbench for the model layer of an agent: system prompt, tool description format, native
+An agent harness is the code around a model: the system prompt, the tools it may call, and the loop that feeds
+results back. This is a small workbench for the model layer of that harness: system prompt, tool description format, native
 vs prompted tool calls, schema enforcement, tool-output truncation, context budget. Every run is a
 JSONL trace of exactly what went to the model and what came back.
 
@@ -69,7 +70,8 @@ Or install it globally:
 
 ## Quick start
 
-    npx llm-harness-builder demo --model qwen3:8b        # needs Ollama running
+    ollama pull qwen3:8b                                 # once; needs Ollama running
+    npx llm-harness-builder demo --model qwen3:8b
     npx llm-harness-builder                              # opens the workbench UI
 
 Against anything that speaks the OpenAI API (llama-server, LM Studio, vLLM):
@@ -84,6 +86,12 @@ the same model, and prints PASS/FAIL from a check script. `bench` repeats it and
     npx llm-harness-builder bench --n 5 \
       --kind openai --base-url http://127.0.0.1:8080/v1 \
       --model unsloth/Qwen3-8B-GGUF:Q4_K_M
+
+From zero to a first PASS:
+
+1. Install [Ollama](https://ollama.com) and start it.
+2. `ollama pull qwen3:8b`
+3. `npx llm-harness-builder demo`, or open the UI and follow Start here.
 
 Run `demo` first: it takes a few minutes and shows you the trace and that the backend is alive.
 `bench --n 5` on the setup of [Bench results](docs/findings.md#bench-results) took 96 minutes, most

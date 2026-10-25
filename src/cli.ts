@@ -204,14 +204,42 @@ async function cmdRun(argv: string[]) {
   process.exitCode = ok ? 0 : 1
 }
 
+/**
+ * Asks each distinct backend once, before any run: down, no such model, a knob the harness cannot do without. Prints the window it found; returns the refusal, if any.
+ * The test backend is the network itself; there is no server behind it to ask.
+ */
+async function preflightAll(hs: { name: string; config: HarnessConfig; server?: BenchHarness['server'] }[], task: Task, size?: number): Promise<string | undefined> {
+  if (await fakeBackendFromEnv()) return undefined
+  const asked = new Map<string, PreflightResult>()
+  for (const h of hs) {
+    const b = h.config.backend, key = `${b.kind} ${b.baseUrl} ${b.model} ${b.numCtx ?? ''} ${b.apiKeyEnv ?? ''}`
+    let r = asked.get(key)
+    if (!r) {
+      asked.set(key, r = await preflight(createBackend(b), b))
+      if (r.ok) console.error(`preflight: ${b.baseUrl} ${b.model}: window ${r.server.nCtx ?? 'unknown'}${r.server.build ? `, build ${showable(r.server.build)}` : ''}`)
+    }
+    if (!r.ok) return showable(redactor(apiKey(b, process.env), b.apiKeyEnv ?? '').text(r.message))
+    h.server = r.server
+    // A knob without which the harness would be another one is a refusal before any run, like a model that is not there.
+    const refuse = knobsOff(h.config, r.server, task.answerSchema?.(size)).refuse
+    if (refuse) return showable(`preflight: ${h.name}: ${refuse}`)
+    const w = windowWarning(h.config, r.server.nCtx)
+    if (w) console.error(w)
+  }
+}
+
 async function cmdDemo(argv: string[]) {
   const { values } = parseArgs({ args: argv, options: COMMANDS.demo.options })
   if (values.help) return printHelp('demo')
   keyFlag('demo', values['api-key-env'])
   console.error(autoApproves('demo'))
+  const configs = await Promise.all(DEMO_HARNESSES.map(name => loadHarness(path.join(PKG_ROOT, 'harnesses', `${name}.json`), { model: values.model, baseUrl: values['base-url'], kind: values.kind, apiKeyEnv: values['api-key-env'] })))
+  // Not die(): exit 2 is for a bad command line; a server that is not up yet is the newcomer's first stumble.
+  const no = await preflightAll(configs.map(config => ({ name: config.name, config })), TASKS.slug)
+  if (no) { console.error(no); process.exitCode = 1; return }
   const rows: string[] = []
-  for (const name of DEMO_HARNESSES) {
-    const config = await loadHarness(path.join(PKG_ROOT, 'harnesses', `${name}.json`), { model: values.model, baseUrl: values['base-url'], kind: values.kind, apiKeyEnv: values['api-key-env'] })
+  for (const [i, name] of DEMO_HARNESSES.entries()) {
+    const config = configs[i]
     const note = bashEnvNote(config.tools.bashEnv)
     if (note) console.error(`${name}: ${note}`)
     const key = keyNote(config.backend, process.env)
@@ -307,27 +335,8 @@ async function cmdBench(argv: string[]) {
     if (key) console.error(`${h.name}: ${key}`)
   }
   // Before any JSON exists: a server that is down, or lacks the model, is a typo to report, not 90 minutes of 'error' rows.
-  // The test backend is the network itself; there is no server behind it to ask.
-  if (!(await fakeBackendFromEnv())) {
-    const asked = new Map<string, PreflightResult>()
-    for (const h of harnesses) {
-      const b = h.config.backend, key = `${b.kind} ${b.baseUrl} ${b.model} ${b.numCtx ?? ''} ${b.apiKeyEnv ?? ''}`
-      let r = asked.get(key)
-      if (!r) {
-        asked.set(key, r = await preflight(createBackend(b), b))
-        if (r.ok) console.error(`preflight: ${b.baseUrl} ${b.model}: window ${r.server.nCtx ?? 'unknown'}${r.server.build ? `, build ${showable(r.server.build)}` : ''}`)
-      }
-      if (!r.ok) die(showable(redactor(apiKey(b, process.env), b.apiKeyEnv ?? '').text(r.message)))
-      else {
-        h.server = r.server
-        // A knob without which the harness would be another one is a refusal before any run, like a model that is not there.
-        const refuse = knobsOff(h.config, r.server, task.answerSchema?.(size)).refuse
-        if (refuse) die(showable(`preflight: ${h.name}: ${refuse}`))
-        const w = windowWarning(h.config, r.server.nCtx)
-        if (w) console.error(w)
-      }
-    }
-  }
+  const no = await preflightAll(harnesses, task, size)
+  if (no) die(no)
   await mkdir(path.dirname(out), { recursive: true })
   const result: BenchResult = { version: 1, date: started.toISOString(), task: task.prompt, taskName: values.task, size, node: process.version, n, timeoutS, complete: false, harnesses }
   // tmp + rename in the same directory: the SIGINT handler exits immediately, and a half-written

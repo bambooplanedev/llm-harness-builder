@@ -11,6 +11,8 @@ const emit = defineEmits<{ refreshModels: []; load: [name: string]; saveAs: [nam
 
 const saveName = ref(config.value.name)
 watch(() => config.value.name, n => (saveName.value = n))
+/** A decimal comma is a decimal point; text that is no number leaves the value alone. */
+const setTemp = (v: string) => { const n = Number(v.replace(',', '.')); if (v.trim() && Number.isFinite(n)) config.value.backend.temperature = n }
 /** A knob the model does not take cannot be turned; its value stays in the harness, so another model gets it back.
  *  Same pairs as knobsOff: the repeat knobs go with what they change. */
 const off = (k: 'temperature' | 'maxTokens' | 'think') => props.modelInfo?.takes?.[k] === false
@@ -126,7 +128,7 @@ function editMcp(text: string) {
     </div>
     <div v-if="modelsError" class="err">{{ modelsError }}</div>
     <div class="row">
-      <span :title="H.temp">temp</span><input type="number" step="0.1" v-model.number="config.backend.temperature" :disabled="off('temperature')">
+      <span :title="H.temp">temp</span><input type="text" inputmode="decimal" :value="config.backend.temperature" :disabled="off('temperature')" @change="setTemp(($event.target as HTMLInputElement).value)">
       <span :title="H.numCtx">num_ctx</span><input type="number" v-model.number="config.backend.numCtx" :disabled="config.backend.kind !== 'ollama'">
       <span :title="H.maxTokens">max_tokens</span><input type="number" min="1" :value="config.backend.maxTokens ?? ''" :disabled="off('maxTokens')" @change="setMaxTokens(($event.target as HTMLInputElement).value)">
       <span :title="H.think">think</span><select :value="config.backend.think === undefined ? '' : config.backend.think ? 'on' : 'off'" :disabled="off('think')" @change="setThink(($event.target as HTMLSelectElement).value)"><option value="">—</option><option>on</option><option>off</option></select>

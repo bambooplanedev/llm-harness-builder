@@ -124,3 +124,26 @@ test('emptying a tools limit box leaves the key out of the saved harness, and a 
   await put('bash timeout', '')
   expect(await saved()).toEqual({ enabled: ['bash'], approveBash: false, bashMaxBytes: 99 })
 })
+
+test('a decimal comma in the temp box is a decimal point; text that is no number leaves it alone', async () => {
+  const app = await mount({ '/api/harnesses': [{ name: 'c' }], '/api/harnesses/c': harness({ backend: { kind: 'ollama', baseUrl: 'http://localhost:11434', model: 'm', temperature: 0.7 } }), '/api/runs': [], '/api/models': [] })
+  await app.load('c')
+  const span = all(app.root).find(n => n.tag === 'span' && textOf(n) === 'temp')!
+  const box = span.parent!.children[span.parent!.children.indexOf(span) + 1]
+  const put = async (value: string) => { box.props.onChange({ target: { value } }); await settle() }
+  const temp = () => {
+    all(app.root).find(n => n.tag === 'button' && textOf(n) === 'Save as')!.props.onClick()
+    return settle().then(() => app.calls.filter(c => c.url.startsWith('/api/harnesses/') && c.body).at(-1)!.body.backend.temperature)
+  }
+  await put('0,2')
+  expect(await temp()).toBe(0.2)
+  await put('abc')
+  expect(await temp()).toBe(0.2)
+})
+
+test('Run without a model says to pick one, not the server\'s field name', async () => {
+  const app = await mount({ '/api/harnesses': [], '/api/runs': [], '/api/models': [] })
+  globalThis.fetch = (async () => new Response(JSON.stringify({ errors: ['backend.model is required'] }), { status: 400 })) as typeof fetch
+  all(app.root).find(n => n.tag === 'button' && textOf(n) === 'Run')!.props.onClick(); await settle()
+  expect(textOf(app.root)).toContain('pick or type a model first')
+})

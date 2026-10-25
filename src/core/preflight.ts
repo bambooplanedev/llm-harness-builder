@@ -5,6 +5,14 @@ import type { HarnessConfig } from './config.js'
 
 export type PreflightResult = { ok: true; server: Omit<ServerInfo, 'router'> } | { ok: false; message: string }
 
+/** A server that gave no HTTP answer: where, what the network said, and what to start. */
+export function unreachable(b: { kind: string; baseUrl: string; apiKeyEnv?: string }, e: unknown): string {
+  const cause = (e as any)?.cause?.code ?? (e as any)?.cause?.message
+  const next = b.kind === 'ollama' ? '; start Ollama with "ollama serve" (get it at https://ollama.com)'
+    : b.kind === 'openai' && b.apiKeyEnv === undefined ? '; check that the server is running at that URL' : ''
+  return `${b.baseUrl} (${b.kind}) does not answer: ${(e as Error).message}${cause ? ` (${cause})` : ''}${next}`
+}
+
 /**
  * No generation: a list of models and llama-server's /props, nothing that costs model time (a router
  * does load the named model to report its window — the bench would load it anyway). The model name
@@ -17,10 +25,7 @@ export async function preflight(backend: Backend, b: HarnessConfig['backend']): 
   const where = `${b.baseUrl} (${b.kind})`
   let models: string[]
   try { models = await backend.listModels() }
-  catch (e) {
-    const cause = (e as any)?.cause?.code ?? (e as any)?.cause?.message
-    return { ok: false, message: `preflight: ${where} does not answer: ${(e as Error).message}${cause ? ` (${cause})` : ''}` }
-  }
+  catch (e) { return { ok: false, message: `preflight: ${unreachable(b, e)}` } }
   const info = await backend.serverInfo?.(b.model)
   if (b.apiKeyEnv !== undefined) {
     // A hosted API serves by name. Its list is long, so a refusal counts it instead of printing it.
@@ -28,7 +33,7 @@ export async function preflight(backend: Backend, b: HarnessConfig['backend']): 
     if (!listed && !backend.partialList) return { ok: false, message: `preflight: model ${b.model} is not among the ${models.length} models ${b.baseUrl} lists` }
   } else if (b.kind === 'ollama' || info?.router) {
     const names = b.kind === 'ollama' && !b.model.includes(':') ? [b.model, `${b.model}:latest`] : [b.model]
-    if (!names.some(n => models.includes(n))) return { ok: false, message: `preflight: model ${b.model} is not on ${where}; it has: ${models.join(', ')}` }
+    if (!names.some(n => models.includes(n))) return { ok: false, message: `preflight: model ${b.model} is not on ${where}; it has: ${models.join(', ')}${b.kind === 'ollama' ? `; pull it with "ollama pull ${b.model}"` : ''}` }
   }
   // Ollama's window is the num_ctx the harness sends; without one it is Ollama's default, which the harness does not know.
   const { router: _, ...server } = info ?? {}

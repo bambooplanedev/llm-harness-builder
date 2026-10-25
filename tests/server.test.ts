@@ -190,6 +190,16 @@ test('harnesses and models', async () => {
   expect(await listed.json()).toEqual(['fake-model'])
 })
 
+test('/api/models on a server that does not answer says what to do', async () => {
+  const real = await startServer({ port: 0, runsDir, harnessesDir })
+  try {
+    const r = await fetch(`http://127.0.0.1:${real.port}/api/models`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind: 'ollama', baseUrl: 'http://127.0.0.1:1' }) })
+    expect(r.status).toBe(502)
+    const { error } = await r.json()
+    expect(error).toContain('does not answer'); expect(error).toContain('ollama serve')
+  } finally { await real.close() }
+})
+
 test('concurrent POST /api/runs for the same workdir: exactly one 201, one 409', async () => {
   const wd = await tmp('lhb-wd-race-')
   queue = [{ toolCalls: [{ name: 'bash', args: { command: 'true' } }] }]
