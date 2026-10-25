@@ -496,7 +496,7 @@ async function cmdProxy(argv: string[]) {
   // The agent's key rides on every forwarded request: it must not leave in clear text or be shadowed by one in the URL.
   const u = new URL(values.upstream)
   if (u.username || u.password) argError('proxy', '--upstream must not carry a login or password')
-  if (u.search || u.hash) argError('proxy', '--upstream must not carry a query or fragment')
+  if (/[?#]/.test(values.upstream)) argError('proxy', '--upstream must not carry a query or fragment')
   if (u.protocol === 'http:' && !isLoopbackUrl(values.upstream)) argError('proxy', '--upstream over http must be a loopback address; use https')
   const upstream = values.upstream.replace(/\/+$/, '')
   if (/\/v1$/.test(upstream)) die(`--upstream is the server root, not its /v1: try ${upstream.slice(0, -3)}`)

@@ -845,6 +845,10 @@ test('argument errors name the option, show the usage, exit 2 and print no stack
     [['proxy', '--port', 'x'], /^error: --port must be an integer from 0 to 65535$/m],
     [['proxy', '--upstream', 'https://u:p@api.example.com'], /^error: --upstream must not carry a login or password$/m],
     [['proxy', '--upstream', 'https://api.example.com?k=1'], /^error: --upstream must not carry a query or fragment$/m],
+    [['proxy', '--upstream', 'http://user:@evil.com'], /^error: --upstream must not carry a login or password$/m],
+    [['proxy', '--upstream', 'http://127.0.0.1@evil.com'], /^error: --upstream must not carry a login or password$/m],
+    [['proxy', '--upstream', 'https://a.com#f'], /^error: --upstream must not carry a query or fragment$/m],
+    [['proxy', '--upstream', 'https://a.com?'], /^error: --upstream must not carry a query or fragment$/m],
     [['proxy', '--upstream', 'http://api.example.com'], /^error: --upstream over http must be a loopback address; use https$/m],
   ]
   for (const [args, message] of cases) {
