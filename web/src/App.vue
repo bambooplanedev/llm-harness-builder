@@ -75,6 +75,21 @@ const refusal = computed(() => {
   const r = modelInfo.value && knobsOff(config.value, modelInfo.value) // unknown: nothing to say yet
   return r?.refuseKind && t(`refuse.${r.refuseKind}`, { model: config.value.backend.model, from: modelInfo.value!.takesFrom ? ` (${modelInfo.value!.takesFrom})` : '' })
 })
+/** A Claude Code session is one group at the place of its newest run: mains first, then subagents, each oldest first. A group without a main still gets its head, on its first member. */
+const listed = computed(() => {
+  const groups = new Map<string, RunSummary[]>(), seen = new Set<string>()
+  for (const r of runs.value) if (r.session) groups.set(r.session, [...(groups.get(r.session) ?? []), r])
+  const out: { r: RunSummary; head?: { session: string; subagents: number }; sub?: boolean }[] = []
+  for (const r of runs.value) {
+    if (!r.session) { out.push({ r }); continue }
+    if (seen.has(r.session)) continue
+    seen.add(r.session)
+    const g = groups.get(r.session)!.sort((a, b) => a.started - b.started)
+    const members = [...g.filter(x => x.agent === 'main'), ...g.filter(x => x.agent !== 'main')]
+    members.forEach((x, i) => out.push({ r: x, head: i ? undefined : { session: r.session!, subagents: g.filter(y => y.agent !== 'main').length }, sub: x.agent !== 'main' }))
+  }
+  return out
+})
 async function refreshLists() { harnessNames.value = (await api.harnesses()).map(h => h.name); runs.value = await api.runs() }
 /** A harness describes how the agent thinks; the backend is what it runs on. Switching the first
  *  leaves the second alone — unless no model is picked yet (models never listed), when the
@@ -192,8 +207,8 @@ watch(() => config.value.backend.model, () => {
           </ol>
         </div>
         <div class="runs">
-          <div v-for="r in runs" :key="r.id" @click="open(r.id, r.task, r.active)">
-            <div class="line"><span><b>{{ r.harness }}</b> · {{ r.reason ?? 'running' }}</span><span>{{ r.turns ?? '-' }} turns · {{ r.toolCallCount ?? '-' }} tool calls · {{ new Date(r.started).toLocaleTimeString(lang) }}</span></div>
+          <div v-for="{ r, head, sub } in listed" :key="r.id" :class="{ session: r.session, sub }" @click="open(r.id, r.task, r.active)">
+            <div class="line"><span><b>{{ r.harness }}</b><template v-if="head"> · session {{ head.session.slice(0, 4) }}…</template><template v-if="sub"> · ↳ subagent {{ r.agentType ?? r.agent }}</template><template v-else-if="head"> · main</template> · {{ r.reason ?? 'running' }}</span><span><template v-if="head?.subagents">{{ head.subagents }} subagent{{ head.subagents === 1 ? '' : 's' }} · </template>{{ r.turns ?? '-' }} turns · {{ r.toolCallCount ?? '-' }} tool calls · {{ new Date(r.started).toLocaleTimeString(lang) }}</span></div>
             <div class="muted">{{ r.task.slice(0, 60) }}</div>
           </div>
         </div>

@@ -40,3 +40,12 @@ test('the recorded example runs ship, small, each trace finished, with nothing t
     if (f.endsWith('.jsonl')) expect([f, JSON.parse(s.trim().split('\n').at(-1)!).type]).toEqual([f, 'done'])
   }
 })
+
+test('the Claude Code fixture is hand-built: no path, email, key, bearer, git name or foreign user_id', () => {
+  const s = readFileSync('tests/fixtures/claude-code-session.json', 'utf8')
+  for (const re of [/\/Users\/|\/home\/|\/private\//, /[\w.+-]+@[\w-]+\.[\w.-]+/, /sk-ant-/, /Bearer /]) expect(re.exec(s)?.[0]).toBeUndefined()
+  try { const n = execSync('git config user.name', { encoding: 'utf8' }).trim(); if (n) expect(s).not.toContain(n) } catch {} // CI may have none
+  const ids = [...s.matchAll(/"user_id":\s*"([^"]*)"/g)].map(m => m[1])
+  expect(ids.length).toBeGreaterThan(0)
+  expect(new Set(ids)).toEqual(new Set(['user_fixture_0000']))
+})

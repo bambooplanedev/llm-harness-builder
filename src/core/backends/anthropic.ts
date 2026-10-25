@@ -54,6 +54,26 @@ export async function collectAnthropic(chunks: AsyncIterable<any>, onDelta?: (d:
   }
 }
 
+/** A non-streamed Messages reply, read by turning it into the events of a stream: one reader for both shapes, so they cannot drift. */
+export function fromAnthropicJson(m: unknown): Promise<NormalizedResponse> {
+  const j = m as any
+  if (j?.type === 'error') throw new BackendError(`POST /v1/messages: ${[j.error?.type, j.error?.message].filter(Boolean).join(': ') || 'error'}`, JSON.stringify(m))
+  const blocks: any[] = Array.isArray(j?.content) ? j.content : []
+  const events = [
+    { type: 'message_start', message: { ...j, content: [] } },
+    ...blocks.flatMap((b, index) => {
+      const delta = b?.type === 'text' ? { type: 'text_delta', text: b.text }
+        : b?.type === 'thinking' ? { type: 'thinking_delta', thinking: b.thinking }
+        : b?.type === 'tool_use' ? { type: 'input_json_delta', partial_json: JSON.stringify(b.input ?? {}) } : undefined
+      const empty = b?.type === 'text' ? { ...b, text: '' } : b?.type === 'thinking' ? { ...b, thinking: '' } : b?.type === 'tool_use' ? { ...b, input: {} } : b
+      return [{ type: 'content_block_start', index, content_block: empty }, ...delta ? [{ type: 'content_block_delta', index, delta }] : []]
+    }),
+    { type: 'message_delta', delta: { stop_reason: j?.stop_reason, stop_details: j?.stop_details } },
+    { type: 'message_stop' },
+  ]
+  return collectAnthropic((async function* () { yield* events })())
+}
+
 /** A token count from the server: only a positive integer is one. */
 const count = (x: unknown): number | undefined => Number.isInteger(x) && (x as number) > 0 ? x as number : undefined
 

@@ -17,7 +17,7 @@ export function redactor(value: string | undefined, name: string): Redactor {
     if (Array.isArray(x)) return x.map(walk)
     if (x !== null && typeof x === 'object' && Object.getPrototypeOf(x) === Object.prototype) {
       const out: Record<string, unknown> = {}
-      for (const [k, v] of Object.entries(x)) out[k] = walk(v)
+      for (const [k, v] of Object.entries(x)) out[text(k)] = walk(v)
       return out
     }
     return x

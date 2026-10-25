@@ -3,7 +3,7 @@ import type { Knob, Usage } from './backends/types.js'
 export type ToolCall = { callId: string; name: string; args: Record<string, unknown>; backendId?: string }
 /** A knob set in the harness that is not sent, because the server said the model does not take it. */
 export type KnobOff = { knob: Knob | 'repeatTemperature' | 'repeatThinkTokens'; value: unknown; reason: string }
-export type DoneReason = 'final' | 'max_turns' | 'parse_failed' | 'aborted' | 'backend_error' | 'mcp_error' | 'repeat_loop'
+export type DoneReason = 'final' | 'max_turns' | 'parse_failed' | 'aborted' | 'backend_error' | 'mcp_error' | 'repeat_loop' | 'proxy_stopped'
 
 type Base = { seq: number; turn: number; ts: number }
 
@@ -21,6 +21,8 @@ export type HarnessEvent = Base & (
       offered: number; tools: string[]; descriptionChars: number; schemaChars: number }
   | { type: 'knobs_off'; off: KnobOff[] }
   | { type: 'error'; message: string; body?: string }
+  /** A proxy run only: a side call of the agent (a title, a summary) recorded beside the turn, or a compaction turn. */
+  | { type: 'proxy_note'; kind: 'auxiliary' | 'compaction'; model?: string; usage?: Usage; latencyMs?: number; error?: string }
   | { type: 'done'; reason: DoneReason; text?: string; turns: number; toolCallCount: number }
 )
 

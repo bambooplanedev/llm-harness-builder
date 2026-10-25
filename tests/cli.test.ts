@@ -640,6 +640,7 @@ test('proxy records until SIGINT or SIGTERM, then exits 0 with done appended', a
     expect(lines[0].meta).toMatchObject({ harness: 'cli', task: 'hello', workdir: '' })
     expect(lines.slice(1).map(l => l.type)).toEqual(['llm_request', 'llm_response', 'done'])
     expect(err).toContain(`run ${files[0].slice(0, 8)}: hello`)
+    expect(err).toContain(`ANTHROPIC_BASE_URL=http://127.0.0.1:${port}`)
   }
 }, 60_000)
 
@@ -842,6 +843,13 @@ test('argument errors name the option, show the usage, exit 2 and print no stack
     [['analyze'], /^error: analyze needs at least one bench JSON, run id or trace file$/m],
     [['proxy', 'extra'], /^error: proxy takes no positional arguments$/m],
     [['proxy', '--port', 'x'], /^error: --port must be an integer from 0 to 65535$/m],
+    [['proxy', '--upstream', 'https://u:p@api.example.com'], /^error: --upstream must not carry a login or password$/m],
+    [['proxy', '--upstream', 'https://api.example.com?k=1'], /^error: --upstream must not carry a query or fragment$/m],
+    [['proxy', '--upstream', 'http://user:@evil.com'], /^error: --upstream must not carry a login or password$/m],
+    [['proxy', '--upstream', 'http://127.0.0.1@evil.com'], /^error: --upstream must not carry a login or password$/m],
+    [['proxy', '--upstream', 'https://a.com#f'], /^error: --upstream must not carry a query or fragment$/m],
+    [['proxy', '--upstream', 'https://a.com?'], /^error: --upstream must not carry a query or fragment$/m],
+    [['proxy', '--upstream', 'http://api.example.com'], /^error: --upstream over http must be a loopback address; use https$/m],
   ]
   for (const [args, message] of cases) {
     const r = cli(args)

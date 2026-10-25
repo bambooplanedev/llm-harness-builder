@@ -84,7 +84,7 @@ export const COMMANDS = {
     docs: { json: ['', 'print the rows as JSON'] },
   }),
   proxy: command({
-    summary: 'Record what another agent sends a local server, live, into ./runs.',
+    summary: 'Record what another agent sends a server, live, into ./runs.',
     args: '',
     options: { upstream: { type: 'string', default: 'http://127.0.0.1:8080' }, port: { type: 'string', default: '8090' }, name: { type: 'string', default: 'proxy' }, help },
     docs: {

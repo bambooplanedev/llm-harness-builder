@@ -51,3 +51,13 @@ test('the events stream of a live proxy run ends without done, and a reconnect s
     expect(await readFile(join(dir, 'live0002.jsonl'), 'utf8')).not.toContain('"done"')
   } finally { srv.close() }
 })
+
+test('list() carries the Claude Code session fields from meta', async () => {
+  const dir = await tmp('lhb-runs-')
+  const line = (id: string, extra: object) => writeFile(join(dir, `${id}.jsonl`), JSON.stringify({ meta: { id, harness: 'oc', task: 't', workdir: '', started: 1, ...extra } }) + '\n' + JSON.stringify({ seq: 0, turn: 1, ts: 1, type: 'llm_request', payload: {} }) + '\n')
+  await line('sub00001', { session: 's1', agent: 'agent-1', parent: 'main', agentType: 'Explore' }); await line('plain001', {})
+  const list = await new RunStore(dir).list()
+  expect(list.find(r => r.id === 'sub00001')).toMatchObject({ session: 's1', agent: 'agent-1', parent: 'main', agentType: 'Explore' })
+  const plain = list.find(r => r.id === 'plain001')!
+  for (const k of ['session', 'agent', 'parent', 'agentType']) expect(plain).not.toHaveProperty(k)
+})

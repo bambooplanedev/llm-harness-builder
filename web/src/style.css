@@ -82,6 +82,8 @@ label[title], .label > span[title], .row > span[title], th[title], summary[title
 /* One card per run: what it is on the left, how it went (turns, tool calls, time) on the right. */
 .runs > div { cursor: pointer; margin: 6px 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); overflow-wrap: anywhere; }
 .runs > div:hover { border-color: var(--muted); }
+.runs > div.session { border-left: 3px solid var(--accent); }
+.runs > div.sub { margin-left: 18px; }
 .runs .line { display: flex; justify-content: space-between; align-items: baseline; gap: 4px 16px; flex-wrap: wrap; }
 .runs .line > :last-child { margin-left: auto; color: var(--muted); white-space: nowrap; }
 /* One line no matter what: the left side gives way with an ellipsis, the right side stays whole. */

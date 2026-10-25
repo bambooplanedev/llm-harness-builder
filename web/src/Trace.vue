@@ -80,6 +80,10 @@ const liveTok = computed(() => Math.ceil(liveText.value.length / 4))
       </div>
       <div v-else-if="e.type === 'final_check'" class="ev tool_result" :class="{ err: !e.passed }">final check <code>{{ e.command }}</code>: {{ e.passed ? 'passed' : t('trace.checkFailed') }}<template v-if="!e.passed"><br>{{ e.output }}</template></div>
       <div v-else-if="e.type === 'context_reset'" class="ev parse_error">{{ tn('trace.reset', e.chars) }}</div>
+      <div v-else-if="e.type === 'proxy_note'" class="ev muted">
+        <template v-if="e.kind === 'compaction'">compaction · {{ t('trace.compaction') }}</template>
+        <template v-else>auxiliary · {{ e.model }}<template v-if="e.error !== undefined"> · failed: {{ e.error }}</template><template v-else><template v-if="e.usage"> · {{ e.usage.promptTokens }}+{{ e.usage.completionTokens }} tok</template> · {{ e.latencyMs }}ms</template></template>
+      </div>
       <div v-else-if="e.type === 'mcp_server_start'" class="ev tool_call">
         mcp <code>{{ e.server }}</code>: {{ mcpCounts(e) }}
       </div>

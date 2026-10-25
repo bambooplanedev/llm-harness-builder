@@ -4,7 +4,9 @@ import { EventEmitter } from 'node:events'
 import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { startProxy, drained } from '../src/core/proxy/server.js'
+import { normalizeRequest } from '../src/core/normalize.js'
 import { tmp } from './helpers.js'
+import { textReply, toolReply } from './fake-anthropic.js'
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 const cleanups: (() => unknown)[] = []
@@ -56,6 +58,9 @@ const TOOL_REPLY = sseLines([
   { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'call_1', type: 'function', function: { name: 'read_file', arguments: '{"path":"a"}' } }] }, finish_reason: null }] },
   { choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 9, completion_tokens: 4 } },
 ])
+const msgs = (base: string, body: string, headers: Record<string, string> = {}, init: RequestInit = {}) =>
+  fetch(`${base}/v1/messages?beta=true`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body, ...init })
+const ANT = JSON.stringify({ model: 'claude-haiku-5-5', stream: true, system: 'sys', messages: [{ role: 'user', content: 'do it' }] })
 const post = (base: string, body: string, init: RequestInit = {}) => fetch(`${base}/v1/chat/completions`, { method: 'POST', headers: { 'content-type': 'application/json' }, body, ...init })
 
 /** One raw request: node's http sends what fetch will not (a `//` path, absolute-form, a foreign Host). */
@@ -87,7 +92,7 @@ test('forwards the reply byte for byte, split inside a UTF-8 letter, and records
     res.end(bytes.subarray(cut + 50))
   })
   const px = await proxy(up.url)
-  const r = await post(px.base, chat(), { headers: { 'content-type': 'application/json', authorization: 'Bearer secret-token-123', 'accept-encoding': 'gzip' } })
+  const r = await post(px.base, chat(), { headers: { 'content-type': 'application/json', authorization: 'Bearer secret-token-123', 'accept-encoding': 'gzip', 'x-claude-code-session-id': 'sess-0001', 'x-claude-code-request-class': 'main' } })
   expect(r.status).toBe(200); expect(r.headers.get('content-type')).toBe('text/event-stream')
   expect(Buffer.from(await r.arrayBuffer()).equals(bytes)).toBe(true)
   expect(up.seen[0]).toMatchObject({ url: '/v1/chat/completions', body: chat() })
@@ -95,11 +100,11 @@ test('forwards the reply byte for byte, split inside a UTF-8 letter, and records
   expect(up.seen[0].headers['accept-encoding']).toBeUndefined()
   await px.stop()
   const [t] = await traces(px.runsDir)
-  expect(t.meta).toMatchObject({ harness: 'test', task: 'do it', workdir: '', proxy: { upstream: up.url, pid: process.pid } })
+  expect(t.meta).toMatchObject({ harness: 'test', task: 'do it', workdir: '', proxy: { upstream: up.url, pid: process.pid }, session: 'sess-0001', agent: 'main' })
   expect(t.events.map(e => e.type)).toEqual(['llm_request', 'llm_response', 'tool_call', 'done'])
   expect(t.events[1]).toMatchObject({ content: HELLO, usage: { promptTokens: 9, completionTokens: 4 } })
   expect(t.events[2].call).toMatchObject({ callId: 'c1', name: 'read_file', args: { path: 'a' }, backendId: 'call_1' })
-  expect(t.events[3]).toMatchObject({ type: 'done', reason: 'aborted', turns: 1, toolCallCount: 1 })
+  expect(t.events[3]).toMatchObject({ type: 'done', reason: 'proxy_stopped', turns: 1, toolCallCount: 1 })
   expect(await readFile(join(px.runsDir, `${t.meta.id}.jsonl`), 'utf8')).not.toContain('secret-token-123')
   expect(px.lines).toContain(`run ${t.meta.id}: do it`)
 })
@@ -273,4 +278,188 @@ test('a page on another localhost port is another origin: refused; the proxy\'s 
   expect(await raw(px.p.port, '/props', { host: `localhost:${px.p.port}`, origin: `http://localhost:${px.p.port}` })).toEqual({ status: 200, body: 'upstream' })
   expect(await raw(px.p.port, '/props')).toEqual({ status: 200, body: 'upstream' })
   expect(up.seen).toHaveLength(2)
+})
+
+test('anthropic: the stream passes byte for byte; the trace has request, reply, call, and the result on the next request', async () => {
+  const replies = [toolReply('Read', { file_path: 'a.txt' }), textReply('done')]
+  const up = await upstream((_q, res) => { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(replies.shift()) })
+  const px = await proxy(up.url)
+  const first = { model: 'claude-haiku-5-5', stream: true, system: [{ type: 'text', text: 'attr' }, { type: 'text', text: 'sys' }], messages: [{ role: 'user', content: [{ type: 'text', text: 'do it' }] }] }
+  const sent = toolReply('Read', { file_path: 'a.txt' })
+  expect(await (await msgs(px.base, JSON.stringify(first))).text()).toBe(sent)
+  expect(up.seen[0].url).toBe('/v1/messages?beta=true')
+  const second = { ...first, messages: [...first.messages, { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_1', name: 'Read', input: { file_path: 'a.txt' } }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'AAA' }] }] }
+  await (await msgs(px.base, JSON.stringify(second))).text()
+  await px.stop()
+  const [t] = await traces(px.runsDir)
+  expect(t.events.map(e => e.type)).toEqual(['llm_request', 'llm_response', 'tool_call', 'tool_result', 'llm_request', 'llm_response', 'done'])
+  expect(t.events[3]).toMatchObject({ callId: 'c1', output: 'AAA' })
+  expect(normalizeRequest(t.events[0].payload)?.format).toBe('anthropic')
+  expect(t.events[2].call).toMatchObject({ name: 'Read', args: { file_path: 'a.txt' }, backendId: 'toolu_1' })
+  expect(t.events[1].usage).toMatchObject({ promptTokens: expect.any(Number), completionTokens: 5 })
+})
+
+test('anthropic: a JSON reply is recorded; a 200 JSON error is an error event', async () => {
+  const bodies = [
+    { id: 'msg_1', type: 'message', role: 'assistant', model: 'm', content: [{ type: 'text', text: 'plain' }, { type: 'tool_use', id: 'toolu_9', name: 'Bash', input: { command: 'ls' } }], stop_reason: 'tool_use', usage: { input_tokens: 3, output_tokens: 1 } },
+    { type: 'error', error: { type: 'overloaded_error', message: 'busy' } },
+  ]
+  const up = await upstream((_q, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(bodies.shift())) })
+  const px = await proxy(up.url)
+  await (await msgs(px.base, ANT)).text()
+  await (await msgs(px.base, ANT)).text()
+  await px.stop()
+  const ts = await traces(px.runsDir)
+  const events = ts.flatMap(t => t.events)
+  expect(events.map(e => e.type)).toEqual(['llm_request', 'llm_response', 'tool_call', 'llm_request', 'error', 'done'])
+  expect(events[1]).toMatchObject({ content: 'plain', usage: { promptTokens: 3, completionTokens: 1 } })
+  expect(events[2].call).toMatchObject({ name: 'Bash', args: { command: 'ls' }, backendId: 'toolu_9' })
+  expect(events[4].message).toMatch(/overloaded_error: busy/)
+})
+
+test('anthropic: a 4xx reply passes through and its body is the error body; labels name /v1/messages', async () => {
+  const bad = '{"type":"error","error":{"type":"invalid_request_error","message":"bad"}}'
+  const up = await upstream((_q, res) => { res.writeHead(400, { 'content-type': 'application/json' }); res.end(bad) })
+  const px = await proxy(up.url)
+  const r = await msgs(px.base, ANT)
+  expect(r.status).toBe(400); expect(await r.text()).toBe(bad)
+  await px.stop()
+  const [t] = await traces(px.runsDir)
+  expect(t.events.find(e => e.type === 'error')).toMatchObject({ message: 'POST /v1/messages: 400', body: bad })
+})
+
+test('anthropic: the upstream dying mid-stream, and the client leaving, are errors with what came', async () => {
+  const sse = textReply('half text'), half = sse.slice(0, sse.indexOf('content_block_stop'))
+  const up = await upstream((req, res) => { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.write(half); if (up.seen.length === 1) setTimeout(() => req.socket.destroy(), 20) })
+  const px = await proxy(up.url)
+  await expect((await msgs(px.base, ANT)).text()).rejects.toThrow()
+  const ac = new AbortController()
+  const r = await msgs(px.base, JSON.stringify({ ...JSON.parse(ANT), system: 'other' }), {}, { signal: ac.signal })
+  await r.body!.getReader().read()
+  ac.abort()
+  await up.seen[1].closed
+  await px.stop()
+  const errors = (await traces(px.runsDir)).flatMap(t => t.events).filter(e => e.type === 'error')
+  expect(errors.find(e => e.message === 'POST /v1/messages: the upstream closed the connection mid-reply')?.body).toContain('half text')
+  expect(errors.find(e => e.message === 'client closed the connection')?.body).toContain('half text')
+})
+
+test('anthropic: a streamed event: error is recorded as an error event', async () => {
+  const up = await upstream((_q, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    res.end(`event: error\ndata: ${JSON.stringify({ type: 'error', error: { type: 'overloaded_error', message: 'Overloaded' } })}\n\n`)
+  })
+  const px = await proxy(up.url)
+  await (await msgs(px.base, ANT)).text()
+  await px.stop()
+  const [t] = await traces(px.runsDir)
+  expect(t.events.map(e => e.type)).toEqual(['llm_request', 'error', 'done'])
+  expect(t.events[1].message + t.events[1].body).toMatch(/Overloaded/)
+})
+
+const KEY = 'sk-ant-test-' + 'k'.repeat(30), TOKEN = 'oauth-test-' + 't'.repeat(30)
+/** Every file in runs/: none may contain the key or the token. */
+async function noSecretOnDisk(runsDir: string) {
+  for (const f of await readdir(runsDir)) {
+    const s = await readFile(join(runsDir, f), 'utf8')
+    expect([f, s.includes(KEY), s.includes(TOKEN)]).toEqual([f, false, false])
+  }
+}
+
+test('anthropic: the key and the bearer token reach the upstream and nothing else: not runs/, not the log', async () => {
+  let n = 0
+  const up = await upstream((_q, res) => {
+    if (n++ === 0) { res.writeHead(200, { 'content-type': 'text/event-stream' }); return void res.end(textReply(`echo ${KEY}`)) }
+    res.writeHead(401, { 'content-type': 'application/json' }); res.end(JSON.stringify({ type: 'error', error: { type: 'authentication_error', message: `bad ${TOKEN}` } }))
+  })
+  const px = await proxy(up.url)
+  // Both headers on every request; both values in the user message, the first reply and the 401 body.
+  const both = { 'x-api-key': KEY, authorization: `Bearer ${TOKEN}` }
+  const body = (who: string) => JSON.stringify({ model: 'm', stream: true, system: 'sys', messages: [{ role: 'user', content: `${who} ${KEY} ${TOKEN}` }] })
+  await (await msgs(px.base, body('a'), both)).text()
+  expect((await msgs(px.base, body('b'), both)).status).toBe(401)
+  expect(up.seen[0].headers['x-api-key']).toBe(KEY); expect(up.seen[1].headers.authorization).toBe(`Bearer ${TOKEN}`)
+  // A hint header carrying the key itself: printable and short, so hintsOf keeps it, and only the scrubber stops it.
+  await (await msgs(px.base, body('c'), { ...both, 'x-claude-code-session-id': 's-1', 'x-claude-code-agent-type': KEY })).text()
+  await px.stop()
+  await noSecretOnDisk(px.runsDir)
+  expect(px.lines.length).toBeGreaterThan(0)
+  expect(px.lines.join('\n')).not.toContain(KEY); expect(px.lines.join('\n')).not.toContain(TOKEN)
+  const all = JSON.stringify(await traces(px.runsDir))
+  expect(all).toContain('[redacted: x-api-key]'); expect(all).toContain('[redacted: authorization]')
+})
+
+test('anthropic: a subscription request (bearer + anthropic-beta) reaches the upstream unchanged', async () => {
+  const up = await upstream((_q, res) => { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(textReply('ok')) })
+  const px = await proxy(up.url)
+  const h = { authorization: `Bearer ${TOKEN}`, 'anthropic-beta': 'oauth-2025-04-20,claude-code-20250219', 'anthropic-version': '2023-06-01' }
+  await (await msgs(px.base, ANT, h)).text()
+  expect(up.seen[0].headers).toMatchObject(h)
+  await px.stop()
+  expect(await traces(px.runsDir)).toHaveLength(1)
+  await noSecretOnDisk(px.runsDir)
+})
+
+test('anthropic: count_tokens and other /v1 paths are forwarded and not recorded', async () => {
+  const up = await upstream((_q, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"input_tokens":12}') })
+  const px = await proxy(up.url)
+  const r = await fetch(`${px.base}/v1/messages/count_tokens`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: ANT })
+  expect(await r.json()).toEqual({ input_tokens: 12 })
+  expect(up.seen[0].url).toBe('/v1/messages/count_tokens')
+  expect((await fetch(`${px.base}/v1/models`)).status).toBe(200)
+  expect(up.seen[1]).toMatchObject({ method: 'GET', url: '/v1/models' })
+  await px.stop()
+  expect(await traces(px.runsDir)).toEqual([])
+})
+
+test('anthropic: a key split across two deltas of a cut stream reaches no file and no log line', async () => {
+  const cut = KEY.length / 2
+  const delta = (text: string) => `event: content_block_delta\ndata: ${JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text } })}\n\n`
+  const sse = textReply('x'), head = sse.slice(0, sse.indexOf('event: ping'))
+  const up = await upstream((req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    res.write(head + delta(`echo ${KEY.slice(0, cut)}`) + delta(KEY.slice(cut)))
+    setTimeout(() => req.socket.destroy(), 20)
+  })
+  const px = await proxy(up.url)
+  await expect((await msgs(px.base, ANT, { 'x-api-key': KEY })).text()).rejects.toThrow()
+  await px.stop()
+  await noSecretOnDisk(px.runsDir)
+  for (const f of await readdir(px.runsDir)) expect(await readFile(join(px.runsDir, f), 'utf8')).not.toContain(KEY.slice(cut)) // nor a piece of it
+  expect(px.lines.join('\n')).not.toContain(KEY)
+  const err = (await traces(px.runsDir))[0].events.find(e => e.type === 'error')
+  expect(err).toMatchObject({ message: 'POST /v1/messages: the upstream closed the connection mid-reply', body: 'echo [redacted: x-api-key]' })
+})
+
+test('a lowercase bearer scheme is scrubbed, and so is a Bearer key on /chat/completions', async () => {
+  const up = await upstream((_q, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    res.end(sseLines([{ choices: [{ index: 0, delta: { content: `echo ${KEY}` }, finish_reason: 'stop' }] }]))
+  })
+  const px = await proxy(up.url)
+  await (await post(px.base, chat([{ role: 'user', content: `do ${KEY}` }]), { headers: { 'content-type': 'application/json', authorization: `Bearer ${KEY}` } })).text()
+  await (await msgs(px.base, JSON.stringify({ ...JSON.parse(ANT), messages: [{ role: 'user', content: `do ${TOKEN}` }] }), { authorization: `bearer ${TOKEN}` })).text()
+  expect(up.seen.map(s => s.headers.authorization)).toEqual([`Bearer ${KEY}`, `bearer ${TOKEN}`])
+  await px.stop()
+  await noSecretOnDisk(px.runsDir)
+  expect(px.lines.join('\n')).not.toContain(KEY); expect(px.lines.join('\n')).not.toContain(TOKEN)
+  expect(JSON.stringify(await traces(px.runsDir)).split('[redacted: authorization]').length - 1).toBeGreaterThanOrEqual(3)
+})
+
+test('anthropic: a title call before the first turn lands in the main run, whose task is the real one; a session of titles only is written at stop', async () => {
+  const up = await upstream((_q, res) => { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(textReply('ok')) })
+  const px = await proxy(up.url)
+  const cc = (s: string, cls: string) => ({ 'x-claude-code-session-id': s, 'x-claude-code-request-class': cls })
+  const title = JSON.stringify({ model: 'claude-haiku-5-5', stream: true, system: 'sys', messages: [{ role: 'user', content: 'title?' }] })
+  await (await msgs(px.base, title, cc('sess-a', 'auxiliary'))).text()
+  await (await msgs(px.base, ANT, cc('sess-a', 'main'))).text()
+  await (await msgs(px.base, title, cc('sess-b', 'auxiliary'))).text()
+  await px.stop()
+  const ts = await traces(px.runsDir)
+  expect(ts.map(t => [t.meta.session, t.meta.task, t.events.map(e => e.type).join(' ')]).sort()).toEqual([
+    ['sess-a', 'do it', 'proxy_note llm_request llm_response done'],
+    ['sess-b', '', 'proxy_note done'],
+  ])
+  expect(ts.every(t => t.events.at(-1).reason === 'proxy_stopped')).toBe(true)
 })
