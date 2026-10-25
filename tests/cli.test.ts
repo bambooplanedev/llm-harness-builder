@@ -724,7 +724,7 @@ test('analyze <run-id> prints one row: stub t3 ate the read, first edit t2', () 
   expect(r.status).toBe(0)
   const [head, row] = r.stdout.trim().split('\n')
   expect(head).toMatch(/^harness\s+run\s+verdict/)
-  expect(row).toMatch(/^tuned-budget\s+abcd0001\s+final\s+3\s+t3\s+read_file a\.txt\s+t2\s+—\s+—$/)
+  expect(row).toMatch(/^tuned-budget\s+abcd0001\s+final\s+3\s+t3\s+read_file a\.txt\s+t2\s+—\s+—\s+0 s$/)
 })
 
 test('analyze <bench.json> reads verdicts from the JSON and traces next to it; a run with no trace is a row', () => {

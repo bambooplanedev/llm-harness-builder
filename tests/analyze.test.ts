@@ -1,4 +1,5 @@
 import { test, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
 import { analyzeTrace, editKind, normPath, describeCall, analysisCells, cellsLine, summaryLine, formatAnalysisTable, type TraceAnalysis } from '../src/core/analyze.js'
 import type { HarnessEvent } from '../src/core/events.js'
 
@@ -70,6 +71,7 @@ test('cellsLine and summaryLine', () => {
   expect(cellsLine(analysisCells(looped))).toBe('stub t5 · edit t4 · loop src/b.js ×7 (identical 5, zero 1) · reread t6 src/b.js +1')
   expect(summaryLine(looped)).toBe('first stub t5 (ate: list_dir src/; bash node --test) · first edit t4 · loop on src/b.js ×7 (identical 5, zero 1) · reread t6 src/b.js +1')
   expect(summaryLine(A())).toBe('no stub · no edit · no loop')
+  expect(summaryLine(A({ unanswered: 1710 }))).toBe('no stub · no edit · no loop · unanswered last request: 1710 s')
   expect(summaryLine(A({ stubs: 'unknown' }))).toBe('stubs unknown (no recorded request) · no edit · no loop')
 })
 
@@ -79,10 +81,12 @@ test('formatAnalysisTable pads columns; a run without a trace says so', () => {
     { harness: 'tuned', run: '—', verdict: 'PASS final', turns: 5, analysis: null },
   ])
   const lines = t.split('\n')
-  expect(lines[0]).toMatch(/^harness\s+run\s+verdict\s+turns\s+stub@\s+ate\s+edit@\s+loop on\s+reread$/)
+  expect(lines[0]).toMatch(/^harness\s+run\s+verdict\s+turns\s+stub@\s+ate\s+edit@\s+loop on\s+reread\s+unanswered$/)
   expect(lines[1]).toContain('3855ef63')
   expect(lines[1]).toContain('src/b.js ×7 (identical 5, zero 1)')
   expect(lines[2]).toContain('no trace')
+  expect(lines[1]).toMatch(/ —$/)
+  expect(formatAnalysisTable([{ harness: 'h', run: 'r', verdict: 'v', turns: 1, analysis: A({ unanswered: 1710 }) }])).toMatch(/1710 s$/)
   // columns line up: "verdict" starts where the run's verdict starts
   expect(lines[1].indexOf('FAIL')).toBe(lines[0].indexOf('verdict'))
 })
@@ -110,4 +114,23 @@ test('a path named constructor or __proto__ is an ordinary path', () => {
   expect(a.loopFile).toBe('constructor')
   expect(a.edits['__proto__']).toEqual({ calls: 1, failed: 0, byKind: {} })
   expect(({} as Record<string, unknown>).calls).toBeUndefined()
+})
+
+const req = (turn: number, ts: number) => e(turn, { type: 'llm_request', ts, payload: {} })
+const done = (turn: number, ts: number) => e(turn, { type: 'done', ts, reason: 'final', turns: turn, toolCallCount: 0 })
+
+test('a last request with no reply before done is unanswered, in whole seconds', () => {
+  expect(analyzeTrace([req(6, 1_000), done(6, 1_710_667)]).unanswered).toBe(1710)
+})
+
+test('an answered last request, an error reply, or no done is not unanswered', () => {
+  expect(analyzeTrace([req(1, 0), e(1, { type: 'llm_response' }), done(1, 5000)]).unanswered).toBeUndefined()
+  expect(analyzeTrace([req(1, 0), e(1, { type: 'error', message: 'HTTP 500' }), done(1, 5000)]).unanswered).toBeUndefined()
+  expect(analyzeTrace([req(1, 0)]).unanswered).toBeUndefined()
+})
+
+test('the recorded bare run that hung is unanswered for 1710 s; the other examples are not', () => {
+  const un = (id: string) => analyzeTrace(readFileSync(`example-runs/${id}.jsonl`, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l)).filter(l => !('meta' in l))).unanswered
+  expect(un('d63e9548')).toBe(1710)
+  for (const id of ['590eb245', '059867d3', '6f1fb37b']) expect(un(id)).toBeUndefined()
 })
