@@ -62,13 +62,30 @@ Not a coding agent for daily work. A lab for understanding why your 8B model bre
 
 ## Installation
 
-Nothing to install for a try — `npx` fetches it:
+Nothing to install for a try — `npx` fetches it (pin a version with `npx llm-harness-builder@0.4.0`):
 
     npx llm-harness-builder --help
 
 Or install it globally:
 
     npm install -g llm-harness-builder
+
+Or as a dev dependency of a project, then run it with `npx`:
+
+    npm i -D llm-harness-builder@0.4.0
+    npx llm-harness-builder
+
+Without the npm registry, from the archive on the [GitHub release](https://github.com/bambooplanedev/llm-harness-builder/releases) page:
+
+    npm i -g https://github.com/bambooplanedev/llm-harness-builder/releases/download/v0.4.0/llm-harness-builder-0.4.0.tgz
+
+In a container, for the CLI only — the commands the model runs then run inside the container, not on
+your machine:
+
+    docker run --rm -it node:22.12-slim npx llm-harness-builder …
+
+The UI is not reachable from a container: `serve` listens on 127.0.0.1. From source, see
+[Development](#development).
 
 ## Quick start
 
@@ -127,7 +144,9 @@ Running the package with no command does the same. The page has two tabs:
 
 - **Workbench** runs one harness on a folder and shows its trace. The current turn streams live:
   `<think>` and the answer appear as they are generated, with a rough `~N tok` counter. The trace
-  keeps one `llm_response` per turn; the live text is not saved. Names on the form carry hover hints (in Ukrainian for now).
+  keeps one `llm_response` per turn; the live text is not saved. Names on the form carry hover hints, in English or
+  Ukrainian: **Settings**, at the right of the tabs, picks the page's language (the browser's by
+  default). Names of fields stay English, as in the harness file and the CLI.
 - **Bench** shows a `bench` run, whether it is still going in another terminal or finished long ago:
   its table, the live trace of the run in flight, and **Run bench again**, which repeats it into a
   new JSON. Press `⇄` on a run to compare it with the open one — which config knobs differ, the

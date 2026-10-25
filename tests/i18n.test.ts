@@ -137,3 +137,15 @@ test("the page's own copies of CLI lines read, in English, exactly as the CLI pr
     expect(t(`refuse.${r.refuseKind!}`, { model: 'fake-model', from: info?.takesFrom ? ` (${info.takesFrom})` : '' })).toBe(r.refuse)
   }
 })
+
+test('each doc twin has the same headings level by level, and its first line links to the other', async () => {
+  const { readFileSync } = await import('node:fs')
+  const read = (f: string) => readFileSync(new URL(`../${f}`, import.meta.url), 'utf8')
+  const levels = (f: string) => read(f).split('\n').filter(l => /^#+ /.test(l)).map(l => l.match(/^#+/)![0])
+  for (const [a, b] of [['README.md', 'README.uk.md'], ['docs/honest-notes.md', 'docs/honest-notes.uk.md']]) {
+    expect(levels(b), b).toEqual(levels(a))
+    expect(read(a).split('\n')[0]).toContain(`(${b.split('/').at(-1)})`)
+    expect(read(b).split('\n')[0]).toContain(`(${a.split('/').at(-1)})`)
+  }
+  expect(read('README.uk.md')).not.toContain('(docs/honest-notes.md')
+})

@@ -1,3 +1,5 @@
+**English** · [Українська](honest-notes.uk.md)
+
 # Honest notes
 
 Limits of [llm-harness-builder](../README.md) and of what its [findings](findings.md) say.
