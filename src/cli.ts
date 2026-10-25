@@ -41,7 +41,9 @@ function keyFlag(cmd: CommandName, v: string | undefined): void {
 }
 const PORT = (s: string) => /^\d+$/.test(s) && Number(s) <= 65535
 
-const DEMO_HARNESSES = ['bare', 'tuned', 'tuned-hermes']
+const DEMO_HARNESSES = ['bare', 'tuned-nothink', 'tuned-hermes']
+/** tuned-nothink sets backend.think, which config.ts refuses on a hosted API (openai kind with a key): there demo runs tuned. */
+const demoHarnesses = (kind?: string, apiKeyEnv?: string): string[] => kind === 'openai' && apiKeyEnv ? DEMO_HARNESSES.map(h => h === 'tuned-nothink' ? 'tuned' : h) : DEMO_HARNESSES
 
 let fakeCache: Promise<Backend | undefined> | undefined
 /** Test hook: LHB_FAKE_BACKEND=<file.json> with an array of Partial<NormalizedResponse>; an entry may carry `deltas` as well, which stream to the terminal before its reply returns. One shared queue per process. */
@@ -231,12 +233,13 @@ async function cmdDemo(argv: string[]) {
   if (values.help) return printHelp('demo')
   keyFlag('demo', values['api-key-env'])
   console.error(autoApproves('demo'))
-  const configs = await Promise.all(DEMO_HARNESSES.map(name => loadHarness(path.join(PKG_ROOT, 'harnesses', `${name}.json`), { model: values.model, baseUrl: values['base-url'], kind: values.kind, apiKeyEnv: values['api-key-env'] })))
+  const names = demoHarnesses(values.kind, values['api-key-env'])
+  const configs = await Promise.all(names.map(name => loadHarness(path.join(PKG_ROOT, 'harnesses', `${name}.json`), { model: values.model, baseUrl: values['base-url'], kind: values.kind, apiKeyEnv: values['api-key-env'] })))
   // Not die(): exit 2 is for a bad command line; a server that is not up yet is the newcomer's first stumble.
   const no = await preflightAll(configs.map(config => ({ name: config.name, config })), TASKS.slug)
   if (no) { console.error(no); process.exitCode = 1; return }
   const rows: string[] = []
-  for (const [i, name] of DEMO_HARNESSES.entries()) {
+  for (const [i, name] of names.entries()) {
     const config = configs[i]
     const note = bashEnvNote(config.tools.bashEnv)
     if (note) console.error(`${name}: ${note}`)
@@ -318,7 +321,7 @@ async function cmdBench(argv: string[]) {
   const started = new Date()
   const out = values.out ?? path.join('runs', benchFileName(started))
   const localDir = path.join(process.cwd(), 'harnesses')
-  const files = positionals.length ? positionals : DEMO_HARNESSES.map(h => path.join(existsSync(localDir) ? localDir : path.join(PKG_ROOT, 'harnesses'), `${h}.json`))
+  const files = positionals.length ? positionals : demoHarnesses(values.kind, values['api-key-env']).map(h => path.join(existsSync(localDir) ? localDir : path.join(PKG_ROOT, 'harnesses'), `${h}.json`))
   const over = { model: values.model, baseUrl: values['base-url'], kind: values.kind, apiKeyEnv: values['api-key-env'], maxTurns: values['max-turns'] === undefined ? undefined : Number(values['max-turns']) }
   console.error(autoApproves('bench'))
   const harnesses: BenchHarness[] = []

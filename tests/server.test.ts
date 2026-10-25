@@ -742,6 +742,8 @@ test('examples are served read-only', async () => {
   const ex = await tmp('lhb-ex-'), dir = await tmp('lhb-exruns-')
   await cp(fileURLToPath(new URL('../example-runs/', import.meta.url)), ex, { recursive: true })
   const snap = async () => Promise.all((await readdir(ex)).sort().map(async f => [f, (await stat(join(ex, f))).mtimeMs]))
+  const files = (await readdir(ex)).map(f => join(ex, f))
+  for (const f of files) await chmod(f, 0o444)
   await chmod(ex, 0o555)
   const before = await snap()
   const s = await startServer({ port: 0, runsDir: dir, harnessesDir, examplesDir: ex, backendFactory: () => fake([]) })
@@ -759,7 +761,20 @@ test('examples are served read-only', async () => {
     expect((await fetch(`${u}/api/runs/d63e9548/events`)).status).toBe(404)
     expect(await snap()).toEqual(before)
     expect(await readdir(dir)).toEqual([])
-  } finally { await s.close(); await chmod(ex, 0o755) }
+  } finally { await s.close(); await chmod(ex, 0o755); for (const f of files) await chmod(f, 0o644) }
+  // A trace with no done line at the end: opening it must not write one (ensureDone is for live runs only).
+  const cut = await tmp('lhb-excut-'), cutFile = join(cut, 'd63e9548.jsonl')
+  const lines = (await readFile(join(ex, 'd63e9548.jsonl'), 'utf8')).trimEnd().split('\n')
+  expect(JSON.parse(lines.at(-1)!).type).toBe('done')
+  await writeFile(cutFile, lines.slice(0, -1).join('\n') + '\n')
+  await chmod(cutFile, 0o444); await chmod(cut, 0o555)
+  const before2 = await stat(cutFile)
+  const s2 = await startServer({ port: 0, runsDir: dir, harnessesDir, examplesDir: cut, backendFactory: () => fake([]) })
+  try {
+    await collectSSE(`http://127.0.0.1:${s2.port}/api/runs/d63e9548/events?example=1`)
+    const after2 = await stat(cutFile)
+    expect([after2.size, after2.mtimeMs]).toEqual([before2.size, before2.mtimeMs])
+  } finally { await s2.close(); await chmod(cut, 0o755); await chmod(cutFile, 0o644) }
   // No examples folder given: the switch is a 404, never the runs dir.
   expect((await fetch(`${base}/api/runs?example=1`)).status).toBe(404)
 })
