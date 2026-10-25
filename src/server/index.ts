@@ -60,6 +60,30 @@ export async function startServer(opts: ServerOpts) {
   /** Realpaths of the demo projects this server created: Check runs only in one of them, never in a folder the page names. */
   const demoDirs = new Set<string>()
 
+  const exists = (f: string) => stat(f).then(() => true, () => false)
+  /** The one bench start: 409 while one runs, else spawns `opts.bench(args + --out)`; 201 once its JSON exists (past preflight), else 502 with its stderr. */
+  async function startBench(args: string[], cleanup?: () => void): Promise<{ status: 201 | 409 | 502; body: { file?: string; error?: string } }> {
+    if (benching && benching.exitCode === null && benching.signalCode === null) return { status: 409, body: { error: 'a bench started from this page is still running' } }
+    const first = benchFileName(new Date())
+    let out = first
+    for (let i = 2; await exists(path.join(opts.runsDir, out)); i++) out = first.replace(/\.json$/, `-${i}.json`) // two in one second must not share a JSON
+    const outPath = path.join(opts.runsDir, out)
+    const i = args.findIndex(a => !a.startsWith('--')) // flags first, then the harness files
+    const k2 = i < 0 ? args.length : i
+    const child = benching = opts.bench!([...args.slice(0, k2), `--out=${outPath}`, ...args.slice(k2)])
+    let tail = ''
+    child.stderr?.on('data', (c: Buffer) => { tail = (tail + c).slice(-2000) }) // read to the end, or a full pipe stalls the bench
+    if (cleanup) child.once('exit', cleanup)
+    // Answered once the JSON exists, that is past preflight; a bench that dies before it (server down, no such model) is its stderr.
+    const started = await new Promise<boolean>(resolve => {
+      const done = (y: boolean) => { clearInterval(t); resolve(y) }
+      const t = setInterval(() => void exists(outPath).then(y => y && done(true)), 200)
+      child.once('exit', () => void exists(outPath).then(done))
+      child.once('error', () => done(false))
+    })
+    return started ? { status: 201, body: { file: out } } : { status: 502, body: { error: tail.trim() || 'bench exited before it wrote its JSON' } }
+  }
+
   const server = http.createServer(async (req, res) => {
     try {
       // DNS rebinding (a foreign Host) and CSRF (a page of another origin, other localhost ports included): refused.
@@ -141,29 +165,14 @@ export async function startServer(opts: ServerOpts) {
         if (!benchName(file)) return json(res, 400, { error: 'bad name' })
         const opened = await store.benchOpen(file)
         if (!opened) return json(res, 404, { error: 'not a bench file' })
-        if (benching && benching.exitCode === null && benching.signalCode === null) return json(res, 409, { error: 'a bench started from this page is still running' })
         const r = opened.result
         const dir = await mkdtemp(path.join(tmpdir(), 'lhb-again-'))
         const harnesses = await Promise.all(r.harnesses.map(async (h, i) => { const f = path.join(dir, `${i}.json`); await writeFile(f, JSON.stringify(h.config)); return f }))
-        const exists = (f: string) => stat(f).then(() => true, () => false)
-        const first = benchFileName(new Date())
-        let out = first
-        for (let i = 2; await exists(path.join(opts.runsDir, out)); i++) out = first.replace(/\.json$/, `-${i}.json`) // two in one second must not share a JSON
-        const outPath = path.join(opts.runsDir, out)
+        const cleanup = () => void rm(dir, { recursive: true, force: true })
         // `--x=value`: a value from the file that starts with `-` stays a value. The CLI checks every one of them.
-        const child = benching = opts.bench([`--task=${r.taskName ?? 'slug'}`, ...r.size ? [`--size=${r.size}`] : [], `--n=${r.n}`, `--timeout=${r.timeoutS}`, `--out=${outPath}`, ...harnesses])
-        let tail = ''
-        child.stderr?.on('data', (c: Buffer) => { tail = (tail + c).slice(-2000) }) // read to the end, or a full pipe stalls the bench
-        child.once('exit', () => void rm(dir, { recursive: true, force: true }))
-        // Answered once the JSON exists, that is past preflight; a bench that dies before it (server down, no such model) is its stderr.
-        const started = await new Promise<boolean>(resolve => {
-          const done = (y: boolean) => { clearInterval(t); resolve(y) }
-          const t = setInterval(() => void exists(outPath).then(y => y && done(true)), 200)
-          child.once('exit', () => void exists(outPath).then(done))
-          child.once('error', () => done(false))
-        })
-        if (!started) return json(res, 502, { error: tail.trim() || 'bench exited before it wrote its JSON' })
-        return json(res, 201, { file: out })
+        const { status, body } = await startBench([`--task=${r.taskName ?? 'slug'}`, ...r.size ? [`--size=${r.size}`] : [], `--n=${r.n}`, `--timeout=${r.timeoutS}`, ...harnesses], cleanup)
+        if (status === 409) cleanup() // no child, so no exit to clean up on
+        return json(res, status, body)
       }
       if (m('POST', /^\/api\/demo$/)) {
         const dir = await realpath(await TASKS.slug.prepare())
