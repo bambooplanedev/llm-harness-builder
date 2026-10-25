@@ -22,6 +22,8 @@ export type TraceAnalysis = {
   /** The first read_file of a path at or after the turn a stub removed its earlier read. */
   rereads: { path: string; turn: number }[]
   done?: { reason: DoneReason; turns: number }
+  /** Whole seconds the last request waited with no reply (no response, no error) until `done`; absent while the run has no `done`. */
+  unanswered?: number
 }
 
 /** Built-in names only, the same boundary loop.maxRepeats has. */
@@ -128,7 +130,10 @@ export function analyzeTrace(events: HarnessEvent[]): TraceAnalysis {
   const d = of(events, 'done').at(-1)
   const stubs = rebuildStubs(events, calls)
   const rereads = stubs === 'unknown' ? [] : rebuildRereads(events, stubs, calls)
-  return { stubs, firstEdit, edits, loopFile, rereads, done: d && { reason: d.reason, turns: d.turns } }
+  const lastReq = events.map(x => x.type).lastIndexOf('llm_request')
+  const unanswered = d && lastReq >= 0 && !events.slice(lastReq).some(x => x.type === 'llm_response' || x.type === 'error')
+    ? Math.round((d.ts - events[lastReq].ts) / 1000) : undefined
+  return { stubs, firstEdit, edits, loopFile, rereads, done: d && { reason: d.reason, turns: d.turns }, unanswered }
 }
 
 export type AnalysisCells = { stub: string; ate: string; edit: string; loop: string; reread: string }
@@ -173,15 +178,15 @@ export function summaryLine(a: TraceAnalysis): string {
   const c = analysisCells(a)
   const stub = a.stubs === 'unknown' ? 'stubs unknown (no recorded request)' : c.stub === '—' ? 'no stub' : `first stub ${c.stub} (ate: ${c.ate})`
   return [stub, c.edit === '—' ? 'no edit' : `first edit ${c.edit}`, c.loop === '—' ? 'no loop' : `loop on ${c.loop}`,
-    ...(c.reread === '—' ? [] : [`reread ${c.reread}`])].join(' · ')
+    ...(c.reread === '—' ? [] : [`reread ${c.reread}`]), ...(a.unanswered === undefined ? [] : [`unanswered last request: ${a.unanswered} s`])].join(' · ')
 }
 
 export function formatAnalysisTable(rows: AnalyzedRun[]): string {
-  const head = ['harness', 'run', 'verdict', 'turns', 'stub@', 'ate', 'edit@', 'loop on', 'reread']
+  const head = ['harness', 'run', 'verdict', 'turns', 'stub@', 'ate', 'edit@', 'loop on', 'reread', 'unanswered']
   const body = rows.map(r => {
-    if (!r.analysis) return [r.harness, r.run, r.verdict, String(r.turns), 'no trace', '', '', '', '']
+    if (!r.analysis) return [r.harness, r.run, r.verdict, String(r.turns), 'no trace', '', '', '', '', '']
     const c = analysisCells(r.analysis)
-    return [r.harness, r.run, r.verdict, String(r.turns), c.stub, c.ate, c.edit, c.loop, c.reread]
+    return [r.harness, r.run, r.verdict, String(r.turns), c.stub, c.ate, c.edit, c.loop, c.reread, r.analysis.unanswered === undefined ? '—' : `${r.analysis.unanswered} s`]
   })
   const w = head.map((h, i) => Math.max(h.length, ...body.map(b => b[i].length)))
   return [head, ...body].map(cols => cols.map((s, i) => s.padEnd(w[i])).join('  ').trimEnd()).join('\n')
