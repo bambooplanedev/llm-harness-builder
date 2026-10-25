@@ -18,6 +18,7 @@ test('deep: a new structure with every string redacted, arrays and nesting inclu
   expect(out).toEqual({ a: '[redacted: K_API_KEY]', n: 3, ok: true, none: null, list: ['x[redacted: K_API_KEY]', { b: ['[redacted: K_API_KEY]'] }], nested: { c: { d: '[redacted: K_API_KEY]!' } } })
   expect(input).toEqual(before)
   expect(out).not.toBe(input); expect(out.list).not.toBe(input.list); expect(out.nested.c).not.toBe(input.nested.c)
+  expect(r.deep({ [`k${KEY}`]: 1 })).toEqual({ 'k[redacted: K_API_KEY]': 1 }) // an object key too
 })
 
 test('a key with regex metacharacters is replaced literally, every time; a near miss is left alone', () => {

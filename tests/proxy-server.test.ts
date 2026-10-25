@@ -410,3 +410,37 @@ test('anthropic: count_tokens and other /v1 paths are forwarded and not recorded
   await px.stop()
   expect(await traces(px.runsDir)).toEqual([])
 })
+
+test('anthropic: a key split across two deltas of a cut stream reaches no file and no log line', async () => {
+  const cut = KEY.length / 2
+  const delta = (text: string) => `event: content_block_delta\ndata: ${JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text } })}\n\n`
+  const sse = textReply('x'), head = sse.slice(0, sse.indexOf('event: ping'))
+  const up = await upstream((req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    res.write(head + delta(`echo ${KEY.slice(0, cut)}`) + delta(KEY.slice(cut)))
+    setTimeout(() => req.socket.destroy(), 20)
+  })
+  const px = await proxy(up.url)
+  await expect((await msgs(px.base, ANT, { 'x-api-key': KEY })).text()).rejects.toThrow()
+  await px.stop()
+  await noSecretOnDisk(px.runsDir)
+  for (const f of await readdir(px.runsDir)) expect(await readFile(join(px.runsDir, f), 'utf8')).not.toContain(KEY.slice(cut)) // nor a piece of it
+  expect(px.lines.join('\n')).not.toContain(KEY)
+  const err = (await traces(px.runsDir))[0].events.find(e => e.type === 'error')
+  expect(err).toMatchObject({ message: 'POST /v1/messages: the upstream closed the connection mid-reply', body: 'echo [redacted: x-api-key]' })
+})
+
+test('a lowercase bearer scheme is scrubbed, and so is a Bearer key on /chat/completions', async () => {
+  const up = await upstream((_q, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    res.end(sseLines([{ choices: [{ index: 0, delta: { content: `echo ${KEY}` }, finish_reason: 'stop' }] }]))
+  })
+  const px = await proxy(up.url)
+  await (await post(px.base, chat([{ role: 'user', content: `do ${KEY}` }]), { headers: { 'content-type': 'application/json', authorization: `Bearer ${KEY}` } })).text()
+  await (await msgs(px.base, JSON.stringify({ ...JSON.parse(ANT), messages: [{ role: 'user', content: `do ${TOKEN}` }] }), { authorization: `bearer ${TOKEN}` })).text()
+  expect(up.seen.map(s => s.headers.authorization)).toEqual([`Bearer ${KEY}`, `bearer ${TOKEN}`])
+  await px.stop()
+  await noSecretOnDisk(px.runsDir)
+  expect(px.lines.join('\n')).not.toContain(KEY); expect(px.lines.join('\n')).not.toContain(TOKEN)
+  expect(JSON.stringify(await traces(px.runsDir)).split('[redacted: authorization]').length - 1).toBeGreaterThanOrEqual(3)
+})

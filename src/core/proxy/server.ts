@@ -74,6 +74,12 @@ const scrubberOf = (h: http.IncomingHttpHeaders) => {
   return <T>(x: T): T => token.deep(key.deep(x))
 }
 
+/** The text, thinking and tool-argument deltas of a Messages SSE text, joined in order; lines that do not parse are skipped. */
+const deltaText = (sse: string) => sse.split('\n').map(l => {
+  if (!l.startsWith('data:')) return ''
+  try { const d = JSON.parse(l.slice(5)).delta; return [d?.text, d?.thinking, d?.partial_json].find(x => typeof x === 'string') ?? '' } catch { return '' }
+}).join('')
+
 /** The reply as the backend itself would read it: a JSON body or an SSE stream, by content-type. */
 async function readReply(chunks: Buffer[], contentType: string, api: Api): Promise<NormalizedResponse> {
   if (/^application\/json/i.test(contentType)) {
@@ -176,8 +182,9 @@ export async function startProxy(o: ProxyOpts): Promise<ProxyServer> {
     } finally { inflight.delete(ac) }
 
     if (!rec) return
-    // A cut Messages stream has no message_stop, which collectAnthropic refuses: its body is the text that came.
-    const partial = async () => rec.api === 'anthropic' ? Buffer.concat(chunks).toString('utf8')
+    // A cut Messages stream has no message_stop, which collectAnthropic refuses: its body is the text its deltas carried,
+    // joined, never the raw SSE (a key echoed in pieces would pass the scrubber); nothing readable is no body.
+    const partial = async () => rec.api === 'anthropic' ? deltaText(Buffer.concat(chunks).toString('utf8')) || undefined
       : (await readReply(chunks, contentType, rec.api).catch(() => undefined))?.content ?? ''
     let outcome: ReplyOutcome
     if (stoppedByUs.has(ac) && failure !== undefined) outcome = { ok: false, message: 'the proxy stopped before the reply ended', body: await partial() }
