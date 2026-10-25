@@ -341,8 +341,10 @@ fit aider, whose first user message is its edit examples. So:
 - two identical sessions at the same time interleave in one run, and two sessions of the same task
   one after the other share the run of their identical one-message side requests.
 
-**Claude Code.** Point the proxy at Anthropic and Claude Code at the proxy's root, not its `/v1`
-(the proxy prints that line when it starts):
+**Claude Code.** Point the proxy at Anthropic and Claude Code at the proxy's root, not its `/v1`.
+On start the proxy prints two lines: `proxy on http://127.0.0.1:<port>/v1 -> …` is the base URL for
+OpenAI-style agents; Claude Code takes the value from the second one,
+`for Claude Code: ANTHROPIC_BASE_URL=http://127.0.0.1:<port>`, without `/v1`:
 
     llm-harness-builder proxy --upstream https://api.anthropic.com --name claude-code
     ANTHROPIC_BASE_URL=http://127.0.0.1:8090 claude
@@ -356,10 +358,12 @@ Both sign-ins work. With an API key, set `ANTHROPIC_API_KEY` (sent as `x-api-key
   under their session. Auxiliary calls (titles, classifiers) are notes in the main run, and a
   compaction is a marker in its agent's run. Without those headers (older versions) the
   system-and-first-user rule above applies.
-- Not recorded: `count_tokens`, every other path, any header. The request's key or token is replaced
-  by `[redacted: x-api-key]` or `[redacted: authorization]` wherever it shows up, a reply that echoes
-  it included; a value shorter than 20 characters is not looked for. Telemetry and update checks go
-  to anthropic.com directly, not through the proxy.
+- Not recorded: `count_tokens`, every other path. No request header is written as such; only the
+  session, agent, parent agent and agent type ids from `x-claude-code-*` go, scrubbed, into the
+  run's meta line to group the runs. The request's key or token is replaced by
+  `[redacted: x-api-key]` or `[redacted: authorization]` wherever it shows up, a reply that echoes it
+  included; a value shorter than 20 characters is not looked for. Telemetry and update checks go to
+  anthropic.com directly, not through the proxy.
 - `--upstream` refuses a URL with a login or password, a query or fragment, and plain http to
   anything but loopback.
 
@@ -375,7 +379,8 @@ proxy was killed and the system has given its pid to another process, the run sh
 until that process ends.
 
 Like every trace, a recorded one holds everything the agent read and its system prompt, local paths
-included. Request headers, an API key among them, are never written.
+included. Request headers, an API key among them, are never written as such; only Claude Code's
+grouping ids above go into the meta line.
 
 <details>
 <summary>Checked with opencode: setup and what the proxy saw</summary>
