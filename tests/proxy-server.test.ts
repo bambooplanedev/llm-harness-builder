@@ -4,7 +4,9 @@ import { EventEmitter } from 'node:events'
 import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { startProxy, drained } from '../src/core/proxy/server.js'
+import { normalizeRequest } from '../src/core/normalize.js'
 import { tmp } from './helpers.js'
+import { textReply, toolReply } from './fake-anthropic.js'
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 const cleanups: (() => unknown)[] = []
@@ -56,6 +58,9 @@ const TOOL_REPLY = sseLines([
   { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'call_1', type: 'function', function: { name: 'read_file', arguments: '{"path":"a"}' } }] }, finish_reason: null }] },
   { choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 9, completion_tokens: 4 } },
 ])
+const msgs = (base: string, body: string, headers: Record<string, string> = {}, init: RequestInit = {}) =>
+  fetch(`${base}/v1/messages?beta=true`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body, ...init })
+const ANT = JSON.stringify({ model: 'claude-haiku-5-5', stream: true, system: 'sys', messages: [{ role: 'user', content: 'do it' }] })
 const post = (base: string, body: string, init: RequestInit = {}) => fetch(`${base}/v1/chat/completions`, { method: 'POST', headers: { 'content-type': 'application/json' }, body, ...init })
 
 /** One raw request: node's http sends what fetch will not (a `//` path, absolute-form, a foreign Host). */
@@ -273,4 +278,69 @@ test('a page on another localhost port is another origin: refused; the proxy\'s 
   expect(await raw(px.p.port, '/props', { host: `localhost:${px.p.port}`, origin: `http://localhost:${px.p.port}` })).toEqual({ status: 200, body: 'upstream' })
   expect(await raw(px.p.port, '/props')).toEqual({ status: 200, body: 'upstream' })
   expect(up.seen).toHaveLength(2)
+})
+
+test('anthropic: the stream passes byte for byte; the trace has request, reply, call, and the result on the next request', async () => {
+  const replies = [toolReply('Read', { file_path: 'a.txt' }), textReply('done')]
+  const up = await upstream((_q, res) => { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(replies.shift()) })
+  const px = await proxy(up.url)
+  const first = { model: 'claude-haiku-5-5', stream: true, system: [{ type: 'text', text: 'attr' }, { type: 'text', text: 'sys' }], messages: [{ role: 'user', content: [{ type: 'text', text: 'do it' }] }] }
+  const sent = toolReply('Read', { file_path: 'a.txt' })
+  expect(await (await msgs(px.base, JSON.stringify(first))).text()).toBe(sent)
+  expect(up.seen[0].url).toBe('/v1/messages?beta=true')
+  const second = { ...first, messages: [...first.messages, { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_1', name: 'Read', input: { file_path: 'a.txt' } }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'AAA' }] }] }
+  await (await msgs(px.base, JSON.stringify(second))).text()
+  await px.stop()
+  const [t] = await traces(px.runsDir)
+  // Task 4 inserts 'tool_result' after 'tool_call' here and asserts it is { callId: 'c1', output: 'AAA' }.
+  expect(t.events.map(e => e.type)).toEqual(['llm_request', 'llm_response', 'tool_call', 'llm_request', 'llm_response', 'done'])
+  expect(normalizeRequest(t.events[0].payload)?.format).toBe('anthropic')
+  expect(t.events[2].call).toMatchObject({ name: 'Read', args: { file_path: 'a.txt' }, backendId: 'toolu_1' })
+  expect(t.events[1].usage).toMatchObject({ promptTokens: expect.any(Number), completionTokens: 5 })
+})
+
+test('anthropic: a JSON reply is recorded; a 200 JSON error is an error event', async () => {
+  const bodies = [
+    { id: 'msg_1', type: 'message', role: 'assistant', model: 'm', content: [{ type: 'text', text: 'plain' }, { type: 'tool_use', id: 'toolu_9', name: 'Bash', input: { command: 'ls' } }], stop_reason: 'tool_use', usage: { input_tokens: 3, output_tokens: 1 } },
+    { type: 'error', error: { type: 'overloaded_error', message: 'busy' } },
+  ]
+  const up = await upstream((_q, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(bodies.shift())) })
+  const px = await proxy(up.url)
+  await (await msgs(px.base, ANT)).text()
+  await (await msgs(px.base, ANT)).text()
+  await px.stop()
+  const ts = await traces(px.runsDir)
+  const events = ts.flatMap(t => t.events)
+  expect(events.map(e => e.type)).toEqual(['llm_request', 'llm_response', 'tool_call', 'llm_request', 'error', 'done'])
+  expect(events[1]).toMatchObject({ content: 'plain', usage: { promptTokens: 3, completionTokens: 1 } })
+  expect(events[2].call).toMatchObject({ name: 'Bash', args: { command: 'ls' }, backendId: 'toolu_9' })
+  expect(events[4].message).toMatch(/overloaded_error: busy/)
+})
+
+test('anthropic: a 4xx reply passes through and its body is the error body; labels name /v1/messages', async () => {
+  const bad = '{"type":"error","error":{"type":"invalid_request_error","message":"bad"}}'
+  const up = await upstream((_q, res) => { res.writeHead(400, { 'content-type': 'application/json' }); res.end(bad) })
+  const px = await proxy(up.url)
+  const r = await msgs(px.base, ANT)
+  expect(r.status).toBe(400); expect(await r.text()).toBe(bad)
+  await px.stop()
+  const [t] = await traces(px.runsDir)
+  expect(t.events.find(e => e.type === 'error')).toMatchObject({ message: 'POST /v1/messages: 400', body: bad })
+})
+
+test('anthropic: the upstream dying mid-stream, and the client leaving, are errors with what came', async () => {
+  const sse = textReply('half text'), half = sse.slice(0, sse.indexOf('content_block_stop'))
+  const up = await upstream((req, res) => { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.write(half); if (up.seen.length === 1) setTimeout(() => req.socket.destroy(), 20) })
+  const px = await proxy(up.url)
+  await expect((await msgs(px.base, ANT)).text()).rejects.toThrow()
+  const ac = new AbortController()
+  const r = await msgs(px.base, JSON.stringify({ ...JSON.parse(ANT), system: 'other' }), {}, { signal: ac.signal })
+  await r.body!.getReader().read()
+  ac.abort()
+  await up.seen[1].closed
+  await px.stop()
+  const errors = (await traces(px.runsDir)).flatMap(t => t.events).filter(e => e.type === 'error')
+  expect(errors.find(e => e.message === 'POST /v1/messages: the upstream closed the connection mid-reply')?.body).toContain('half text')
+  expect(errors.find(e => e.message === 'client closed the connection')?.body).toContain('half text')
 })

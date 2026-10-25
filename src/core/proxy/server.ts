@@ -1,11 +1,12 @@
 // src/core/proxy/server.ts — the recording proxy: forwards every request to one upstream unchanged and writes
-// chat completions into runs/<id>.jsonl through TraceWriter. Forwarding never waits on recording.
+// chat completions and Anthropic messages into runs/<id>.jsonl through TraceWriter. Forwarding never waits on recording.
 import http from 'node:http'
 import https from 'node:https'
 import { randomUUID } from 'node:crypto'
 import { TraceWriter } from '../../server/runs.js'
 import { refusal } from '../../server/origin.js'
 import { collect, fromJson } from '../backends/openai.js'
+import { collectAnthropic, fromAnthropicJson } from '../backends/anthropic.js'
 import { BackendError, jsonChunks, type NormalizedResponse } from '../backends/types.js'
 import type { HarnessEvent } from '../events.js'
 import { Sessions, type ReplyOutcome, type RunMeta } from './sessions.js'
@@ -59,10 +60,20 @@ export const drained = (res: http.ServerResponse) => new Promise<void>(resolve =
   res.on('drain', done); res.on('close', done)
 })
 
+type Api = 'openai' | 'anthropic'
+const LABEL: Record<Api, string> = { openai: 'POST /chat/completions', anthropic: 'POST /v1/messages' }
+/** The API a request is recorded as, if any: /v1/messages/count_tokens and the rest pass through unrecorded. */
+const apiOf = (method: string | undefined, pathname: string): Api | undefined =>
+  method !== 'POST' ? undefined : pathname.endsWith('/chat/completions') ? 'openai' : pathname.endsWith('/v1/messages') ? 'anthropic' : undefined
+
 /** The reply as the backend itself would read it: a JSON body or an SSE stream, by content-type. */
-async function readReply(chunks: Buffer[], contentType: string): Promise<NormalizedResponse> {
-  if (/^application\/json/i.test(contentType)) return fromJson(JSON.parse(Buffer.concat(chunks).toString('utf8')))
-  return collect(jsonChunks({ body: (async function* () { yield* chunks })() }, 'POST /chat/completions', 'data:'))
+async function readReply(chunks: Buffer[], contentType: string, api: Api): Promise<NormalizedResponse> {
+  if (/^application\/json/i.test(contentType)) {
+    const j = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+    return api === 'anthropic' ? fromAnthropicJson(j) : fromJson(j)
+  }
+  const sse = jsonChunks({ body: (async function* () { yield* chunks })() }, LABEL[api], 'data:')
+  return api === 'anthropic' ? collectAnthropic(sse) : collect(sse)
 }
 
 export async function startProxy(o: ProxyOpts): Promise<ProxyServer> {
@@ -103,8 +114,9 @@ export async function startProxy(o: ProxyOpts): Promise<ProxyServer> {
     if (target.origin !== up.origin) return refuse(res, 400, 'bad request path')
     const body = await readAll(req)
 
-    let rec: { run: string; turn: number } | undefined
-    if (req.method === 'POST' && target.pathname.endsWith('/chat/completions')) {
+    let rec: { run: string; turn: number; api: Api } | undefined
+    const api = apiOf(req.method, target.pathname)
+    if (api) {
       let payload: unknown
       if (body.length > cap) log(`not recorded: a ${body.length}-byte request is over the ${cap}-byte cap`)
       else try { payload = JSON.parse(body.toString('utf8')) } catch { log('not recorded: the request body is not JSON') }
@@ -112,7 +124,7 @@ export async function startProxy(o: ProxyOpts): Promise<ProxyServer> {
         const out = sessions.onRequest(payload)
         if (out.meta) log(`run ${out.run}: ${out.meta.task.slice(0, 80).replace(/\n/g, ' ')}`)
         record(out.run, out.events, out.meta)
-        rec = { run: out.run, turn: out.turn }
+        rec = { run: out.run, turn: out.turn, api }
       }
     }
 
@@ -155,15 +167,17 @@ export async function startProxy(o: ProxyOpts): Promise<ProxyServer> {
     } finally { inflight.delete(ac) }
 
     if (!rec) return
-    const partial = async () => (await readReply(chunks, contentType).catch(() => undefined))?.content ?? ''
+    // A cut Messages stream has no message_stop, which collectAnthropic refuses: its body is the text that came.
+    const partial = async () => rec.api === 'anthropic' ? Buffer.concat(chunks).toString('utf8')
+      : (await readReply(chunks, contentType, rec.api).catch(() => undefined))?.content ?? ''
     let outcome: ReplyOutcome
     if (stoppedByUs.has(ac) && failure !== undefined) outcome = { ok: false, message: 'the proxy stopped before the reply ended', body: await partial() }
     else if (clientClosed) outcome = { ok: false, message: 'client closed the connection', body: await partial() }
-    else if (failure !== undefined && !status) outcome = { ok: false, message: `POST /chat/completions: ${failure}` }
-    else if (failure !== undefined) outcome = { ok: false, message: 'POST /chat/completions: the upstream closed the connection mid-reply', body: await partial() }
-    else if (status < 200 || status > 299) outcome = { ok: false, message: `POST /chat/completions: ${status}`, body: Buffer.concat(chunks).toString('utf8') }
+    else if (failure !== undefined && !status) outcome = { ok: false, message: `${LABEL[rec.api]}: ${failure}` }
+    else if (failure !== undefined) outcome = { ok: false, message: `${LABEL[rec.api]}: the upstream closed the connection mid-reply`, body: await partial() }
+    else if (status < 200 || status > 299) outcome = { ok: false, message: `${LABEL[rec.api]}: ${status}`, body: Buffer.concat(chunks).toString('utf8') }
     else {
-      try { outcome = { ok: true, res: await readReply(chunks, contentType), latencyMs: Date.now() - t0 } }
+      try { outcome = { ok: true, res: await readReply(chunks, contentType, rec.api), latencyMs: Date.now() - t0 } }
       catch (e) {
         outcome = e instanceof BackendError ? { ok: false, message: e.message, body: e.body } : { ok: false, message: `could not read the reply: ${(e as Error).message}` }
       }
