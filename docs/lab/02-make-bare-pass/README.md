@@ -13,6 +13,8 @@ In a folder where `serve` already ran, `harnesses/bare.json` is there:
 
     cp harnesses/bare.json start.json
 
+(this copy keeps `"name": "bare"`, so `bench` labels it `bare`, not `lab-start`)
+
 Otherwise download it:
 
     curl -fLO https://raw.githubusercontent.com/bambooplanedev/llm-harness-builder/main/docs/lab/02-make-bare-pass/start.json
@@ -70,12 +72,13 @@ about the tools?
 <details>
 <summary>Hint 3</summary>
 
-On this model, thinking can eat a whole turn. One key of `backend` switches it off. Find it in the README's
-[Harness file](https://github.com/bambooplanedev/llm-harness-builder#harness-file) table. Does
+On this model, thinking can eat a whole turn. One key of `backend` switches it off. Find it in the
+README's [Harness file](https://github.com/bambooplanedev/llm-harness-builder#harness-file) table. Does
 `start.json` set it?
 
 </details>
 
-Expected: on the local setup, the measured solution passed 8 of 10 (median 12 s a run); see the [solution](solution.md), which also has the file.
+Expected: on the local setup (qwen3:8b on Ollama, `slug`, n = 10), the measured solution passed 8 of 10
+(median 12 s a run); see the [solution](solution.md), which also has the file.
 
 Solution: [solution.md](solution.md).

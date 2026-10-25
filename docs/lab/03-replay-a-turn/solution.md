@@ -3,7 +3,7 @@
 # Exercise 3: solution
 
 The measured output of `replay ./059867d3.jsonl --turn 2 --n 5`: 5 samples, **1 distinct reply**, and
-all 5 were `same as recorded`. The 5 requests used 756 prompt tokens.
+all 5 were `same as recorded`. Each request was 756 prompt tokens.
 
 ## What it means
 

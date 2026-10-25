@@ -13,6 +13,8 @@
 
     cp harnesses/bare.json start.json
 
+(ця копія лишає `"name": "bare"`, тож `bench` позначає її `bare`, а не `lab-start`)
+
 Інакше завантажте його:
 
     curl -fLO https://raw.githubusercontent.com/bambooplanedev/llm-harness-builder/main/docs/lab/02-make-bare-pass/start.json
@@ -71,12 +73,13 @@
 <details>
 <summary>Підказка 3</summary>
 
-На цій моделі thinking може з'їсти цілий хід. Один ключ `backend` його вимикає. Знайдіть його в таблиці
-[Файл харнесу](https://github.com/bambooplanedev/llm-harness-builder/blob/main/README.uk.md#файл-харнесу)
+На цій моделі thinking може з'їсти цілий хід. Один ключ `backend` його вимикає. Знайдіть його в
+таблиці [Файл харнесу](https://github.com/bambooplanedev/llm-harness-builder/blob/main/README.uk.md#файл-харнесу)
 в README. Чи задає його `start.json`?
 
 </details>
 
-Очікуване: на локальному стенді виміряний розв'язок пройшов 8 з 10 (медіана 12 с на прогін); див. [розв'язок](solution.uk.md), там і файл.
+Очікуване: на локальному стенді (qwen3:8b на Ollama, `slug`, n = 10) виміряний розв'язок пройшов
+8 з 10 (медіана 12 с на прогін); див. [розв'язок](solution.uk.md), там і файл.
 
 Розв'язок: [solution.uk.md](solution.uk.md).

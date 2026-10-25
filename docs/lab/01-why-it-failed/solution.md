@@ -36,8 +36,8 @@ So the run was not stuck in a loop of edits. It was on its way, and turn 6 just 
 `bare` has no cap on one reply (`backend.maxTokens` is not set) and leaves thinking on (no
 `backend.think: false`), so nothing stopped one generation from going on for as long as the server
 let it. `tuned-nothink` sets both: `"maxTokens": 1024` and `"think": false`. It also differs in
-other knobs (prompted tool calls, `explainEditMiss`, `context.maxToolOutputChars`, a longer system
-prompt), and `⇄` lists them all, but those two are the ones that bound a single reply. In the
+other knobs (among others, prompted tool calls, `explainEditMiss`, `context.maxToolOutputChars`, a longer
+system prompt), and `⇄` lists them all, but those two are the ones that bound a single reply. In the
 example bench `tuned-nothink` passed both runs, in 6.9 s and 5.3 s.
 
 The trace does not say which of the two would have been enough on its own; in exercise 2 you can

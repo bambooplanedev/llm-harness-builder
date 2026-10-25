@@ -15,7 +15,8 @@ Three short exercises on one small task, `slug`: fix a one-line bug in `src/slug
 
 ### Local
 
-1. Node 22.12 or newer.
+1. Node 22.12 or newer, and llm-harness-builder 0.5.0 or newer (`npx` fetches the latest): the
+   `unanswered` column in `analyze` and the anatomy strip came after 0.4.0.
 2. Ollama from its [download page](https://ollama.com/download), started, then:
 
        ollama pull qwen3:8b
@@ -37,8 +38,10 @@ No GPU: the same commands run on a hosted API, as in the README's
       --api-key-env OPENROUTER_API_KEY --model nvidia/nemotron-3.5-lightning:free
 
 A free OpenRouter account is enough: models whose id ends in `:free` cost nothing, but OpenRouter
-allows them 20 requests a minute and 50 a day. Free models on OpenRouter come and go: if this one is gone, pick any free model with tool support. A hosted API refuses `backend.think`. Every number
-in this kit is from qwen3:8b on Ollama: your numbers on the cloud will differ.
+allows them 20 requests a minute and 50 a day. Free models on OpenRouter come and go: if this one is
+gone, pick any free model with tool support. A hosted API refuses `backend.think`. Every local number
+in this kit is from qwen3:8b on Ollama; the one cloud row, in exercise 2's solution, is from the
+OpenRouter model named there. Your numbers on the cloud will differ.
 
 ### Safety, before any exercise with a model
 
@@ -50,7 +53,8 @@ environment. So:
       docker run --rm -it -v "$PWD":/work -w /work node:22.12-slim bash
 
   An Ollama on the host is then `--base-url http://host.docker.internal:11434` (on Linux add
-  `--add-host=host.docker.internal:host-gateway` to `docker run`). The UI is not reachable from a
+  `--add-host=host.docker.internal:host-gateway` to `docker run`, and start Ollama with
+  `OLLAMA_HOST=0.0.0.0` so the container can reach it). The UI is not reachable from a
   container, so open traces with `serve` on the host: that needs no model.
 - Use a key with a spend limit, made for this.
 - Keep no other secrets in that environment.
