@@ -7,6 +7,7 @@ import Trace from './Trace.vue'
 import { t, tn, T, lang } from './i18n'
 import Diff from './Diff.vue'
 import type { DiffSide } from '../../src/core/diff'
+import { shown } from './film'
 
 const emit = defineEmits<{ toWorkbench: [config: HarnessConfig, workdir: string]; example: [on: boolean] }>()
 /** The Workbench form's model: New bench always runs on it. `example`: the shipped recorded bench, read-only — its backend is not yours. */
@@ -63,6 +64,11 @@ const sideB = computed<DiffSide | null>(() => diff.value && { ...diff.value, eve
 const total = computed(() => result.value ? result.value.n * result.value.harnesses.length : 0)
 const msDone = computed(() => runs.value.reduce((a, r) => a + r.ms, 0))
 const backend = computed(() => result.value?.harnesses[0].config.backend)
+/** Film mode hides every model and server the page names. */
+const names = computed(() => {
+  const be = [props.backend, ...result.value?.harnesses.map(h => h.config.backend) ?? []]
+  return { models: [...files.value.map(f => f.model), ...be.map(b => b.model)].filter(Boolean), urls: be.map(b => b.baseUrl) }
+})
 const nCtx = computed(() => result.value?.harnesses.find(h => h.server?.nCtx)?.server?.nCtx)
 const hasCost = computed(() => runs.value.some(r => r.costUsd !== undefined))
 /** The harness of the open run: its row in the table is marked. */
@@ -222,7 +228,7 @@ onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer); unsub?.(); d
       <div class="runs">
         <div v-for="f in files" :key="f.file" :class="{ on: f.file === file }" @click="openFile(f.file)">
           <b>{{ f.file }}</b>
-          <div class="line one muted"><span :title="f.model">{{ f.model || '?' }}<span v-if="!f.complete"> · incomplete</span></span><span>{{ new Date(f.date).toLocaleString(lang, { dateStyle: 'short', timeStyle: 'short' }) }}</span></div>
+          <div class="line one muted"><span :title="shown(f.model, names)">{{ shown(f.model, names) || '?' }}<span v-if="!f.complete"> · incomplete</span></span><span>{{ new Date(f.date).toLocaleString(lang, { dateStyle: 'short', timeStyle: 'short' }) }}</span></div>
         </div>
       </div>
       </details>
@@ -239,11 +245,11 @@ onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer); unsub?.(); d
                  @click="r.trace && (sel = { id: r.trace })">
               <div class="line"><span><b>#{{ r.round }}</b> <span :class="['chip', 'solid', r.verdict === 'PASS' ? 'ok' : 'err']">{{ r.verdict }}</span> {{ r.reason }}</span><span>{{ r.turns }} turns · {{ r.toolCalls }} tool calls · {{ mmss(r.ms) }}</span></div>
               <div v-if="r.verdict === 'FAIL' && r.reason === 'final'">{{ t('bench.redTests') }}</div>
-              <div v-if="r.lastError" class="clip" :title="r.lastError">{{ r.lastError }}</div>
+              <div v-if="r.lastError" class="clip" :title="shown(r.lastError, names)">{{ shown(r.lastError, names) }}</div>
               <div v-if="r.trace && analysis[r.trace]" class="analysis">{{ cellsLine(analysis[r.trace]) }}</div>
               <small class="where">
                 <template v-if="r.trace">{{ r.trace }}</template>
-                <template v-else>{{ t('bench.noTrace') }}</template> · {{ r.workdir }}
+                <template v-else>{{ t('bench.noTrace') }}</template> · {{ shown(r.workdir, names) }}
               </small>
               <div class="actions">
                 <button v-if="!example" @click.stop="emit('toWorkbench', h.config, r.workdir)">to Workbench</button>
@@ -253,16 +259,16 @@ onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer); unsub?.(); d
           </template>
         </div>
       </template>
-      <div class="err">{{ error }}</div>
+      <div class="err">{{ shown(error, names) }}</div>
     </div>
     <div class="col" ref="pane">
       <div v-if="newOpen" class="table-wrap new-bench">
         <h5 class="group">Harnesses <span class="muted">· {{ t('bench.fromHarnesses') }}</span></h5>
         <div v-for="h in list" :key="h.name">
-          <label><input type="checkbox" :value="h.name" v-model="picked"> <b>{{ h.name }}</b></label> <span v-if="h.description" class="muted">{{ h.description }}</span>
-          <div v-for="c in picked.includes(h.name) ? runsUnasked[h.name] ?? [] : []" :key="c" class="hint clip" :title="c">{{ t('bench.runsUnasked', { cmd: c }) }}</div>
+          <label><input type="checkbox" :value="h.name" v-model="picked"> <b>{{ h.name }}</b></label> <span v-if="h.description" class="muted film-hide">{{ shown(h.description, names) }}</span>
+          <div v-for="c in picked.includes(h.name) ? runsUnasked[h.name] ?? [] : []" :key="c" class="hint clip" :title="shown(c, names)">{{ shown(t('bench.runsUnasked', { cmd: c }), names) }}</div>
         </div>
-        <div class="row"><b>Model</b> <span class="muted">{{ t('bench.modelFrom', { model: props.backend.model || '(none picked)' }) }} · {{ props.backend.kind }} {{ props.backend.baseUrl }}<template v-if="props.backend.apiKeyEnv"> · key {{ props.backend.apiKeyEnv }}</template></span></div>
+        <div class="row"><b>Model</b> <span class="muted">{{ shown(t('bench.modelFrom', { model: props.backend.model || '(none picked)' }), names) }} · {{ props.backend.kind }} {{ shown(props.backend.baseUrl, names) }}<template v-if="props.backend.apiKeyEnv"> · key {{ props.backend.apiKeyEnv }}</template></span></div>
         <div class="row">
           <label><b>Task</b> <select v-model="task"><option v-for="(_, name) in BENCH_TASKS" :key="name" :value="name">{{ name }}</option></select></label>
           <label v-if="BENCH_TASKS[task]"><b>size</b> <input type="number" min="1" :max="BENCH_TASKS[task]" v-model.number="size"></label>
@@ -276,7 +282,7 @@ onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer); unsub?.(); d
         <div class="bench-head">
           <div>
           <h2>{{ result.taskName ?? 'bench' }}<template v-if="result.size"> · size {{ result.size }}</template> · {{ result.harnesses.length }} harnesses × {{ result.n }} runs</h2>
-          <div class="muted">{{ backend?.model }} · {{ backend?.kind }} {{ backend?.baseUrl }}<template v-if="nCtx"> · window {{ nCtx.toLocaleString(lang) }}</template> · timeout {{ mmss(result.timeoutS * 1000) }} · {{ new Date(result.date).toLocaleString(lang) }}</div>
+          <div class="muted">{{ shown(backend?.model ?? '', names) }} · {{ backend?.kind }} {{ shown(backend?.baseUrl ?? '', names) }}<template v-if="nCtx"> · window {{ nCtx.toLocaleString(lang) }}</template> · timeout {{ mmss(result.timeoutS * 1000) }} · {{ new Date(result.date).toLocaleString(lang) }}</div>
           <div class="muted">{{ runs.length }}/{{ total }} runs<template v-if="!result.complete"> · {{ result.stopped ? 'stopped' : 'incomplete' }}</template> · {{ mmss(msDone) }} in</div>
           </div>
           <button v-if="!example" @click="again" :disabled="starting || !!active" :title="active ? t('h.againBusy') : t('h.again')">{{ starting ? 'Starting…' : 'Run bench again' }}</button>
@@ -308,7 +314,7 @@ onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer); unsub?.(); d
       </template>
       <h5 v-if="result && events.length && !(sideA && sideB)" class="group">{{ sideA ? `${sideA.name} #${sideA.run.round} · ${sideA.run.verdict} · trace` : `${active?.harness ?? ''} #${active?.round ?? ''} · live trace` }}</h5>
       <Diff v-if="sideA && sideB" :a="sideA" :b="sideB" :task="result!.task" @close="closeDiff" />
-      <Trace v-else-if="result && events.length" :events="events" :task="result.task" :approvable="false" />
+      <Trace v-else-if="result && events.length" :events="events" :task="result.task" :approvable="false" :names="names" />
     </div>
   </div>
 </template>

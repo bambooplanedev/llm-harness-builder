@@ -10,12 +10,15 @@ import ContextBar from './ContextBar.vue'
 import Trace from './Trace.vue'
 import Bench from './Bench.vue'
 import { t, T, lang, LANGS, langName, setLang } from './i18n'
+import { shown } from './film'
 
 const tab = ref<'workbench' | 'bench'>('workbench')
 /** The Bench tab shows the recorded bench shipped with the package instead of ./runs: read-only, no model. */
 const benchExample = ref(false)
 const openExamples = () => { benchExample.value = true; tab.value = 'bench' }
 const config = ref<HarnessConfig>(structuredClone(NEW_HARNESS))
+/** Film mode hides the picked model and server. */
+const names = computed(() => ({ models: [config.value.backend.model], urls: [config.value.backend.baseUrl] }))
 const harnessNames = ref<string[]>([])
 const models = ref<string[]>([]); const modelsError = ref('')
 /** What the server says the picked model takes; undefined is unknown, and nothing is locked. */
@@ -165,8 +168,8 @@ watch(() => config.value.backend.model, () => {
         <ConfigForm v-model="config" v-model:mcp-error="mcpError" :models="models" :models-error="modelsError" :model-info="modelInfo" :harness-names="harnessNames" @refresh-models="refreshModels" @load="load" @save-as="saveAs" />
       </div>
       <div class="col">
-        <label :title="t('h.workdir')">Workdir</label>
-        <div class="browse" @keydown.esc="browse = null">
+        <label class="film-hide" :title="t('h.workdir')">Workdir</label>
+        <div class="browse film-hide" @keydown.esc="browse = null">
         <div class="row">
           <input type="text" v-model="workdir" placeholder="/path/to/project">
           <button @click="browse ? (browse = null) : browseTo(workdir)">{{ browse ? 'Close' : 'Browse…' }}</button>
@@ -184,11 +187,11 @@ watch(() => config.value.backend.model, () => {
         </div>
         <label :title="t('h.task')">Task</label>
         <textarea v-model="task" class="task"></textarea>
-        <div v-if="refusal" class="warn">{{ refusal }}</div>
+        <div v-if="refusal" class="warn">{{ shown(refusal, names) }}</div>
         <div class="row" style="margin:8px 0">
           <button @click="start" :disabled="!!running() || !!mcpError">Run</button>
           <button @click="abort" :disabled="!canAbort()">Abort</button>
-          <span class="err">{{ error }}</span>
+          <span class="err">{{ shown(error, names) }}</span>
         </div>
         <div v-if="canCheck()" class="row" style="margin:8px 0">
           <button @click="check">Check</button>
@@ -196,7 +199,7 @@ watch(() => config.value.backend.model, () => {
           <span v-if="verdict" :class="['chip', 'solid', verdict === 'PASS' ? 'ok' : 'err']">{{ verdict }}</span>
         </div>
         <ContextBar :events="events" :num-ctx="config.backend.kind === 'ollama' ? config.backend.numCtx : undefined" />
-        <Trace v-if="runId" :events="events" :live="live" :task="runTask" @approve="approve" />
+        <Trace v-if="runId" :events="events" :live="live" :task="runTask" :names="names" @approve="approve" />
         <h4>Runs <button class="link" @click="openExamples">Examples</button></h4>
         <div v-if="!runs.length" class="start">
           <h5 class="group">{{ t('start.title') }}</h5>
@@ -209,7 +212,7 @@ watch(() => config.value.backend.model, () => {
         <div class="runs">
           <div v-for="{ r, head, sub } in listed" :key="r.id" :class="{ session: r.session, sub }" @click="open(r.id, r.task, r.active)">
             <div class="line"><span><b>{{ r.harness }}</b><template v-if="head"> · session {{ head.session.slice(0, 4) }}…</template><template v-if="sub"> · ↳ subagent {{ r.agentType ?? r.agent }}</template><template v-else-if="head"> · main</template> · {{ r.reason ?? 'running' }}</span><span><template v-if="head?.subagents">{{ head.subagents }} subagent{{ head.subagents === 1 ? '' : 's' }} · </template>{{ r.turns ?? '-' }} turns · {{ r.toolCallCount ?? '-' }} tool calls · {{ new Date(r.started).toLocaleTimeString(lang) }}</span></div>
-            <div class="muted">{{ r.task.slice(0, 60) }}</div>
+            <div class="muted">{{ shown(r.task, names).slice(0, 60) }}</div>
           </div>
         </div>
       </div>

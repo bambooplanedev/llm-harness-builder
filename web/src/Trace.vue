@@ -1,20 +1,28 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import Anatomy from './Anatomy.vue'
 import { t, tn, T } from './i18n'
 import type { Delta, HarnessEvent } from './api'
 import { mcpApprovalServer, mcpCounts, UNTIL_BASH } from '../../src/core/events'
 import { analyzeTrace, summaryLine } from '../../src/core/analyze'
-import { normalizeRequest } from '../../src/core/normalize'
+import { anatomies, anatomyLine } from '../../src/core/anatomy'
+import { film, filmDeep, namesIn, shown, type FilmNames } from './film'
 // approvable is a Boolean-typed prop, so Vue casts an ABSENT value to `false` (not `undefined`).
 // App.vue's live Workbench never passes this prop and needs the opposite default -- only a
 // finished/replayed trace (Bench.vue, Diff.vue) opts out by passing `false` explicitly.
 // `live` is only ever set by the live Workbench; a replayed trace (Bench.vue, Diff.vue) omits it.
-const props = withDefaults(defineProps<{ events: HarnessEvent[]; live?: Delta; task?: string; approvable?: boolean }>(), { approvable: true, live: () => ({}) })
+const props = withDefaults(defineProps<{ events: HarnessEvent[]; live?: Delta; task?: string; approvable?: boolean; bars?: boolean; names?: FilmNames }>(), { approvable: true, bars: true, live: () => ({}) })
 const emit = defineEmits<{ approve: [callId: string, ok: boolean] }>()
+/** `names`: the models and servers the page knows of (the trace names no server, and a live run's knobs_off comes before its first model). */
+const names = computed(() => ({ models: [...namesIn(props.events).models, ...props.names?.models ?? []], urls: props.names?.urls ?? [] }))
+/** What the screen shows: in film mode a copy with model names, servers and paths replaced. */
+const shownEvents = computed(() => film.value ? filmDeep(props.events, names.value) : props.events)
+/** A live approval shows the command exactly as it will run, film mode or not: you approve what executes. */
+const command = (seq: number) => (props.events.find(e => e.seq === seq) as Extract<HarnessEvent, { type: 'approval_required' }>).call.args.command
 
 const turns = computed(() => {
   const map = new Map<number, HarnessEvent[]>()
-  for (const e of props.events) { if (!map.has(e.turn)) map.set(e.turn, []); map.get(e.turn)!.push(e) }
+  for (const e of shownEvents.value) { if (!map.has(e.turn)) map.set(e.turn, []); map.get(e.turn)!.push(e) }
   return [...map.entries()]
 })
 const answered = computed(() => {
@@ -30,8 +38,8 @@ const answered = computed(() => {
   for (const e of props.events) if (e.type === 'approval_required' && e.call.name === UNTIL_BASH && e.seq < lastSeq) ids.add(e.call.callId)
   return ids
 })
-const analysis = computed(() => analyzeTrace(props.events))
-const summary = computed(() => props.events.length ? summaryLine(analysis.value) : '')
+const analysis = computed(() => analyzeTrace(shownEvents.value))
+const summary = computed(() => shownEvents.value.length ? summaryLine(analysis.value) : '')
 /** callId → the turn whose request first went out without that result. */
 const stubbedAt = computed(() => {
   const m = new Map<string, number>(), s = analysis.value.stubs
@@ -40,12 +48,18 @@ const stubbedAt = computed(() => {
 })
 const pretty = (v: unknown) => JSON.stringify(v, null, 2)
 /** The CLI's knobs_off line: what the file sets and was not sent, and who said so. */
-const knobsOff = computed(() => props.events.flatMap(e => e.type === 'knobs_off' ? e.off.map(o => `${o.knob} ${JSON.stringify(o.value)} not sent: ${o.reason}`) : []))
-/** One line of what a request holds, read the same way whatever API it went to. */
-function layers(payload: unknown): string {
-  const n = normalizeRequest(payload)
-  return n ? `system ${n.system.length} chars · tools ${n.tools.length} · messages ${n.messages.filter(m => m.role !== 'system').length} · ${n.format}` : ''
+const knobsOff = computed(() => shownEvents.value.flatMap(e => e.type === 'knobs_off' ? e.off.map(o => `${o.knob} ${JSON.stringify(o.value)} not sent: ${o.reason}`) : []))
+/** The anatomy of every request the trace shows, and the same by event seq: counts only, from the trace as recorded. */
+const anat = computed(() => anatomies(props.events))
+/** Strip column click: open that turn's inspector (view A) and scroll to it. */
+const turnEls = new Map<number, HTMLElement>()
+function pick(turn: number) {
+  const el = turnEls.get(turn)
+  const d = el?.querySelector('details.inspector') as HTMLDetailsElement | null
+  if (d) d.open = true
+  el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
+const anatBySeq = computed(() => new Map(anat.value.map(x => [x.seq, x.a])))
 // The current turn is "open" from its llm_request until its llm_response; the live bubble shows the streamed text meanwhile,
 // and stays (without the cursor) if the run ended first, since that text is not in the trace.
 const done = computed(() => props.events.some(e => e.type === 'done'))
@@ -60,8 +74,9 @@ const liveTok = computed(() => Math.ceil(liveText.value.length / 4))
 <template>
   <div v-if="summary" class="analysis">{{ summary }}</div>
   <div v-for="k in knobsOff" :key="k" class="warn">{{ k }}</div>
-  <div v-if="task" class="ev user">{{ task }}</div>
-  <div v-for="[turn, evs] in turns" :key="turn" class="turn">
+  <Anatomy v-if="bars" :items="anat" @pick="pick" />
+  <div v-if="task" class="ev user">{{ shown(task, names) }}</div>
+  <div v-for="[turn, evs] in turns" :key="turn" class="turn" :ref="(el: any) => { el ? turnEls.set(turn, el) : turnEls.delete(turn) }">
     <template v-for="e in evs" :key="e.seq">
       <div v-if="e.type === 'llm_response'" class="ev assistant">
         <div v-if="e.reasoning" class="muted">thinking: {{ e.reasoning }}</div>{{ e.content || '(empty content)' }}
@@ -71,9 +86,9 @@ const liveTok = computed(() => Math.ceil(liveText.value.length / 4))
       <div v-else-if="e.type === 'tool_call'" class="ev tool_call">{{ e.call.name }} {{ pretty(e.call.args) }}</div>
       <div v-else-if="e.type === 'approval_required' && !answered.has(e.call.callId)" class="ev approval">
         <template v-if="props.approvable !== false">
-          <T v-if="mcpApprovalServer(e.call.name)" k="trace.askMcp"><template #name><code>{{ mcpApprovalServer(e.call.name) }}</code></template><template #cmd><code>{{ e.call.args.command }}</code></template></T>
-          <T v-else-if="e.call.name === UNTIL_BASH" k="trace.askUntil"><template #cmd><code>{{ e.call.args.command }}</code></template></T>
-          <T v-else k="trace.askRun"><template #cmd><code>{{ e.call.args.command }}</code></template></T>
+          <T v-if="mcpApprovalServer(e.call.name)" k="trace.askMcp"><template #name><code>{{ mcpApprovalServer(e.call.name) }}</code></template><template #cmd><code>{{ command(e.seq) }}</code></template></T>
+          <T v-else-if="e.call.name === UNTIL_BASH" k="trace.askUntil"><template #cmd><code>{{ command(e.seq) }}</code></template></T>
+          <T v-else k="trace.askRun"><template #cmd><code>{{ command(e.seq) }}</code></template></T>
           <button @click="emit('approve', e.call.callId, true)">Run</button> <button @click="emit('approve', e.call.callId, false)">Deny</button>
         </template>
         <template v-else>approval_required: <code>{{ e.call.args.command }}</code> ({{ t('trace.autoApproved') }})</template>
@@ -93,11 +108,14 @@ const liveTok = computed(() => Math.ceil(liveText.value.length / 4))
     </template>
     <div v-if="turn === events.at(-1)?.turn && openTurn && (liveText || !done)" class="ev assistant">
       <small class="muted">{{ live.content ? 'answering' : 'thinking' }}…<span v-if="liveText"> ~{{ liveTok }} tok</span><span v-if="done"> · partial, not in the trace</span></small>
-      <div v-if="live.reasoning" class="muted">thinking: {{ live.reasoning }}</div>{{ live.content }}<span v-if="!done">▍</span>
+      <div v-if="live.reasoning" class="muted">thinking: {{ shown(live.reasoning, names) }}</div>{{ shown(live.content ?? '', names) }}<span v-if="!done">▍</span>
     </div>
     <details class="inspector"><summary>{{ turn === 0 ? 'setup' : `turn ${turn}` }} — raw request / response</summary>
       <template v-for="e in evs" :key="'raw' + e.seq">
-        <template v-if="e.type === 'llm_request'"><div class="hint">{{ layers(e.payload) }}</div><pre>{{ pretty(e.payload) }}</pre></template>
+        <template v-if="e.type === 'llm_request'"><template v-if="anatBySeq.get(e.seq)"><div class="hint" :title="t('trace.anatomySplit')">{{ anatomyLine(anatBySeq.get(e.seq)!) }}</div>
+          <div v-if="!anatBySeq.get(e.seq)!.exact" class="hint">{{ t('trace.anatomyEstimate') }}</div>
+          <div v-if="anatBySeq.get(e.seq)!.toolsInSystem" class="hint">{{ t('trace.anatomyToolsInSystem') }}</div>
+          <div v-if="anatBySeq.get(e.seq)!.thinkingBlocks" class="hint">{{ t('trace.anatomyThinking') }}</div></template><pre>{{ pretty(e.payload) }}</pre></template>
         <pre v-if="e.type === 'llm_response'">{{ pretty(e.raw) }}</pre>
       </template>
     </details>

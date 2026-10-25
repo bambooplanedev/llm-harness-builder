@@ -185,3 +185,7 @@ test('a locked repeat knob inside Advanced shows the lock hint there too', async
   const locked = await renderToString(createSSRApp(ConfigForm, { modelValue: base, models: [], modelsError: '', harnessNames: [], modelInfo: { takes: { temperature: false } } }))
   expect(locked.split(/<summary[^>]*>Advanced/)[1]).toContain('not available for this model')
 })
+
+test('film mode hides the harness description, which often names the model', async () => {
+  expect(await render({ ...base, description: 'qwen3 on Ollama' })).toContain('<div class="hint film-hide">qwen3 on Ollama</div>')
+})
