@@ -23,7 +23,7 @@ export const api = {
   saveHarness: (name: string, c: HarnessConfig) => j(`/api/harnesses/${name}`, { method: 'PUT', body: JSON.stringify(c) }),
   runs: () => j<RunSummary[]>('/api/runs'),
   dirs: (path: string) => j<{ path: string; parent: string | null; dirs: { name: string; path: string }[] }>(`/api/dirs?path=${encodeURIComponent(path)}`),
-  bench: (file?: string) => j<{ files: BenchFile[]; result?: BenchResult; active?: ActiveTrace; analysis?: Record<string, AnalysisCells> }>(
+  bench: (file?: string) => j<{ files: BenchFile[]; own?: string; result?: BenchResult; active?: ActiveTrace; analysis?: Record<string, AnalysisCells> }>(
     `/api/bench${file ? `?file=${encodeURIComponent(file)}` : ''}`),
   benchAgain: (file: string) => j<{ file: string }>('/api/bench/again', { method: 'POST', body: JSON.stringify({ file }) }),
   benchNew: (body: { harnesses: string[]; task: string; size?: number; n: number; backend: { kind: string; baseUrl: string; model: string; apiKeyEnv?: string } }) =>

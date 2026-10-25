@@ -59,6 +59,8 @@ export async function startServer(opts: ServerOpts) {
   let benching: ChildProcess | undefined
   /** Stop bench reached `benching` before its JSON existed: the start that waits says so, not a raw 502. */
   let stopping = false
+  /** The JSON `benching` writes: GET /api/bench names it while it runs, so a reloaded page still offers Stop. */
+  let benchingFile = ''
   const running = () => !!benching && benching.exitCode === null && benching.signalCode === null
   /** Realpaths of the demo projects this server created: Check runs only in one of them, never in a folder the page names. */
   const demoDirs = new Set<string>()
@@ -73,7 +75,7 @@ export async function startServer(opts: ServerOpts) {
     const outPath = path.join(opts.runsDir, out)
     const i = args.findIndex(a => !a.startsWith('--')) // flags first, then the harness files
     const k2 = i < 0 ? args.length : i
-    stopping = false
+    stopping = false; benchingFile = out
     const child = benching = opts.bench!([...args.slice(0, k2), `--out=${outPath}`, ...args.slice(k2)])
     let tail = ''
     child.stderr?.on('data', (c: Buffer) => { tail = (tail + c).slice(-2000) }) // read to the end, or a full pipe stalls the bench
@@ -157,11 +159,12 @@ export async function startServer(opts: ServerOpts) {
       if (m('GET', /^\/api\/runs$/)) return json(res, 200, await store.list())
       if (m('GET', /^\/api\/bench$/)) {
         const file = url.searchParams.get('file')
-        if (file === null) return json(res, 200, { files: await store.benchList() })
+        const own = running() ? benchingFile : undefined
+        if (file === null) return json(res, 200, { files: await store.benchList(), own })
         if (!benchName(file)) return json(res, 400, { error: 'bad name' })
         const opened = await store.benchOpen(file)
         if (!opened) return json(res, 404, { error: 'not a bench file' })
-        return json(res, 200, { files: await store.benchList(), ...opened, analysis: await store.benchAnalysis(opened.result) })
+        return json(res, 200, { files: await store.benchList(), own, ...opened, analysis: await store.benchAnalysis(opened.result) })
       }
       if (opts.bench && m('POST', /^\/api\/bench\/again$/)) {
         // The same bench once more, from its own JSON: the harnesses as recorded, the task, size, n and timeout. A new JSON, the old one stays.

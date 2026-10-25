@@ -353,7 +353,8 @@ async function cmdBench(argv: string[]) {
   try { save() } catch (e) { die(`cannot write ${out}:\n  ${(e as Error).message}`) }
   console.error(`bench: ${files.length} harnesses × ${n} runs, timeout ${timeoutS}s per run, writing ${out}`)
   files.forEach((f, i) => console.error(`  ${harnesses[i].name.padEnd(13)} ${f}`))
-  process.once('SIGINT', () => { result.stopped = true; save(); finish(130) })
+  // A failed write still prints the table: the terminal then holds what the JSON could not.
+  process.once('SIGINT', () => { result.stopped = true; try { save() } catch (e) { console.error(`cannot write ${out}: ${(e as Error).message}`) } finish(130) })
   for (let round = 1; round <= n; round++) {
     console.error(`--- round ${round}/${n}`)
     for (const h of harnesses) {

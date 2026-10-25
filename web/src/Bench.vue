@@ -79,7 +79,7 @@ async function again() {
   if (!confirm(`Run this bench again: the same harnesses, task, n and timeout, into a new JSON.\n\n${autoApproves('bench')}.`)) return
   await start(() => api.benchAgain(file.value))
 }
-/** The bench JSON this page started, while it may still run: Stop bench shows for it. */
+/** The bench JSON this server started, while it runs (from every tick, so a reload keeps it): Stop bench shows for it. */
 const own = ref('')
 const stopping = ref(false)
 async function start(call: () => Promise<{ file: string }>) {
@@ -90,10 +90,9 @@ async function start(call: () => Promise<{ file: string }>) {
 }
 async function stop() {
   stopping.value = true; error.value = ''
-  // A 409 is a bench that already ended on its own: nothing left to stop.
-  try { await api.benchStop() } catch (e) { error.value = (e as Error).message; own.value = '' }
+  try { await api.benchStop() } catch (e) { error.value = (e as Error).message; stopping.value = false }
+  restart()
 }
-watch(() => result.value, r => { if (r && file.value === own.value && (r.complete || r.stopped)) own.value = '' })
 watch(() => !starting.value && !own.value, idle => { if (idle) stopping.value = false })
 
 /** New bench: harnesses from ./harnesses, the model from the Workbench form, nothing else from anywhere. */
@@ -108,9 +107,14 @@ const runsPer = ref(3)
 watch(task, t => { size.value = BENCH_TASKS[t] })
 async function toggleNew() {
   newOpen.value = !newOpen.value
-  if (newOpen.value) try { list.value = await api.harnesses() } catch (e) { error.value = (e as Error).message }
+  if (!newOpen.value) return
+  // Read afresh on every open: a harness file edited since may run something else unasked now.
+  runsUnasked.value = {}
+  try { list.value = await api.harnesses() } catch (e) { error.value = (e as Error).message; return }
+  picked.value = picked.value.filter(n => list.value.some(h => h.name === n))
+  await loadUnasked(picked.value)
 }
-watch(picked, async names => {
+async function loadUnasked(names: string[]) {
   for (const n of names) if (!runsUnasked.value[n]) {
     try {
       const c = await api.harness(n)
@@ -118,7 +122,8 @@ watch(picked, async names => {
         ...c.loop?.untilBash ? [`loop.untilBash: ${c.loop.untilBash}`] : []]
     } catch (e) { error.value = (e as Error).message }
   }
-})
+}
+watch(picked, loadUnasked)
 async function startNew() {
   const b = props.backend
   const ok = await start(() => api.benchNew({ harnesses: picked.value, task: task.value, ...BENCH_TASKS[task.value] ? { size: size.value } : {}, n: runsPer.value,
@@ -138,6 +143,7 @@ async function tick() {
     const r = await api.bench(file.value || undefined)
     if (my !== gen || stopped) return
     files.value = r.files
+    own.value = r.own ?? ''
     now.value = Date.now()
     if (file.value) {
       result.value = r.result ?? null

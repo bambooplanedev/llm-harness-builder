@@ -723,3 +723,16 @@ test('GET /api/bench?file= on a stopped bench shows no live run, though its .par
     expect(r.active).toBeUndefined()
   } finally { await s.close() }
 })
+
+test('GET /api/bench names the bench this server started while it runs, so a reloaded page can still stop it', async () => {
+  const b = await benchServer(() => `require('fs').writeFileSync(OUT, ${JSON.stringify(benchJson({ date: new Date().toISOString() }))}); process.on('SIGINT', () => process.exit(130)); setInterval(() => {}, 1000)`)
+  await writeFile(join(b.hdir, 'tuned.json'), JSON.stringify(config({ name: 'tuned' })))
+  try {
+    expect((await (await fetch(`${b.u}/api/bench`)).json()).own).toBeUndefined()
+    const { file } = await (await postJson(`${b.u}/api/bench/new`, { harnesses: ['tuned'], task: 'slug', n: 1, backend: form })).json()
+    expect((await (await fetch(`${b.u}/api/bench`)).json()).own).toBe(file)
+    expect((await (await fetch(`${b.u}/api/bench?file=${file}`)).json()).own).toBe(file)
+    b.children[0].kill('SIGINT'); await exited(b.children[0])
+    expect((await (await fetch(`${b.u}/api/bench`)).json()).own).toBeUndefined()
+  } finally { for (const c of b.children) c.kill('SIGKILL'); await b.s.close() }
+})
