@@ -398,7 +398,7 @@ test('Ctrl-C during bench with a live mcp server leaves the PASS table intact an
 test('SIGINT to bench takes a long command the model started with it', async () => {
   const wd = await tmp('lhb-cli-')
   const fake = join(wd, 'fake.json'); const out = join(wd, 'b.json')
-  // A duration no other process has: pgrep finds this sleep and nothing else.
+  // A duration no other process has: pgrep finds this sleep and nothing else (on Linux the shell around it too).
   const secs = `300.${process.pid}${Date.now() % 100000}`
   await writeFile(fake, JSON.stringify([{ toolCalls: [{ name: 'bash', args: { command: `sleep ${secs}` } }] }]))
   const harnessFile = join(wd, 'sleepy.json')
@@ -415,7 +415,7 @@ test('SIGINT to bench takes a long command the model started with it', async () 
     p.stdout.resume(); p.stderr.resume()
     const deadline1 = Date.now() + 10_000
     while (count() === 0 && Date.now() < deadline1) await new Promise(r => setTimeout(r, 50))
-    expect(count()).toBe(1)
+    expect(count()).toBeGreaterThan(0)
     expect(await new Promise(done => { p.on('exit', done); p.kill('SIGINT') })).toBe(130)
     const deadline2 = Date.now() + 2000
     while (count() > 0 && Date.now() < deadline2) await new Promise(r => setTimeout(r, 50))
