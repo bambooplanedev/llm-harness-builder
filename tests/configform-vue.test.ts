@@ -56,7 +56,7 @@ test('no non-English text ships in the source', async () => {
   const root = new URL('..', import.meta.url).pathname
   const files = execFileSync('git', ['ls-files', 'src', 'web/src', 'tests'], { cwd: root, encoding: 'utf8' })
     .split('\n').filter(Boolean)
-    .filter(f => f !== 'web/src/hints.ts') // the hover hints are Ukrainian on purpose: asked for, and kept in this one file
+    .filter(f => !['web/src/hints.ts', 'web/src/uk.ts'].includes(f)) // Ukrainian on purpose: the hover hints, and the Ukrainian catalog in uk.ts
   const offenders: string[] = []
   for (const f of files) {
     const text = await readFile(new URL(`../${f}`, import.meta.url), 'utf8')

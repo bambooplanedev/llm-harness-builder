@@ -21,6 +21,9 @@ body { margin: 0; }
 .tabs button { min-height: 44px; padding: 0 14px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--muted); font: 500 14px var(--sans); cursor: pointer; }
 .tabs button:hover:not(:disabled) { background: none; color: var(--text); }
 .tabs button.on { color: var(--text); border-bottom-color: var(--text); }
+.tabs .settings { margin-left: auto; }
+dialog { padding: 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--text); }
+dialog::backdrop { background: rgb(0 0 0 / .4); }
 .col { overflow: auto; padding: 16px 20px; }
 .col.left { border-right: 1px solid var(--line); background: var(--surface); }
 /* .label: a heading with buttons in it. A <label> hands any click on it to its first button, so a click on the name would apply a preset. */

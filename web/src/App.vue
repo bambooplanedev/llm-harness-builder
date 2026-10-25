@@ -10,6 +10,7 @@ import ContextBar from './ContextBar.vue'
 import Trace from './Trace.vue'
 import Bench from './Bench.vue'
 import { H } from './hints'
+import { t, lang, LANGS, langName, setLang } from './i18n'
 
 const tab = ref<'workbench' | 'bench'>('workbench')
 /** The Bench tab shows the recorded bench shipped with the package instead of ./runs: read-only, no model. */
@@ -118,6 +119,7 @@ function outbound(c: HarnessConfig): HarnessConfig {
 /** Loads a bench run's harness and workdir into the form; the user presses Run themselves. */
 function toWorkbench(c: HarnessConfig, wd: string) { config.value = c; workdir.value = wd; tab.value = 'workbench' }
 
+const settings = ref<HTMLDialogElement | null>(null)
 onMounted(async () => { await refreshLists(); if (listsModelsByItself(config.value.backend)) await refreshModels() })
 // Three sources, not one getter returning an array: a new array never equals the last, so a family button, which swaps the
 // whole config, would ask for the model list again and blink the panel with every click.
@@ -138,6 +140,7 @@ watch(() => config.value.backend.model, () => {
     <div class="tabs">
       <button :class="{ on: tab === 'workbench' }" @click="tab = 'workbench'">Workbench</button>
       <button :class="{ on: tab === 'bench' }" @click="tab = 'bench'">Bench</button>
+      <button class="settings" @click="settings?.showModal()">⚙ {{ t('settings.title') }}</button>
     </div>
     <Bench v-if="tab === 'bench'" :key="String(benchExample)" :backend="config.backend" :example="benchExample" @example="v => (benchExample = v)" @to-workbench="toWorkbench" />
     <div class="layout" v-else>
@@ -194,5 +197,15 @@ watch(() => config.value.backend.model, () => {
         </div>
       </div>
     </div>
+    <dialog ref="settings">
+      <form method="dialog">
+        <h3>{{ t('settings.title') }}</h3>
+        <fieldset>
+          <legend>{{ t('settings.language') }}</legend>
+          <label v-for="l in LANGS" :key="l"><input type="radio" name="lang" :value="l" :checked="l === lang" @change="setLang(l)"> {{ langName(l) }}</label>
+        </fieldset>
+        <button>{{ t('settings.close') }}</button>
+      </form>
+    </dialog>
   </div>
 </template>
