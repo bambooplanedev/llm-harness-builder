@@ -1,6 +1,7 @@
 import { test, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+import { execSync } from 'node:child_process'
 
 const pkg = JSON.parse(readFileSync('package.json', 'utf8'))
 const files = (d: string): string[] => readdirSync(d).flatMap(f => { const p = join(d, f); return statSync(p).isDirectory() ? files(p) : [p] })
@@ -23,4 +24,19 @@ test('the metadata npm shows', () => {
   expect(pkg.homepage).toBe('https://github.com/bambooplanedev/llm-harness-builder#readme')
   expect(pkg.bugs).toEqual({ url: 'https://github.com/bambooplanedev/llm-harness-builder/issues' })
   expect(pkg.keywords).toEqual(['llm', 'agent', 'harness', 'local-llm', 'llama.cpp', 'ollama', 'tool-calling', 'tracing', 'benchmark'])
+})
+
+test('the recorded example runs ship, small, each trace finished, with nothing that ties them to a machine or an account', () => {
+  expect(pkg.files).toContain('example-runs')
+  const ex = files('example-runs')
+  expect(ex.length).toBeLessThanOrEqual(10)
+  expect(ex.reduce((a, f) => a + statSync(f).size, 0)).toBeLessThanOrEqual(500_000)
+  const emails = [/<(.+)>/.exec(pkg.author)![1]]
+  try { const e = execSync('git config user.email', { encoding: 'utf8' }).trim(); if (e) emails.push(e) } catch {} // CI may have none
+  for (const f of ex) {
+    const s = readFileSync(f, 'utf8')
+    expect([f, /\/Users\/|\/home\/|\/var\/folders|\/private\/var|192\.168\.|10\.\d+\.\d+\.\d+|_API_KEY"\s*:\s*"[^"]/.exec(s)?.[0]]).toEqual([f, undefined])
+    for (const e of emails) expect([f, s.includes(e)]).toEqual([f, false])
+    if (f.endsWith('.jsonl')) expect([f, JSON.parse(s.trim().split('\n').at(-1)!).type]).toEqual([f, 'done'])
+  }
 })

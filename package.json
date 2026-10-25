@@ -19,7 +19,8 @@
     "examples",
     "examples-pool",
     "examples-sift",
-    "examples-triage"
+    "examples-triage",
+    "example-runs"
   ],
   "scripts": {
     "test": "vitest run",

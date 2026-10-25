@@ -15,8 +15,9 @@ import { benchFileName } from '../core/bench.js'
 import { TASKS, checkSlug } from '../core/tasks.js'
 import { childEnv } from '../core/tools/env.js'
 
-/** `bench` starts `llm-harness-builder bench <args>` with its stderr piped; without it the page cannot start one. */
-export type ServerOpts = { port: number; runsDir: string; harnessesDir: string; staticDir?: string; backendFactory?: (b: HarnessConfig['backend']) => Backend; bench?: (args: string[]) => ChildProcess }
+/** `bench` starts `llm-harness-builder bench <args>` with its stderr piped; without it the page cannot start one.
+ *  `examplesDir`: recorded runs the three GET routes read with `?example=1`; nothing ever writes there. */
+export type ServerOpts = { port: number; runsDir: string; harnessesDir: string; examplesDir?: string; staticDir?: string; backendFactory?: (b: HarnessConfig['backend']) => Backend; bench?: (args: string[]) => ChildProcess }
 
 const MIME: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml' }
 const MAX_BODY_BYTES = 5e6
@@ -53,6 +54,7 @@ const readBody = (req: http.IncomingMessage) => new Promise<any>((resolve, rejec
 
 export async function startServer(opts: ServerOpts) {
   const store = new RunStore(opts.runsDir)
+  const examples = opts.examplesDir ? new RunStore(opts.examplesDir) : undefined
   const backendFactory = opts.backendFactory ?? createBackend
   await mkdir(opts.harnessesDir, { recursive: true })
   /** The bench this server started: one at a time, both would share one model server. */
@@ -156,15 +158,19 @@ export async function startServer(opts: ServerOpts) {
         const dirs = entries.filter(e => e.isDirectory() && !e.name.startsWith('.')).map(e => ({ name: e.name, path: path.join(dir, e.name) })).sort((a, b) => a.name.localeCompare(b.name))
         return json(res, 200, { path: dir, parent: path.dirname(dir) === dir ? null : path.dirname(dir), dirs })
       }
-      if (m('GET', /^\/api\/runs$/)) return json(res, 200, await store.list())
+      // `?example=1` on the three GET routes below reads the shipped examples; no POST route looks at it.
+      const example = url.searchParams.get('example') === '1'
+      const reads = example ? examples : store
+      if (!reads && (m('GET', /^\/api\/runs$/) || m('GET', /^\/api\/bench$/) || m('GET', /^\/api\/runs\/[^/]+\/events$/))) return json(res, 404, { error: 'no examples here' })
+      if (m('GET', /^\/api\/runs$/)) return json(res, 200, await reads!.list())
       if (m('GET', /^\/api\/bench$/)) {
         const file = url.searchParams.get('file')
-        const own = running() ? benchingFile : undefined
-        if (file === null) return json(res, 200, { files: await store.benchList(), own })
+        const own = !example && running() ? benchingFile : undefined
+        if (file === null) return json(res, 200, { files: await reads!.benchList(), own })
         if (!benchName(file)) return json(res, 400, { error: 'bad name' })
-        const opened = await store.benchOpen(file)
+        const opened = await reads!.benchOpen(file)
         if (!opened) return json(res, 404, { error: 'not a bench file' })
-        return json(res, 200, { files: await store.benchList(), own, ...opened, analysis: await store.benchAnalysis(opened.result) })
+        return json(res, 200, { files: await reads!.benchList(), own, ...opened, analysis: await reads!.benchAnalysis(opened.result) })
       }
       if (opts.bench && m('POST', /^\/api\/bench\/again$/)) {
         // The same bench once more, from its own JSON: the harnesses as recorded, the task, size, n and timeout. A new JSON, the old one stays.
@@ -259,6 +265,7 @@ export async function startServer(opts: ServerOpts) {
       }
       if ((mm = m('GET', /^\/api\/runs\/([^/]+)\/events$/))) {
         const id = mm[1]
+        if (example && !safeName(id)) return json(res, 404, { error: 'not found' })
         const rawLastId = Number(req.headers['last-event-id'])
         let sent = Number.isInteger(rawLastId) ? rawLastId : -1
         let ended = false
@@ -276,19 +283,20 @@ export async function startServer(opts: ServerOpts) {
         // duplicates between the snapshot and the buffer are harmless since emit() dedupes on `sent`.
         const buffered: HarnessEvent[] = []
         let replaying = true
-        const unsub = store.subscribe(id, e => {
+        const unsub = reads!.subscribe(id, e => {
           // Deltas are live-only: no id (Last-Event-ID stays on real events), dropped while replaying (headers not sent yet).
           if (e.type === 'delta') { if (!replaying && !ended) res.write(`event: delta\ndata: ${JSON.stringify(e)}\n\n`) }
           else if (replaying) buffered.push(e); else emit(e)
         })
         req.on('close', unsub) // before the first await: a client that drops mid-read must not leave a listener behind
         let past: HarnessEvent[]
-        try { past = await store.read(id) } catch { return json(res, 404, { error: 'not found' }) }
+        try { past = await reads!.read(id) } catch { return json(res, 404, { error: 'not found' }) }
         res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' })
         for (const e of past) emit(e)
         for (const e of buffered) emit(e)
         replaying = false
-        if (!store.isActive(id) && !ended) {
+        if (example) endOnce() // a shipped trace already ends with done: never ensureDone, nothing is written there
+        else if (!store.isActive(id) && !ended) {
           const synthetic = await store.ensureDone(id)
           if (synthetic) emit(synthetic)
           else endOnce()

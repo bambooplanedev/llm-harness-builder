@@ -8,9 +8,9 @@ import { H } from './hints'
 import Diff from './Diff.vue'
 import type { DiffSide } from '../../src/core/diff'
 
-const emit = defineEmits<{ toWorkbench: [config: HarnessConfig, workdir: string] }>()
-/** The Workbench form's model: New bench always runs on it. */
-const props = defineProps<{ backend: HarnessConfig['backend'] }>()
+const emit = defineEmits<{ toWorkbench: [config: HarnessConfig, workdir: string]; example: [on: boolean] }>()
+/** The Workbench form's model: New bench always runs on it. `example`: the shipped recorded bench, read-only — its backend is not yours. */
+const props = defineProps<{ backend: HarnessConfig['backend']; example: boolean }>()
 
 const files = ref<BenchFile[]>([])
 const file = ref('')
@@ -38,7 +38,7 @@ function compare(name: string, run: BenchRun, config: HarnessConfig) {
   diffUnsub?.(); diffEvents.value = []
   diff.value = { name, run, config }
   diffUnsub = api.events(run.trace!, e => diffEvents.value.push(e),
-    m => (error.value = killedHint(`${m} — the compared run`, run.trace!)))
+    m => (error.value = killedHint(`${m} — the compared run`, run.trace!)), undefined, props.example)
 }
 function closeDiff() { diffUnsub?.(); diffUnsub = null; diff.value = null; diffEvents.value = [] }
 
@@ -140,7 +140,7 @@ const medCost = (h: BenchHarness) => { const c = h.runs.flatMap(r => r.costUsd ?
 async function tick() {
   const my = ++gen
   try {
-    const r = await api.bench(file.value || undefined)
+    const r = await api.bench(file.value || undefined, props.example)
     if (my !== gen || stopped) return
     files.value = r.files
     own.value = r.own ?? ''
@@ -182,7 +182,7 @@ watch(sel, s => {
   if (s === 'live') { events.value = active.value?.events ?? [] ; return }
   events.value = []
   unsub = api.events(s.id, e => events.value.push(e),
-    m => (error.value = killedHint(m, s.id)))
+    m => (error.value = killedHint(m, s.id)), undefined, props.example)
 })
 
 const age = computed(() => active.value ? now.value - active.value.started : 0)
@@ -201,20 +201,21 @@ watch([runs, total, () => result.value?.complete], () => {
   document.title = result.value ? `${runs.value.length}/${total.value}${result.value.complete ? ' done' : ''} · bench` : TITLE
 })
 
-onMounted(() => void tick())
+onMounted(() => props.example ? openFile('bench-example.json') : void tick())
 onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer); unsub?.(); diffUnsub?.(); document.title = TITLE })
 </script>
 
 <template>
   <div class="layout bench">
     <div class="col left">
-      <h4>Bench</h4>
-      <div class="actions">
+      <h4>Bench <button class="link" @click="emit('example', !example)">{{ example ? 'your benches' : 'Examples' }}</button></h4>
+      <div v-if="example" class="hint">a recorded bench shipped with the package: read-only, no model needed</div>
+      <div v-else class="actions">
         <button @click="toggleNew">New bench</button>
         <button v-if="starting || own" :disabled="stopping" title="SIGINT, like Ctrl-C: the finished runs stay in the JSON; can take up to a minute" @click="stop">{{ stopping ? 'stopping…' : 'Stop bench' }}</button>
       </div>
-      <div v-if="!files.length" class="hint">
-        no benches yet: run <code>llm-harness-builder bench</code><br>
+      <div v-if="!files.length && !example" class="hint">
+        no benches yet: run <code>llm-harness-builder bench</code> or New bench, or open the <button class="link" @click="emit('example', true)">Examples</button><br>
         this page reads only <code>runs/*.json</code> — a bench written with <code>--out</code> elsewhere will not show up here
       </div>
       <details v-if="files.length" :open="!file"><summary class="hint">{{ file || 'pick a bench' }} · {{ files.length }} benches</summary>
@@ -245,7 +246,7 @@ onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer); unsub?.(); d
                 <template v-else>no trace written (JSON predates v2.0.3)</template> · {{ r.workdir }}
               </small>
               <div class="actions">
-                <button @click.stop="emit('toWorkbench', h.config, r.workdir)">to Workbench</button>
+                <button v-if="!example" @click.stop="emit('toWorkbench', h.config, r.workdir)">to Workbench</button>
                 <button v-if="r.trace && sideA && r.trace !== sideA.run.trace && r.trace !== diff?.run.trace" title="compare with the open run" @click.stop="compare(h.name, r, h.config)">⇄</button>
               </div>
             </div>
@@ -278,7 +279,7 @@ onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer); unsub?.(); d
           <div class="muted">{{ backend?.model }} · {{ backend?.kind }} {{ backend?.baseUrl }}<template v-if="nCtx"> · window {{ nCtx.toLocaleString() }}</template> · timeout {{ mmss(result.timeoutS * 1000) }} · {{ new Date(result.date).toLocaleString() }}</div>
           <div class="muted">{{ runs.length }}/{{ total }} runs<template v-if="!result.complete"> · {{ result.stopped ? 'stopped' : 'incomplete' }}</template> · {{ mmss(msDone) }} in</div>
           </div>
-          <button @click="again" :disabled="starting || !!active" :title="active ? H.againBusy : H.again">{{ starting ? 'Starting…' : 'Run bench again' }}</button>
+          <button v-if="!example" @click="again" :disabled="starting || !!active" :title="active ? H.againBusy : H.again">{{ starting ? 'Starting…' : 'Run bench again' }}</button>
         </div>
         <div v-if="runs.length" class="table-wrap">
           <table class="bench">

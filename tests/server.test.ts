@@ -1,5 +1,6 @@
 import { test, expect, afterAll } from 'vitest'
-import { writeFile, readFile, appendFile, realpath, stat } from 'node:fs/promises'
+import { writeFile, readFile, appendFile, realpath, stat, cp, chmod, readdir } from 'node:fs/promises'
+import { fileURLToPath } from 'node:url'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import http from 'node:http'
@@ -735,4 +736,30 @@ test('GET /api/bench names the bench this server started while it runs, so a rel
     b.children[0].kill('SIGINT'); await exited(b.children[0])
     expect((await (await fetch(`${b.u}/api/bench`)).json()).own).toBeUndefined()
   } finally { for (const c of b.children) c.kill('SIGKILL'); await b.s.close() }
+})
+
+test('examples are served read-only', async () => {
+  const ex = await tmp('lhb-ex-'), dir = await tmp('lhb-exruns-')
+  await cp(fileURLToPath(new URL('../example-runs/', import.meta.url)), ex, { recursive: true })
+  const snap = async () => Promise.all((await readdir(ex)).sort().map(async f => [f, (await stat(join(ex, f))).mtimeMs]))
+  await chmod(ex, 0o555)
+  const before = await snap()
+  const s = await startServer({ port: 0, runsDir: dir, harnessesDir, examplesDir: ex, backendFactory: () => fake([]) })
+  const u = `http://127.0.0.1:${s.port}`
+  try {
+    const ids = ((await (await fetch(`${u}/api/runs?example=1`)).json()) as { id: string }[]).map(r => r.id).sort()
+    expect(ids).toEqual(['059867d3', '590eb245', '6f1fb37b', 'd63e9548'])
+    expect(await (await fetch(`${u}/api/runs`)).json()).toEqual([])
+    const b = await (await fetch(`${u}/api/bench?example=1&file=bench-example.json`)).json()
+    expect(b.result.harnesses.map((h: { name: string }) => h.name)).toEqual(['bare', 'tuned-nothink'])
+    expect(Object.keys(b.analysis).sort()).toEqual(ids)
+    expect((await (await fetch(`${u}/api/bench`)).json()).files).toEqual([])
+    const events = await collectSSE(`${u}/api/runs/d63e9548/events?example=1`)
+    expect(events.at(-1).type).toBe('done')
+    expect((await fetch(`${u}/api/runs/d63e9548/events`)).status).toBe(404)
+    expect(await snap()).toEqual(before)
+    expect(await readdir(dir)).toEqual([])
+  } finally { await s.close(); await chmod(ex, 0o755) }
+  // No examples folder given: the switch is a 404, never the runs dir.
+  expect((await fetch(`${base}/api/runs?example=1`)).status).toBe(404)
 })

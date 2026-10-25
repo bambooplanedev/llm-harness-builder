@@ -118,6 +118,17 @@ test('tuned-repeat is tuned plus loop.maxRepeats and nothing else', async () => 
   expect(rep).toEqual({ ...tuned, name: 'tuned-repeat', description: rep.description, loop: { ...tuned.loop, maxRepeats: 3 } })
 })
 
+test('tuned-nothink is tuned with thinking off and edit-miss help, and is the harness of the shipped example bench', async () => {
+  const load = async (n: string) => JSON.parse(await readFile(new URL(`../harnesses/${n}.json`, import.meta.url), 'utf8'))
+  const tuned = await load('tuned'), nt = await load('tuned-nothink')
+  expect(validateConfig(nt)).toEqual([])
+  expect(nt).toEqual({ ...tuned, name: 'tuned-nothink', description: nt.description, backend: { ...tuned.backend, think: false },
+    tools: { ...tuned.tools, explainEditMiss: true, editMissEscalation: 2 } })
+  const bench = JSON.parse(await readFile(new URL('../example-runs/bench-example.json', import.meta.url), 'utf8'))
+  const { description: _, ...rest } = nt
+  expect(bench.harnesses.find((h: { name: string }) => h.name === 'tuned-nothink').config).toEqual(rest)
+})
+
 test('tuned-budget is tuned-repeat plus context.budgetTokens and nothing else', async () => {
   const load = async (n: string) => JSON.parse(await readFile(new URL(`../harnesses/${n}.json`, import.meta.url), 'utf8'))
   const rep = await load('tuned-repeat'), bud = await load('tuned-budget')

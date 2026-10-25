@@ -21,10 +21,11 @@ export const api = {
   harnesses: () => j<{ name: string; description?: string }[]>('/api/harnesses'),
   harness: (name: string) => j<HarnessConfig>(`/api/harnesses/${name}`),
   saveHarness: (name: string, c: HarnessConfig) => j(`/api/harnesses/${name}`, { method: 'PUT', body: JSON.stringify(c) }),
-  runs: () => j<RunSummary[]>('/api/runs'),
+  /** `example`: the recorded runs shipped with the package, read-only, never mixed into your own. */
+  runs: (example?: boolean) => j<RunSummary[]>(`/api/runs${example ? '?example=1' : ''}`),
   dirs: (path: string) => j<{ path: string; parent: string | null; dirs: { name: string; path: string }[] }>(`/api/dirs?path=${encodeURIComponent(path)}`),
-  bench: (file?: string) => j<{ files: BenchFile[]; own?: string; result?: BenchResult; active?: ActiveTrace; analysis?: Record<string, AnalysisCells> }>(
-    `/api/bench${file ? `?file=${encodeURIComponent(file)}` : ''}`),
+  bench: (file?: string, example?: boolean) => j<{ files: BenchFile[]; own?: string; result?: BenchResult; active?: ActiveTrace; analysis?: Record<string, AnalysisCells> }>(
+    `/api/bench?${new URLSearchParams({ ...file ? { file } : {}, ...example ? { example: '1' } : {} })}`),
   benchAgain: (file: string) => j<{ file: string }>('/api/bench/again', { method: 'POST', body: JSON.stringify({ file }) }),
   benchNew: (body: { harnesses: string[]; task: string; size?: number; n: number; backend: { kind: string; baseUrl: string; model: string; apiKeyEnv?: string } }) =>
     j<{ file: string }>('/api/bench/new', { method: 'POST', body: JSON.stringify(body) }),
@@ -35,8 +36,8 @@ export const api = {
   approve: (id: string, callId: string, ok: boolean) => j(`/api/runs/${id}/approve`, { method: 'POST', body: JSON.stringify({ callId, ok }) }),
   abort: (id: string) => j(`/api/runs/${id}/abort`, { method: 'POST' }),
   /** Subscribes to a run; browser EventSource handles Last-Event-ID on reconnect. */
-  events: (id: string, onEvent: (e: HarnessEvent) => void, onError: (message: string) => void, onDelta?: (d: Delta) => void): (() => void) => {
-    const es = new EventSource(`/api/runs/${id}/events`)
+  events: (id: string, onEvent: (e: HarnessEvent) => void, onError: (message: string) => void, onDelta?: (d: Delta) => void, example?: boolean): (() => void) => {
+    const es = new EventSource(`/api/runs/${id}/events${example ? '?example=1' : ''}`)
     es.onmessage = m => { const e = JSON.parse(m.data) as HarnessEvent; onEvent(e); if (e.type === 'done') es.close() }
     es.addEventListener('delta', m => onDelta?.(JSON.parse((m as MessageEvent).data)))
     // While CONNECTING the browser retries on its own (with Last-Event-ID); CLOSED means it gave up, e.g. on a 404.
