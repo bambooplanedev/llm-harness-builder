@@ -43,7 +43,7 @@ const hasEvents = computed(() => props.a.events.length > 0 && props.b.events.len
       <button @click="$emit('close')" :title="t('diff.closeTitle')">×</button>
     </div>
 
-    <div class="muted mono summary">{{ tn('diff.knobs', rows.length) }}<template v-if="!rows.length"> {{ t('diff.same') }}</template></div>
+    <div class="muted mono summary">{{ tn('diff.knobs', rows.length) }}<template v-if="!rows.length">{{ ' ' + t('diff.same') }}</template></div>
     <div v-if="rows.length" class="table-wrap">
     <table class="cfg">
       <tr v-for="r in rows" :key="r.path">

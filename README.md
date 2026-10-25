@@ -82,9 +82,10 @@ Without the npm registry, from the archive on the [GitHub release](https://githu
 In a container, for the CLI only — the commands the model runs then run inside the container, not on
 your machine:
 
-    docker run --rm -it node:22.12-slim npx llm-harness-builder …
+    docker run --rm -it -v "$PWD":/work -w /work node:22.12-slim npx llm-harness-builder …
 
-The UI is not reachable from a container: `serve` listens on 127.0.0.1. From source, see
+A model server on the host is reached at `http://host.docker.internal:11434` (on Linux add
+`--add-host=host.docker.internal:host-gateway`), not 127.0.0.1. The UI is not reachable from a container: `serve` listens on 127.0.0.1. From source, see
 [Development](#development).
 
 ## Quick start

@@ -46,6 +46,13 @@ test('Settings: a native dialog with one radio per language, each named in its o
   const uk = await renderToString(createSSRApp(App))
   expect(uk).toMatch(/value="uk"[^>]*checked/)
   expect(uk).toContain(t('settings.title'))
+  expect(uk).toMatch(/<dialog[^>]*aria-labelledby="settings-title"/); expect(uk).toContain('id="settings-title"')
+  expect(uk).toMatch(/value="uk"[^>]*autofocus/); expect(uk).not.toMatch(/value="en"[^>]*autofocus/)
+})
+
+test('uk.ts uses the ASCII apostrophe only', async () => {
+  const { readFileSync } = await import('node:fs')
+  expect(readFileSync(new URL('../web/src/uk.ts', import.meta.url), 'utf8')).not.toContain('\u02bc')
 })
 
 const plain = (html: string) => html.replace(/<!--[\s\S]*?-->/g, '')

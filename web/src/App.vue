@@ -199,12 +199,12 @@ watch(() => config.value.backend.model, () => {
         </div>
       </div>
     </div>
-    <dialog ref="settings">
+    <dialog ref="settings" aria-labelledby="settings-title">
       <form method="dialog">
-        <h3>{{ t('settings.title') }}</h3>
+        <h3 id="settings-title">{{ t('settings.title') }}</h3>
         <fieldset>
           <legend>{{ t('settings.language') }}</legend>
-          <label v-for="l in LANGS" :key="l"><input type="radio" name="lang" :value="l" :checked="l === lang" @change="setLang(l)"> {{ langName(l) }}</label>
+          <label v-for="l in LANGS" :key="l"><input type="radio" name="lang" :value="l" :autofocus="l === lang" :checked="l === lang" @change="setLang(l)"> {{ langName(l) }}</label>
         </fieldset>
         <button>{{ t('settings.close') }}</button>
       </form>
