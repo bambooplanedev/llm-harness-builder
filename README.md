@@ -613,7 +613,7 @@ that holds the key:
 
     "backend": { "kind": "openai", "baseUrl": "https://openrouter.ai/api/v1",
                  "apiKeyEnv": "OPENROUTER_API_KEY",
-                 "model": "nvidia/nemotron-3-super-120b-a12b:free", "temperature": 0.2 }
+                 "model": "nvidia/nemotron-3.5-super-vl:free", "temperature": 0.2 }
 
 The demo on the cloud, no GPU needed — a free OpenRouter account is enough: models whose id ends in
 `:free` cost nothing, but OpenRouter allows them 20 requests a minute and 50 a day until you have
@@ -623,7 +623,7 @@ advises:
 
     export OPENROUTER_API_KEY=...
     npx llm-harness-builder demo --kind openai --base-url https://openrouter.ai/api/v1 \
-      --api-key-env OPENROUTER_API_KEY --model nvidia/nemotron-3-super-120b-a12b:free
+      --api-key-env OPENROUTER_API_KEY --model nvidia/nemotron-3.5-super-vl:free
 
 `harnesses/tuned-openrouter.json` is `tuned` on that backend; an older `harnesses/` copy made by
 `serve` lacks it, so copy it by hand.
