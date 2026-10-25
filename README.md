@@ -48,7 +48,7 @@ Not a coding agent for daily work. A lab for understanding why your 8B model bre
   where they split.
 - **Replay and analyze.** Send a recorded request again N times to see where the next call goes;
   read from traces what the context budget took away and when.
-- **Recording proxy.** Put it between another agent (opencode, for one) and llama-server, and its
+- **Recording proxy.** Put it between another agent (opencode, Claude Code) and its server, and its
   conversations become traces too.
 - **Local and cloud.** Ollama, llama-server, LM Studio, vLLM, any OpenAI-compatible API with a key
   (OpenRouter), and the Anthropic Messages API.
@@ -305,7 +305,7 @@ then shows that agent's requests and replies, and `replay` takes any of its turn
 
 Start it in the directory `serve` runs in (both use `./runs`) and give the agent
 `http://127.0.0.1:8090/v1` as its OpenAI base URL. `--upstream` is the server root, not its `/v1`.
-Every path goes through; only `POST …/chat/completions` is recorded. Ctrl-C (or `kill`) ends every
+Every path goes through; only `POST …/chat/completions` and `POST /v1/messages` are recorded. Ctrl-C (or `kill`) ends every
 open run with `done: aborted`, which here means "the recording stopped", not that the agent failed.
 The proxy refuses requests from a browser page served from another origin (other ports of
 `localhost` included), as `serve` does; agents that are not browser pages send no `Origin` and are
@@ -340,6 +340,34 @@ fit aider, whose first user message is its edit examples. So:
   `loop.repeatThinkTokens` turn is a one-turn run, and `loop.freshContext` starts a new one;
 - two identical sessions at the same time interleave in one run, and two sessions of the same task
   one after the other share the run of their identical one-message side requests.
+
+**Claude Code.** Point the proxy at Anthropic and Claude Code at the proxy's root, not its `/v1`
+(the proxy prints that line when it starts):
+
+    llm-harness-builder proxy --upstream https://api.anthropic.com --name claude-code
+    ANTHROPIC_BASE_URL=http://127.0.0.1:8090 claude
+
+Both sign-ins work. With an API key, set `ANTHROPIC_API_KEY` (sent as `x-api-key`) or
+`ANTHROPIC_AUTH_TOKEN` (sent as `Authorization: Bearer`) as usual. With the subscription, set only
+`ANTHROPIC_BASE_URL`: the saved OAuth token and its `anthropic-beta` value pass through unchanged.
+
+- Recorded: `POST /v1/messages`, streamed or not. Claude Code's `x-claude-code-*` headers split a
+  session into one run per agent, the main one and each subagent, and the Runs list groups them
+  under their session. Auxiliary calls (titles, classifiers) are notes in the main run, and a
+  compaction is a marker in its agent's run. Without those headers (older versions) the
+  system-and-first-user rule above applies.
+- Not recorded: `count_tokens`, every other path, any header. The request's key or token is replaced
+  by `[redacted: x-api-key]` or `[redacted: authorization]` wherever it shows up, a reply that echoes
+  it included; a value shorter than 20 characters is not looked for. Telemetry and update checks go
+  to anthropic.com directly, not through the proxy.
+- `--upstream` refuses a URL with a login or password, a query or fragment, and plain http to
+  anything but loopback.
+
+Claude Code sends your CLAUDE.md, memory, git identity and local paths in every request, so the
+trace holds them. Record a session you will show from a clean profile: a temporary `HOME` or
+`CLAUDE_CONFIG_DIR`, no global CLAUDE.md or memory, a synthetic repository with a throwaway git
+identity. Hiding names on screen while filming is a display convenience, not privacy protection.
+Recordings stay on your machine; never commit them.
 
 **A running session.** While the proxy that writes it is alive (its pid is in the meta line)
 `serve` does not mark the run aborted, and the page picks up new events every few seconds. If the
