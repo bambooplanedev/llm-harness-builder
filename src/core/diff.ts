@@ -71,9 +71,11 @@ function leaves(v: unknown, prefix = ''): [string, string][] {
   return [[prefix, JSON.stringify(v) ?? 'undefined']]
 }
 
+const LABELS = ['name', 'description']
+
 /**
- * Leaf-by-leaf difference of two harness configs. `name` is the harness's label, not a knob,
- * so it never counts as a difference. Order: a's leaves in their own order, then b-only ones.
+ * Leaf-by-leaf difference of two harness configs. `name` and `description` are the harness's labels, not knobs,
+ * so they never count as a difference. Order: a's leaves in their own order, then b-only ones.
  */
 export function configDiff(a: HarnessConfig, b: HarnessConfig): { path: string; a: string; b: string }[] {
   const rest = new Map(leaves(b))
@@ -81,9 +83,9 @@ export function configDiff(a: HarnessConfig, b: HarnessConfig): { path: string; 
   for (const [path, av] of leaves(a)) {
     const bv = rest.get(path) ?? 'undefined'
     rest.delete(path)
-    if (path !== 'name' && bv !== av) out.push({ path, a: av, b: bv })
+    if (!LABELS.includes(path) && bv !== av) out.push({ path, a: av, b: bv })
   }
-  for (const [path, bv] of rest) if (path !== 'name') out.push({ path, a: 'undefined', b: bv })
+  for (const [path, bv] of rest) if (!LABELS.includes(path)) out.push({ path, a: 'undefined', b: bv })
   return out
 }
 

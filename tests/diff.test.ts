@@ -97,6 +97,11 @@ const cfg = (over: Record<string, unknown> = {}): HarnessConfig => ({
   ...over,
 } as HarnessConfig)
 
+test('configDiff: a description is a label, not a knob', () => {
+  expect(configDiff({ ...cfg(), description: 'a' }, { ...cfg(), description: 'b' })).toEqual([])
+  expect(configDiff(cfg(), { ...cfg(), description: 'b' })).toEqual([])
+})
+
 test('configDiff: identical configs differ in nothing, and the name never counts', () => {
   expect(configDiff(cfg(), cfg())).toEqual([])
   expect(configDiff(cfg(), cfg({ name: 'tuned' }))).toEqual([])

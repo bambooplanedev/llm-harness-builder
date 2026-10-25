@@ -18,7 +18,7 @@ export const api = {
     j<string[]>('/api/models', { method: 'POST', body: JSON.stringify({ kind, baseUrl, ...(apiKeyEnv ? { apiKeyEnv } : {}) }) }),
   modelInfo: (kind: string, baseUrl: string, model: string, apiKeyEnv?: string) =>
     j<ServerInfo>('/api/model-info', { method: 'POST', body: JSON.stringify({ kind, baseUrl, model, ...(apiKeyEnv ? { apiKeyEnv } : {}) }) }),
-  harnesses: () => j<{ name: string }[]>('/api/harnesses'),
+  harnesses: () => j<{ name: string; description?: string }[]>('/api/harnesses'),
   harness: (name: string) => j<HarnessConfig>(`/api/harnesses/${name}`),
   saveHarness: (name: string, c: HarnessConfig) => j(`/api/harnesses/${name}`, { method: 'PUT', body: JSON.stringify(c) }),
   runs: () => j<RunSummary[]>('/api/runs'),

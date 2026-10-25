@@ -370,6 +370,7 @@ silently off.
 | `backend.think` | the chat template's thinking switch (below) |
 | `backend.apiKeyEnv` | the variable that holds a hosted API's key — see [Cloud](#cloud) |
 | `backend.pricePerMTok` | prices per million tokens, for `$` per reply and per run — see [Anthropic](#anthropic) |
+| `description` | one line on what the harness is for; shown beside the picker, ignored by diffs |
 | `systemPrompt` | the first message of every request |
 | `tools.enabled` | built-in tools: `list_dir`, `read_file`, `write_file`, `edit_file`, `bash` |
 | `tools.approveBash` | ask before each `bash` command |

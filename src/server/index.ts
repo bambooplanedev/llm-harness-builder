@@ -94,8 +94,13 @@ export async function startServer(opts: ServerOpts) {
         }
       }
       if (m('GET', /^\/api\/harnesses$/)) {
-        const names = (await readdir(opts.harnessesDir)).filter(f => f.endsWith('.json')).map(f => ({ name: f.slice(0, -5) }))
-        return json(res, 200, names)
+        const files = (await readdir(opts.harnessesDir)).filter(f => f.endsWith('.json'))
+        // An unreadable file is still listed, by name only.
+        const list = await Promise.all(files.map(async f => {
+          const name = f.slice(0, -5)
+          try { const d = JSON.parse(await readFile(path.join(opts.harnessesDir, f), 'utf8')).description; return typeof d === 'string' ? { name, description: d } : { name } } catch { return { name } }
+        }))
+        return json(res, 200, list)
       }
       if ((mm = m('GET', /^\/api\/harnesses\/([^/]+)$/))) {
         if (!safeName(mm[1])) return json(res, 400, { error: 'bad name' })

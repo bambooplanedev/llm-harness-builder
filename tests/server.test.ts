@@ -183,6 +183,11 @@ test('the Vite dev proxy keeps the browser\'s Host, or serve would refuse every 
 test('harnesses and models', async () => {
   await writeFile(join(harnessesDir, 'x.json'), JSON.stringify(config({ name: 'x' })))
   expect(await (await fetch(`${base}/api/harnesses`)).json()).toEqual([{ name: 'x' }])
+  await writeFile(join(harnessesDir, 'z.json'), JSON.stringify(config({ name: 'z', description: 'says what it is for' })))
+  await writeFile(join(harnessesDir, 'broken.json'), '{')
+  const listing = await (await fetch(`${base}/api/harnesses`)).json()
+  expect(listing).toContainEqual({ name: 'z', description: 'says what it is for' })
+  expect(listing).toContainEqual({ name: 'broken' })
   const put = await fetch(`${base}/api/harnesses/y`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(config({ name: 'y' })) })
   expect(put.status).toBe(200)
   expect((await (await fetch(`${base}/api/harnesses/y`)).json()).name).toBe('y')
