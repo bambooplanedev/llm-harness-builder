@@ -8,7 +8,7 @@ import { createInterface } from 'node:readline/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { runAgent, mayAsk, type RunOpts } from './core/run.js'
-import { validateConfig, sendsAnswerSchema, KEY_ENV, FLAG_WORDS, keyNameMessage, keyErrors, keyProblem, keyNote, apiKey, isHttpUrl, type HarnessConfig, type BackendKind } from './core/config.js'
+import { validateConfig, sendsAnswerSchema, KEY_ENV, FLAG_WORDS, keyNameMessage, keyErrors, keyProblem, keyNote, apiKey, isHttpUrl, isLoopbackUrl, type HarnessConfig, type BackendKind } from './core/config.js'
 import { validateWorkdir } from './core/tools/sandbox.js'
 import type { Backend, Delta, NormalizedResponse } from './core/backends/types.js'
 import { approvalPrompt, mcpCounts, quitWithoutWork, showable, showableText, type HarnessEvent, type ToolCall } from './core/events.js'
@@ -493,12 +493,18 @@ async function cmdProxy(argv: string[]) {
   if (positionals.length) argError('proxy', 'proxy takes no positional arguments')
   if (!/^https?:\/\/[^/]/.test(values.upstream)) argError('proxy', '--upstream must be an http(s) URL')
   if (!PORT(values.port)) argError('proxy', '--port must be an integer from 0 to 65535')
+  // The agent's key rides on every forwarded request: it must not leave in clear text or be shadowed by one in the URL.
+  const u = new URL(values.upstream)
+  if (u.username || u.password) argError('proxy', '--upstream must not carry a login or password')
+  if (u.search || u.hash) argError('proxy', '--upstream must not carry a query or fragment')
+  if (u.protocol === 'http:' && !isLoopbackUrl(values.upstream)) argError('proxy', '--upstream over http must be a loopback address; use https')
   const upstream = values.upstream.replace(/\/+$/, '')
   if (/\/v1$/.test(upstream)) die(`--upstream is the server root, not its /v1: try ${upstream.slice(0, -3)}`)
   const runsDir = path.join(process.cwd(), 'runs')
   const p = await startProxy({ upstream, port: Number(values.port), runsDir, harness: values.name, log: l => console.error(l) })
     .catch(e => die(`proxy: ${(e as Error).message}`))
   console.error(`proxy on http://127.0.0.1:${p.port}/v1 -> ${upstream}  (runs: ${runsDir}); give the agent that base URL`)
+  console.error(`for Claude Code: ANTHROPIC_BASE_URL=http://127.0.0.1:${p.port}`)
   // Stopping is how a proxy session ends, so it exits 0, not run's 130. A second signal while
   // stopping force-exits with 130 instead, in case the graceful stop is stuck: any run this leaves
   // without a `done` gets the usual `aborted` repair from serve once this process's pid is gone.
