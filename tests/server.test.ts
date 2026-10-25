@@ -670,14 +670,15 @@ test('POST /api/bench/new validates and passes only what it checked', async () =
     const { file } = await r.json()
     expect(b.got).toEqual([['--task=slug', '--n=2', '--model=m', '--base-url=http://127.0.0.1:9/v1', '--kind=openai', `--out=${join(b.runs, file)}`, join(b.hdir, 'tuned.json')]])
     await exited(b.children[0])
-    const sized = await post({ task: 'pool', size: 3, backend: { ...form, apiKeyEnv: 'LHB_NEW_SET_API_KEY' } })
-    expect(sized.status).toBe(400) // tuned.json has no apiKeyEnv, the form has one
-    await writeFile(join(b.hdir, 'tuned.json'), JSON.stringify(config({ name: 'tuned', backend: { ...config().backend, apiKeyEnv: 'LHB_NEW_SET_API_KEY' } })))
+    // the form's key overrides the file's (--api-key-env), whether the file has none or another
     expect((await post({ task: 'pool', size: 3, backend: { ...form, apiKeyEnv: 'LHB_NEW_SET_API_KEY' } })).status).toBe(201)
+    await exited(b.children[1])
+    expect((await post({ harnesses: ['keyed'], backend: { ...form, apiKeyEnv: 'LHB_NEW_SET_API_KEY' } })).status).toBe(201)
     expect(b.got[1].slice(0, 7)).toEqual(['--task=pool', '--size=3', '--n=2', '--model=m', '--base-url=http://127.0.0.1:9/v1', '--kind=openai', '--api-key-env=LHB_NEW_SET_API_KEY'])
     const headers = { host: `localhost:${b.s.port}`, origin: 'http://evil.example', 'content-type': 'text/plain' }
     expect(await rawReq('POST', '/api/bench/new', headers, JSON.stringify(ok), b.s.port)).toBe(403)
-    expect(b.got).toHaveLength(2)
+    expect(b.got[2]).toContain('--api-key-env=LHB_NEW_SET_API_KEY')
+    expect(b.got).toHaveLength(3)
   } finally { await b.s.close(); delete process.env.LHB_NEW_SET_API_KEY }
 })
 

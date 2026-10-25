@@ -243,6 +243,30 @@ test('bench without files uses ./harnesses in demo order, round-robin', async ()
   expect(r.stdout).not.toContain('approves everything')
 }, 90_000)
 
+test('bench without files falls back to the package per harness file', async () => {
+  const wd = await tmp('lhb-cli-')
+  const fake = join(wd, 'fake.json'); const out = join(wd, 'b.json')
+  for (const n of ['bare', 'tuned-hermes']) await cp(harness(n), join(wd, 'harnesses', `${n}.json`))
+  await writeFile(fake, JSON.stringify(Array(8).fill({ content: 'Done.' })))
+  const r = cli(['bench', '--n', '1', '--out', out], { LHB_FAKE_BACKEND: fake }, wd)
+  expect(r.status).toBe(0)
+  expect(r.stderr).not.toContain('ENOENT')
+  expect(JSON.parse(await readFile(out, 'utf8')).harnesses.map((h: any) => h.name)).toEqual(['bare', 'tuned-nothink', 'tuned-hermes'])
+}, 90_000)
+
+test('serve adds the shipped harnesses that are missing and keeps an edited copy', async () => {
+  const wd = await tmp('lhb-cli-')
+  mkdirSync(join(wd, 'harnesses'))
+  const edited = JSON.stringify({ ...JSON.parse(await readFile(harness('bare'), 'utf8')), description: 'mine' })
+  await writeFile(join(wd, 'harnesses', 'bare.json'), edited)
+  const p = spawn(join(ROOT, 'node_modules', '.bin', 'tsx'), [join(ROOT, 'src', 'cli.ts'), 'serve', '--port', '0', '--no-open'], { cwd: wd, stdio: ['ignore', 'ignore', 'pipe'] })
+  try {
+    await new Promise<void>(res => p.stderr!.on('data', d => String(d).includes('serving on') && res()))
+    expect(readdirSync(join(wd, 'harnesses')).sort()).toEqual(readdirSync(join(ROOT, 'harnesses')).sort())
+    expect(await readFile(join(wd, 'harnesses', 'bare.json'), 'utf8')).toBe(edited)
+  } finally { p.kill() }
+}, 30_000)
+
 test('bench against a server that does not answer stops before the first run, with no JSON written', async () => {
   const wd = await tmp('lhb-cli-'); const out = join(wd, 'b.json')
   const r = cli(['bench', '--n', '1', '--out', out, '--kind', 'openai', '--base-url', 'http://127.0.0.1:1/v1', harness('tuned')])

@@ -214,8 +214,8 @@ export async function startServer(opts: ServerOpts) {
           const file = path.resolve(opts.harnessesDir, `${name}.json`)
           let cfg: { backend?: { apiKeyEnv?: unknown } }
           try { cfg = JSON.parse(await readFile(file, 'utf8')) } catch { errors.push(`${name}: no readable harness file of that name`); continue }
-          // loadHarness keeps a file's own apiKeyEnv: its key would go to the form's URL.
-          if (cfg?.backend?.apiKeyEnv !== backend.apiKeyEnv) errors.push(`${name}: its backend.apiKeyEnv differs from the form's`)
+          // loadHarness keeps a file's own apiKeyEnv unless --api-key-env overrides it: with no form key, the file's key would go to the form's URL.
+          if (!backend.apiKeyEnv && cfg?.backend?.apiKeyEnv !== undefined) errors.push(`${name}: its backend.apiKeyEnv differs from the form's`)
           files.push(file)
         }
         if (errors.length) return json(res, 400, { errors })

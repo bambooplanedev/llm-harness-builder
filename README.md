@@ -147,8 +147,8 @@ opens the recorded runs and bench that ship with the package: read-only, no mode
   finished runs stay in the JSON.
 
 Every run, from the UI or the CLI, is kept in `./runs/*.jsonl`. Start `serve` from the same
-directory to browse them, and reload the list after a CLI run. `serve` copies the shipped
-`harnesses/` into its working directory when there is none there yet.
+directory to browse them, and reload the list after a CLI run. On every start `serve` adds the shipped
+`harnesses/` that are missing from its working directory and never overwrites an existing file; `bench` and `demo` fall back to the package's file.
 
 ### CLI
 
@@ -176,7 +176,7 @@ directory to browse them, and reload the list after a CLI run. `serve` copies th
 
 **Exit codes.** 0 for help. `run` exits 0 when the model ended with a final answer (with
 `--answer-schema`, one that parses as JSON) and 1 when it did not; `demo` and `bench` exit 0
-whatever the verdicts; `demo` exits 1 when the server is not up or lacks the model, with a hint.
+whatever the verdicts; `demo` exits 1 when the server is not up or lacks the model, or when a harness needs something the model lacks (a knob it refuses), with a hint.
 2 for an argument a command cannot take (the message names it and the usage follows), for a file it cannot read, for a key variable that is not set, is empty or holds what a
 key cannot (see [Cloud](#cloud)), and for the refusal below. 130 for Ctrl-C in `run`, `demo` and
 `bench`, which keeps the trace. `proxy` exits 0 when stopped.

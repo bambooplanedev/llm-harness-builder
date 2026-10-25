@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // src/cli.ts
 import { parseArgs } from 'node:util'
-import { readFile, cp, access, mkdir } from 'node:fs/promises'
+import { readFile, cp, mkdir } from 'node:fs/promises'
 import { existsSync, readFileSync, writeFileSync, renameSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline/promises'
@@ -320,8 +320,9 @@ async function cmdBench(argv: string[]) {
   const n = Number(values.n), timeoutS = Number(values.timeout)
   const started = new Date()
   const out = values.out ?? path.join('runs', benchFileName(started))
+  // Per file: a ./harnesses copied by an older version lacks the newer shipped ones.
   const localDir = path.join(process.cwd(), 'harnesses')
-  const files = positionals.length ? positionals : demoHarnesses(values.kind, values['api-key-env']).map(h => path.join(existsSync(localDir) ? localDir : path.join(PKG_ROOT, 'harnesses'), `${h}.json`))
+  const files = positionals.length ? positionals : demoHarnesses(values.kind, values['api-key-env']).map(h => [path.join(localDir, `${h}.json`), path.join(PKG_ROOT, 'harnesses', `${h}.json`)].find(existsSync)!)
   const over = { model: values.model, baseUrl: values['base-url'], kind: values.kind, apiKeyEnv: values['api-key-env'], maxTurns: values['max-turns'] === undefined ? undefined : Number(values['max-turns']) }
   console.error(autoApproves('bench'))
   const harnesses: BenchHarness[] = []
@@ -471,7 +472,8 @@ async function cmdServe(argv: string[]) {
   if (!PORT(values.port)) argError('serve', '--port must be an integer from 0 to 65535')
   const cwd = process.cwd()
   const harnessesDir = path.join(cwd, 'harnesses')
-  try { await access(harnessesDir) } catch { await cp(path.join(PKG_ROOT, 'harnesses'), harnessesDir, { recursive: true }) }
+  // Adds the shipped harnesses that are missing; never overwrites an edited copy.
+  await cp(path.join(PKG_ROOT, 'harnesses'), harnessesDir, { recursive: true, force: false, errorOnExist: false })
   const fake = await fakeBackendFromEnv()
   const srv = await startServer({
     port: Number(values.port), runsDir: path.join(cwd, 'runs'), harnessesDir, examplesDir: path.join(PKG_ROOT, 'example-runs'),
