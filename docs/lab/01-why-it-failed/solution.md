@@ -45,7 +45,8 @@ try.
 
 ## The other `bare` run
 
-`590eb245` is the same `bare` harness on the same task in the same bench, and it passed: 252 s over
+`590eb245` (in the example bench; for the terminal, download `example-runs/590eb245.jsonl` like the
+other two) is the same `bare` harness on the same task in the same bench, and it passed: 252 s over
 8 turns, with two failed edits on the way (`src/slugify.js ×4 (zero 2)` in `loop on`). One harness,
 two very different runs: one run says little about a harness.
 
