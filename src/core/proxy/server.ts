@@ -60,7 +60,7 @@ export const drained = (res: http.ServerResponse) => new Promise<void>(resolve =
 })
 
 /** The reply as the backend itself would read it: a JSON body or an SSE stream, by content-type. */
-export async function readReply(chunks: Buffer[], contentType: string): Promise<NormalizedResponse> {
+async function readReply(chunks: Buffer[], contentType: string): Promise<NormalizedResponse> {
   if (/^application\/json/i.test(contentType)) return fromJson(JSON.parse(Buffer.concat(chunks).toString('utf8')))
   return collect(jsonChunks({ body: (async function* () { yield* chunks })() }, 'POST /chat/completions', 'data:'))
 }

@@ -24,6 +24,11 @@ export type HarnessEvent = Base & (
   | { type: 'done'; reason: DoneReason; text?: string; turns: number; toolCallCount: number }
 )
 
+// Plain Omit collapses the HarnessEvent union into one object type; distribute it manually
+// so each variant keeps its own extra fields (reason, payload, call, ...).
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never
+/** An event before the run stamps its seq, turn and ts. */
+export type Ev = DistributiveOmit<HarnessEvent, 'seq' | 'turn' | 'ts'>
 export type DoneEvent = Extract<HarnessEvent, { type: 'done' }>
 export type McpStartEvent = Extract<HarnessEvent, { type: 'mcp_server_start' }>
 

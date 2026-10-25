@@ -236,6 +236,9 @@ export class RunStore {
     return out.sort((x, y) => y.started - x.started)
   }
 
+  /** Every poll lists every bench: a file is parsed again only once its size or mtime moved. null is a file that is not a bench. */
+  private benches = new Map<string, { size: number; mtimeMs: number; result: BenchResult | null }>()
+
   /**
    * Every *.json in the runs dir that is a v1 bench result; anything else there is somebody's stray file.
    * `only` narrows the scan to that one name: the Bench page polls benchOpen every two seconds, and
@@ -247,10 +250,16 @@ export class RunStore {
     for (const f of await readdir(this.dir)) {
       if (!f.endsWith('.json') || !safeName(f) || (only !== undefined && f !== only)) continue
       try {
-        const result = JSON.parse(await readFile(path.join(this.dir, f), 'utf8'))
-        // A harness entry with no config is garbage, not a bench: skipping it here keeps such a file
-        // out of the list, so nothing downstream has to survive opening one (§3.1).
-        if (result?.version === 1 && Array.isArray(result.harnesses) && result.harnesses[0]?.config?.backend) out.push({ file: f, result })
+        const file = path.join(this.dir, f), { size, mtimeMs } = await stat(file)
+        let hit = this.benches.get(f)
+        if (hit?.size !== size || hit.mtimeMs !== mtimeMs) {
+          const result = JSON.parse(await readFile(file, 'utf8'))
+          // A harness entry with no config is garbage, not a bench: skipping it here keeps such a file
+          // out of the list, so nothing downstream has to survive opening one (§3.1).
+          const ok = result?.version === 1 && Array.isArray(result.harnesses) && result.harnesses[0]?.config?.backend
+          this.benches.set(f, hit = { size, mtimeMs, result: ok ? result : null })
+        }
+        if (hit.result) out.push({ file: f, result: hit.result })
       } catch { continue }
     }
     return out

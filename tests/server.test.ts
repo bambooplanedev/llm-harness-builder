@@ -333,6 +333,21 @@ test('GET /api/bench?file= returns the result and the one live trace that belong
   expect(r.active.events.map((e: any) => e.type)).toEqual(['llm_request', 'approval_required'])
 })
 
+test('GET /api/bench reads a bench JSON again once it changed on disk, a file that was not a bench included', async () => {
+  const dir = await tmp('lhb-bench-cache-')
+  const s = await startServer({ port: 0, runsDir: dir, harnessesDir, backendFactory: () => fake([]) })
+  const get = async (q = '') => (await fetch(`http://127.0.0.1:${s.port}/api/bench${q}`)).json()
+  await writeFile(join(dir, 'c.json'), benchJson())
+  await writeFile(join(dir, 'later.json'), '{half')
+  expect((await get('?file=c.json')).result.n).toBe(2)
+  expect((await get()).files.map((f: any) => f.file)).toEqual(['c.json'])
+  await writeFile(join(dir, 'c.json'), benchJson({ n: 3, complete: true }))
+  await writeFile(join(dir, 'later.json'), benchJson({ date: '2026-09-14T10:00:00.000Z' }))
+  expect((await get('?file=c.json')).result).toMatchObject({ n: 3, complete: true })
+  expect((await get()).files.map((f: any) => f.file)).toEqual(['later.json', 'c.json'])
+  await s.close()
+})
+
 test('GET /api/bench?file= ignores a .part started before the bench (the date floor)', async () => {
   const r = await (await fetch(`${bbase}/api/bench?file=b3.json`)).json()
   expect(r.result).toBeDefined()

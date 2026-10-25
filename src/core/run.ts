@@ -1,12 +1,12 @@
 import { NO_THINK_LINE, apiKey, listsModelsByItself, type HarnessConfig, type RunParams } from './config.js'
-import { mcpApprovalName, UNTIL_BASH, type HarnessEvent, type ToolCall, type DoneReason } from './events.js'
+import { mcpApprovalName, UNTIL_BASH, type Ev, type HarnessEvent, type ToolCall, type DoneReason } from './events.js'
 import { createBackend, type Backend, type ChatMessage, type ChatRequest, type Delta, type NormalizedResponse, type Usage } from './backends/index.js'
 import { TOOL_SCHEMAS, runTool } from './tools/index.js'
 import { GUARD_BLOCKED } from './tools/fs.js'
 import { bash } from './tools/bash.js'
 import { renderTools, PROMPTED_SCHEMA } from './prompts.js'
 import { parsePrompted, parseHermes } from './parse.js'
-import { estimateTokens, applyBudget } from './tokens.js'
+import { applyBudget } from './tokens.js'
 import { normPath } from './analyze.js'
 import { startServers, type McpSession } from './mcp.js'
 import { redactor } from './redact.js'
@@ -21,11 +21,6 @@ export type RunOpts = {
   /** Seam for tests; defaults to the real stdio client. */
   mcp?: typeof startServers
 }
-
-// Plain Omit collapses the HarnessEvent union into one object type; distribute it manually
-// so each variant keeps its own extra fields (reason, payload, call, ...).
-type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never
-type Ev = DistributiveOmit<HarnessEvent, 'seq' | 'turn' | 'ts'>
 
 // loop.freshContext. Appended to the task, not sent as a second user message: no chat template sees two user turns in a row.
 // It does not name the call that looped: that would put the loop back into the new history.
@@ -129,7 +124,6 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
     const cut = (s: string) => max !== undefined && s.length > max ? s.slice(0, max) + `\n[truncated: ${s.length - max} more chars]` : s
     const ctx = {
       workdir,
-      maxToolOutputChars: max,
       // Present only when the harness asked for it; the tools treat "absent" as "guard off".
       reads: config.tools.requireReadBeforeEdit ? new Set<string>() : undefined,
       explainEditMiss: config.tools.explainEditMiss,
@@ -155,7 +149,7 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
       if (turn >= config.loop.maxTurns) { yield done('max_turns'); return }
       turn++
 
-      const droppedChars = applyBudget(messages, config.context?.budgetTokens ?? 0)
+      const { dropped: droppedChars, tokens: estimatedTokens } = applyBudget(messages, config.context?.budgetTokens ?? 0)
       const think = hot && thinkTokens !== undefined
       const req: ChatRequest = {
         model: config.backend.model, messages: think ? [{ role: 'system', content: systemThinking }, ...messages.slice(1)] : messages,
@@ -171,7 +165,7 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
       }
       const payload = backend.buildPayload(req)
       const exactTokens = await backend.countTokens?.(payload, opts.signal)
-      yield ev({ type: 'context_stats', estimatedTokens: estimateTokens(messages), exactTokens, budgetTokens: config.context?.budgetTokens, droppedChars, usage: lastUsage })
+      yield ev({ type: 'context_stats', estimatedTokens, exactTokens, budgetTokens: config.context?.budgetTokens, droppedChars, usage: lastUsage })
       yield ev({ type: 'llm_request', payload })
 
       const t0 = Date.now()

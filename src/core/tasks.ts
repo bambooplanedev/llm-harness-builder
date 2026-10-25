@@ -59,11 +59,16 @@ const copyUnits = async (dir: string, units: string[], testOf: TestOf) => {
   }
 }
 
+/** A size outside 1..max is a caller's bug: `bench` checks --size before any task sees it. */
+function checkSize(name: string, size: number, max: number): void {
+  if (!Number.isInteger(size) || size < 1 || size > max) throw new RangeError(`${name} size must be an integer from 1 to ${max}, got ${size}`)
+}
+
 /** Grows with --size until a healthy run fills the window. The text names no technique; `node --test` is the success criterion. */
 const poolTask = (name: string, order: readonly string[], testOf: TestOf = sharedTest): Task => {
   /** The first `size` units. A size outside 1..order.length is a caller's bug: an empty list would turn `node --test` into recursive discovery. */
   const firstUnits = (size: number): string[] => {
-    if (!Number.isInteger(size) || size < 1 || size > order.length) throw new RangeError(`${name} size must be an integer from 1 to ${order.length}, got ${size}`)
+    checkSize(name, size, order.length)
     return order.slice(0, size)
   }
   return {
@@ -98,7 +103,7 @@ const sift: Task = (() => {
   const all = () => readFileSync(SIFT_FIXTURE, 'utf8').split('\n').filter(Boolean)
   const max = 12
   const first = (size: number): string[] => {
-    if (!Number.isInteger(size) || size < 1 || size > max) throw new RangeError(`sift size must be an integer from 1 to ${max}, got ${size}`)
+    checkSize('sift', size, max)
     return all().slice(0, size)
   }
   /** The lines of a file the model wrote, blank ones dropped; a file that is not there has none. */
@@ -144,7 +149,7 @@ const { triage, judge }: { triage: Task; judge: Task } = (() => {
   type Post = { message_id: number; published: string; source: string; title: string; summary: string; url: string; key: 'KEEP' | 'DROP' | 'EITHER' | 'DUP'; dup?: string }
   const max = 12
   const load = (size: number) => {
-    if (!Number.isInteger(size) || size < 1 || size > max) throw new RangeError(`triage size must be an integer from 1 to ${max}, got ${size}`)
+    checkSize('triage', size, max)
     const [head, ...posts] = readFileSync(TRIAGE_FIXTURE, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l))
     return { head: head as { head: string[]; foot: string }, posts: (posts as Post[]).slice(0, size) }
   }

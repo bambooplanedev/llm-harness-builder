@@ -74,16 +74,13 @@ async function refreshInfo() {
 /** A structural knob the model does not take: the run would be refused, so the form says it before Run. */
 const refusal = computed(() => modelInfo.value && knobsOff(config.value, modelInfo.value).refuse) // unknown: nothing to say yet
 async function refreshLists() { harnessNames.value = (await api.harnesses()).map(h => h.name); runs.value = await api.runs() }
-/** Normalises a config from either door (saved harness, bench JSON) before it lands in the form. */
-/** A harness without toolCalls.format stays without it: the form shows json for a missing key, and only a choice made there writes one. */
-function setConfig(c: HarnessConfig) { config.value = c }
 /** A harness describes how the agent thinks; the backend is what it runs on. Switching the first
  *  leaves the second alone — unless no model is picked yet (models never listed), when the
  *  harness's own backend is the only usable one. */
 async function load(name: string) {
   if (!name) return
   const c = await api.harness(name)
-  setConfig({ ...c, backend: config.value.backend.model ? config.value.backend : c.backend })
+  config.value = { ...c, backend: config.value.backend.model ? config.value.backend : c.backend }
 }
 async function saveAs(name: string) { error.value = ''; try { config.value.name = name; await api.saveHarness(name, outbound(config.value)); await refreshLists() } catch (e) { error.value = (e as Error).message } }
 function open(id: string, runTaskText: string, active = false) {
@@ -112,7 +109,7 @@ function outbound(c: HarnessConfig): HarnessConfig {
 }
 
 /** Loads a bench run's harness and workdir into the form; the user presses Run themselves. */
-function toWorkbench(c: HarnessConfig, wd: string) { setConfig(c); workdir.value = wd; tab.value = 'workbench' }
+function toWorkbench(c: HarnessConfig, wd: string) { config.value = c; workdir.value = wd; tab.value = 'workbench' }
 
 onMounted(async () => { await refreshLists(); if (listsModelsByItself(config.value.backend)) await refreshModels() })
 // Three sources, not one getter returning an array: a new array never equals the last, so a family button, which swaps the

@@ -17,7 +17,7 @@ export const defaultFetch: FetchLike = (url, init) => undiciFetch(url, { ...init
 export type Usage = { promptTokens: number; completionTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number }
 
 /** A count as a server sent it: absent is 0, as it always was; anything but a finite non-negative number is not one. */
-const tokenCount = (x: unknown): number | undefined =>
+export const tokenCount = (x: unknown): number | undefined =>
   x === undefined || x === null ? 0 : typeof x === 'number' && Number.isFinite(x) && x >= 0 ? x : undefined
 
 /** Usage from the two counts a server sent, or none at all: a server's text must never reach the terminal as a count,
@@ -29,6 +29,15 @@ export function usageFrom(prompt: unknown, completion: unknown, cacheRead?: unkn
   const count = (x: unknown) => typeof x === 'number' && Number.isFinite(x) && x >= 0 ? x : undefined
   const r = count(cacheRead), w = count(cacheWrite)
   return { promptTokens: p, completionTokens: c, ...(r === undefined ? {} : { cacheReadTokens: r }), ...(w === undefined ? {} : { cacheWriteTokens: w }) }
+}
+
+/** Text a server sent, only when it is text: a number, an array or an object in its place is dropped, not printed. */
+export const text = (x: unknown): string | undefined => typeof x === 'string' && x ? x : undefined
+
+/** A 2xx body or chunk carrying only `error` is a failure, not an empty reply. */
+export function errorOnly(what: string, c: any, raw: string): BackendError | undefined {
+  if (c?.error !== undefined && c?.choices === undefined && c?.message === undefined)
+    return new BackendError(`${what}: ${typeof c.error === 'string' ? c.error : c.error?.message ?? 'stream error'}`, raw)
 }
 
 /** One streamed piece of the assistant turn; either field may be absent. */
@@ -138,8 +147,8 @@ export async function* jsonChunks(r: { body?: AsyncIterable<Uint8Array> | null }
     if (text === '[DONE]') break
     let c: any
     try { c = JSON.parse(text) } catch { continue }
-    if (c.error !== undefined && c.choices === undefined && c.message === undefined)
-      throw new BackendError(`${what}: ${typeof c.error === 'string' ? c.error : c.error?.message ?? 'stream error'}`, text)
+    const failed = errorOnly(what, c, text)
+    if (failed) throw failed
     any = true
     yield c
   }

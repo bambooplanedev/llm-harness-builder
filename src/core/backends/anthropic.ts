@@ -1,11 +1,8 @@
-import { BackendError, jsonChunks, readJson, usageFrom, type Backend, type ChatRequest, type Delta, type FetchLike, type NormalizedResponse, type NormalizedToolCall, type ServerInfo } from './types.js'
+import { BackendError, jsonChunks, readJson, usageFrom, text, tokenCount, type Backend, type ChatRequest, type Delta, type FetchLike, type NormalizedResponse, type NormalizedToolCall, type ServerInfo } from './types.js'
 import { parseCalls } from './openai.js'
 
-/** Text a server sent, only when it is text: a number, an array or an object in its place is dropped, not printed. */
-const text = (x: unknown): string | undefined => typeof x === 'string' && x ? x : undefined
-
 /** A count for the prompt sum: absent is 0, anything but a non-negative number makes the sum NaN, which usageFrom refuses. */
-const part = (x: unknown): number => x === undefined || x === null ? 0 : typeof x === 'number' && Number.isFinite(x) && x >= 0 ? x : NaN
+const part = (x: unknown): number => tokenCount(x) ?? NaN
 
 /** Folds the SSE events of one Messages reply into a NormalizedResponse; `native` is its `content` blocks in their order.
  *  Shared with the proxy, so the two cannot read a stream differently. */
@@ -68,7 +65,7 @@ export class AnthropicBackend implements Backend {
 
   /** Every request here: the key goes as x-api-key, which undici keeps on a redirect to another origin (it strips only
    *  authorization), so no redirect is followed at all. Nothing about the API redirects. */
-  private keyed(path: string, init: { method?: string; headers?: Record<string, string>; body?: string; signal?: AbortSignal } = {}) {
+  private keyed(path: string, init: NonNullable<Parameters<FetchLike>[1]> = {}) {
     return this.fetchFn(`${this.baseUrl}${path}`, { ...init, headers: { ...init.headers, 'x-api-key': this.key, 'anthropic-version': '2026-10-21' }, redirect: 'manual' })
   }
 
