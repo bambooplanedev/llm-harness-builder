@@ -84,7 +84,7 @@ async function load(name: string) {
 }
 async function saveAs(name: string) { error.value = ''; try { config.value.name = name; await api.saveHarness(name, outbound(config.value)); await refreshLists() } catch (e) { error.value = (e as Error).message } }
 function open(id: string, runTaskText: string, active = false) {
-  unsub?.(); events.value = []; live.value = {}; runId.value = id; runTask.value = runTaskText; openActive.value = active
+  unsub?.(); events.value = []; live.value = {}; verdict.value = ''; runId.value = id; runTask.value = runTaskText; openActive.value = active
   unsub = api.events(id,
     e => { events.value.push(e); if (e.type === 'done') refreshLists(); else if (e.type !== 'error') live.value = {} }, // keep partial text visible after an abort
     msg => (error.value = msg),
@@ -100,6 +100,11 @@ const abort = () => api.abort(runId.value).catch(e => (error.value = e.message))
 /** The folder picker: the server lists folders, since a browser never tells a page an absolute path. */
 const browse = ref<Awaited<ReturnType<typeof api.dirs>> | null>(null)
 const browseTo = (p: string) => api.dirs(p).then(d => (browse.value = d)).catch(e => (error.value = e.message))
+/** The demo project made from this page, and Check's verdict on it: shown here only, never written to the trace. */
+const demoDir = ref(''); const verdict = ref<'PASS' | 'FAIL' | ''>('')
+const createDemo = () => api.demo().then(d => { workdir.value = demoDir.value = d.workdir; browse.value = null }).catch(e => (error.value = e.message))
+const canCheck = () => isDone() && runId.value === ownRun.value && !!demoDir.value && workdir.value === demoDir.value && runTask.value === DEMO_TASK
+const check = () => { verdict.value = ''; api.demoCheck(workdir.value, outbound(config.value)).then(r => (verdict.value = r.verdict)).catch(e => (error.value = e.message)) }
 
 /** v-model.number leaves numCtx as '' when the field is cleared; drop it so validateConfig sees undefined, not a bad number. */
 function outbound(c: HarnessConfig): HarnessConfig {
@@ -143,6 +148,7 @@ watch(() => config.value.backend.model, () => {
         <div class="row">
           <input type="text" v-model="workdir" placeholder="/path/to/project">
           <button @click="browse ? (browse = null) : browseTo(workdir)">{{ browse ? 'Close' : 'Browse…' }}</button>
+          <button @click="createDemo">Create demo project</button>
         </div>
         <div v-if="browse" class="backdrop" @click="browse = null"></div><!-- a click anywhere else closes the dropdown -->
         <div v-if="browse" class="picker">
@@ -161,6 +167,11 @@ watch(() => config.value.backend.model, () => {
           <button @click="start" :disabled="!!running() || !!mcpError">Run</button>
           <button @click="abort" :disabled="!canAbort()">Abort</button>
           <span class="err">{{ error }}</span>
+        </div>
+        <div v-if="canCheck()" class="row" style="margin:8px 0">
+          <button @click="check">Check</button>
+          <span class="muted">runs node --test on the code the model wrote</span>
+          <span v-if="verdict" :class="['chip', 'solid', verdict === 'PASS' ? 'ok' : 'err']">{{ verdict }}</span>
         </div>
         <ContextBar :events="events" :num-ctx="config.backend.kind === 'ollama' ? config.backend.numCtx : undefined" />
         <Trace v-if="runId" :events="events" :live="live" :task="runTask" @approve="approve" />

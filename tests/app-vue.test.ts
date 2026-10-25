@@ -147,3 +147,25 @@ test('Run without a model says to pick one, not the server\'s field name', async
   all(app.root).find(n => n.tag === 'button' && textOf(n) === 'Run')!.props.onClick(); await settle()
   expect(textOf(app.root)).toContain('pick or type a model first')
 })
+
+test('Create demo project fills Workdir; once the run is done, Check shows its verdict as a chip', async () => {
+  const answers: Record<string, unknown> = { '/api/harnesses': [], '/api/runs': [], '/api/models': [], '/api/demo': { workdir: '/tmp/lhb-demo-x' }, '/api/demo/check': { verdict: 'FAIL' } }
+  const app = await mount(answers)
+  let es: { onmessage?: (m: { data: string }) => void } = {}
+  const savedES = globalThis.EventSource
+  globalThis.EventSource = class { static CLOSED = 2; constructor() { es = this } addEventListener() {} close() {} } as unknown as typeof EventSource
+  try {
+    const button = (t: string) => all(app.root).find(n => n.tag === 'button' && textOf(n) === t)
+    button('Create demo project')!.props.onClick(); await settle()
+    expect(all(app.root).find(n => n.props.placeholder === '/path/to/project')!.value).toBe('/tmp/lhb-demo-x')
+    answers['/api/runs'] = { runId: 'r1' }
+    button('Run')!.props.onClick(); await settle()
+    answers['/api/runs'] = []
+    expect(button('Check')).toBeUndefined() // not before the run is done
+    es.onmessage!({ data: JSON.stringify({ seq: 0, turn: 0, ts: 0, type: 'done', reason: 'final' }) }); await settle()
+    expect(textOf(app.root)).toContain('runs node --test on the code the model wrote')
+    button('Check')!.props.onClick(); await settle()
+    expect(app.calls.find(c => c.url === '/api/demo/check')?.body.workdir).toBe('/tmp/lhb-demo-x')
+    expect(all(app.root).find(n => n.tag === 'span' && n.props.class?.includes?.('chip') && textOf(n) === 'FAIL')).toBeDefined()
+  } finally { globalThis.EventSource = savedES }
+})

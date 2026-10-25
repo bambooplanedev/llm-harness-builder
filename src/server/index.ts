@@ -1,5 +1,5 @@
 import http from 'node:http'
-import { readFile, readdir, writeFile, mkdir, mkdtemp, rm, stat } from 'node:fs/promises'
+import { readFile, readdir, writeFile, mkdir, mkdtemp, rm, stat, realpath } from 'node:fs/promises'
 import type { ChildProcess } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -12,6 +12,8 @@ import { redactor } from '../core/redact.js'
 import { unreachable } from '../core/preflight.js'
 import type { HarnessEvent } from '../core/events.js'
 import { benchFileName } from '../core/bench.js'
+import { TASKS, checkSlug } from '../core/tasks.js'
+import { childEnv } from '../core/tools/env.js'
 
 /** `bench` starts `llm-harness-builder bench <args>` with its stderr piped; without it the page cannot start one. */
 export type ServerOpts = { port: number; runsDir: string; harnessesDir: string; staticDir?: string; backendFactory?: (b: HarnessConfig['backend']) => Backend; bench?: (args: string[]) => ChildProcess }
@@ -55,6 +57,8 @@ export async function startServer(opts: ServerOpts) {
   await mkdir(opts.harnessesDir, { recursive: true })
   /** The bench this server started: one at a time, both would share one model server. */
   let benching: ChildProcess | undefined
+  /** Realpaths of the demo projects this server created: Check runs only in one of them, never in a folder the page names. */
+  const demoDirs = new Set<string>()
 
   const server = http.createServer(async (req, res) => {
     try {
@@ -160,6 +164,21 @@ export async function startServer(opts: ServerOpts) {
         })
         if (!started) return json(res, 502, { error: tail.trim() || 'bench exited before it wrote its JSON' })
         return json(res, 201, { file: out })
+      }
+      if (m('POST', /^\/api\/demo$/)) {
+        const dir = await realpath(await TASKS.slug.prepare())
+        demoDirs.add(dir)
+        return json(res, 201, { workdir: dir })
+      }
+      if (m('POST', /^\/api\/demo\/check$/)) {
+        const body = await readBody(req) as { workdir?: unknown; config?: unknown }
+        const errs = validateConfig(body.config)
+        if (errs.length) return json(res, 400, { errors: errs })
+        const dir = typeof body.workdir === 'string' ? await realpath(body.workdir).catch(() => '') : ''
+        if (!demoDirs.has(dir)) return json(res, 404, { error: 'not a demo project this server created' })
+        // The model's code runs here: the environment the harness names, never serve's own (keys live there).
+        const ok = await checkSlug(dir, childEnv((body.config as HarnessConfig).tools.bashEnv))
+        return json(res, 200, { verdict: ok ? 'PASS' : 'FAIL' })
       }
       if (m('POST', /^\/api\/runs$/)) {
         const body = await readBody(req) as Partial<RunParams>

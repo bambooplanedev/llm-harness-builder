@@ -1,12 +1,13 @@
 // src/core/tasks.ts — what `bench` and `demo` can run: the text, the workdir and the verdict of each task, in one place.
 import { mkdtemp, cp, writeFile, mkdir } from 'node:fs/promises'
 import { rmSync, mkdirSync, copyFileSync, readFileSync } from 'node:fs'
-import { spawnSync } from 'node:child_process'
+import { spawnSync, spawn } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { DEMO_TASK } from './prompts.js'
 import { childEnv } from './tools/env.js'
+import { track, untrack } from './procs.js'
 
 const PKG_ROOT = fileURLToPath(new URL('../..', import.meta.url))
 
@@ -41,6 +42,18 @@ const slug: Task = {
   },
   check: (dir, _size, _answer, env = childEnv()) => spawnSync('sh', [path.join(dir, 'check.sh')], { timeout: 60_000, env }).status === 0,
 }
+
+/** The page's Check on a slug workdir: what check.sh runs, but not check.sh — the model can rewrite it, and it cds to its own folder.
+ *  Async, unlike `check`: serve must not stall for up to 60 s. On the timeout the whole group dies, as in tools/bash.ts. */
+export const checkSlug = (dir: string, env: NodeJS.ProcessEnv): Promise<boolean> => new Promise(resolve => {
+  const child = spawn(process.execPath, ['--test'], { cwd: dir, env, detached: true, stdio: 'ignore' })
+  const pid = child.pid
+  if (pid) track(pid)
+  const timer = setTimeout(() => { try { process.kill(-pid!, 'SIGKILL') } catch {} }, 60_000)
+  const end = (ok: boolean) => { clearTimeout(timer); if (pid) untrack(pid); resolve(ok) }
+  child.on('close', code => end(code === 0))
+  child.on('error', () => end(false))
+})
 
 /** The order IS the task: size N means the first N of these. titleCase imports words and paginate imports chunk, on purpose. */
 export const POOL = ['clamp', 'words', 'titleCase', 'chunk', 'paginate', 'parseDuration', 'dedupe', 'range', 'formatBytes', 'median'] as const

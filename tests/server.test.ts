@@ -1,5 +1,5 @@
 import { test, expect, afterAll } from 'vitest'
-import { writeFile, readFile, appendFile } from 'node:fs/promises'
+import { writeFile, readFile, appendFile, realpath, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import http from 'node:http'
@@ -605,4 +605,27 @@ test('POST /api/bench/again starts bench from the JSON\'s own harnesses and answ
     // a server that was not given a way to start one has no such route
     expect((await postJson(`${base}/api/bench/again`, { file: 'b1.json' })).status).toBe(404)
   } finally { await s.close() }
+})
+
+test('Create demo project: a slug workdir under tmp, and Check runs its tests only there', async () => {
+  const r = await fetch(`${base}/api/demo`, { method: 'POST' })
+  expect(r.status).toBe(201)
+  const { workdir: demo } = await r.json()
+  expect(demo.startsWith(await realpath(tmpdir()))).toBe(true)
+  expect((await stat(join(demo, 'data', 'app.log'))).isFile()).toBe(true)
+  const check = (wd: unknown, c: unknown = config()) => postJson(`${base}/api/demo/check`, { workdir: wd, config: c })
+  const fail = await check(demo)
+  expect(fail.status).toBe(200)
+  expect(await fail.json()).toEqual({ verdict: 'FAIL' }) // the shipped bug is still there
+  const other = await check(workdir)
+  expect(other.status).toBe(404)
+  expect(await other.json()).toEqual({ error: 'not a demo project this server created' })
+  expect((await check(join(demo, 'missing'))).status).toBe(404)
+  expect((await check(demo, {})).status).toBe(400)
+})
+
+test('a page of another origin can neither create a demo project nor run Check', async () => {
+  const headers = { host: `localhost:${srv.port}`, origin: 'http://evil.example', 'content-type': 'text/plain' }
+  expect(await rawReq('POST', '/api/demo', headers)).toBe(403)
+  expect(await rawReq('POST', '/api/demo/check', headers, JSON.stringify({ workdir, config: config() }))).toBe(403)
 })
