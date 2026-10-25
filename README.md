@@ -11,7 +11,7 @@
 [![Node](https://img.shields.io/node/v/llm-harness-builder)](https://nodejs.org)
 [![License: MIT](https://img.shields.io/npm/l/llm-harness-builder)](LICENSE)
 
-![The Bench tab on the example bench shipped with the package: two harnesses on one task, and a passing run compared with a failing one](docs/screenshot.png)
+![The example bench shipped with the package, filmed with ?film=1: the PASS table, the strip of per-request columns above a trace and the anatomy line of each turn, then a Diff of a PASS run and a FAIL run](docs/demo.gif)
 
 </div>
 
@@ -21,6 +21,40 @@ vs prompted tool calls, schema enforcement, tool-output truncation, context budg
 JSONL trace of exactly what went to the model and what came back.
 
 Not a coding agent for daily work. A lab for understanding why your 8B model breaks.
+
+No model needed to look: `npx llm-harness-builder`, then **Start here** → **PASS**. A trace is one
+JSON line per event; here is turn 3 of that run, abbreviated:
+
+    {"seq":13,"turn":3,"type":"llm_request","payload":{…}}
+    {"seq":14,"turn":3,"type":"llm_response","content":"{\"calls\": [{\"name\": \"read_file\", \"args\": {\"path\": \"src/slugify.js\"}}], \"final\": null}","usage":{"promptTokens":871,"completionTokens":30}}
+    {"seq":15,"turn":3,"type":"tool_call","call":{"callId":"c3","name":"read_file","args":{"path":"src/slugify.js"}}}
+    {"seq":16,"turn":3,"type":"tool_result","callId":"c3","name":"read_file","output":"export function slugify(s) {\n  return s.toLowerCase()…","truncated":false,"error":false}
+    …
+    {"seq":28,"turn":5,"type":"done","reason":"final","text":"Fixed slugify.js to strip leading and trailing dashes, and all tests passed.","turns":5,"toolCallCount":5}
+
+and what the request of that turn was made of, as the UI prints it (prompted mode, so the tool
+results went back as user text and count as history):
+
+    system + tools 75% · history 25% · tool results 0% · 871 tok
+
+**What it found so far** — one model and one task each, small n ([how to read](#how-to-read-the-results)):
+
+1. **Thinking ate the reply cap.** `tuned` 0/2 (`parse_failed`); thinking off alone 0/2
+   (`max_turns`, the same failing edit); `tuned-nothink` — thinking off plus `explainEditMiss` and
+   `editMissEscalation: 2` — 5/5. qwen3:8b on Ollama, `slug`. ([table](#quick-start))
+2. **A rule in the prompt beat the same rule in code.** "Read a file before you change it" as a
+   sentence: 5/5; as a guard in code without the sentence: 0/5, the next miss repeated to
+   `max_turns`. ([Read before edit](docs/findings.md#read-before-edit))
+3. **Explaining an edit miss shortened the loop; the model never used the explanation.** Eleven
+   identical failing calls in a row became seven; shown 16 times, used 0.
+   ([Explaining an edit miss](docs/findings.md#explaining-an-edit-miss))
+4. **A context budget held the window and cost passes.** `pool2` on a 5120 window: no budget died
+   at 5344 tokens; `budgetTokens` 2670 stayed at or under 3364, PASS 1/3, and 0/3 with the 0.75·B
+   low-water mark that ships. Qwen3-8B on llama-server.
+   ([The measurement, on `pool2`](docs/findings.md#the-measurement-on-pool2))
+5. **A repeat detector stops a loop; it does not fix it.** `loop.maxRepeats` ended a loop at turn
+   12 in 57 s where `guard-only` ran 15 turns; on a replayed flip-flop all ten replies, with the old
+   notes or the new, were the same undo. ([Noticing a repeated call](docs/findings.md#noticing-a-repeated-call))
 
 ## Contents
 
@@ -152,6 +186,21 @@ Running the package with no command does the same. The page has two tabs:
   its table, the live trace of the run in flight, and **Run bench again**, which repeats it into a
   new JSON. Press `⇄` on a run to compare it with the open one — which config knobs differ, the
   per-turn path of both with the first divergence marked, and the time and tokens each turn cost.
+
+![The Bench tab on the example bench shipped with the package: two harnesses on one task, and a passing run compared with a failing one](docs/screenshot.png)
+
+Above every trace a strip shows one column per request, its height the prompt tokens and its
+colours the layers; a click opens that turn. Each request in the trace carries the same split as a
+line: system prompt, tool descriptions, history and tool results, measured in characters and
+scaled to the server's `prompt_tokens`. When the server sent no usage the count is an estimate and
+starts with "≈". In prompted mode the tool descriptions are part of the system text, so the two
+show as one `system + tools` layer. Anthropic thinking blocks are counted in no layer, and the line
+says so.
+
+`?film=1` (for example `http://127.0.0.1:7331/?film=1`) is for filming or showing the screen: larger, higher-contrast
+type, and model names, server addresses and absolute paths replaced on display. The trace files
+are not changed. It is a convenience for showing a screen, **not a privacy guard**: text it does
+not recognise still shows, and an approval shows its command exactly as it will run.
 
 On a first open, with no runs yet, **Start here** in the Runs list walks through three steps: open a
 recorded PASS run and a FAIL one, open the example bench, then make a run of your own. **Examples**

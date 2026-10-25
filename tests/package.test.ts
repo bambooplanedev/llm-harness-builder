@@ -49,3 +49,8 @@ test('the Claude Code fixture is hand-built: no path, email, key, bearer, git na
   expect(ids.length).toBeGreaterThan(0)
   expect(new Set(ids)).toEqual(new Set(['user_fixture_0000']))
 })
+
+test('the README GIF is small enough for a first screen', () => {
+  expect(statSync('docs/demo.gif').size).toBeLessThanOrEqual(2_000_000)
+  for (const f of ['README.md', 'README.uk.md']) expect([f, readFileSync(f, 'utf8').includes('](docs/demo.gif)')]).toEqual([f, true])
+})
