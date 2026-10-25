@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { t, tn, T } from './i18n'
 import type { Delta, HarnessEvent } from './api'
 import { mcpApprovalServer, mcpCounts, UNTIL_BASH } from '../../src/core/events'
 import { analyzeTrace, summaryLine } from '../../src/core/analyze'
@@ -66,25 +67,25 @@ const liveTok = computed(() => Math.ceil(liveText.value.length / 4))
         <div v-if="e.reasoning" class="muted">thinking: {{ e.reasoning }}</div>{{ e.content || '(empty content)' }}
         <small class="muted"> · {{ e.latencyMs }}ms<template v-if="e.costUsd !== undefined"> · ${{ Number(e.costUsd.toPrecision(4)) }}</template></small>
       </div>
-      <div v-else-if="e.type === 'parse_error'" class="ev parse_error">parse error: {{ e.message }}<span v-if="e.droppedChars"> · {{ e.droppedChars }} chars kept out of the history, a marker went back instead</span></div>
+      <div v-else-if="e.type === 'parse_error'" class="ev parse_error">parse error: {{ e.message }}<span v-if="e.droppedChars"> · {{ tn('trace.dropped', e.droppedChars) }}</span></div>
       <div v-else-if="e.type === 'tool_call'" class="ev tool_call">{{ e.call.name }} {{ pretty(e.call.args) }}</div>
       <div v-else-if="e.type === 'approval_required' && !answered.has(e.call.callId)" class="ev approval">
         <template v-if="props.approvable !== false">
-          <template v-if="mcpApprovalServer(e.call.name)">start mcp server <code>{{ mcpApprovalServer(e.call.name) }}</code>: <code>{{ e.call.args.command }}</code>?</template>
-          <template v-else-if="e.call.name === UNTIL_BASH">run <code>{{ e.call.args.command }}</code> each time the model says it is done, on files the model has written?</template>
-          <template v-else>run <code>{{ e.call.args.command }}</code>?</template>
+          <T v-if="mcpApprovalServer(e.call.name)" k="trace.askMcp"><template #name><code>{{ mcpApprovalServer(e.call.name) }}</code></template><template #cmd><code>{{ e.call.args.command }}</code></template></T>
+          <T v-else-if="e.call.name === UNTIL_BASH" k="trace.askUntil"><template #cmd><code>{{ e.call.args.command }}</code></template></T>
+          <T v-else k="trace.askRun"><template #cmd><code>{{ e.call.args.command }}</code></template></T>
           <button @click="emit('approve', e.call.callId, true)">Run</button> <button @click="emit('approve', e.call.callId, false)">Deny</button>
         </template>
-        <template v-else>approval_required: <code>{{ e.call.args.command }}</code> (bench: auto-approved)</template>
+        <template v-else>approval_required: <code>{{ e.call.args.command }}</code> ({{ t('trace.autoApproved') }})</template>
       </div>
-      <div v-else-if="e.type === 'final_check'" class="ev tool_result" :class="{ err: !e.passed }">final check <code>{{ e.command }}</code>: {{ e.passed ? 'passed' : 'failed, the run goes on' }}<template v-if="!e.passed"><br>{{ e.output }}</template></div>
-      <div v-else-if="e.type === 'context_reset'" class="ev parse_error">context reset: {{ e.chars }} chars of history cleared, the next request is the task again</div>
+      <div v-else-if="e.type === 'final_check'" class="ev tool_result" :class="{ err: !e.passed }">final check <code>{{ e.command }}</code>: {{ e.passed ? 'passed' : t('trace.checkFailed') }}<template v-if="!e.passed"><br>{{ e.output }}</template></div>
+      <div v-else-if="e.type === 'context_reset'" class="ev parse_error">{{ tn('trace.reset', e.chars) }}</div>
       <div v-else-if="e.type === 'mcp_server_start'" class="ev tool_call">
         mcp <code>{{ e.server }}</code>: {{ mcpCounts(e) }}
       </div>
       <div v-else-if="e.type === 'tool_result'" class="ev tool_result" :class="{ err: e.error }">{{ e.output }}<small v-if="e.truncated" class="warn"> [truncated]</small><small v-if="stubbedAt.has(e.callId)" class="stubbed"> [stubbed at t{{ stubbedAt.get(e.callId) }}]</small></div>
       <div v-else-if="e.type === 'error'" class="ev error">{{ e.message }}<br>{{ e.body }}</div>
-      <div v-else-if="e.type === 'done'" class="ev" :class="{ parse_error: e.reason === 'final' && e.toolCallCount === 0 }"><b>done: {{ e.reason }}</b> · {{ e.turns }} turns · {{ e.toolCallCount }} tool calls<span v-if="e.reason === 'final' && e.toolCallCount === 0"> · final after 0 tool calls: the model quit without doing anything</span></div>
+      <div v-else-if="e.type === 'done'" class="ev" :class="{ parse_error: e.reason === 'final' && e.toolCallCount === 0 }"><b>done: {{ e.reason }}</b> · {{ e.turns }} turns · {{ e.toolCallCount }} tool calls<span v-if="e.reason === 'final' && e.toolCallCount === 0"> · {{ t('trace.quit') }}</span></div>
     </template>
     <div v-if="turn === events.at(-1)?.turn && openTurn && (liveText || !done)" class="ev assistant">
       <small class="muted">{{ live.content ? 'answering' : 'thinking' }}…<span v-if="liveText"> ~{{ liveTok }} tok</span><span v-if="done"> · partial, not in the trace</span></small>

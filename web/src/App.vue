@@ -9,7 +9,7 @@ import ConfigForm from './ConfigForm.vue'
 import ContextBar from './ContextBar.vue'
 import Trace from './Trace.vue'
 import Bench from './Bench.vue'
-import { H } from './hints'
+import { t, T, lang, LANGS, langName, setLang } from './i18n'
 
 const tab = ref<'workbench' | 'bench'>('workbench')
 /** The Bench tab shows the recorded bench shipped with the package instead of ./runs: read-only, no model. */
@@ -71,7 +71,10 @@ async function refreshInfo() {
   } catch (e) { if (ask === infoAsk) modelsError.value ||= INFO_ERROR + (e as Error).message }
 }
 /** A structural knob the model does not take: the run would be refused, so the form says it before Run. */
-const refusal = computed(() => modelInfo.value && knobsOff(config.value, modelInfo.value).refuse) // unknown: nothing to say yet
+const refusal = computed(() => {
+  const r = modelInfo.value && knobsOff(config.value, modelInfo.value) // unknown: nothing to say yet
+  return r?.refuseKind && t(`refuse.${r.refuseKind}`, { model: config.value.backend.model, from: modelInfo.value!.takesFrom ? ` (${modelInfo.value!.takesFrom})` : '' })
+})
 async function refreshLists() { harnessNames.value = (await api.harnesses()).map(h => h.name); runs.value = await api.runs() }
 /** A harness describes how the agent thinks; the backend is what it runs on. Switching the first
  *  leaves the second alone — unless no model is picked yet (models never listed), when the
@@ -95,7 +98,7 @@ const openExample = (id: string) => api.runs(true).then(rs => open(id, rs.find(r
 async function start() {
   error.value = ''
   try { const { runId: id } = await api.startRun(outbound(config.value), task.value, workdir.value); ownRun.value = id; open(id, task.value, true) }
-  catch (e) { const m = (e as Error).message; error.value = m === 'backend.model is required' ? 'pick or type a model first' : m }
+  catch (e) { const m = (e as Error).message; error.value = m === 'backend.model is required' ? t('app.pickModel') : m }
 }
 const approve = (callId: string, ok: boolean) => api.approve(runId.value, callId, ok).catch(e => (error.value = e.message))
 const abort = () => api.abort(runId.value).catch(e => (error.value = e.message))
@@ -118,6 +121,7 @@ function outbound(c: HarnessConfig): HarnessConfig {
 /** Loads a bench run's harness and workdir into the form; the user presses Run themselves. */
 function toWorkbench(c: HarnessConfig, wd: string) { config.value = c; workdir.value = wd; tab.value = 'workbench' }
 
+const settings = ref<HTMLDialogElement | null>(null)
 onMounted(async () => { await refreshLists(); if (listsModelsByItself(config.value.backend)) await refreshModels() })
 // Three sources, not one getter returning an array: a new array never equals the last, so a family button, which swaps the
 // whole config, would ask for the model list again and blink the panel with every click.
@@ -138,6 +142,7 @@ watch(() => config.value.backend.model, () => {
     <div class="tabs">
       <button :class="{ on: tab === 'workbench' }" @click="tab = 'workbench'">Workbench</button>
       <button :class="{ on: tab === 'bench' }" @click="tab = 'bench'">Bench</button>
+      <button class="settings" @click="settings?.showModal()">⚙ {{ t('settings.title') }}</button>
     </div>
     <Bench v-if="tab === 'bench'" :key="String(benchExample)" :backend="config.backend" :example="benchExample" @example="v => (benchExample = v)" @to-workbench="toWorkbench" />
     <div class="layout" v-else>
@@ -145,7 +150,7 @@ watch(() => config.value.backend.model, () => {
         <ConfigForm v-model="config" v-model:mcp-error="mcpError" :models="models" :models-error="modelsError" :model-info="modelInfo" :harness-names="harnessNames" @refresh-models="refreshModels" @load="load" @save-as="saveAs" />
       </div>
       <div class="col">
-        <label :title="H.workdir">Workdir (absolute path to a scratch project; not / or your home)</label>
+        <label :title="t('h.workdir')">Workdir</label>
         <div class="browse" @keydown.esc="browse = null">
         <div class="row">
           <input type="text" v-model="workdir" placeholder="/path/to/project">
@@ -158,11 +163,11 @@ watch(() => config.value.backend.model, () => {
           <div class="dirs">
             <div v-if="browse.parent" @click="browseTo(browse.parent)">..</div>
             <div v-for="d in browse.dirs" :key="d.path" @click="browseTo(d.path)">{{ d.name }}/</div>
-            <div v-if="!browse.dirs.length" class="muted">no folders here</div>
+            <div v-if="!browse.dirs.length" class="muted">{{ t('app.noFolders') }}</div>
           </div>
         </div>
         </div>
-        <label :title="H.task">Task</label>
+        <label :title="t('h.task')">Task</label>
         <textarea v-model="task" class="task"></textarea>
         <div v-if="refusal" class="warn">{{ refusal }}</div>
         <div class="row" style="margin:8px 0">
@@ -172,27 +177,37 @@ watch(() => config.value.backend.model, () => {
         </div>
         <div v-if="canCheck()" class="row" style="margin:8px 0">
           <button @click="check">Check</button>
-          <span class="muted">runs node --test on the code the model wrote</span>
+          <span class="muted">{{ t('app.checkNote') }}</span>
           <span v-if="verdict" :class="['chip', 'solid', verdict === 'PASS' ? 'ok' : 'err']">{{ verdict }}</span>
         </div>
         <ContextBar :events="events" :num-ctx="config.backend.kind === 'ollama' ? config.backend.numCtx : undefined" />
         <Trace v-if="runId" :events="events" :live="live" :task="runTask" @approve="approve" />
         <h4>Runs <button class="link" @click="openExamples">Examples</button></h4>
         <div v-if="!runs.length" class="start">
-          <h5 class="group">Start here</h5>
+          <h5 class="group">{{ t('start.title') }}</h5>
           <ol>
-            <li>Open an example run: <button class="link" @click="openExample('059867d3')">PASS</button> and <button class="link" @click="openExample('d63e9548')">FAIL</button> — no model needed.</li>
-            <li>Open the <button class="link" @click="openExamples">example bench</button>: the PASS table, intervals, ⇄ Diff.</li>
-            <li>Pick a model on the left, then Create demo project → Run.</li>
+            <li><T k="start.example"><template #pass><button class="link" @click="openExample('059867d3')">PASS</button></template><template #fail><button class="link" @click="openExample('d63e9548')">FAIL</button></template></T></li>
+            <li><T k="start.bench"><template #bench><button class="link" @click="openExamples">{{ t('start.benchLink') }}</button></template></T></li>
+            <li>{{ t('start.run') }}</li>
           </ol>
         </div>
         <div class="runs">
           <div v-for="r in runs" :key="r.id" @click="open(r.id, r.task, r.active)">
-            <div class="line"><span><b>{{ r.harness }}</b> · {{ r.reason ?? 'running' }}</span><span>{{ r.turns ?? '-' }} turns · {{ r.toolCallCount ?? '-' }} tool calls · {{ new Date(r.started).toLocaleTimeString() }}</span></div>
+            <div class="line"><span><b>{{ r.harness }}</b> · {{ r.reason ?? 'running' }}</span><span>{{ r.turns ?? '-' }} turns · {{ r.toolCallCount ?? '-' }} tool calls · {{ new Date(r.started).toLocaleTimeString(lang) }}</span></div>
             <div class="muted">{{ r.task.slice(0, 60) }}</div>
           </div>
         </div>
       </div>
     </div>
+    <dialog ref="settings" aria-labelledby="settings-title">
+      <form method="dialog">
+        <h3 id="settings-title">{{ t('settings.title') }}</h3>
+        <fieldset>
+          <legend>{{ t('settings.language') }}</legend>
+          <label v-for="l in LANGS" :key="l"><input type="radio" name="lang" :value="l" :autofocus="l === lang" :checked="l === lang" @change="setLang(l)"> {{ langName(l) }}</label>
+        </fieldset>
+        <button>{{ t('settings.close') }}</button>
+      </form>
+    </dialog>
   </div>
 </template>

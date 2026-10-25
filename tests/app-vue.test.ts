@@ -2,6 +2,8 @@ import { test, expect, afterEach } from 'vitest'
 import { createRenderer, nextTick } from 'vue'
 // @ts-expect-error -- vue SFC, no .d.ts; typechecked separately by vue-tsc
 import App from '../web/src/App.vue'
+import { lang } from '../web/src/i18n'
+import { uk } from '../web/src/uk'
 import { harness } from './helpers.js'
 
 // Runs in the `dom` project (vitest.config.ts): .vue files compiled for the browser, so App mounts on the renderer below.
@@ -25,7 +27,7 @@ const { createApp } = createRenderer<N, N>({
 })
 
 const saved = globalThis.fetch
-afterEach(() => { globalThis.fetch = saved })
+afterEach(() => { globalThis.fetch = saved; lang.value = 'en' })
 const settle = async () => { for (let i = 0; i < 5; i++) { await new Promise(r => setTimeout(r, 0)); await nextTick() } }
 /** Mounts App against a fetch that answers by URL; `infos` counts what the form asked of /api/model-info. */
 async function mount(answers: Record<string, unknown>) {
@@ -168,4 +170,12 @@ test('Create demo project fills Workdir; once the run is done, Check shows its v
     expect(app.calls.find(c => c.url === '/api/demo/check')?.body.workdir).toBe('/tmp/lhb-demo-x')
     expect(all(app.root).find(n => n.tag === 'span' && n.props.class?.includes?.('chip') && textOf(n) === 'FAIL')).toBeDefined()
   } finally { globalThis.EventSource = savedES }
+})
+
+test('the family note says what the button changed, and follows a language switch', async () => {
+  const app = await mount({ '/api/harnesses': [], '/api/runs': [], '/api/models': [] })
+  all(app.root).find(n => n.tag === 'button' && textOf(n) === 'qwen3')!.props.onClick(); await settle()
+  expect(textOf(app.root)).toContain('qwen3: tool calls native → prompted; format json → hermes')
+  lang.value = 'uk'; await settle()
+  expect(textOf(app.root)).toContain(uk['family.mode'].replace('{a}', 'native').replace('{b}', 'prompted'))
 })
