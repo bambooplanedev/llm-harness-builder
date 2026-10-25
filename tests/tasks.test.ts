@@ -4,6 +4,7 @@ import { readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { TASKS, POOL, POOL2, verdictSchema, checkSlug } from '../src/core/tasks.js'
 import { DEMO_TASK } from '../src/core/prompts.js'
+import { BENCH_TASKS } from '../src/core/bench.js'
 import { childEnv } from '../src/core/tools/env.js'
 
 // Every number in the README before 2026-09-19 was measured on this workdir and this text.
@@ -332,4 +333,8 @@ test('checkSlug: node --test in the workdir, whatever check.sh now says', async 
   const src = join(dir, 'src', 'slugify.js')
   writeFileSync(src, readFileSync(src, 'utf8').replace(".replace(/[^a-z0-9]+/g, '-')", ".replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')"))
   expect(await checkSlug(dir, childEnv())).toBe(true)
+})
+
+test("the Bench page's list of tasks and sizes is the one bench runs", () => {
+  expect(BENCH_TASKS).toEqual(Object.fromEntries(Object.entries(TASKS).map(([k, t]) => [k, t.max ?? 0])))
 })

@@ -349,6 +349,7 @@ test('Ctrl-C during bench with a live mcp server leaves the PASS table intact an
     expect(code).toBe(130)
     expect(stdout).toMatch(/^harness\s+PASS/m)
     expect(stdout).toMatch(/^mcp-bench\s+0\/0/m)
+    expect(JSON.parse(readFileSync(out, 'utf8'))).toMatchObject({ complete: false, stopped: true })
     const deadline2 = Date.now() + 2000
     while (count() > 0 && Date.now() < deadline2) await new Promise(r => setTimeout(r, 50))
     expect(count()).toBe(0)
@@ -357,6 +358,39 @@ test('Ctrl-C during bench with a live mcp server leaves the PASS table intact an
     try { execSync(`pkill -9 -f ${marker}`) } catch {}
   }
 }, 15_000)
+
+// Stop bench on the page is this SIGINT: a command the model started must not outlive the bench.
+test('SIGINT to bench takes a long command the model started with it', async () => {
+  const wd = await tmp('lhb-cli-')
+  const fake = join(wd, 'fake.json'); const out = join(wd, 'b.json')
+  // A duration no other process has: pgrep finds this sleep and nothing else.
+  const secs = `300.${process.pid}${Date.now() % 100000}`
+  await writeFile(fake, JSON.stringify([{ toolCalls: [{ name: 'bash', args: { command: `sleep ${secs}` } }] }]))
+  const harnessFile = join(wd, 'sleepy.json')
+  await writeFile(harnessFile, JSON.stringify({
+    name: 'sleepy', backend: { kind: 'openai', baseUrl: 'http://x/v1', model: 'm', temperature: 0 }, systemPrompt: 'sys',
+    tools: { enabled: ['bash'], approveBash: true, bashTimeoutS: 600 },
+    toolCalls: { mode: 'native', enforceSchema: false, promptedTemplate: 'T:{{tools}}', parseErrorHint: 'HINT' },
+    context: { maxToolOutputChars: 1000, budgetTokens: 0 }, loop: { maxTurns: 5 },
+  }))
+  const count = () => spawnSync('pgrep', ['-f', `sleep ${secs}`]).stdout.toString().split('\n').filter(Boolean).length
+  const p = spawn(join(ROOT, 'node_modules', '.bin', 'tsx'), [join(ROOT, 'src', 'cli.ts'), 'bench', '--n', '1', '--out', out, harnessFile],
+    { cwd: mkdtempSync(join(tmpdir(), 'lhb-cwd-')), env: { ...process.env, LHB_FAKE_BACKEND: fake }, stdio: ['ignore', 'pipe', 'pipe'] })
+  try {
+    p.stdout.resume(); p.stderr.resume()
+    const deadline1 = Date.now() + 10_000
+    while (count() === 0 && Date.now() < deadline1) await new Promise(r => setTimeout(r, 50))
+    expect(count()).toBe(1)
+    expect(await new Promise(done => { p.on('exit', done); p.kill('SIGINT') })).toBe(130)
+    const deadline2 = Date.now() + 2000
+    while (count() > 0 && Date.now() < deadline2) await new Promise(r => setTimeout(r, 50))
+    expect(count()).toBe(0)
+    expect(JSON.parse(readFileSync(out, 'utf8'))).toMatchObject({ complete: false, stopped: true })
+  } finally {
+    try { p.kill('SIGKILL') } catch {}
+    try { execSync(`pkill -9 -f 'sleep ${secs}'`) } catch {}
+  }
+}, 20_000)
 
 // The two numbers README quotes for the mcp-off/mcp-on pair: what the server put in front of the
 // model, and how many tool results came back as errors. Measured on a real server child, not a mock.

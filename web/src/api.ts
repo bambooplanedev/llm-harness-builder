@@ -26,6 +26,9 @@ export const api = {
   bench: (file?: string) => j<{ files: BenchFile[]; result?: BenchResult; active?: ActiveTrace; analysis?: Record<string, AnalysisCells> }>(
     `/api/bench${file ? `?file=${encodeURIComponent(file)}` : ''}`),
   benchAgain: (file: string) => j<{ file: string }>('/api/bench/again', { method: 'POST', body: JSON.stringify({ file }) }),
+  benchNew: (body: { harnesses: string[]; task: string; size?: number; n: number; backend: { kind: string; baseUrl: string; model: string; apiKeyEnv?: string } }) =>
+    j<{ file: string }>('/api/bench/new', { method: 'POST', body: JSON.stringify(body) }),
+  benchStop: () => j<{ ok: true }>('/api/bench/stop', { method: 'POST' }),
   demo: () => j<{ workdir: string }>('/api/demo', { method: 'POST' }),
   demoCheck: (workdir: string, config: HarnessConfig) => j<{ verdict: 'PASS' | 'FAIL' }>('/api/demo/check', { method: 'POST', body: JSON.stringify({ workdir, config }) }),
   startRun: (config: HarnessConfig, task: string, workdir: string) => j<{ runId: string }>('/api/runs', { method: 'POST', body: JSON.stringify({ config, task, workdir }) }),

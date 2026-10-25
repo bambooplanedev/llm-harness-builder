@@ -97,6 +97,7 @@ details.inspector pre { max-height: 300px; overflow: auto; background: var(--sun
 .bench-head h2 { margin: 0; font-size: 20px; font-weight: 600; }
 .bench-head .muted { font: 12px var(--mono); }
 .bench-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+.new-bench { padding: 4px 14px 12px; }
 .table-wrap { margin: 14px 0 6px; overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; }
 table.bench { border-collapse: collapse; width: 100%; font: 13px var(--mono); }
 table.bench th { text-align: left; font: 600 11px var(--sans); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); padding: 8px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }

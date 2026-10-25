@@ -304,7 +304,7 @@ export class RunStore {
     const hit = (await this.benchFiles(file)).find(b => b.file === file)
     if (!hit) return null
     const { result } = hit
-    if (result.complete) return { result }
+    if (result.complete || result.stopped) return { result } // a stopped bench leaves its last .part behind: not a live run
     // Anything older than the bench itself is an orphan a killed run left behind: it would otherwise
     // win the match in every pause between rounds and drag the panel onto an hours-old corpse.
     const floor = Date.parse(result.date)

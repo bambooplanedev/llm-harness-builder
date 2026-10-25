@@ -2,13 +2,15 @@
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { api, type ActiveTrace, type AnalysisCells, type BenchFile, type BenchHarness, type BenchResult, type BenchRun, type HarnessConfig, type HarnessEvent } from './api'
 import { cellsLine } from '../../src/core/analyze'
-import { formatTable, mmss, wilson } from '../../src/core/bench'
+import { formatTable, mmss, wilson, autoApproves, BENCH_TASKS } from '../../src/core/bench'
 import Trace from './Trace.vue'
 import { H } from './hints'
 import Diff from './Diff.vue'
 import type { DiffSide } from '../../src/core/diff'
 
 const emit = defineEmits<{ toWorkbench: [config: HarnessConfig, workdir: string] }>()
+/** The Workbench form's model: New bench always runs on it. */
+const props = defineProps<{ backend: HarnessConfig['backend'] }>()
 
 const files = ref<BenchFile[]>([])
 const file = ref('')
@@ -74,11 +76,54 @@ const hasPeak = computed(() => runs.value.some(r => r.peakTokens !== undefined))
 const peak = (h: BenchHarness) => Math.max(0, ...h.runs.map(r => r.peakTokens ?? 0)) || undefined
 const starting = ref(false)
 async function again() {
-  if (!confirm('Run this bench again: the same harnesses, task, n and timeout, into a new JSON.\n\nbench approves everything without asking: the model\'s commands and the harness files\' mcpServers and loop.untilBash, in fresh temp workdirs.')) return
+  if (!confirm(`Run this bench again: the same harnesses, task, n and timeout, into a new JSON.\n\n${autoApproves('bench')}.`)) return
+  await start(() => api.benchAgain(file.value))
+}
+/** The bench JSON this page started, while it may still run: Stop bench shows for it. */
+const own = ref('')
+const stopping = ref(false)
+async function start(call: () => Promise<{ file: string }>) {
   starting.value = true; error.value = ''
-  try { openFile((await api.benchAgain(file.value)).file) }
-  catch (e) { error.value = (e as Error).message }
+  try { const f = (await call()).file; own.value = f; openFile(f); return true }
+  catch (e) { error.value = (e as Error).message; return false }
   finally { starting.value = false }
+}
+async function stop() {
+  stopping.value = true; error.value = ''
+  // A 409 is a bench that already ended on its own: nothing left to stop.
+  try { await api.benchStop() } catch (e) { error.value = (e as Error).message; own.value = '' }
+}
+watch(() => result.value, r => { if (r && file.value === own.value && (r.complete || r.stopped)) own.value = '' })
+watch(() => !starting.value && !own.value, idle => { if (idle) stopping.value = false })
+
+/** New bench: harnesses from ./harnesses, the model from the Workbench form, nothing else from anywhere. */
+const newOpen = ref(false)
+const list = ref<{ name: string; description?: string }[]>([])
+const picked = ref<string[]>([])
+/** What each picked harness runs without asking, besides the model's commands. */
+const runsUnasked = ref<Record<string, string[]>>({})
+const task = ref('slug')
+const size = ref(0)
+const runsPer = ref(3)
+watch(task, t => { size.value = BENCH_TASKS[t] })
+async function toggleNew() {
+  newOpen.value = !newOpen.value
+  if (newOpen.value) try { list.value = await api.harnesses() } catch (e) { error.value = (e as Error).message }
+}
+watch(picked, async names => {
+  for (const n of names) if (!runsUnasked.value[n]) {
+    try {
+      const c = await api.harness(n)
+      runsUnasked.value[n] = [...Object.entries(c.mcpServers ?? {}).map(([k, m]) => `mcpServers.${k}: ${[m.command, ...m.args ?? []].join(' ')}`),
+        ...c.loop?.untilBash ? [`loop.untilBash: ${c.loop.untilBash}`] : []]
+    } catch (e) { error.value = (e as Error).message }
+  }
+})
+async function startNew() {
+  const b = props.backend
+  const ok = await start(() => api.benchNew({ harnesses: picked.value, task: task.value, ...BENCH_TASKS[task.value] ? { size: size.value } : {}, n: runsPer.value,
+    backend: { kind: b.kind, baseUrl: b.baseUrl, model: b.model, ...b.apiKeyEnv ? { apiKeyEnv: b.apiKeyEnv } : {} } }))
+  if (ok) newOpen.value = false
 }
 const medCost = (h: BenchHarness) => { const c = h.runs.flatMap(r => r.costUsd ?? []).sort((a, b) => a - b); return c.length ? `$${Number(c[(c.length - 1) >> 1].toPrecision(3))}` : '-' }
 
@@ -158,6 +203,10 @@ onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer); unsub?.(); d
   <div class="layout bench">
     <div class="col left">
       <h4>Bench</h4>
+      <div class="actions">
+        <button @click="toggleNew">New bench</button>
+        <button v-if="starting || own" :disabled="stopping" title="SIGINT, like Ctrl-C: the finished runs stay in the JSON; can take up to a minute" @click="stop">{{ stopping ? 'stopping…' : 'Stop bench' }}</button>
+      </div>
       <div v-if="!files.length" class="hint">
         no benches yet: run <code>llm-harness-builder bench</code><br>
         this page reads only <code>runs/*.json</code> — a bench written with <code>--out</code> elsewhere will not show up here
@@ -200,12 +249,28 @@ onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer); unsub?.(); d
       <div class="err">{{ error }}</div>
     </div>
     <div class="col" ref="pane">
+      <div v-if="newOpen" class="table-wrap new-bench">
+        <h5 class="group">Harnesses <span class="muted">· from ./harnesses</span></h5>
+        <div v-for="h in list" :key="h.name">
+          <label><input type="checkbox" :value="h.name" v-model="picked"> <b>{{ h.name }}</b></label> <span v-if="h.description" class="muted">{{ h.description }}</span>
+          <div v-for="c in picked.includes(h.name) ? runsUnasked[h.name] ?? [] : []" :key="c" class="hint clip" :title="c">runs unasked · {{ c }}</div>
+        </div>
+        <div class="row"><b>Model</b> <span class="muted">the Workbench form's: {{ props.backend.model || '(none picked)' }} · {{ props.backend.kind }} {{ props.backend.baseUrl }}<template v-if="props.backend.apiKeyEnv"> · key {{ props.backend.apiKeyEnv }}</template></span></div>
+        <div class="row">
+          <label><b>Task</b> <select v-model="task"><option v-for="(_, t) in BENCH_TASKS" :key="t" :value="t">{{ t }}</option></select></label>
+          <label v-if="BENCH_TASKS[task]"><b>size</b> <input type="number" min="1" :max="BENCH_TASKS[task]" v-model.number="size"></label>
+          <label><b>runs per harness</b> <input type="number" min="1" max="50" v-model.number="runsPer"></label>
+        </div>
+        <div class="warn">{{ picked.length * runsPer }} runs; on an 8B model one slug run takes a few minutes</div>
+        <div class="hint">{{ autoApproves('bench') }}</div>
+        <button :disabled="starting || !picked.length || !props.backend.model" @click="startNew">{{ starting ? 'Starting…' : 'Start' }}</button>
+      </div>
       <template v-if="result">
         <div class="bench-head">
           <div>
           <h2>{{ result.taskName ?? 'bench' }}<template v-if="result.size"> · size {{ result.size }}</template> · {{ result.harnesses.length }} harnesses × {{ result.n }} runs</h2>
           <div class="muted">{{ backend?.model }} · {{ backend?.kind }} {{ backend?.baseUrl }}<template v-if="nCtx"> · window {{ nCtx.toLocaleString() }}</template> · timeout {{ mmss(result.timeoutS * 1000) }} · {{ new Date(result.date).toLocaleString() }}</div>
-          <div class="muted">{{ runs.length }}/{{ total }} runs<template v-if="!result.complete"> · incomplete</template> · {{ mmss(msDone) }} in</div>
+          <div class="muted">{{ runs.length }}/{{ total }} runs<template v-if="!result.complete"> · {{ result.stopped ? 'stopped' : 'incomplete' }}</template> · {{ mmss(msDone) }} in</div>
           </div>
           <button @click="again" :disabled="starting || !!active" :title="active ? H.againBusy : H.again">{{ starting ? 'Starting…' : 'Run bench again' }}</button>
         </div>

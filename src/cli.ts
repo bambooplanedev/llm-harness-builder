@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // src/cli.ts
 import { parseArgs } from 'node:util'
-import { readFile, cp, writeFile, rename, access, mkdir } from 'node:fs/promises'
-import { existsSync, readFileSync } from 'node:fs'
+import { readFile, cp, access, mkdir } from 'node:fs/promises'
+import { existsSync, readFileSync, writeFileSync, renameSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline/promises'
 import path from 'node:path'
@@ -16,7 +16,7 @@ import { startServer } from './server/index.js'
 import { TraceWriter, type Meta } from './server/runs.js'
 import { TASKS, type Task } from './core/tasks.js'
 import { childEnv, bashEnvNote } from './core/tools/env.js'
-import { median, formatTable, benchFileName, type BenchRun, type BenchHarness, type BenchResult } from './core/bench.js'
+import { median, formatTable, benchFileName, autoApproves, type BenchRun, type BenchHarness, type BenchResult } from './core/bench.js'
 import { GUARD_BLOCKED, EDIT_MISS } from './core/tools/fs.js'
 import { createBackend } from './core/backends/index.js'
 import { redactor } from './core/redact.js'
@@ -169,8 +169,6 @@ async function execRun(config: HarnessConfig, task: string, workdir: string, o: 
 }
 
 const NO_TTY = 'stdin is not a terminal, so nothing can answer an approval prompt: pass --yes to approve every command, or run in a terminal'
-/** demo and bench pass yes: true — that approves the harness files' mcpServers and loop.untilBash too, not only the model's commands. */
-const autoApproves = (cmd: 'demo' | 'bench') => `${cmd} approves everything without asking: the model's commands and the harness files' mcpServers and loop.untilBash, in fresh temp workdirs`
 
 async function cmdRun(argv: string[]) {
   const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: COMMANDS.run.options })
@@ -342,7 +340,8 @@ async function cmdBench(argv: string[]) {
   // tmp + rename in the same directory: the SIGINT handler exits immediately, and a half-written
   // JSON would be the only thing left of a 90-minute run. `.tmp`, not `.json`, so /api/bench skips it.
   const tmpOut = `${out}.${process.pid}.tmp`
-  const save = async () => { await writeFile(tmpOut, JSON.stringify(result, null, 2) + '\n'); await rename(tmpOut, out) }
+  // Synchronous: the SIGINT handler saves too, and can then never land between another save's write and rename.
+  const save = () => { writeFileSync(tmpOut, JSON.stringify(result, null, 2) + '\n'); renameSync(tmpOut, out) }
   // write() with a callback, not console.log: on a pipe stdout is async, and the SIGINT handler's
   // exit() below would drop the table of a 90-minute run on the floor.
   const finish = (code?: number) => {
@@ -351,20 +350,20 @@ async function cmdBench(argv: string[]) {
   }
   // The first save happens before any run, so an unwritable --out (a directory, a bad path) is a
   // typo to report, not a crash after 90 minutes.
-  await save().catch(e => die(`cannot write ${out}:\n  ${(e as Error).message}`))
+  try { save() } catch (e) { die(`cannot write ${out}:\n  ${(e as Error).message}`) }
   console.error(`bench: ${files.length} harnesses × ${n} runs, timeout ${timeoutS}s per run, writing ${out}`)
   files.forEach((f, i) => console.error(`  ${harnesses[i].name.padEnd(13)} ${f}`))
-  process.once('SIGINT', () => finish(130))
+  process.once('SIGINT', () => { result.stopped = true; save(); finish(130) })
   for (let round = 1; round <= n; round++) {
     console.error(`--- round ${round}/${n}`)
     for (const h of harnesses) {
       h.runs.push(await benchOnce(h.config, round, timeoutS, out, task, size))
       rollup(h)
-      await save()
+      save()
     }
   }
   result.complete = true
-  await save()
+  save()
   finish()
 }
 

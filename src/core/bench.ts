@@ -26,12 +26,20 @@ export type BenchHarness = {
   /** What preflight learnt from the server: its window (Ollama: the harness's numCtx) and llama-server's build. Absent in JSON written before v2.27, and under the test backend. */
   server?: { nCtx?: number; build?: string }
 }
-export type BenchResult = { version: 1; date: string; task: string; taskName?: string; size?: number; node?: string; n: number; timeoutS: number; complete: boolean; harnesses: BenchHarness[] }
+export type BenchResult = { version: 1; date: string; task: string; taskName?: string; size?: number; node?: string; n: number; timeoutS: number; complete: boolean;
+  /** Set by Ctrl-C (or Stop bench on the page): no run of it is live any more, though its last .part stays. */
+  stopped?: boolean; harnesses: BenchHarness[] }
 
 /** One row of the Bench tab's file list. `model` and the file name tell two bench files apart; `task` is the prompt text, `taskName`/`size` say which task it was (absent in JSON written before v2.7 = slug). */
 export type BenchFile = { file: string; date: string; model: string; complete: boolean }
 /** The run a `bench` process is executing right now, read from its still-unrenamed runs/<id>.jsonl.part. */
 export type ActiveTrace = { id: string; harness: string; round: number; started: number; events: HarnessEvent[] }
+
+/** demo and bench pass yes: true — that approves the harness files' mcpServers and loop.untilBash too, not only the model's commands. The Bench page shows the same words. */
+export const autoApproves = (cmd: 'demo' | 'bench') => `${cmd} approves everything without asking: the model's commands and the harness files' mcpServers and loop.untilBash, in fresh temp workdirs`
+
+/** The tasks `bench` runs and the largest size of each (0 = no sizes), for the page: tasks.ts reads files and cannot reach the browser. A test keeps the two equal. */
+export const BENCH_TASKS: Record<string, number> = { slug: 0, pool: 10, pool2: 10, pool3: 10, sift: 12, triage: 12, judge: 12 }
 
 /** Lower-middle element of the numerically sorted copy; [] → 0. Never mutates xs. */
 /** The default name of a bench JSON, from local time: bench-YYYYMMDD-HHMMSS.json. */
