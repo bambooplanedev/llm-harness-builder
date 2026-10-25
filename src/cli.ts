@@ -107,6 +107,7 @@ function describe(e: HarnessEvent, streamed = false, cost?: number): string {
     case 'approval_required': return `[t${e.turn}] approval_required ${showable(e.call.name)}`
     case 'tool_result': return `[t${e.turn}] tool_result ${showable(e.name)}${e.error ? ' (error)' : ''}${e.truncated ? ' (truncated)' : ''}: ${excerpt(e.output)}`
     case 'knobs_off': return e.off.map(o => `${o.knob} ${showable(JSON.stringify(o.value))} not sent: ${showable(o.reason)}`).join('\n')
+    case 'proxy_note': return e.kind === 'compaction' ? `[t${e.turn}] compaction` : `[t${e.turn}] auxiliary ${showable(e.model ?? '')} ${e.error !== undefined ? `failed: ${showable(e.error)}` : `${e.latencyMs}ms${e.usage ? ` (${e.usage.promptTokens}+${e.usage.completionTokens} tok)` : ''}`}`
     case 'error': return `error: ${showable(e.message)}${e.body ? `\n${showableText(e.body)}` : ''}`
     case 'done': return `done: ${e.reason} after ${e.turns} turns, ${e.toolCallCount} tool calls${cost === undefined ? '' : ` · $${Number(cost.toPrecision(4))} total`}${quitWithoutWork(e) ? '  ! final after 0 tool calls' : ''}${e.text ? `\n${showableText(e.text)}` : ''}`
   }

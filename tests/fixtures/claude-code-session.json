@@ -1,0 +1,511 @@
+[
+ {
+  "headers": {
+   "x-claude-code-session-id": "00000000-0000-4000-8000-000000000001",
+   "x-claude-code-request-class": "main"
+  },
+  "payload": {
+   "model": "claude-opus-fixture",
+   "max_tokens": 1024,
+   "stream": true,
+   "metadata": {
+    "user_id": "user_fixture_0000"
+   },
+   "system": [
+    {
+     "type": "text",
+     "text": "attribution: fixture"
+    },
+    {
+     "type": "text",
+     "text": "You are a coding agent (stub)."
+    }
+   ],
+   "tools": [
+    {
+     "name": "Task",
+     "description": "stub",
+     "input_schema": {
+      "type": "object"
+     }
+    },
+    {
+     "name": "Read",
+     "description": "stub",
+     "input_schema": {
+      "type": "object"
+     }
+    }
+   ],
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "text": "<system-reminder>context (stub)</system-reminder>"
+      },
+      {
+       "type": "text",
+       "text": "Find the parser"
+      }
+     ]
+    }
+   ]
+  },
+  "reply": {
+   "content": "",
+   "toolCalls": [
+    {
+     "backendId": "toolu_m1",
+     "name": "Task",
+     "args": {
+      "description": "find parser",
+      "prompt": "Find where the parser lives",
+      "subagent_type": "Explore"
+     }
+    }
+   ],
+   "usage": {
+    "promptTokens": 100,
+    "completionTokens": 10
+   }
+  }
+ },
+ {
+  "headers": {
+   "x-claude-code-session-id": "00000000-0000-4000-8000-000000000001",
+   "x-claude-code-request-class": "auxiliary"
+  },
+  "payload": {
+   "model": "claude-haiku-fixture",
+   "max_tokens": 32,
+   "metadata": {
+    "user_id": "user_fixture_0000"
+   },
+   "system": [
+    {
+     "type": "text",
+     "text": "Write a short title (stub)."
+    }
+   ],
+   "messages": [
+    {
+     "role": "user",
+     "content": "Find the parser"
+    }
+   ]
+  },
+  "reply": {
+   "content": "Parser search",
+   "toolCalls": [],
+   "usage": {
+    "promptTokens": 20,
+    "completionTokens": 3
+   }
+  }
+ },
+ {
+  "headers": {
+   "x-claude-code-session-id": "00000000-0000-4000-8000-000000000001",
+   "x-claude-code-agent-id": "agent-0001",
+   "x-claude-code-agent-type": "Explore"
+  },
+  "payload": {
+   "model": "claude-opus-fixture",
+   "max_tokens": 1024,
+   "stream": true,
+   "metadata": {
+    "user_id": "user_fixture_0000"
+   },
+   "system": [
+    {
+     "type": "text",
+     "text": "attribution: fixture"
+    },
+    {
+     "type": "text",
+     "text": "You are a coding agent (stub)."
+    }
+   ],
+   "tools": [
+    {
+     "name": "Task",
+     "description": "stub",
+     "input_schema": {
+      "type": "object"
+     }
+    },
+    {
+     "name": "Read",
+     "description": "stub",
+     "input_schema": {
+      "type": "object"
+     }
+    }
+   ],
+   "messages": [
+    {
+     "role": "user",
+     "content": "Find where the parser lives"
+    }
+   ]
+  },
+  "reply": {
+   "content": "",
+   "toolCalls": [
+    {
+     "backendId": "toolu_s1",
+     "name": "Read",
+     "args": {
+      "file_path": "src/parser.ts"
+     }
+    }
+   ],
+   "usage": {
+    "promptTokens": 100,
+    "completionTokens": 10
+   }
+  }
+ },
+ {
+  "headers": {
+   "x-claude-code-session-id": "00000000-0000-4000-8000-000000000001",
+   "x-claude-code-agent-id": "agent-0001",
+   "x-claude-code-agent-type": "Explore"
+  },
+  "payload": {
+   "model": "claude-opus-fixture",
+   "max_tokens": 1024,
+   "stream": true,
+   "metadata": {
+    "user_id": "user_fixture_0000"
+   },
+   "system": [
+    {
+     "type": "text",
+     "text": "attribution: fixture"
+    },
+    {
+     "type": "text",
+     "text": "You are a coding agent (stub)."
+    }
+   ],
+   "tools": [
+    {
+     "name": "Task",
+     "description": "stub",
+     "input_schema": {
+      "type": "object"
+     }
+    },
+    {
+     "name": "Read",
+     "description": "stub",
+     "input_schema": {
+      "type": "object"
+     }
+    }
+   ],
+   "messages": [
+    {
+     "role": "user",
+     "content": "Find where the parser lives"
+    },
+    {
+     "role": "assistant",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_s1",
+       "name": "Read",
+       "input": {
+        "file_path": "src/parser.ts"
+       }
+      }
+     ]
+    },
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "tool_result",
+       "tool_use_id": "toolu_s1",
+       "content": "export function parse() {}"
+      }
+     ]
+    }
+   ]
+  },
+  "reply": {
+   "content": "The parser is in src/parser.ts.",
+   "toolCalls": [],
+   "usage": {
+    "promptTokens": 100,
+    "completionTokens": 10
+   }
+  }
+ },
+ {
+  "headers": {
+   "x-claude-code-session-id": "00000000-0000-4000-8000-000000000001",
+   "x-claude-code-request-class": "main"
+  },
+  "payload": {
+   "model": "claude-opus-fixture",
+   "max_tokens": 1024,
+   "stream": true,
+   "metadata": {
+    "user_id": "user_fixture_0000"
+   },
+   "system": [
+    {
+     "type": "text",
+     "text": "attribution: fixture"
+    },
+    {
+     "type": "text",
+     "text": "You are a coding agent (stub)."
+    }
+   ],
+   "tools": [
+    {
+     "name": "Task",
+     "description": "stub",
+     "input_schema": {
+      "type": "object"
+     }
+    },
+    {
+     "name": "Read",
+     "description": "stub",
+     "input_schema": {
+      "type": "object"
+     }
+    }
+   ],
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "text": "<system-reminder>context (stub)</system-reminder>"
+      },
+      {
+       "type": "text",
+       "text": "Find the parser"
+      }
+     ]
+    },
+    {
+     "role": "assistant",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_m1",
+       "name": "Task",
+       "input": {
+        "description": "find parser",
+        "prompt": "Find where the parser lives",
+        "subagent_type": "Explore"
+       }
+      }
+     ]
+    },
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "tool_result",
+       "tool_use_id": "toolu_m1",
+       "content": [
+        {
+         "type": "text",
+         "text": "The parser is in src/parser.ts."
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  "reply": {
+   "content": "It is in src/parser.ts.",
+   "toolCalls": [],
+   "usage": {
+    "promptTokens": 100,
+    "completionTokens": 10
+   }
+  }
+ },
+ {
+  "headers": {
+   "x-claude-code-session-id": "00000000-0000-4000-8000-000000000001",
+   "x-claude-code-request-class": "compaction"
+  },
+  "payload": {
+   "model": "claude-opus-fixture",
+   "max_tokens": 1024,
+   "stream": true,
+   "metadata": {
+    "user_id": "user_fixture_0000"
+   },
+   "system": [
+    {
+     "type": "text",
+     "text": "attribution: fixture"
+    },
+    {
+     "type": "text",
+     "text": "You are a coding agent (stub)."
+    }
+   ],
+   "tools": [
+    {
+     "name": "Task",
+     "description": "stub",
+     "input_schema": {
+      "type": "object"
+     }
+    },
+    {
+     "name": "Read",
+     "description": "stub",
+     "input_schema": {
+      "type": "object"
+     }
+    }
+   ],
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "text": "<system-reminder>context (stub)</system-reminder>"
+      },
+      {
+       "type": "text",
+       "text": "Find the parser"
+      }
+     ]
+    },
+    {
+     "role": "assistant",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_m1",
+       "name": "Task",
+       "input": {
+        "description": "find parser",
+        "prompt": "Find where the parser lives",
+        "subagent_type": "Explore"
+       }
+      }
+     ]
+    },
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "tool_result",
+       "tool_use_id": "toolu_m1",
+       "content": [
+        {
+         "type": "text",
+         "text": "The parser is in src/parser.ts."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "role": "assistant",
+     "content": [
+      {
+       "type": "text",
+       "text": "It is in src/parser.ts."
+      }
+     ]
+    },
+    {
+     "role": "user",
+     "content": "Summarize the conversation so far (stub)."
+    }
+   ]
+  },
+  "reply": {
+   "content": "Summary: the parser is in src/parser.ts.",
+   "toolCalls": [],
+   "usage": {
+    "promptTokens": 100,
+    "completionTokens": 10
+   }
+  }
+ },
+ {
+  "headers": {
+   "x-claude-code-session-id": "00000000-0000-4000-8000-000000000001",
+   "x-claude-code-request-class": "main"
+  },
+  "payload": {
+   "model": "claude-opus-fixture",
+   "max_tokens": 1024,
+   "stream": true,
+   "metadata": {
+    "user_id": "user_fixture_0000"
+   },
+   "system": [
+    {
+     "type": "text",
+     "text": "attribution: fixture"
+    },
+    {
+     "type": "text",
+     "text": "You are a coding agent (stub)."
+    }
+   ],
+   "tools": [
+    {
+     "name": "Task",
+     "description": "stub",
+     "input_schema": {
+      "type": "object"
+     }
+    },
+    {
+     "name": "Read",
+     "description": "stub",
+     "input_schema": {
+      "type": "object"
+     }
+    }
+   ],
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "text": "Summary: the parser is in src/parser.ts."
+      },
+      {
+       "type": "text",
+       "text": "Now add a test."
+      }
+     ]
+    }
+   ]
+  },
+  "reply": {
+   "content": "Done.",
+   "toolCalls": [],
+   "usage": {
+    "promptTokens": 100,
+    "completionTokens": 10
+   }
+  }
+ }
+]

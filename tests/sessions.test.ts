@@ -1,5 +1,6 @@
 import { test, expect } from 'vitest'
-import { Sessions, textOf } from '../src/core/proxy/sessions.js'
+import { readFileSync } from 'node:fs'
+import { Sessions, textOf, hintsOf } from '../src/core/proxy/sessions.js'
 import type { NormalizedResponse } from '../src/core/backends/types.js'
 
 const S = { role: 'system', content: 'sys' }, U = { role: 'user', content: 'task one' }
@@ -140,4 +141,76 @@ test('anthropic is told by the route: no system and a plain string task, then to
 
 test('an unclosed system-reminder leaks nothing into the task', () => {
   expect(ar(mk(), A('sys', [ublk('fix it', '<system-reminder>secret context')])).meta!.task).toBe('fix it')
+})
+
+const CC = '00000000-0000-4000-8000-000000000001'
+const ccReq = (messages: object[], model = 'claude-opus-fixture') => ({ model, system: [{ type: 'text', text: 'attribution: fixture' }, { type: 'text', text: 'sys' }], messages })
+const ccOk = (content: string, calls: { id: string; name: string }[] = []): NormalizedResponse =>
+  ({ content, toolCalls: calls.map(c => ({ backendId: c.id, name: c.name, args: {} })), usage: { promptTokens: 7, completionTokens: 2 }, raw: {} })
+
+test('a Claude Code session from the fixture: one main run, one subagent run with its parent, auxiliary and compaction as notes in main', () => {
+  const steps: { headers: Record<string, string>; payload: any; reply: any }[] = JSON.parse(readFileSync('tests/fixtures/claude-code-session.json', 'utf8'))
+  const s = mk(), metas: any[] = [], byRun: Record<string, any[]> = {}, runs: string[] = []
+  for (const step of steps) {
+    const out = s.onRequest(step.payload, 'anthropic', hintsOf(step.headers))
+    if (out.meta) metas.push(out.meta)
+    runs.push(out.run)
+    ;(byRun[out.run] ??= []).push(...out.events, ...s.onReply(out.run, out.turn, ok({ ...step.reply, raw: {} }), out.side))
+  }
+  expect(metas).toHaveLength(2)
+  const [main, sub] = metas
+  expect(main).toMatchObject({ session: CC, agent: 'main', task: 'Find the parser' })
+  expect(main.parent).toBeUndefined()
+  expect(sub).toMatchObject({ session: CC, agent: 'agent-0001', parent: 'main', agentType: 'Explore', task: 'Find where the parser lives' })
+  expect(runs).toEqual([main.id, main.id, sub.id, sub.id, main.id, main.id, main.id]) // turn 3 joins main with fewer messages
+  const m = byRun[main.id]
+  expect(m.filter(e => e.type === 'proxy_note')).toEqual([
+    expect.objectContaining({ kind: 'auxiliary', model: 'claude-haiku-fixture', usage: { promptTokens: 20, completionTokens: 3 }, latencyMs: 5, turn: 1 }),
+    expect.objectContaining({ kind: 'compaction', turn: 3 }),
+  ])
+  const reqs = m.flatMap((e, i) => e.type === 'llm_request' ? [i] : [])
+  expect(reqs).toHaveLength(4)
+  expect(m[reqs[2] - 1]).toMatchObject({ type: 'proxy_note', kind: 'compaction' })
+  expect(m.filter(e => e.type === 'tool_result')).toEqual([expect.objectContaining({ callId: 'c1', name: 'Task', turn: 1, output: 'The parser is in src/parser.ts.' })])
+  expect(byRun[sub.id].filter(e => e.type === 'tool_result')).toEqual([expect.objectContaining({ callId: 'c1', name: 'Read', turn: 1 })])
+  expect(m.map(e => e.seq)).toEqual(m.map((_, i) => i))
+})
+
+test('auxiliary before main opens an empty main run that main then joins', () => {
+  const s = mk(), h = (c: string) => hintsOf({ 'x-claude-code-session-id': CC, 'x-claude-code-request-class': c })
+  const aux = s.onRequest(ccReq([{ role: 'user', content: 'title?' }], 'claude-haiku-fixture'), 'anthropic', h('auxiliary'))
+  expect(aux).toMatchObject({ run: 'run1', turn: 0, events: [], side: { model: 'claude-haiku-fixture' } })
+  expect(aux.meta).toMatchObject({ task: '', session: CC, agent: 'main' })
+  expect(s.onReply(aux.run, aux.turn, ok(ccOk('Title')), aux.side)).toEqual([expect.objectContaining({ type: 'proxy_note', kind: 'auxiliary', turn: 0, seq: 0 })])
+  const a = s.onRequest(ccReq([{ role: 'user', content: 'do it' }]), 'anthropic', h('main'))
+  expect(a).toMatchObject({ run: 'run1', turn: 1 }); expect(a.meta).toBeUndefined()
+})
+
+test('an auxiliary reply between main turns keeps the main calls matched', () => {
+  const s = mk(), h = (c: string) => hintsOf({ 'x-claude-code-session-id': CC, 'x-claude-code-request-class': c })
+  const U1 = { role: 'user', content: 'do it' }
+  s.onRequest(ccReq([U1]), 'anthropic', h('main'))
+  s.onReply('run1', 1, ok(ccOk('', [{ id: 'toolu_a', name: 'Read' }])))
+  const aux = s.onRequest(ccReq([{ role: 'user', content: 'title?' }], 'claude-haiku-fixture'), 'anthropic', h('auxiliary'))
+  s.onReply(aux.run, aux.turn, ok(ccOk('', [{ id: 'toolu_x', name: 'Other' }])), aux.side)
+  const b = s.onRequest(ccReq([U1, { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_a', name: 'Read', input: {} }] }, { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_a', content: 'A' }] }]), 'anthropic', h('main'))
+  expect(b).toMatchObject({ run: 'run1', turn: 2 })
+  expect(b.events[0]).toMatchObject({ type: 'tool_result', callId: 'c1', name: 'Read', output: 'A', turn: 1 })
+})
+
+test('a failed auxiliary call is a note with its error, not an error event', () => {
+  const s = mk()
+  const aux = s.onRequest(ccReq([{ role: 'user', content: 'title?' }], 'claude-haiku-fixture'), 'anthropic', hintsOf({ 'x-claude-code-session-id': CC, 'x-claude-code-request-class': 'auxiliary' }))
+  const ev = s.onReply(aux.run, aux.turn, { ok: false, message: 'POST /v1/messages: 429', body: 'slow down' }, aux.side)
+  expect(ev).toEqual([{ seq: 0, turn: 0, ts: expect.any(Number), type: 'proxy_note', kind: 'auxiliary', model: 'claude-haiku-fixture', error: 'POST /v1/messages: 429' }])
+})
+
+test('hintsOf takes only the whitelist, as single printable strings', () => {
+  const bad = { 'x-claude-code-session-id': ['a', 'b'], 'x-claude-code-agent-id': 'x'.repeat(129), 'x-claude-code-agent-type': 'Ex\u0007', 'x-claude-code-request-class': 'main', 'x-api-key': 'k', authorization: 'Bearer t' }
+  expect(hintsOf(bad)).toEqual({ requestClass: 'main' })
+  expect(hintsOf({ 'x-claude-code-session-id': 'x'.repeat(128), 'x-claude-code-parent-agent-id': 'p', 'x-claude-code-agent-id': '' })).toEqual({ session: 'x'.repeat(128), parent: 'p' })
+  const s = mk()
+  s.onRequest(ccReq([{ role: 'user', content: 'do it' }]), 'anthropic', hintsOf(bad))
+  const b = s.onRequest(ccReq([{ role: 'user', content: 'do it' }]), 'anthropic')
+  expect(b).toMatchObject({ run: 'run1', turn: 2 })
 })

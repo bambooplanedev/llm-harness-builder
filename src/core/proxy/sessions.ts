@@ -4,7 +4,13 @@ import type { Ev, HarnessEvent, ToolCall } from '../events.js'
 import type { NormalizedResponse } from '../backends/types.js'
 
 /** The meta line of a proxy run; `proxy` marks the file as a transcription, `pid` lets serve tell a live writer from a killed one. */
-export type RunMeta = { id: string; harness: string; task: string; workdir: string; started: number; proxy: { upstream: string; pid: number } }
+export type RunMeta = {
+  id: string; harness: string; task: string; workdir: string; started: number; proxy: { upstream: string; pid: number }
+  session?: string; agent?: string; parent?: string; agentType?: string
+}
+/** What Claude Code's x-claude-code-* headers say about a request; never the headers themselves. */
+export type ProxyHints = { session?: string; agent?: string; parent?: string; agentType?: string; requestClass?: string }
+
 export type SessionDeps = { now: () => number; newId: () => string; harness: string; upstream: string; pid: number }
 export type ReplyOutcome = { ok: true; res: NormalizedResponse; latencyMs: number } | { ok: false; message: string; body?: string }
 
@@ -17,6 +23,18 @@ type Run = {
   replied?: { turn: number; calls: ToolCall[] }
   resulted: Set<string>
   open: boolean
+}
+
+const HINTS = { session: 'x-claude-code-session-id', agent: 'x-claude-code-agent-id', parent: 'x-claude-code-parent-agent-id', agentType: 'x-claude-code-agent-type', requestClass: 'x-claude-code-request-class' } as const
+
+/** The hint headers only; a value counts if it is one string of 1..128 printable ASCII characters, else that hint is absent. */
+export function hintsOf(h: Record<string, string | string[] | undefined>): ProxyHints {
+  const out: ProxyHints = {}
+  for (const [k, name] of Object.entries(HINTS) as [keyof ProxyHints, string][]) {
+    const v = h[name]
+    if (typeof v === 'string' && /^[\x21-\x7e]{1,128}$/.test(v)) out[k] = v
+  }
+  return out
 }
 
 /** Text of an OpenAI message `content`: a string, an array of parts (the text ones count), or null. */
@@ -53,8 +71,11 @@ export class Sessions {
    * no more messages than this one. Call it before any await, so two requests of one run keep their seq order.
    * `api` comes from the route the request took. Anthropic: the key is text only, the top-level system without its first block (Claude Code's attribution
    * block changes) and the first user text, since Claude Code moves cache_control markers between turns.
+   * With a session hint (Claude Code's headers) the key is the session and the agent, with no length rule: a compaction
+   * rewrites the history. An auxiliary request (a title, a summary) gets no turn: it is a note in the session's main run,
+   * written by onReply with the `side` returned here. A compaction is a turn of its agent's run, marked by a note.
    */
-  onRequest(payload: object, api: 'openai' | 'anthropic' = 'openai'): { run: string; turn: number; meta?: RunMeta; events: HarnessEvent[] } {
+  onRequest(payload: object, api: 'openai' | 'anthropic' = 'openai', hints: ProxyHints = {}): { run: string; turn: number; meta?: RunMeta; events: HarnessEvent[]; side?: { model: string } } {
     const raw = (payload as { messages?: unknown }).messages
     const msgs: any[] = Array.isArray(raw) ? raw : []
     const anthropic = api === 'anthropic'
@@ -70,17 +91,28 @@ export class Sessions {
       key = stable([sys ?? null, user ?? null])
       task = taskOf(textOf(user?.content))
     }
-    let run = this.runs.filter(r => r.open && r.key === key && r.len <= msgs.length).sort((a, b) => b.active - a.active)[0]
+    const aux = hints.session !== undefined && hints.requestClass === 'auxiliary'
+    const agent = aux ? 'main' : hints.agent ?? 'main'
+    if (hints.session !== undefined) key = `cc\0${hints.session}\0${agent}`
+    let run = this.runs.filter(r => r.open && r.key === key && (hints.session !== undefined || r.len <= msgs.length)).sort((a, b) => b.active - a.active)[0]
     let meta: RunMeta | undefined
     if (!run) {
       run = { id: this.d.newId(), key, len: 0, active: 0, seq: 0, turn: 0, callSeq: 0, toolCallCount: 0, resulted: new Set(), open: true }
       this.runs.push(run)
-      meta = { id: run.id, harness: this.d.harness, task, workdir: '', started: this.d.now(), proxy: { upstream: this.d.upstream, pid: this.d.pid } }
+      meta = { id: run.id, harness: this.d.harness, task: aux ? '' : task, workdir: '', started: this.d.now(), proxy: { upstream: this.d.upstream, pid: this.d.pid } }
+      if (hints.session !== undefined) {
+        meta.session = hints.session; meta.agent = agent
+        const parent = hints.parent ?? (hints.agent !== undefined ? 'main' : undefined)
+        if (!aux && parent !== undefined) meta.parent = parent
+        if (!aux && hints.agentType !== undefined) meta.agentType = hints.agentType
+      }
     }
+    if (aux) return { run: run.id, turn: run.turn, meta, events: [], side: { model: String((payload as { model?: unknown }).model ?? '') } }
     run.len = msgs.length
     run.active = ++this.tick
     const events = this.results(run, msgs, anthropic)
     const turn = ++run.turn
+    if (hints.requestClass === 'compaction') events.push(this.ev(run, turn, { type: 'proxy_note', kind: 'compaction' }))
     events.push(this.ev(run, turn, { type: 'llm_request', payload }))
     return { run: run.id, turn, meta, events }
   }
@@ -121,10 +153,16 @@ export class Sessions {
     return out
   }
 
-  /** The reply to the request `onRequest` numbered `turn`: llm_response and one tool_call per entry of its tool_calls, or an error. */
-  onReply(runId: string, turn: number, o: ReplyOutcome): HarnessEvent[] {
+  /**
+   * The reply to the request `onRequest` numbered `turn`: llm_response and one tool_call per entry of its tool_calls, or an error.
+   * With `side` (an auxiliary request): one note at the run's current turn, success or failure; the run's calls stay as they were.
+   */
+  onReply(runId: string, turn: number, o: ReplyOutcome, side?: { model: string }): HarnessEvent[] {
     const run = this.runs.find(r => r.id === runId)
     if (!run?.open) return []
+    if (side) return [this.ev(run, run.turn, o.ok
+      ? { type: 'proxy_note', kind: 'auxiliary', model: side.model, ...(o.res.usage ? { usage: o.res.usage } : {}), latencyMs: o.latencyMs }
+      : { type: 'proxy_note', kind: 'auxiliary', model: side.model, error: o.message })]
     if (!o.ok) return [this.ev(run, turn, { type: 'error', message: o.message, ...(o.body !== undefined ? { body: o.body } : {}) })]
     const { res } = o
     const events = [this.ev(run, turn, { type: 'llm_response', raw: res.raw, content: res.content, reasoning: res.reasoning, usage: res.usage, latencyMs: o.latencyMs })]

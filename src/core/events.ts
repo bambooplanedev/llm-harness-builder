@@ -21,6 +21,8 @@ export type HarnessEvent = Base & (
       offered: number; tools: string[]; descriptionChars: number; schemaChars: number }
   | { type: 'knobs_off'; off: KnobOff[] }
   | { type: 'error'; message: string; body?: string }
+  /** A proxy run only: a side call of the agent (a title, a summary) recorded beside the turn, or a compaction turn. */
+  | { type: 'proxy_note'; kind: 'auxiliary' | 'compaction'; model?: string; usage?: Usage; latencyMs?: number; error?: string }
   | { type: 'done'; reason: DoneReason; text?: string; turns: number; toolCallCount: number }
 )
 

@@ -17,6 +17,8 @@ export type Meta = { meta: {
   bench?: { file: string; round: number }
   /** Only on runs a `proxy` records: its upstream, and its pid, which tells serve a live writer from a killed one. */
   proxy?: { upstream: string; pid: number }
+  /** Only on proxy runs of Claude Code: its session, which agent this run is, its parent agent and agent type. */
+  session?: string; agent?: string; parent?: string; agentType?: string
 } }
 /** Live-only: fanned out to listeners, never written to the run file, no seq. */
 export type DeltaMsg = Delta & { type: 'delta' }

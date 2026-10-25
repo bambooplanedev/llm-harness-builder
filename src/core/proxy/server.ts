@@ -9,7 +9,7 @@ import { collect, fromJson } from '../backends/openai.js'
 import { collectAnthropic, fromAnthropicJson } from '../backends/anthropic.js'
 import { BackendError, jsonChunks, type NormalizedResponse } from '../backends/types.js'
 import type { HarnessEvent } from '../events.js'
-import { Sessions, type ReplyOutcome, type RunMeta } from './sessions.js'
+import { Sessions, hintsOf, type ReplyOutcome, type RunMeta } from './sessions.js'
 import { redactor } from '../redact.js'
 
 export type ProxyOpts = {
@@ -128,7 +128,7 @@ export async function startProxy(o: ProxyOpts): Promise<ProxyServer> {
     if (target.origin !== up.origin) return refuse(res, 400, 'bad request path')
     const body = await readAll(req)
 
-    let rec: { run: string; turn: number; api: Api } | undefined
+    let rec: { run: string; turn: number; api: Api; side?: { model: string } } | undefined
     const api = apiOf(req.method, target.pathname)
     const scrub = scrubberOf(req.headers)
     if (api) {
@@ -136,10 +136,11 @@ export async function startProxy(o: ProxyOpts): Promise<ProxyServer> {
       if (body.length > cap) log(`not recorded: a ${body.length}-byte request is over the ${cap}-byte cap`)
       else try { payload = JSON.parse(body.toString('utf8')) } catch { log('not recorded: the request body is not JSON') }
       if (payload && typeof payload === 'object') {
-        const out = sessions.onRequest(scrub(payload), api)
+        // Only the hint headers, scrubbed like the body: Sessions never sees req.headers.
+        const out = sessions.onRequest(scrub(payload), api, scrub(hintsOf(req.headers)))
         if (out.meta) log(`run ${out.run}: ${out.meta.task.slice(0, 80).replace(/\n/g, ' ')}`)
         record(out.run, out.events, out.meta)
-        rec = { run: out.run, turn: out.turn, api }
+        rec = { run: out.run, turn: out.turn, api, side: out.side }
       }
     }
 
@@ -198,7 +199,7 @@ export async function startProxy(o: ProxyOpts): Promise<ProxyServer> {
         outcome = e instanceof BackendError ? { ok: false, message: e.message, body: e.body } : { ok: false, message: `could not read the reply: ${(e as Error).message}` }
       }
     }
-    record(rec.run, sessions.onReply(rec.run, rec.turn, scrub(outcome)))
+    record(rec.run, sessions.onReply(rec.run, rec.turn, scrub(outcome), rec.side))
   }
 
   const server = http.createServer((req, res) => {
