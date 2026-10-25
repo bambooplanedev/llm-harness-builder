@@ -3,7 +3,7 @@ import { ref, computed, watch } from 'vue'
 import type { HarnessConfig, ServerInfo } from './api'
 import { PRESETS, FAMILIES, applyFamily, DEFAULT_PROMPTED_TEMPLATE, DEFAULT_PARSE_ERROR_HINT } from '../../src/core/prompts'
 import { TOOL_NAMES, keyNote } from '../../src/core/config'
-import { t } from './i18n'
+import { t, type Key } from './i18n'
 import { advancedSet } from './advanced'
 
 const config = defineModel<HarnessConfig>({ required: true })
@@ -31,17 +31,19 @@ function applyPreset(k: keyof typeof PRESETS) {
   if (!config.value.toolCalls.parseErrorHint) config.value.toolCalls.parseErrorHint = DEFAULT_PARSE_ERROR_HINT
 }
 /** What the last family button changed, while the config is still the one it made; any other swap (load, a bench run) clears it. */
-const familyChanged = ref<{ key: string; changes: string[]; config: HarnessConfig } | null>(null)
+const familyChanged = ref<{ key: string; changes: { k: Key; p?: Record<string, string> }[]; config: HarnessConfig } | null>(null)
 function family(k: keyof typeof FAMILIES) {
   const a = config.value, b = applyFamily(a, k), suffix = FAMILIES[k].systemSuffix
   const lastLine = (p: string) => p.trimEnd().split('\n').at(-1)!.trim()
+  type Change = { k: Key; p?: Record<string, string> }
+  const ch = (k: Key, p?: Change['p']): Change => ({ k, p })
   const changes = [
-    a.toolCalls.mode !== b.toolCalls.mode && `tool calls ${a.toolCalls.mode} → ${b.toolCalls.mode}`,
-    b.toolCalls.mode === 'prompted' && (a.toolCalls.format ?? 'json') !== b.toolCalls.format && `format ${a.toolCalls.format ?? 'json'} → ${b.toolCalls.format}`,
-    a.toolCalls.promptedTemplate !== b.toolCalls.promptedTemplate && 'prompted template replaced',
-    a.toolCalls.parseErrorHint !== b.toolCalls.parseErrorHint && 'parse-error hint replaced',
-    lastLine(a.systemPrompt) !== lastLine(b.systemPrompt) && (suffix && lastLine(b.systemPrompt) === suffix ? `${suffix} added as the last line of the system prompt` : `${lastLine(a.systemPrompt)} removed from the end of the system prompt`),
-  ].filter((c): c is string => !!c)
+    a.toolCalls.mode !== b.toolCalls.mode && ch('family.mode', { a: a.toolCalls.mode, b: b.toolCalls.mode }),
+    b.toolCalls.mode === 'prompted' && (a.toolCalls.format ?? 'json') !== b.toolCalls.format && ch('family.format', { a: a.toolCalls.format ?? 'json', b: b.toolCalls.format! }),
+    a.toolCalls.promptedTemplate !== b.toolCalls.promptedTemplate && ch('family.template'),
+    a.toolCalls.parseErrorHint !== b.toolCalls.parseErrorHint && ch('family.hint'),
+    lastLine(a.systemPrompt) !== lastLine(b.systemPrompt) && (suffix && lastLine(b.systemPrompt) === suffix ? ch('family.added', { line: suffix }) : ch('family.removed', { line: lastLine(a.systemPrompt) })),
+  ].filter((c): c is Change => !!c)
   config.value = b
   familyChanged.value = { key: k, changes, config: b }
 }
@@ -145,7 +147,7 @@ function editMcp(text: string) {
     <div class="label"><span :title="t('h.systemPrompt')">System prompt</span> <span v-for="(_, k) in PRESETS" :key="k"><button @click="applyPreset(k)">{{ k }}</button> </span></div>
     <textarea v-model="config.systemPrompt"></textarea>
     <div class="label"><span :title="t('h.family')">Model family</span> <span v-for="(f, k) in FAMILIES" :key="k"><button :title="t(`h.family.${k}`)" @click="family(k)">{{ k }}</button> </span></div>
-    <div v-if="familyChanged" class="hint">{{ familyChanged.key }}: {{ familyChanged.changes.length ? familyChanged.changes.join('; ') : t('form.familyNone') }}</div>
+    <div v-if="familyChanged" class="hint">{{ familyChanged.key }}: {{ familyChanged.changes.length ? familyChanged.changes.map(c => t(c.k, c.p)).join('; ') : t('form.familyNone') }}</div>
 
     <label :title="t('h.tools')">Tools</label>
     <div class="row" style="flex-wrap:wrap">

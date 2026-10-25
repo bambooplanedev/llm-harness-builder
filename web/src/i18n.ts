@@ -51,6 +51,29 @@ export const en = {
   'diff.split': '{at} · click a turn to read both sides',
   'diff.splitAt': 'paths split at t{n}',
   'diff.noEvents': "one side's events have not loaded — nothing to draw the path from",
+  'bench.runsWarn.one': '{n} runs; on an 8B model one slug run takes a few minutes',
+  'bench.runsWarn.few': '{n} runs; on an 8B model one slug run takes a few minutes',
+  'bench.runsWarn.many': '{n} runs; on an 8B model one slug run takes a few minutes',
+  'bench.runsWarn.other': '{n} runs; on an 8B model one slug run takes a few minutes',
+  'trace.dropped.one': '{n} chars kept out of the history, a marker went back instead',
+  'trace.dropped.few': '{n} chars kept out of the history, a marker went back instead',
+  'trace.dropped.many': '{n} chars kept out of the history, a marker went back instead',
+  'trace.dropped.other': '{n} chars kept out of the history, a marker went back instead',
+  'trace.reset.one': 'context reset: {n} chars of history cleared, the next request is the task again',
+  'trace.reset.few': 'context reset: {n} chars of history cleared, the next request is the task again',
+  'trace.reset.many': 'context reset: {n} chars of history cleared, the next request is the task again',
+  'trace.reset.other': 'context reset: {n} chars of history cleared, the next request is the task again',
+  'diff.knobs.one': 'config: {n} knob differs',
+  'diff.knobs.few': 'config: {n} knobs differ',
+  'diff.knobs.many': 'config: {n} knobs differ',
+  'diff.knobs.other': 'config: {n} knobs differ',
+  'diff.same': '(same harness). The paths split on what the model did.',
+  'family.mode': 'tool calls {a} → {b}',
+  'family.format': 'format {a} → {b}',
+  'family.template': 'prompted template replaced',
+  'family.hint': 'parse-error hint replaced',
+  'family.added': '{line} added as the last line of the system prompt',
+  'family.removed': '{line} removed from the end of the system prompt',
   // Hover hints for the names on the page, for someone who opens it for the first time: what it is, what it is for, what it takes.
   'h.advanced': 'Rarer knobs live here: tool limits, MCP, prompted templates, context and the loop.\nThe number is how many of them differ from a new harness.',
   'h.harness': 'A harness is one settings file: backend, prompts, tools, limits.\nLoad a ready one from the list (the harnesses/ folder) or save the current one under a new name.',
@@ -98,6 +121,8 @@ export const en = {
   'h.reasons': 'How the runs ended.\nfinal — the model gave an answer; max_turns — out of turns; repeat_loop — a repeat loop; parse_failed — a call could not be parsed; *_error — a server or MCP error; aborted — interrupted, including by the timeout.',
 }
 export type Key = keyof typeof en
+/** The base of a key that has `.one/.few/.many/.other` forms. */
+export type PluralKey<K = Key> = K extends `${infer B}.other` ? B : never
 
 const catalog: Record<Lang, Partial<Record<Key, string>>> = { en, uk }
 /** Starts at English whatever the browser says: main.ts sets the real one, so tests render English. */
@@ -118,6 +143,11 @@ export function setLang(l: Lang, storage?: Pick<Storage, 'setItem'>): void {
 export function t(key: Key, params?: Record<string, string | number>): string {
   const s = catalog[lang.value][key] ?? en[key]
   return params ? s.replace(/\{(\w+)\}/g, (m, n) => (n in params ? String(params[n]) : m)) : s
+}
+/** `t` for a count: the form `Intl.PluralRules` picks for the language, else `.other`; `{n}` is the count. */
+export function tn(base: PluralKey, n: number, params?: Record<string, string | number>): string {
+  const k = `${base}.${new Intl.PluralRules(lang.value).select(n)}`
+  return t((k in en ? k : `${base}.other`) as Key, { n, ...params })
 }
 export const langName = (l: Lang): string => catalog[l]['lang.name'] ?? en['lang.name']
 

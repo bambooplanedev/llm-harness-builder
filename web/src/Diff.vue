@@ -3,7 +3,7 @@ import { computed, ref } from 'vue'
 import { configDiff, lineDiff, skeleton, turnsOf, type DiffSide } from '../../src/core/diff'
 import { mmss } from '../../src/core/bench'
 import Trace from './Trace.vue'
-import { t, T } from './i18n'
+import { t, tn, T } from './i18n'
 
 const props = defineProps<{ a: DiffSide; b: DiffSide; task: string }>()
 defineEmits<{ close: [] }>()
@@ -43,7 +43,7 @@ const hasEvents = computed(() => props.a.events.length > 0 && props.b.events.len
       <button @click="$emit('close')" :title="t('diff.closeTitle')">×</button>
     </div>
 
-    <div class="muted mono summary">config: {{ rows.length }} knob{{ rows.length === 1 ? '' : 's' }} differ{{ rows.length === 1 ? 's' : '' }}<template v-if="!rows.length"> (same harness). The paths split on what the model did.</template></div>
+    <div class="muted mono summary">{{ tn('diff.knobs', rows.length) }}<template v-if="!rows.length"> {{ t('diff.same') }}</template></div>
     <div v-if="rows.length" class="table-wrap">
     <table class="cfg">
       <tr v-for="r in rows" :key="r.path">

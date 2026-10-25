@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { t, T } from './i18n'
+import { t, tn, T } from './i18n'
 import type { Delta, HarnessEvent } from './api'
 import { mcpApprovalServer, mcpCounts, UNTIL_BASH } from '../../src/core/events'
 import { analyzeTrace, summaryLine } from '../../src/core/analyze'
@@ -67,7 +67,7 @@ const liveTok = computed(() => Math.ceil(liveText.value.length / 4))
         <div v-if="e.reasoning" class="muted">thinking: {{ e.reasoning }}</div>{{ e.content || '(empty content)' }}
         <small class="muted"> · {{ e.latencyMs }}ms<template v-if="e.costUsd !== undefined"> · ${{ Number(e.costUsd.toPrecision(4)) }}</template></small>
       </div>
-      <div v-else-if="e.type === 'parse_error'" class="ev parse_error">parse error: {{ e.message }}<span v-if="e.droppedChars"> · {{ e.droppedChars }} chars kept out of the history, a marker went back instead</span></div>
+      <div v-else-if="e.type === 'parse_error'" class="ev parse_error">parse error: {{ e.message }}<span v-if="e.droppedChars"> · {{ tn('trace.dropped', e.droppedChars) }}</span></div>
       <div v-else-if="e.type === 'tool_call'" class="ev tool_call">{{ e.call.name }} {{ pretty(e.call.args) }}</div>
       <div v-else-if="e.type === 'approval_required' && !answered.has(e.call.callId)" class="ev approval">
         <template v-if="props.approvable !== false">
@@ -79,7 +79,7 @@ const liveTok = computed(() => Math.ceil(liveText.value.length / 4))
         <template v-else>approval_required: <code>{{ e.call.args.command }}</code> ({{ t('trace.autoApproved') }})</template>
       </div>
       <div v-else-if="e.type === 'final_check'" class="ev tool_result" :class="{ err: !e.passed }">final check <code>{{ e.command }}</code>: {{ e.passed ? 'passed' : t('trace.checkFailed') }}<template v-if="!e.passed"><br>{{ e.output }}</template></div>
-      <div v-else-if="e.type === 'context_reset'" class="ev parse_error">context reset: {{ e.chars }} chars of history cleared, the next request is the task again</div>
+      <div v-else-if="e.type === 'context_reset'" class="ev parse_error">{{ tn('trace.reset', e.chars) }}</div>
       <div v-else-if="e.type === 'mcp_server_start'" class="ev tool_call">
         mcp <code>{{ e.server }}</code>: {{ mcpCounts(e) }}
       </div>

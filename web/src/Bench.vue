@@ -4,7 +4,7 @@ import { api, type ActiveTrace, type AnalysisCells, type BenchFile, type BenchHa
 import { cellsLine } from '../../src/core/analyze'
 import { formatTable, mmss, wilson, BENCH_TASKS } from '../../src/core/bench'
 import Trace from './Trace.vue'
-import { t, T } from './i18n'
+import { t, tn, T, lang } from './i18n'
 import Diff from './Diff.vue'
 import type { DiffSide } from '../../src/core/diff'
 
@@ -222,7 +222,7 @@ onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer); unsub?.(); d
       <div class="runs">
         <div v-for="f in files" :key="f.file" :class="{ on: f.file === file }" @click="openFile(f.file)">
           <b>{{ f.file }}</b>
-          <div class="line one muted"><span :title="f.model">{{ f.model || '?' }}<span v-if="!f.complete"> · incomplete</span></span><span>{{ new Date(f.date).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) }}</span></div>
+          <div class="line one muted"><span :title="f.model">{{ f.model || '?' }}<span v-if="!f.complete"> · incomplete</span></span><span>{{ new Date(f.date).toLocaleString(lang, { dateStyle: 'short', timeStyle: 'short' }) }}</span></div>
         </div>
       </div>
       </details>
@@ -268,7 +268,7 @@ onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer); unsub?.(); d
           <label v-if="BENCH_TASKS[task]"><b>size</b> <input type="number" min="1" :max="BENCH_TASKS[task]" v-model.number="size"></label>
           <label><b>runs per harness</b> <input type="number" min="1" max="50" v-model.number="runsPer"></label>
         </div>
-        <div class="warn">{{ picked.length * runsPer }} runs; on an 8B model one slug run takes a few minutes</div>
+        <div class="warn">{{ tn('bench.runsWarn', picked.length * runsPer) }}</div>
         <div class="hint">{{ t('bench.autoApproves') }}</div>
         <button :disabled="starting || !picked.length || !props.backend.model" @click="startNew">{{ starting ? 'Starting…' : 'Start' }}</button>
       </div>
@@ -276,7 +276,7 @@ onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer); unsub?.(); d
         <div class="bench-head">
           <div>
           <h2>{{ result.taskName ?? 'bench' }}<template v-if="result.size"> · size {{ result.size }}</template> · {{ result.harnesses.length }} harnesses × {{ result.n }} runs</h2>
-          <div class="muted">{{ backend?.model }} · {{ backend?.kind }} {{ backend?.baseUrl }}<template v-if="nCtx"> · window {{ nCtx.toLocaleString() }}</template> · timeout {{ mmss(result.timeoutS * 1000) }} · {{ new Date(result.date).toLocaleString() }}</div>
+          <div class="muted">{{ backend?.model }} · {{ backend?.kind }} {{ backend?.baseUrl }}<template v-if="nCtx"> · window {{ nCtx.toLocaleString(lang) }}</template> · timeout {{ mmss(result.timeoutS * 1000) }} · {{ new Date(result.date).toLocaleString(lang) }}</div>
           <div class="muted">{{ runs.length }}/{{ total }} runs<template v-if="!result.complete"> · {{ result.stopped ? 'stopped' : 'incomplete' }}</template> · {{ mmss(msDone) }} in</div>
           </div>
           <button v-if="!example" @click="again" :disabled="starting || !!active" :title="active ? t('h.againBusy') : t('h.again')">{{ starting ? 'Starting…' : 'Run bench again' }}</button>
@@ -297,7 +297,7 @@ onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer); unsub?.(); d
                 <td class="n">{{ h.median.turns }}</td>
                 <td class="n">{{ mmss(h.median.ms) }}</td>
                 <td v-if="hasCost" class="n">{{ medCost(h) }}</td>
-                <td v-if="hasPeak" class="n" :class="{ warn: nCtx && (peak(h) ?? 0) > nCtx * 0.9 }">{{ peak(h)?.toLocaleString() ?? '-' }}</td>
+                <td v-if="hasPeak" class="n" :class="{ warn: nCtx && (peak(h) ?? 0) > nCtx * 0.9 }">{{ peak(h)?.toLocaleString(lang) ?? '-' }}</td>
                 <td><span v-for="(v, k) in h.reasons" :key="k" :class="['chip', reasonTone(String(k))]">{{ k }} ×{{ v }}</span></td>
               </tr>
             </tbody>

@@ -6,7 +6,7 @@ import App from '../web/src/App.vue'
 // @ts-expect-error -- vue SFC, no .d.ts; typechecked separately by vue-tsc
 import Bench from '../web/src/Bench.vue'
 import { NEW_HARNESS } from '../web/src/advanced'
-import { lang, initialLang, readLang, setLang, langName, t, en, type Key } from '../web/src/i18n'
+import { lang, initialLang, readLang, setLang, langName, t, tn, en, type Key } from '../web/src/i18n'
 import { uk } from '../web/src/uk'
 
 afterEach(() => { lang.value = 'en' })
@@ -107,4 +107,11 @@ test('t falls back to English for a key the current language lacks, and still fi
     lang.value = 'uk'
     expect(t('bench.runsUnasked', { cmd: 'npm test' })).toBe('runs unasked · npm test')
   } finally { u['bench.runsUnasked'] = saved }
+})
+
+test('tn: English one/other; Ukrainian one/few/many on 1, 2, 5, 11, 21', () => {
+  expect([0, 1, 2].map(n => tn('diff.knobs', n))).toEqual(['config: 0 knobs differ', 'config: 1 knob differs', 'config: 2 knobs differ'])
+  lang.value = 'uk'
+  const f = (form: 'one' | 'few' | 'many', n: number) => uk[`diff.knobs.${form}`].replace('{n}', String(n))
+  expect([1, 2, 5, 11, 21].map(n => tn('diff.knobs', n))).toEqual([f('one', 1), f('few', 2), f('many', 5), f('many', 11), f('one', 21)])
 })

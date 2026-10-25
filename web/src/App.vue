@@ -190,7 +190,7 @@ watch(() => config.value.backend.model, () => {
         </div>
         <div class="runs">
           <div v-for="r in runs" :key="r.id" @click="open(r.id, r.task, r.active)">
-            <div class="line"><span><b>{{ r.harness }}</b> · {{ r.reason ?? 'running' }}</span><span>{{ r.turns ?? '-' }} turns · {{ r.toolCallCount ?? '-' }} tool calls · {{ new Date(r.started).toLocaleTimeString() }}</span></div>
+            <div class="line"><span><b>{{ r.harness }}</b> · {{ r.reason ?? 'running' }}</span><span>{{ r.turns ?? '-' }} turns · {{ r.toolCallCount ?? '-' }} tool calls · {{ new Date(r.started).toLocaleTimeString(lang) }}</span></div>
             <div class="muted">{{ r.task.slice(0, 60) }}</div>
           </div>
         </div>
