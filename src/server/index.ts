@@ -10,12 +10,21 @@ import { validateWorkdir } from '../core/tools/sandbox.js'
 import { createBackend, type Backend } from '../core/backends/index.js'
 import { redactor } from '../core/redact.js'
 import type { HarnessEvent } from '../core/events.js'
+import { benchFileName } from '../core/bench.js'
 
 /** `bench` starts `llm-harness-builder bench <args>` with its stderr piped; without it the page cannot start one. */
 export type ServerOpts = { port: number; runsDir: string; harnessesDir: string; staticDir?: string; backendFactory?: (b: HarnessConfig['backend']) => Backend; bench?: (args: string[]) => ChildProcess }
 
 const MIME: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml' }
 const MAX_BODY_BYTES = 5e6
+
+/** A bench JSON the page may name: one plain segment ending in .json. */
+const benchName = (f: unknown): f is string => typeof f === 'string' && safeName(f) && f.endsWith('.json')
+/** The words for a key the environment of serve does not hold, or undefined. */
+const keyMissing = (b: HarnessConfig['backend']) => {
+  const problem = keyProblem(b, process.env)
+  return problem && `backend.apiKeyEnv: ${problem} in the environment serve was started from`
+}
 
 const json = (res: http.ServerResponse, status: number, body: unknown) => {
   res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body))
@@ -67,8 +76,8 @@ export async function startServer(opts: ServerOpts) {
         if (info && (typeof b.model !== 'string' || !b.model)) errors.push('backend.model is required')
         // Past backendErrors the fields are what a backend config holds; only model-info asks for a model.
         const backend = b as unknown as HarnessConfig['backend']
-        const problem = errors.length ? undefined : keyProblem(backend, process.env)
-        if (problem) errors.push(`backend.apiKeyEnv: ${problem} in the environment serve was started from`)
+        const missing = errors.length ? undefined : keyMissing(backend)
+        if (missing) errors.push(missing)
         if (errors.length) return json(res, 400, { errors })
         const redact = redactor(apiKey(backend, process.env), backend.apiKeyEnv ?? '')
         try {
@@ -110,7 +119,7 @@ export async function startServer(opts: ServerOpts) {
       if (m('GET', /^\/api\/bench$/)) {
         const file = url.searchParams.get('file')
         if (file === null) return json(res, 200, { files: await store.benchList() })
-        if (!safeName(file) || !file.endsWith('.json')) return json(res, 400, { error: 'bad name' })
+        if (!benchName(file)) return json(res, 400, { error: 'bad name' })
         const opened = await store.benchOpen(file)
         if (!opened) return json(res, 404, { error: 'not a bench file' })
         return json(res, 200, { files: await store.benchList(), ...opened, analysis: await store.benchAnalysis(opened.result) })
@@ -118,18 +127,17 @@ export async function startServer(opts: ServerOpts) {
       if (opts.bench && m('POST', /^\/api\/bench\/again$/)) {
         // The same bench once more, from its own JSON: the harnesses as recorded, the task, size, n and timeout. A new JSON, the old one stays.
         const { file } = await readBody(req)
-        if (typeof file !== 'string' || !safeName(file) || !file.endsWith('.json')) return json(res, 400, { error: 'bad name' })
+        if (!benchName(file)) return json(res, 400, { error: 'bad name' })
         const opened = await store.benchOpen(file)
         if (!opened) return json(res, 404, { error: 'not a bench file' })
         if (benching && benching.exitCode === null && benching.signalCode === null) return json(res, 409, { error: 'a bench started from this page is still running' })
         const r = opened.result
         const dir = await mkdtemp(path.join(tmpdir(), 'lhb-again-'))
         const harnesses = await Promise.all(r.harnesses.map(async (h, i) => { const f = path.join(dir, `${i}.json`); await writeFile(f, JSON.stringify(h.config)); return f }))
-        const d = new Date(), p = (n: number) => String(n).padStart(2, '0')
-        const stamp = `bench-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`
         const exists = (f: string) => stat(f).then(() => true, () => false)
-        let out = `${stamp}.json`
-        for (let i = 2; await exists(path.join(opts.runsDir, out)); i++) out = `${stamp}-${i}.json` // two in one second must not share a JSON
+        const first = benchFileName(new Date())
+        let out = first
+        for (let i = 2; await exists(path.join(opts.runsDir, out)); i++) out = first.replace(/\.json$/, `-${i}.json`) // two in one second must not share a JSON
         const outPath = path.join(opts.runsDir, out)
         // `--x=value`: a value from the file that starts with `-` stays a value. The CLI checks every one of them.
         const child = benching = opts.bench([`--task=${r.taskName ?? 'slug'}`, ...r.size ? [`--size=${r.size}`] : [], `--n=${r.n}`, `--timeout=${r.timeoutS}`, `--out=${outPath}`, ...harnesses])
@@ -149,10 +157,8 @@ export async function startServer(opts: ServerOpts) {
       if (m('POST', /^\/api\/runs$/)) {
         const body = await readBody(req) as Partial<RunParams>
         const errs = validateConfig(body.config)
-        if (!errs.length) {
-          const problem = keyProblem((body.config as HarnessConfig).backend, process.env)
-          if (problem) errs.push(`backend.apiKeyEnv: ${problem} in the environment serve was started from`)
-        }
+        const missing = errs.length ? undefined : keyMissing((body.config as HarnessConfig).backend)
+        if (missing) errs.push(missing)
         if (typeof body.task !== 'string' || !body.task.trim()) errs.push('task is required')
         if (typeof body.workdir !== 'string') errs.push('workdir is required')
         else { const w = await validateWorkdir(body.workdir); if (w) errs.push(w) }

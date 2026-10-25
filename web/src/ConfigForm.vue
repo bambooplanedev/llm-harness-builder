@@ -43,63 +43,37 @@ function toggleTool(n: HarnessConfig['tools']['enabled'][number]) {
   set.has(n) ? set.delete(n) : set.add(n)
   config.value.tools.enabled = TOOL_NAMES.filter(t => set.has(t))
 }
-/** Absent, not false, when off: v-model would stamp `false` into every harness saved from the UI
- *  and make configDiff show `undefined vs false` against older runs. Same reason mcpServers is deleted. */
-function toggleGuard(on: boolean) {
-  if (on) config.value.tools.requireReadBeforeEdit = true
-  else delete config.value.tools.requireReadBeforeEdit
+/** Absent, not false or '', when off or empty: v-model would stamp `false` into every harness saved from the UI and make
+ *  configDiff show `undefined vs false` against older runs, and an empty or useless box would save a value the validator
+ *  refuses. Same reason mcpServers is deleted. */
+function put<T extends object, K extends keyof T>(o: T, k: K, v: T[K] | undefined) {
+  if (v === undefined) Reflect.deleteProperty(o, k)
+  else o[k] = v
 }
-/** Same rule: an empty or useless box removes the key instead of saving a value the validator refuses. */
-function setMaxTokens(text: string) {
-  const n = Number(text)
-  if (Number.isInteger(n) && n > 0) config.value.backend.maxTokens = n
-  else delete config.value.backend.maxTokens
-}
-/** Same rule for the tool limits: empty keeps the built-in one. */
-function setToolLimit(k: 'readMaxBytes' | 'bashMaxBytes' | 'bashTimeoutS', text: string) {
-  const n = Number(text)
-  if (Number.isInteger(n) && n > 0) config.value.tools[k] = n
-  else delete config.value.tools[k]
-}
+const posInt = (text: string) => { const n = Number(text); return Number.isInteger(n) && n > 0 ? n : undefined }
+const toggleGuard = (on: boolean) => put(config.value.tools, 'requireReadBeforeEdit', on || undefined)
+const setMaxTokens = (text: string) => put(config.value.backend, 'maxTokens', posInt(text))
+/** Empty keeps the built-in limit. */
+const setToolLimit = (k: 'readMaxBytes' | 'bashMaxBytes' | 'bashTimeoutS', text: string) => put(config.value.tools, k, posInt(text))
 /** Same rule for the context limits; an emptied section goes too. */
 function setContext(k: 'maxToolOutputChars' | 'budgetTokens', text: string) {
   const n = Number(text)
   const cx = config.value.context ??= {}
-  if (text !== '' && Number.isInteger(n) && n >= (k === 'budgetTokens' ? 0 : 1)) cx[k] = n
-  else delete cx[k]
+  put(cx, k, text !== '' && Number.isInteger(n) && n >= (k === 'budgetTokens' ? 0 : 1) ? n : undefined)
   if (!Object.keys(cx).length) delete config.value.context
 }
-
 /** Three states, and the first is no key at all: absent, nothing about thinking is sent. */
-function setThink(text: string) {
-  if (text === '') delete config.value.backend.think
-  else config.value.backend.think = text === 'on'
-}
-
+const setThink = (text: string) => put(config.value.backend, 'think', text === '' ? undefined : text === 'on')
 /** An empty box removes the key: the backend is keyless again, as before. */
-function setKeyEnv(text: string) {
-  const t = text.trim()
-  if (t) config.value.backend.apiKeyEnv = t
-  else delete config.value.backend.apiKeyEnv
-}
+const setKeyEnv = (text: string) => put(config.value.backend, 'apiKeyEnv', text.trim() || undefined)
 /** Where the key goes; nothing for a name or a URL validation would refuse, so a key pasted as a name is never shown. */
 const keyLine = () => keyNote(config.value.backend)
 
-/** Same rule for the optional loop knobs: an empty box removes the key, so a harness without them saves as before.
- *  What a value may be is validateConfig's to say: its message names the knob and what it needs. */
-function setLoop(k: 'maxRepeats' | 'repeatTemperature' | 'repeatThinkTokens' | 'freshContext', text: string) {
-  if (text.trim() && Number.isFinite(Number(text))) config.value.loop[k] = Number(text)
-  else delete config.value.loop[k]
-}
-function setEscalation(text: string) {
-  const n = Number(text)
-  if (text.trim() && Number.isFinite(n)) config.value.tools.editMissEscalation = n
-  else delete config.value.tools.editMissEscalation
-}
-function setUntilBash(text: string) {
-  if (text.trim()) config.value.loop.untilBash = text
-  else delete config.value.loop.untilBash
-}
+/** The optional loop knobs: what a value may be is validateConfig's to say, its message names the knob and what it needs. */
+const finite = (text: string) => text.trim() && Number.isFinite(Number(text)) ? Number(text) : undefined
+const setLoop = (k: 'maxRepeats' | 'repeatTemperature' | 'repeatThinkTokens' | 'freshContext', text: string) => put(config.value.loop, k, finite(text))
+const setEscalation = (text: string) => put(config.value.tools, 'editMissEscalation', finite(text))
+const setUntilBash = (text: string) => put(config.value.loop, 'untilBash', text.trim() ? text : undefined)
 
 const fmtMcp = (m: HarnessConfig['mcpServers']) => (m && Object.keys(m).length ? JSON.stringify(m, null, 2) : '')
 const mcpText = ref(fmtMcp(config.value.mcpServers))

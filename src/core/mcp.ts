@@ -16,8 +16,8 @@ export type McpSession = {
   close(): void
 }
 
-export const MCP_HANDSHAKE_TIMEOUT_MS = 60_000
-export const MCP_CALL_TIMEOUT_MS = 60_000
+const MCP_HANDSHAKE_TIMEOUT_MS = 60_000
+const MCP_CALL_TIMEOUT_MS = 60_000
 /** A line longer than this means the server is broken; grow no further. */
 const MAX_LINE_BYTES = 1 << 20
 const STDERR_TAIL = 8 << 10

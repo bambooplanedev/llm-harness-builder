@@ -16,7 +16,7 @@ import { startServer } from './server/index.js'
 import { TraceWriter, type Meta } from './server/runs.js'
 import { TASKS, type Task } from './core/tasks.js'
 import { childEnv, bashEnvNote } from './core/tools/env.js'
-import { median, formatTable, type BenchRun, type BenchHarness, type BenchResult } from './core/bench.js'
+import { median, formatTable, benchFileName, type BenchRun, type BenchHarness, type BenchResult } from './core/bench.js'
 import { GUARD_BLOCKED, EDIT_MISS } from './core/tools/fs.js'
 import { createBackend } from './core/backends/index.js'
 import { redactor } from './core/redact.js'
@@ -230,7 +230,6 @@ async function cmdDemo(argv: string[]) {
 }
 
 const INT = /^[1-9]\d*$/
-const stamp = (d: Date) => { const p = (n: number) => String(n).padStart(2, '0'); return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}` }
 
 /** One bench run: fresh task workdir → execRun (timed) → the task's check. Never throws; an exception becomes a FAIL row with reason 'error'. */
 async function benchOnce(config: HarnessConfig, round: number, timeoutS: number, out: string, task: Task, size?: number): Promise<BenchRun> {
@@ -291,7 +290,7 @@ async function cmdBench(argv: string[]) {
   if (values['max-turns'] !== undefined && !INT.test(values['max-turns'])) argError('bench', '--max-turns must be a positive integer')
   const n = Number(values.n), timeoutS = Number(values.timeout)
   const started = new Date()
-  const out = values.out ?? path.join('runs', `bench-${stamp(started)}.json`)
+  const out = values.out ?? path.join('runs', benchFileName(started))
   const localDir = path.join(process.cwd(), 'harnesses')
   const files = positionals.length ? positionals : DEMO_HARNESSES.map(h => path.join(existsSync(localDir) ? localDir : path.join(PKG_ROOT, 'harnesses'), `${h}.json`))
   const over = { model: values.model, baseUrl: values['base-url'], kind: values.kind, apiKeyEnv: values['api-key-env'], maxTurns: values['max-turns'] === undefined ? undefined : Number(values['max-turns']) }

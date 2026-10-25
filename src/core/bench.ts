@@ -34,6 +34,12 @@ export type BenchFile = { file: string; date: string; model: string; complete: b
 export type ActiveTrace = { id: string; harness: string; round: number; started: number; events: HarnessEvent[] }
 
 /** Lower-middle element of the numerically sorted copy; [] → 0. Never mutates xs. */
+/** The default name of a bench JSON, from local time: bench-YYYYMMDD-HHMMSS.json. */
+export const benchFileName = (d: Date): string => {
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `bench-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.json`
+}
+
 export const median = (xs: number[]): number => xs.length ? [...xs].sort((a, b) => a - b)[(xs.length - 1) >> 1] : 0
 
 /** Four of five `bare` runs are over 900 s: 1800s reads worse than 30:00. */

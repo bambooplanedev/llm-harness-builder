@@ -6,7 +6,7 @@ export const TOOL_NAMES: ToolName[] = ['list_dir', 'read_file', 'write_file', 'e
 export type BackendKind = 'openai' | 'ollama' | 'anthropic'
 
 export type ToolCallFormat = 'json' | 'hermes'
-export const TOOL_CALL_FORMATS: ToolCallFormat[] = ['json', 'hermes']
+const TOOL_CALL_FORMATS: ToolCallFormat[] = ['json', 'hermes']
 
 /** A name `tools.bashEnv` may hold: a shell variable name. The value always comes from the user's environment. */
 export const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
@@ -22,7 +22,7 @@ const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]'])
 
 /** How the key's rules name the fields: the harness file's names, or replay's flags. */
 export type KeyWords = { key: string; kind: string; url: string }
-export const FILE_WORDS: KeyWords = { key: 'backend.apiKeyEnv', kind: 'kind openai or anthropic', url: 'an https baseUrl' }
+const FILE_WORDS: KeyWords = { key: 'backend.apiKeyEnv', kind: 'kind openai or anthropic', url: 'an https baseUrl' }
 export const FLAG_WORDS: KeyWords = { key: '--api-key-env', kind: '--kind openai or anthropic', url: 'an https --base-url' }
 export const keyNameMessage = (field: string) => `${field} must be an upper-case variable name ending in _API_KEY (like OPENROUTER_API_KEY)`
 

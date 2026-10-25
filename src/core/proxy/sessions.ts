@@ -1,15 +1,12 @@
 // src/core/proxy/sessions.ts — turns what a recording proxy sees into runs and their events.
 // Pure: no sockets, no files, no clock of its own. Every event is read off the wire; nothing is inferred.
-import type { HarnessEvent, ToolCall } from '../events.js'
+import type { Ev, HarnessEvent, ToolCall } from '../events.js'
 import type { NormalizedResponse } from '../backends/types.js'
 
 /** The meta line of a proxy run; `proxy` marks the file as a transcription, `pid` lets serve tell a live writer from a killed one. */
 export type RunMeta = { id: string; harness: string; task: string; workdir: string; started: number; proxy: { upstream: string; pid: number } }
 export type SessionDeps = { now: () => number; newId: () => string; harness: string; upstream: string; pid: number }
 export type ReplyOutcome = { ok: true; res: NormalizedResponse; latencyMs: number } | { ok: false; message: string; body?: string }
-
-type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never
-type Ev = DistributiveOmit<HarnessEvent, 'seq' | 'turn' | 'ts'>
 
 type Run = {
   id: string; key: string

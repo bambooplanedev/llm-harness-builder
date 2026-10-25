@@ -1,4 +1,4 @@
-import { BackendError, defaultFetch, readJson, jsonChunks, toolsField, usageFrom, type Backend, type ChatRequest, type Delta, type FetchLike, type NormalizedResponse, type NormalizedToolCall, type ServerInfo } from './types.js'
+import { BackendError, defaultFetch, readJson, jsonChunks, errorOnly, text, toolsField, usageFrom, type Backend, type ChatRequest, type Delta, type FetchLike, type NormalizedResponse, type NormalizedToolCall, type ServerInfo } from './types.js'
 
 export type AccCall = { id?: string; name?: string; args: string }
 
@@ -14,8 +14,6 @@ export function parseCalls(calls: AccCall[]): NormalizedToolCall[] {
 }
 
 const usageOf = (u: any) => u && typeof u === 'object' ? usageFrom(u.prompt_tokens, u.completion_tokens, u.prompt_tokens_details?.cached_tokens) : undefined
-/** Text a server sent, only when it is text: a number, an array or an object in its place is dropped, not printed. */
-const text = (x: unknown): string | undefined => typeof x === 'string' && x ? x : undefined
 
 /** A stream that failed after its 200, OpenRouter's way: a chunk whose finish_reason is "error", the error beside the
  *  choices. jsonChunks' rule (an error and no choices) does not see it, and the reply would read as an empty one. */
@@ -61,9 +59,8 @@ export async function collect(chunks: AsyncIterable<any>, onDelta?: (d: Delta) =
 
 /** A non-streamed reply (`stream: false`) as the same NormalizedResponse; `raw` is the body as it came. */
 export function fromJson(body: any): NormalizedResponse {
-  // Mirrors jsonChunks' rule: a 2xx body carrying only `error` is a failure, not an empty reply.
-  if (body?.error !== undefined && body?.choices === undefined && body?.message === undefined)
-    throw new BackendError(`POST /chat/completions: ${typeof body.error === 'string' ? body.error : body.error?.message ?? 'stream error'}`, JSON.stringify(body))
+  const failed = errorOnly('POST /chat/completions', body, JSON.stringify(body)) // jsonChunks' rule, for a whole body
+  if (failed) throw failed
   if (body?.choices?.[0]?.finish_reason === 'error') throw streamFailed(body)
   const ch = body?.choices?.[0], m = ch?.message ?? {}
   const calls: AccCall[] = (Array.isArray(m.tool_calls) ? m.tool_calls : []).map((t: any) => ({
@@ -90,7 +87,7 @@ export class OpenAIBackend implements Backend {
    *  request with a key goes with redirect: 'manual', no exception. */
   constructor(private baseUrl: string, private fetchFn: FetchLike = defaultFetch, private key?: string) { this.baseUrl = baseUrl.replace(/\/+$/, '') }
 
-  private keyed(init: { method?: string; headers?: Record<string, string>; body?: string; signal?: AbortSignal } = {}) {
+  private keyed(init: NonNullable<Parameters<FetchLike>[1]> = {}) {
     return this.key ? { ...init, headers: { ...init.headers, authorization: `Bearer ${this.key}` }, redirect: 'manual' as const } : init
   }
 
