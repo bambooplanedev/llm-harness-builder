@@ -13,10 +13,11 @@ export const estimateTokens = (messages: ChatMessage[]): number => Math.ceil(cha
 
 /** Once over budget, replaces content of the oldest tool results with a stub until at three quarters of it:
  *  stopping at the budget itself would rewrite the history, and cost the server its prefix cache, on every turn after.
- *  Returns chars dropped. Results after the last assistant message are left alone: the model has not seen them yet. */
-export function applyBudget(messages: ChatMessage[], budgetTokens: number): number {
+ *  Returns chars dropped and the history's estimate after it, so the turn counts it once.
+ *  Results after the last assistant message are left alone: the model has not seen them yet. */
+export function applyBudget(messages: ChatMessage[], budgetTokens: number): { dropped: number; tokens: number } {
   let chars = charsOf(messages) // counted once and kept up to date below: a recount per stub is quadratic in the history
-  if (budgetTokens <= 0 || Math.ceil(chars / 4) <= budgetTokens) return 0
+  if (budgetTokens <= 0 || Math.ceil(chars / 4) <= budgetTokens) return { dropped: 0, tokens: Math.ceil(chars / 4) }
   const mark = Math.floor(budgetTokens * 0.75)
   let dropped = 0
   const seen = messages.slice(0, Math.max(messages.map(m => m.role).lastIndexOf('assistant'), 0))
@@ -28,5 +29,5 @@ export function applyBudget(messages: ChatMessage[], budgetTokens: number): numb
     chars += stub.length - m.content.length
     m.content = stub
   }
-  return dropped
+  return { dropped, tokens: Math.ceil(chars / 4) }
 }

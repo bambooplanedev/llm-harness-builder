@@ -6,7 +6,7 @@ import { GUARD_BLOCKED } from './tools/fs.js'
 import { bash } from './tools/bash.js'
 import { renderTools, PROMPTED_SCHEMA } from './prompts.js'
 import { parsePrompted, parseHermes } from './parse.js'
-import { estimateTokens, applyBudget } from './tokens.js'
+import { applyBudget } from './tokens.js'
 import { normPath } from './analyze.js'
 import { startServers, type McpSession } from './mcp.js'
 import { redactor } from './redact.js'
@@ -149,7 +149,7 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
       if (turn >= config.loop.maxTurns) { yield done('max_turns'); return }
       turn++
 
-      const droppedChars = applyBudget(messages, config.context?.budgetTokens ?? 0)
+      const { dropped: droppedChars, tokens: estimatedTokens } = applyBudget(messages, config.context?.budgetTokens ?? 0)
       const think = hot && thinkTokens !== undefined
       const req: ChatRequest = {
         model: config.backend.model, messages: think ? [{ role: 'system', content: systemThinking }, ...messages.slice(1)] : messages,
@@ -165,7 +165,7 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
       }
       const payload = backend.buildPayload(req)
       const exactTokens = await backend.countTokens?.(payload, opts.signal)
-      yield ev({ type: 'context_stats', estimatedTokens: estimateTokens(messages), exactTokens, budgetTokens: config.context?.budgetTokens, droppedChars, usage: lastUsage })
+      yield ev({ type: 'context_stats', estimatedTokens, exactTokens, budgetTokens: config.context?.budgetTokens, droppedChars, usage: lastUsage })
       yield ev({ type: 'llm_request', payload })
 
       const t0 = Date.now()
