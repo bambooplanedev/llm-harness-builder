@@ -4,6 +4,7 @@ import { api, type Delta, type HarnessConfig, type HarnessEvent, type RunSummary
 import { PRESETS, DEFAULT_PROMPTED_TEMPLATE, DEFAULT_PARSE_ERROR_HINT, DEMO_TASK } from '../../src/core/prompts'
 import { isLoopbackUrl, listsModelsByItself } from '../../src/core/config'
 import { knobsOff } from '../../src/core/knobs'
+import { NEW_HARNESS } from './advanced'
 import ConfigForm from './ConfigForm.vue'
 import ContextBar from './ContextBar.vue'
 import Trace from './Trace.vue'
@@ -11,12 +12,7 @@ import Bench from './Bench.vue'
 import { H } from './hints'
 
 const tab = ref<'workbench' | 'bench'>('workbench')
-const config = ref<HarnessConfig>({
-  name: 'new', backend: { kind: 'ollama', baseUrl: 'http://localhost:11434', model: '', numCtx: 8192, temperature: 0.2 },
-  systemPrompt: PRESETS.minimal, tools: { enabled: ['list_dir', 'read_file', 'write_file', 'edit_file', 'bash'], approveBash: true },
-  toolCalls: { mode: 'native', format: 'json', enforceSchema: false, promptedTemplate: DEFAULT_PROMPTED_TEMPLATE, parseErrorHint: DEFAULT_PARSE_ERROR_HINT },
-  context: { maxToolOutputChars: 4000 }, loop: { maxTurns: 15 },
-})
+const config = ref<HarnessConfig>(structuredClone(NEW_HARNESS))
 const harnessNames = ref<string[]>([])
 const models = ref<string[]>([]); const modelsError = ref('')
 /** What the server says the picked model takes; undefined is unknown, and nothing is locked. */

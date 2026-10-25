@@ -5,6 +5,7 @@ import { renderToString } from 'vue/server-renderer'
 import ConfigForm from '../web/src/ConfigForm.vue'
 import { H } from '../web/src/hints'
 import type { HarnessConfig } from '../src/core/config.js'
+import { DEFAULT_PROMPTED_TEMPLATE, DEFAULT_PARSE_ERROR_HINT } from '../src/core/prompts.js'
 import { harness } from './helpers.js'
 
 // An ollama/prompted harness: the form renders more knobs for it than for the shared default.
@@ -164,4 +165,23 @@ test('context boxes: show the harness values, and empty boxes when the harness s
   const set = { ...base, context: { maxToolOutputChars: 50, budgetTokens: 60 } } as HarnessConfig
   expect(await render(set)).toMatch(/max tool output chars[^<]*<\/span><input[^>]*value="50"/)
   expect(await render(set)).toMatch(/budget tokens[^<]*<\/span><input[^>]*value="60"/)
+})
+
+test('the rarer knobs sit inside one <details> that counts the ones set; the common ones stay outside', async () => {
+  const c = { ...base, tools: { ...base.tools, bashTimeoutS: 60 }, context: { maxToolOutputChars: 4000 }, toolCalls: { ...base.toolCalls, promptedTemplate: DEFAULT_PROMPTED_TEMPLATE, parseErrorHint: DEFAULT_PARSE_ERROR_HINT }, loop: { maxTurns: 20, maxRepeats: 3, untilBash: 'node --test' } }
+  const html = await render(c)
+  expect(html).toContain('Advanced · 3 set')
+  const [outside, inside] = html.split(/<summary[^>]*>Advanced/)
+  for (const t of ['bash timeout, s', 'MCP servers', 'prompted template', 'max tool output chars', 'budget tokens', 'max repeats', 'fresh context', 'repeat temperature', 'repeat think tokens', 'until bash', 'read_file max bytes', 'bash max bytes', 'edit misses', 'refuse to edit'])
+    expect(inside).toContain(t)
+  for (const t of ['temp</span>', 'num_ctx', 'max_tokens', 'think</span>', 'System prompt', 'Model family', 'ask before running bash', 'max turns', 'enforce schema'])
+    expect(outside).toContain(t)
+  expect(await render({ ...c, tools: base.tools, loop: { maxTurns: 15 } })).toMatch(/Advanced<\/summary>/)
+})
+
+test('a locked repeat knob inside Advanced shows the lock hint there too', async () => {
+  const html = await render(base)
+  expect(html.split(/<summary[^>]*>Advanced/)[1]).not.toContain('not available for this model')
+  const locked = await renderToString(createSSRApp(ConfigForm, { modelValue: base, models: [], modelsError: '', harnessNames: [], modelInfo: { takes: { temperature: false } } }))
+  expect(locked.split(/<summary[^>]*>Advanced/)[1]).toContain('not available for this model')
 })

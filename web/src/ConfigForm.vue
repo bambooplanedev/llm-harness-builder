@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref, computed, watch } from 'vue'
 import type { HarnessConfig, ServerInfo } from './api'
 import { PRESETS, FAMILIES, applyFamily, DEFAULT_PROMPTED_TEMPLATE, DEFAULT_PARSE_ERROR_HINT } from '../../src/core/prompts'
 import { TOOL_NAMES, keyNote } from '../../src/core/config'
 import { H } from './hints'
+import { advancedSet } from './advanced'
 
 const config = defineModel<HarnessConfig>({ required: true })
 const props = defineProps<{ models: string[]; modelsError: string; harnessNames: string[]; modelInfo?: ServerInfo }>()
@@ -18,6 +19,11 @@ const setTemp = (v: string) => { const n = Number(v.replace(',', '.')); if (v.tr
 const off = (k: 'temperature' | 'maxTokens' | 'think') => props.modelInfo?.takes?.[k] === false
 const lockedThinkTokens = () => off('think') || off('maxTokens')
 const locked = () => [off('temperature') && 'temp', off('maxTokens') && 'max_tokens', off('think') && 'think'].filter(Boolean).join(', ')
+const lockedRepeat = () => off('temperature') || lockedThinkTokens()
+const advN = computed(() => advancedSet(config.value))
+/** Open or closed is the reader's, kept across reloads; storage may be absent or throw (private window). */
+const advOpen = (() => { try { return localStorage.getItem('lhb.advanced') === '1' } catch { return false } })()
+const saveAdv = (open: boolean) => { try { localStorage.setItem('lhb.advanced', open ? '1' : '0') } catch { /* not kept */ } }
 const ollamaViaV1 = () => config.value.backend.kind === 'openai' && /:11434/.test(config.value.backend.baseUrl)
 function applyPreset(k: keyof typeof PRESETS) {
   config.value.systemPrompt = PRESETS[k]
@@ -147,6 +153,15 @@ function editMcp(text: string) {
     </div>
     <div :title="H.approveBash"><input type="checkbox" v-model="config.tools.approveBash"> ask before running bash</div>
     <div v-if="config.tools.bashEnv?.length" class="hint">bash gets from your environment: {{ config.tools.bashEnv.join(', ') }}</div>
+    <label :title="H.toolCalls">Tool calls</label>
+    <div class="row">
+      <select v-model="config.toolCalls.mode"><option value="native">native (tools[] in API)</option><option value="prompted">prompted (in text)</option></select>
+      <select v-if="config.toolCalls.mode === 'prompted'" :title="H.format" :value="config.toolCalls.format ?? 'json'" @change="config.toolCalls.format = ($event.target as HTMLSelectElement).value as 'json' | 'hermes'"><option value="json">json {calls, final}</option><option value="hermes">hermes &lt;tool_call&gt;</option></select>
+      <span v-if="config.toolCalls.mode === 'prompted' && !hermes()" :title="H.enforceSchema"><input type="checkbox" v-model="config.toolCalls.enforceSchema"> enforce schema</span>
+    </div>
+    <label>Loop</label>
+    <div class="row"><span :title="H.maxTurns">max turns</span><input type="number" v-model.number="config.loop.maxTurns"></div>
+    <details class="advanced" :open="advOpen" @toggle="saveAdv(($event.target as HTMLDetailsElement).open)"><summary :title="H.advanced">Advanced{{ advN ? ` · ${advN} set` : '' }}</summary>
     <div :title="H.guard"><input type="checkbox" :checked="!!config.tools.requireReadBeforeEdit" @change="toggleGuard(($event.target as HTMLInputElement).checked)"> refuse to edit a file that has not been read</div>
     <div class="row"><span :title="H.escalation">edit misses before a re-read note</span><input type="number" min="1" :value="config.tools.editMissEscalation ?? ''" @change="setEscalation(($event.target as HTMLInputElement).value)"></div>
     <div class="row"><span :title="H.readMax">read_file max bytes</span><input type="number" min="1" placeholder="4194304 (default)" :value="config.tools.readMaxBytes ?? ''" @change="setToolLimit('readMaxBytes', ($event.target as HTMLInputElement).value)"></div>
@@ -158,12 +173,6 @@ function editMcp(text: string) {
       <div v-if="mcpErr" class="err">invalid JSON — not saved, Run disabled: {{ mcpErr }}</div>
     </details>
 
-    <label :title="H.toolCalls">Tool calls</label>
-    <div class="row">
-      <select v-model="config.toolCalls.mode"><option value="native">native (tools[] in API)</option><option value="prompted">prompted (in text)</option></select>
-      <select v-if="config.toolCalls.mode === 'prompted'" :title="H.format" :value="config.toolCalls.format ?? 'json'" @change="config.toolCalls.format = ($event.target as HTMLSelectElement).value as 'json' | 'hermes'"><option value="json">json {calls, final}</option><option value="hermes">hermes &lt;tool_call&gt;</option></select>
-      <span v-if="config.toolCalls.mode === 'prompted' && !hermes()" :title="H.enforceSchema"><input type="checkbox" v-model="config.toolCalls.enforceSchema"> enforce schema</span>
-    </div>
     <details v-if="config.toolCalls.mode === 'prompted'"><summary>prompted template / parse-error hint</summary>
       <textarea v-model="config.toolCalls.promptedTemplate"></textarea>
       <textarea v-model="config.toolCalls.parseErrorHint" style="min-height:50px"></textarea>
@@ -174,8 +183,6 @@ function editMcp(text: string) {
       <span :title="H.maxToolOutput">max tool output chars (empty = no limit)</span><input type="number" min="1" :value="config.context?.maxToolOutputChars ?? ''" @change="setContext('maxToolOutputChars', ($event.target as HTMLInputElement).value)">
       <span :title="H.budget">budget tokens (empty = no budget)</span><input type="number" min="0" :value="config.context?.budgetTokens ?? ''" @change="setContext('budgetTokens', ($event.target as HTMLInputElement).value)">
     </div>
-    <label>Loop</label>
-    <div class="row"><span :title="H.maxTurns">max turns</span><input type="number" v-model.number="config.loop.maxTurns"></div>
     <div class="row">
       <span :title="H.maxRepeats">max repeats</span><input type="number" min="0" :value="config.loop.maxRepeats ?? ''" @change="setLoop('maxRepeats', ($event.target as HTMLInputElement).value)">
       <span :title="H.freshContext">fresh context</span><input type="number" min="1" :value="config.loop.freshContext ?? ''" @change="setLoop('freshContext', ($event.target as HTMLInputElement).value)">
@@ -185,5 +192,7 @@ function editMcp(text: string) {
       <span :title="H.repeatThink">repeat think tokens</span><input type="number" min="1" :value="config.loop.repeatThinkTokens ?? ''" :disabled="lockedThinkTokens()" @change="setLoop('repeatThinkTokens', ($event.target as HTMLInputElement).value)">
     </div>
     <div class="row"><span :title="H.untilBash">until bash</span><input type="text" :value="config.loop.untilBash ?? ''" @change="setUntilBash(($event.target as HTMLInputElement).value)"></div>
+      <div v-if="lockedRepeat()" class="hint">{{ locked() }}: this knob is not available for this model<span v-if="modelInfo?.takesFrom"> ({{ modelInfo.takesFrom }})</span></div>
+    </details>
   </div>
 </template>
