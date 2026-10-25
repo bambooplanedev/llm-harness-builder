@@ -190,6 +190,7 @@ test('a Claude Code session is one group: main first, subagents indented under i
     run('m1', 6, 'main two', { session: A, agent: 'main' }),
     run('m0', 5, 'main one', { session: A, agent: 'main' }),
     run('s3', 4, 'sub plan', { session: B, agent: 'agent-3', parent: 'main', agentType: 'Plan' }),
+    run('c1', 3, 'main alone', { session: 'cccc3333-0000', agent: 'main' }),
   ] })
   const cards = all(app.root).filter(n => n.tag === 'div' && n.props.class?.includes?.('runs')).flatMap(n => n.children)
   const text = textOf(app.root)
@@ -197,7 +198,9 @@ test('a Claude Code session is one group: main first, subagents indented under i
   expect(order.every(i => i >= 0)).toBe(true)
   expect(order).toEqual([...order].sort((a, b) => a - b))
   expect(textOf(cards.find(c => textOf(c).includes('session aaaa…'))!)).toContain('2 subagents')
+  expect(textOf(cards.find(c => textOf(c).includes('session bbbb…'))!)).toContain('1 subagent · ')
+  expect(textOf(cards.find(c => textOf(c).includes('session cccc…'))!)).not.toContain('subagent')
   const cls = (s: string) => String(cards.find(c => textOf(c).includes(s))!.props.class)
   expect(cls('sub ex')).toContain('sub'); expect(cls('main one')).toContain('session'); expect(cls('sub plan')).toMatch(/session/); expect(cls('plain task')).not.toContain('session')
-  expect(cards.filter(c => /session/.test(String(c.props.class)))).toHaveLength(5)
+  expect(cards.filter(c => /session/.test(String(c.props.class)))).toHaveLength(6)
 })

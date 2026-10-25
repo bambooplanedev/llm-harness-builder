@@ -107,8 +107,10 @@ export async function startProxy(o: ProxyOpts): Promise<ProxyServer> {
   const record = (run: string, events: HarnessEvent[], meta?: RunMeta) => {
     let w = writers.get(run)
     if (!w) {
+      // No file and no meta: an auxiliary request waiting for its session's first turn, nothing to write yet.
+      if (!meta) return
       const t = new TraceWriter(o.runsDir, false, run)
-      const { id: _id, ...rest } = meta!
+      const { id: _id, ...rest } = meta
       w = { t, chain: t.open(rest) }
       writers.set(run, w)
     }
@@ -223,7 +225,7 @@ export async function startProxy(o: ProxyOpts): Promise<ProxyServer> {
       server.closeAllConnections()
       await new Promise<void>(r => server.close(() => r()))
       await Promise.all(handlers)
-      for (const { run, events } of sessions.close()) record(run, events)
+      for (const { run, meta, events } of sessions.close()) record(run, events, meta)
       await Promise.all([...writers.values()].map(w => w.chain))
     },
   }

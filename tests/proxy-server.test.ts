@@ -104,7 +104,7 @@ test('forwards the reply byte for byte, split inside a UTF-8 letter, and records
   expect(t.events.map(e => e.type)).toEqual(['llm_request', 'llm_response', 'tool_call', 'done'])
   expect(t.events[1]).toMatchObject({ content: HELLO, usage: { promptTokens: 9, completionTokens: 4 } })
   expect(t.events[2].call).toMatchObject({ callId: 'c1', name: 'read_file', args: { path: 'a' }, backendId: 'call_1' })
-  expect(t.events[3]).toMatchObject({ type: 'done', reason: 'aborted', turns: 1, toolCallCount: 1 })
+  expect(t.events[3]).toMatchObject({ type: 'done', reason: 'proxy_stopped', turns: 1, toolCallCount: 1 })
   expect(await readFile(join(px.runsDir, `${t.meta.id}.jsonl`), 'utf8')).not.toContain('secret-token-123')
   expect(px.lines).toContain(`run ${t.meta.id}: do it`)
 })
@@ -445,4 +445,21 @@ test('a lowercase bearer scheme is scrubbed, and so is a Bearer key on /chat/com
   await noSecretOnDisk(px.runsDir)
   expect(px.lines.join('\n')).not.toContain(KEY); expect(px.lines.join('\n')).not.toContain(TOKEN)
   expect(JSON.stringify(await traces(px.runsDir)).split('[redacted: authorization]').length - 1).toBeGreaterThanOrEqual(3)
+})
+
+test('anthropic: a title call before the first turn lands in the main run, whose task is the real one; a session of titles only is written at stop', async () => {
+  const up = await upstream((_q, res) => { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(textReply('ok')) })
+  const px = await proxy(up.url)
+  const cc = (s: string, cls: string) => ({ 'x-claude-code-session-id': s, 'x-claude-code-request-class': cls })
+  const title = JSON.stringify({ model: 'claude-haiku-5-5', stream: true, system: 'sys', messages: [{ role: 'user', content: 'title?' }] })
+  await (await msgs(px.base, title, cc('sess-a', 'auxiliary'))).text()
+  await (await msgs(px.base, ANT, cc('sess-a', 'main'))).text()
+  await (await msgs(px.base, title, cc('sess-b', 'auxiliary'))).text()
+  await px.stop()
+  const ts = await traces(px.runsDir)
+  expect(ts.map(t => [t.meta.session, t.meta.task, t.events.map(e => e.type).join(' ')]).sort()).toEqual([
+    ['sess-a', 'do it', 'proxy_note llm_request llm_response done'],
+    ['sess-b', '', 'proxy_note done'],
+  ])
+  expect(ts.every(t => t.events.at(-1).reason === 'proxy_stopped')).toBe(true)
 })

@@ -123,7 +123,7 @@ export const en = {
   'h.peak': "The largest request + answer among the harness's runs, in the server's tokens: how close the runs came to the context window.\nYellow — over 90% of the window.",
   'h.again': 'The same bench once more: the same harnesses, task, n and timeout, into a new JSON; the old one stays.\nThe model server is checked first (preflight): if it is unreachable, the bench does not start and you will see why.',
   'h.againBusy': 'A run of this bench is still going: wait for it to finish.',
-  'h.reasons': 'How the runs ended.\nfinal — the model gave an answer; max_turns — out of turns; repeat_loop — a repeat loop; parse_failed — a call could not be parsed; *_error — a server or MCP error; aborted — interrupted, including by the timeout.',
+  'h.reasons': 'How the runs ended.\nfinal — the model gave an answer; max_turns — out of turns; repeat_loop — a repeat loop; parse_failed — a call could not be parsed; *_error — a server or MCP error; aborted — interrupted, including by the timeout; proxy_stopped — the recording proxy stopped.',
 }
 export type Key = keyof typeof en
 /** The base of a key that has `.one/.few/.many/.other` forms. */

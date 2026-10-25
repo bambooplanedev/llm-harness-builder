@@ -3,7 +3,7 @@ import type { Knob, Usage } from './backends/types.js'
 export type ToolCall = { callId: string; name: string; args: Record<string, unknown>; backendId?: string }
 /** A knob set in the harness that is not sent, because the server said the model does not take it. */
 export type KnobOff = { knob: Knob | 'repeatTemperature' | 'repeatThinkTokens'; value: unknown; reason: string }
-export type DoneReason = 'final' | 'max_turns' | 'parse_failed' | 'aborted' | 'backend_error' | 'mcp_error' | 'repeat_loop'
+export type DoneReason = 'final' | 'max_turns' | 'parse_failed' | 'aborted' | 'backend_error' | 'mcp_error' | 'repeat_loop' | 'proxy_stopped'
 
 type Base = { seq: number; turn: number; ts: number }
 

@@ -81,6 +81,6 @@ for (const ids of [true, false]) test(`the proxy trace matches the native trace 
   }
   // Where the proxy differs, on purpose.
   for (const type of ['context_stats', 'final_check', 'approval_required', 'parse_error']) expect(rec.filter(e => e.type === type)).toEqual([])
-  expect(rec.at(-1)).toMatchObject({ type: 'done', reason: 'aborted', turns: 3, toolCallCount: 3 })
+  expect(rec.at(-1)).toMatchObject({ type: 'done', reason: 'proxy_stopped', turns: 3, toolCallCount: 3 })
   expect(rec.map(e => e.seq)).toEqual(rec.map((_, i) => i))
 }, 30_000)

@@ -68,7 +68,7 @@ export function fromAnthropicJson(m: unknown): Promise<NormalizedResponse> {
       const empty = b?.type === 'text' ? { ...b, text: '' } : b?.type === 'thinking' ? { ...b, thinking: '' } : b?.type === 'tool_use' ? { ...b, input: {} } : b
       return [{ type: 'content_block_start', index, content_block: empty }, ...delta ? [{ type: 'content_block_delta', index, delta }] : []]
     }),
-    { type: 'message_delta', delta: { stop_reason: j?.stop_reason } },
+    { type: 'message_delta', delta: { stop_reason: j?.stop_reason, stop_details: j?.stop_details } },
     { type: 'message_stop' },
   ]
   return collectAnthropic((async function* () { yield* events })())

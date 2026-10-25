@@ -271,3 +271,8 @@ test('fromAnthropicJson: an error body without type or message reads "error", no
   await expect(async () => fromAnthropicJson({ type: 'error', error: {} })).rejects.toThrow(/^POST \/v1\/messages: error$/)
   await expect(async () => fromAnthropicJson({ type: 'error', error: { message: 'busy' } })).rejects.toThrow(/^POST \/v1\/messages: busy$/)
 })
+
+test('fromAnthropicJson: a non-streamed refusal keeps its category, like the streamed one', async () => {
+  await expect(fromAnthropicJson({ type: 'message', role: 'assistant', content: [], stop_reason: 'refusal', stop_details: { type: 'refusal', category: 'cyber' }, usage: { input_tokens: 1, output_tokens: 0 } }))
+    .rejects.toThrow('refused: cyber')
+})

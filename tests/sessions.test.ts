@@ -84,7 +84,7 @@ test('bad arguments give a tool_call with {} and nothing else; a length reply ad
   expect((r[1] as any).call.args).toEqual({})
 })
 
-test('a failed reply is an error event; close() ends every open run with aborted, once', () => {
+test('a failed reply is an error event; close() ends every open run with proxy_stopped, once', () => {
   const s = mk()
   s.onRequest({ messages: [S, U] }); s.onReply('run1', 1, ok(reply([{ id: 'a' }, { id: 'b' }])))
   s.onRequest({ messages: [S, U, asst(['a', 'b']), tool('a', '1'), tool('b', '2')] })
@@ -93,7 +93,7 @@ test('a failed reply is an error event; close() ends every open run with aborted
   s.onRequest({ messages: [{ role: 'system', content: 'other' }, U] })
   const closed = s.close()
   expect(closed.map(c => c.run)).toEqual(['run1', 'run2'])
-  expect(closed[0].events).toEqual([{ seq: 8, turn: 2, ts: expect.any(Number), type: 'done', reason: 'aborted', turns: 2, toolCallCount: 2 }])
+  expect(closed[0].events).toEqual([{ seq: 8, turn: 2, ts: expect.any(Number), type: 'done', reason: 'proxy_stopped', turns: 2, toolCallCount: 2 }])
   expect(s.close()).toEqual([])
 })
 
@@ -176,14 +176,36 @@ test('a Claude Code session from the fixture: one main run, one subagent run wit
   expect(m.map(e => e.seq)).toEqual(m.map((_, i) => i))
 })
 
-test('auxiliary before main opens an empty main run that main then joins', () => {
+test('auxiliary before main waits: the first main request writes the meta with its task, then the notes in order', () => {
   const s = mk(), h = (c: string) => hintsOf({ 'x-claude-code-session-id': CC, 'x-claude-code-request-class': c })
   const aux = s.onRequest(ccReq([{ role: 'user', content: 'title?' }], 'claude-haiku-fixture'), 'anthropic', h('auxiliary'))
   expect(aux).toMatchObject({ run: 'run1', turn: 0, events: [], side: { model: 'claude-haiku-fixture' } })
-  expect(aux.meta).toMatchObject({ task: '', session: CC, agent: 'main' })
-  expect(s.onReply(aux.run, aux.turn, ok(ccOk('Title')), aux.side)).toEqual([expect.objectContaining({ type: 'proxy_note', kind: 'auxiliary', turn: 0, seq: 0 })])
+  expect(aux.meta).toBeUndefined()
+  const aux2 = s.onRequest(ccReq([{ role: 'user', content: 'summary?' }], 'claude-haiku-other'), 'anthropic', h('auxiliary'))
+  expect(aux2.run).toBe('run1')
+  expect(s.onReply(aux.run, aux.turn, ok(ccOk('Title')), aux.side)).toEqual([])
+  expect(s.onReply(aux2.run, aux2.turn, { ok: false, message: 'POST /v1/messages: 429' }, aux2.side)).toEqual([])
   const a = s.onRequest(ccReq([{ role: 'user', content: 'do it' }]), 'anthropic', h('main'))
-  expect(a).toMatchObject({ run: 'run1', turn: 1 }); expect(a.meta).toBeUndefined()
+  expect(a).toMatchObject({ run: 'run1', turn: 1 })
+  expect(a.meta).toMatchObject({ id: 'run1', task: 'do it', session: CC, agent: 'main' })
+  expect(a.events.map(e => [e.seq, e.turn, e.type, (e as { model?: string }).model])).toEqual([
+    [0, 0, 'proxy_note', 'claude-haiku-fixture'], [1, 0, 'proxy_note', 'claude-haiku-other'], [2, 1, 'llm_request', undefined]])
+  expect(a.events[1]).toMatchObject({ error: 'POST /v1/messages: 429' })
+  // Started now: a later auxiliary reply is a note right away.
+  const aux3 = s.onRequest(ccReq([{ role: 'user', content: 'title?' }], 'claude-haiku-fixture'), 'anthropic', h('auxiliary'))
+  expect(s.onReply(aux3.run, aux3.turn, ok(ccOk('T')), aux3.side)).toEqual([expect.objectContaining({ type: 'proxy_note', turn: 1, seq: 3 })])
+  expect(s.close()).toEqual([{ run: 'run1', events: [expect.objectContaining({ type: 'done', reason: 'proxy_stopped', turns: 1 })] }])
+})
+
+test('a session of auxiliary calls only: close() writes one main run, task empty, with its notes', () => {
+  const s = mk()
+  const aux = s.onRequest(ccReq([{ role: 'user', content: 'title?' }], 'claude-haiku-fixture'), 'anthropic', hintsOf({ 'x-claude-code-session-id': CC, 'x-claude-code-request-class': 'auxiliary' }))
+  s.onReply(aux.run, aux.turn, ok(ccOk('Title')), aux.side)
+  const closed = s.close()
+  expect(closed).toHaveLength(1)
+  expect(closed[0].meta).toMatchObject({ id: 'run1', task: '', session: CC, agent: 'main' })
+  expect(closed[0].events.map(e => [e.seq, e.turn, e.type])).toEqual([[0, 0, 'proxy_note'], [1, 0, 'done']])
+  expect(closed[0].events[1]).toMatchObject({ reason: 'proxy_stopped', turns: 0, toolCallCount: 0 })
 })
 
 test('an auxiliary reply between main turns keeps the main calls matched', () => {
@@ -201,8 +223,8 @@ test('an auxiliary reply between main turns keeps the main calls matched', () =>
 test('a failed auxiliary call is a note with its error, not an error event', () => {
   const s = mk()
   const aux = s.onRequest(ccReq([{ role: 'user', content: 'title?' }], 'claude-haiku-fixture'), 'anthropic', hintsOf({ 'x-claude-code-session-id': CC, 'x-claude-code-request-class': 'auxiliary' }))
-  const ev = s.onReply(aux.run, aux.turn, { ok: false, message: 'POST /v1/messages: 429', body: 'slow down' }, aux.side)
-  expect(ev).toEqual([{ seq: 0, turn: 0, ts: expect.any(Number), type: 'proxy_note', kind: 'auxiliary', model: 'claude-haiku-fixture', error: 'POST /v1/messages: 429' }])
+  expect(s.onReply(aux.run, aux.turn, { ok: false, message: 'POST /v1/messages: 429', body: 'slow down' }, aux.side)).toEqual([])
+  expect(s.close()[0].events[0]).toEqual({ seq: 0, turn: 0, ts: expect.any(Number), type: 'proxy_note', kind: 'auxiliary', model: 'claude-haiku-fixture', error: 'POST /v1/messages: 429' })
 })
 
 test('hintsOf takes only the whitelist, as single printable strings', () => {

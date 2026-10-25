@@ -23,6 +23,8 @@ type Run = {
   replied?: { turn: number; calls: ToolCall[] }
   resulted: Set<string>
   open: boolean
+  /** A main run an auxiliary request opened before any turn: its meta (task '') and notes wait for the first turn. */
+  pending?: { meta: RunMeta; notes: { ts: number; e: Ev }[] }
 }
 
 const HINTS = { session: 'x-claude-code-session-id', agent: 'x-claude-code-agent-id', parent: 'x-claude-code-parent-agent-id', agentType: 'x-claude-code-agent-type', requestClass: 'x-claude-code-request-class' } as const
@@ -73,7 +75,8 @@ export class Sessions {
    * block changes) and the first user text, since Claude Code moves cache_control markers between turns.
    * With a session hint (Claude Code's headers) the key is the session and the agent, with no length rule: a compaction
    * rewrites the history. An auxiliary request (a title, a summary) gets no turn: it is a note in the session's main run,
-   * written by onReply with the `side` returned here. A compaction is a turn of its agent's run, marked by a note.
+   * written by onReply with the `side` returned here. Before the session's first main request those notes wait: the main
+   * run's meta (with the real task) and the notes come with that request. A compaction is a turn of its agent's run, marked by a note.
    */
   onRequest(payload: object, api: 'openai' | 'anthropic' = 'openai', hints: ProxyHints = {}): { run: string; turn: number; meta?: RunMeta; events: HarnessEvent[]; side?: { model: string } } {
     const raw = (payload as { messages?: unknown }).messages
@@ -96,25 +99,42 @@ export class Sessions {
     if (hints.session !== undefined) key = `cc\0${hints.session}\0${agent}`
     let run = this.runs.filter(r => r.open && r.key === key && (hints.session !== undefined || r.len <= msgs.length)).sort((a, b) => b.active - a.active)[0]
     let meta: RunMeta | undefined
+    const metaOf = (id: string): RunMeta => {
+      const m: RunMeta = { id, harness: this.d.harness, task: aux ? '' : task, workdir: '', started: this.d.now(), proxy: { upstream: this.d.upstream, pid: this.d.pid } }
+      if (hints.session !== undefined) {
+        m.session = hints.session; m.agent = agent
+        const parent = hints.parent ?? (hints.agent !== undefined ? 'main' : undefined)
+        if (!aux && parent !== undefined) m.parent = parent
+        if (!aux && hints.agentType !== undefined) m.agentType = hints.agentType
+      }
+      return m
+    }
     if (!run) {
       run = { id: this.d.newId(), key, len: 0, active: 0, seq: 0, turn: 0, callSeq: 0, toolCallCount: 0, resulted: new Set(), open: true }
       this.runs.push(run)
-      meta = { id: run.id, harness: this.d.harness, task: aux ? '' : task, workdir: '', started: this.d.now(), proxy: { upstream: this.d.upstream, pid: this.d.pid } }
-      if (hints.session !== undefined) {
-        meta.session = hints.session; meta.agent = agent
-        const parent = hints.parent ?? (hints.agent !== undefined ? 'main' : undefined)
-        if (!aux && parent !== undefined) meta.parent = parent
-        if (!aux && hints.agentType !== undefined) meta.agentType = hints.agentType
-      }
+      if (aux) run.pending = { meta: metaOf(run.id), notes: [] }
+      else meta = metaOf(run.id)
     }
-    if (aux) return { run: run.id, turn: run.turn, meta, events: [], side: { model: String((payload as { model?: unknown }).model ?? '') } }
+    if (aux) return { run: run.id, turn: run.turn, events: [], side: { model: String((payload as { model?: unknown }).model ?? '') } }
+    const events: HarnessEvent[] = []
+    if (run.pending) {
+      meta = metaOf(run.id)
+      events.push(...this.flush(run))
+    }
     run.len = msgs.length
     run.active = ++this.tick
-    const events = this.results(run, msgs, anthropic)
+    events.push(...this.results(run, msgs, anthropic))
     const turn = ++run.turn
     if (hints.requestClass === 'compaction') events.push(this.ev(run, turn, { type: 'proxy_note', kind: 'compaction' }))
     events.push(this.ev(run, turn, { type: 'llm_request', payload }))
     return { run: run.id, turn, meta, events }
+  }
+
+  /** The waiting notes of a pending run, at its start, in the order they came; the run is pending no more. */
+  private flush(r: Run): HarnessEvent[] {
+    const notes = r.pending?.notes ?? []
+    r.pending = undefined
+    return notes.map(({ ts, e }) => ({ seq: r.seq++, turn: 0, ...e, ts }) as HarnessEvent)
   }
 
   /**
@@ -160,9 +180,13 @@ export class Sessions {
   onReply(runId: string, turn: number, o: ReplyOutcome, side?: { model: string }): HarnessEvent[] {
     const run = this.runs.find(r => r.id === runId)
     if (!run?.open) return []
-    if (side) return [this.ev(run, run.turn, o.ok
-      ? { type: 'proxy_note', kind: 'auxiliary', model: side.model, ...(o.res.usage ? { usage: o.res.usage } : {}), latencyMs: o.latencyMs }
-      : { type: 'proxy_note', kind: 'auxiliary', model: side.model, error: o.message })]
+    if (side) {
+      const e: Ev = o.ok
+        ? { type: 'proxy_note', kind: 'auxiliary', model: side.model, ...(o.res.usage ? { usage: o.res.usage } : {}), latencyMs: o.latencyMs }
+        : { type: 'proxy_note', kind: 'auxiliary', model: side.model, error: o.message }
+      if (run.pending) { run.pending.notes.push({ ts: this.d.now(), e }); return [] }
+      return [this.ev(run, run.turn, e)]
+    }
     if (!o.ok) return [this.ev(run, turn, { type: 'error', message: o.message, ...(o.body !== undefined ? { body: o.body } : {}) })]
     const { res } = o
     const events = [this.ev(run, turn, { type: 'llm_response', raw: res.raw, content: res.content, reasoning: res.reasoning, usage: res.usage, latencyMs: o.latencyMs })]
@@ -174,11 +198,17 @@ export class Sessions {
     return events
   }
 
-  /** `done: aborted` for every open run: the recording stopped. The proxy cannot know how the agent's run ended. */
-  close(): { run: string; events: HarnessEvent[] }[] {
+  /**
+   * `done: proxy_stopped` for every open run: the recording stopped. The proxy cannot know how the agent's run ended.
+   * A main run whose session sent only auxiliary requests is written now, task '', with its notes.
+   */
+  close(): { run: string; meta?: RunMeta; events: HarnessEvent[] }[] {
     return this.runs.filter(r => r.open).map(r => {
       r.open = false
-      return { run: r.id, events: [this.ev(r, r.turn, { type: 'done', reason: 'aborted', turns: r.turn, toolCallCount: r.toolCallCount })] }
+      const meta = r.pending?.meta
+      const events = this.flush(r)
+      events.push(this.ev(r, r.turn, { type: 'done', reason: 'proxy_stopped', turns: r.turn, toolCallCount: r.toolCallCount }))
+      return { run: r.id, ...(meta ? { meta } : {}), events }
     })
   }
 }
