@@ -21,10 +21,10 @@ function journalOf(o: { sets: Record<SetName, string[]>; mode: Mode; original: o
 }
 
 const EDIT: Edit = { field: 'systemPrompt', value: 'Make the file first.' }
-function golden(over: { accepted?: JournalLine; refused?: JournalLine[]; afterGate?: RunLite[]; original?: object } = {}): ReportInput {
+function golden(over: { accepted?: JournalLine; refused?: JournalLine[]; afterGate?: RunLite[]; original?: object; mode?: Mode } = {}): ReportInput {
   return journalOf({
     sets: { train: ['t1', 't2'], gate: ['g1', 'g2'], test: ['x1', 'x2'] },
-    mode: { strict: false, trainGate: 4, test: 2 },
+    mode: over.mode ?? { strict: false, trainGate: 4, test: 2 },
     original: over.original ?? { systemPrompt: 'S', loop: { maxTurns: 1 } },
     current: [fail('t1', 'max_turns|-|-|-'), fail('t2', 'max_turns|-|-|-'), fail('g1', CF), fail('g2', CF)],
     cands: [over.accepted ?? cand(1, EDIT, true, 'accepted', [pass('t1'), pass('t2'), ...(over.afterGate ?? [pass('g1'), fail('g2', CF)])], 1),
@@ -121,17 +121,54 @@ describe('evolve report', () => {
   })
 
   it('nothing but the labelled paragraph leaks', () => {
-    const x = golden({
-      accepted: cand(1, { ...EDIT, why: 'MARK' }, true, 'accepted', [pass('MARKtask'), pass('t2'), pass('g1'), fail('g2', CF)], 1),
+    // A task name in each set, every run's free text: none of it may reach an output path.
+    const mark = (x: ReportInput) => {
+      const to: Record<string, string> = { t1: 'MARKtrain', g1: 'MARKgate', x1: 'MARKtest' }
+      for (const s of Object.values(x.sets)) for (const [i, t] of s.entries()) s[i] = to[t] ?? t
+      for (const l of x.lines) for (const r of l.type === 'current' || l.type === 'candidate' ? l.runs ?? [] : l.type === 'final' ? [...l.orig ?? [], ...l.last ?? []] : []) {
+        r.task = to[r.task] ?? r.task
+        Object.assign(r, { lastError: 'MARK', trace: 'MARK', reason: 'MARK' })
+      }
+      return evolveReport(x)
+    }
+    const v1 = mark(golden({
+      accepted: cand(1, { ...EDIT, why: 'MARK' }, true, 'accepted', [pass('t1'), pass('t2'), pass('g1'), fail('g2', CF)], 1),
       refused: [cand(2, { field: 'systemPrompt', value: 'MARK' }, false, 'tied to a task'), cand(3, { field: 'loop.maxRepeats', value: 3 }, false, 'MARK reason'),
         cand(4, { field: 'loop.maxRepeats', value: 4 }, false, 'invalid config: MARK')],
-    })
-    x.sets.train[0] = 'MARKtask'
-    for (const l of x.lines) for (const r of l.type === 'current' || l.type === 'candidate' ? l.runs ?? [] : l.type === 'final' ? [...l.orig ?? [], ...l.last ?? []] : []) {
-      if (r.task === 't1') r.task = 'MARKtask'
-      Object.assign(r, { lastError: 'MARK', trace: 'MARK', reason: 'MARK' })
+    }))
+    expect(v1).not.toContain('MARK')
+    // Version 0 prints the refused kinds and rule 3; one kind, so its fallback sentence is the one printed.
+    const v0t = mark(golden({ accepted: cand(1, { ...EDIT, why: 'MARK' }, false, 'invalid config: MARK one'),
+      refused: [cand(2, { field: 'loop.maxRepeats', value: 3 }, false, 'invalid config: MARK two')] }))
+    expect(v0t).toContain('  invalid config: 2')
+    expect(v0t).toContain('- every refused candidate: invalid config')
+    expect(v0t).not.toContain('MARK')
+  })
+
+  it('rule few tasks: only train + gate short, only test short', () => {
+    expect(evolveReport(golden({ mode: { strict: false, trainGate: 4, test: 8 } }))).toContain('- add 12 tasks to train + gate for a strict verdict\n')
+    expect(evolveReport(golden({ mode: { strict: false, trainGate: 16, test: 2 } }))).toContain('- add 6 tasks to test for a strict verdict\n')
+  })
+
+  it('rule knob outside evolve: fires on the check part', () => {
+    const ct = 'final|check_timeout|-|-'
+    expect(evolveReport(golden({ afterGate: [fail('g1', ct), fail('g2', ct)] })))
+      .toContain(`- ${ct} is still the biggest failure on the gate tasks (2 of 2): the checks timed out: raise checkTimeoutS in lhb-tasks.json`)
+  })
+
+  it('rule notes: at version 0 it reads round 1; fires at half the gate, not below', () => {
+    expect(evolveReport(v0())).toContain(`- the same failure (${CF}) recurs on 2 of 2 gate tasks and Notes is off`)
+    const gate = (n: number, failing: number) => {
+      const g = Array.from({ length: n }, (_, i) => `g${i}`)
+      return evolveReport(journalOf({
+        sets: { train: ['t1'], gate: g, test: ['x1'] }, mode: { strict: false, trainGate: n + 1, test: 1 }, original: {},
+        current: [pass('t1'), ...g.map((t, i) => i < failing ? fail(t, CF) : pass(t))],
+        cands: [cand(1, EDIT, false, 'no more PASS than current')],
+      }))
     }
-    expect(evolveReport(x)).not.toContain('MARK')
+    expect(gate(4, 2)).toContain('recurs on 2 of 4 gate tasks')
+    expect(gate(4, 1)).not.toContain('Notes is off')
+    expect(gate(5, 2)).not.toContain('Notes is off')
   })
 
   it('the same input gives the same text', () => {

@@ -62,7 +62,7 @@ export function evolveReport(r: ReportInput): string {
   const why: string[] = []
   if (version) {
     for (const l of prompts) why.push('systemPrompt, appended (written by the proposer, passed the filters, not checked by a person):', showableText(String(l.edit!.value)).replace(/^/gm, '  '))
-    for (const f of ALLOWED.slice(1)) {
+    for (const f of ALLOWED.filter(f => f !== 'systemPrompt')) {
       const a = leafOf(r.original, f), b = leafOf(state.current, f)
       if (a !== b) why.push(`${f}: ${a ?? '(unset)'} → ${b}`)
     }
