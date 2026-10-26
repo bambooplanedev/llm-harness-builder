@@ -24,8 +24,9 @@ import { approvalPrompt, mcpCounts, quitWithoutWork, showable, showableText, typ
 import { startServer } from './server/index.js'
 import { TraceWriter, type Meta } from './server/runs.js'
 import { TASKS, type Task } from './core/tasks.js'
+import { loadPolyglot, polyglotTasks, POLYGLOT_MAX } from './core/polyglot.js'
 import { childEnv, bashEnvNote } from './core/tools/env.js'
-import { median, formatTable, benchFileName, autoApproves, type BenchRun, type BenchHarness, type BenchResult } from './core/bench.js'
+import { median, formatTable, BENCH_TASKS, benchFileName, autoApproves, type BenchRun, type BenchHarness, type BenchResult } from './core/bench.js'
 import { GUARD_BLOCKED, EDIT_MISS } from './core/tools/fs.js'
 import { createBackend } from './core/backends/index.js'
 import { redactor } from './core/redact.js'
@@ -328,7 +329,7 @@ async function benchOnce(config: HarnessConfig, round: number, timeoutS: number,
     const checked = typeof c === 'boolean' ? { pass: c } : c
     if (checked.reason) lastError = checked.reason
     const verdict = checked.pass ? 'PASS' : 'FAIL'
-    run = { ...(task.name ? { task: task.name } : {}), round, verdict, reason: d?.reason ?? 'error', turns: d?.turns ?? 0, toolCalls: d?.toolCallCount ?? 0, parseErrors, lastError, ms, workdir, trace: id, toolChars: toolChars || undefined, costUsd, peakTokens, tokens: seenFirst ? tokens : 0, firstPromptTokens, toolErrors, guardBlocks: config.tools.requireReadBeforeEdit ? guardBlocks : undefined, editMiss }
+    run = { ...(task.name ? { task: task.name } : {}), ...checked.tests ? { tests: checked.tests } : {}, round, verdict, reason: d?.reason ?? 'error', turns: d?.turns ?? 0, toolCalls: d?.toolCallCount ?? 0, parseErrors, lastError, ms, workdir, trace: id, toolChars: toolChars || undefined, costUsd, peakTokens, tokens: seenFirst ? tokens : 0, firstPromptTokens, toolErrors, guardBlocks: config.tools.requireReadBeforeEdit ? guardBlocks : undefined, editMiss }
   } catch (e) {
     run = { ...(task.name ? { task: task.name } : {}), round, verdict: 'FAIL', reason: 'error', turns: 0, toolCalls: 0, parseErrors, lastError: redact.text(String(e)), ms: Date.now() - t0, workdir, toolChars: toolChars || undefined, costUsd, peakTokens, tokens: seenFirst ? tokens : 0, firstPromptTokens, toolErrors, guardBlocks: config.tools.requireReadBeforeEdit ? guardBlocks : undefined, editMiss }
   } finally {
@@ -337,6 +338,8 @@ async function benchOnce(config: HarnessConfig, round: number, timeoutS: number,
     // The clone of a task of the user's own goes away whatever happened; a failure to clean up is said, not thrown.
     if (workdir && task.dispose) await task.dispose(workdir, traceId).catch(e => console.error(`cannot clean up ${workdir}: ${(e as Error).message}`))
   }
+  // A run that threw before or in its check still counts its exercise's tests, so sums stay comparable.
+  if (task.tests !== undefined) run.tests ??= { passed: 0, total: task.tests }
   const tail = (run.reason === 'error' || run.reason === 'aborted') && run.lastError ? `  ${showable(run.lastError.replace(/\s+/g, ' ').slice(0, 200))}` : ''
   process.stderr.write(`${run.verdict}  reason=${run.reason} turns=${run.turns} toolCalls=${run.toolCalls} parseErrors=${run.parseErrors} ${Math.round(run.ms / 1000)}s${run.trace ? ` trace=${run.trace}` : ''}${tail}\n`)
   return run
@@ -346,6 +349,7 @@ function rollup(h: BenchHarness) {
   h.pass = h.runs.filter(r => r.verdict === 'PASS').length
   h.reasons = {}
   for (const r of h.runs) h.reasons[r.reason] = (h.reasons[r.reason] ?? 0) + 1
+  if (h.runs.some(r => r.tests)) h.tests = h.runs.reduce((a, r) => ({ passed: a.passed + (r.tests?.passed ?? 0), total: a.total + (r.tests?.total ?? 0) }), { passed: 0, total: 0 })
   h.median = { turns: median(h.runs.map(r => r.turns)), toolCalls: median(h.runs.map(r => r.toolCalls)), ms: median(h.runs.map(r => r.ms)) }
 }
 
@@ -412,10 +416,12 @@ async function cmdBench(argv: string[]) {
   let repo: RepoTasks | undefined
   if (values.tasks !== undefined) try { repo = await loadRepoTasks(values.tasks) } catch (e) { argError('bench', (e as Error).message) }
   const taskName = repo ? 'tasks' : values.task ?? 'slug'
-  const builtin: Task | undefined = repo ? undefined : Object.hasOwn(TASKS, taskName) ? TASKS[taskName as keyof typeof TASKS] : undefined
-  if (!repo && !builtin) argError('bench', `--task must be one of ${Object.keys(TASKS).join('|')}`)
+  const poly = !repo && taskName === 'polyglot'
+  const builtin: Task | undefined = repo || poly ? undefined : Object.hasOwn(TASKS, taskName) ? TASKS[taskName as keyof typeof TASKS] : undefined
+  if (!repo && !poly && !builtin) argError('bench', `--task must be one of ${Object.keys(BENCH_TASKS).join('|')}`)
   const size = values.size === undefined ? undefined : Number(values.size)
   // A task with sizes needs one in range; a task without sizes takes none.
+  if (poly && !(values.size !== undefined && INT.test(values.size) && size! <= POLYGLOT_MAX)) argError('bench', `--size must be an integer from 1 to ${POLYGLOT_MAX} for polyglot`)
   if (builtin) {
     const sizeOk = builtin.max === undefined ? size === undefined : values.size !== undefined && INT.test(values.size) && size! <= builtin.max
     if (!sizeOk) argError('bench', builtin.max === undefined ? `--size: ${taskName} has no sizes` : `--size must be an integer from 1 to ${builtin.max} for ${taskName}`)
@@ -441,7 +447,8 @@ async function cmdBench(argv: string[]) {
     if (key) console.error(`${h.name}: ${key}`)
   }
   // The commands of a repo's tasks run without asking for the whole bench: they are accepted once, by hash, before anything runs.
-  let work: Work = { tasks: [builtin!], live: new Map(), async ready() {} }
+  // Read once, before any run: the exercises of a later run are the bytes of now, whatever an earlier run did to the files.
+  let work: Work = { tasks: poly ? polyglotTasks(loadPolyglot(), size!) : [builtin!], live: new Map(), async ready() {} }
   if (repo) {
     console.error(`tasks: ${repo.tasks.length} from ${repo.repo} at ${repo.sha.slice(0, 7)}`)
     if (repo.uncommitted) console.error('uncommitted changes are not in the clones')
@@ -457,8 +464,8 @@ async function cmdBench(argv: string[]) {
   // What setup left in the background would reach the first run only: every run starts without it.
   await killTracked()
   await mkdir(path.dirname(out), { recursive: true })
-  const result: BenchResult = { version: 1, date: started.toISOString(), task: repo ? `${TASKS_FILE} at ${repo.sha.slice(0, 7)} in ${repo.repo}` : builtin!.prompt, taskName, size, node: process.version, n, timeoutS, complete: false, harnesses,
-    ...(repo ? { tasksRepo: repo.repo, tasksSha: repo.sha, taskCount: repo.tasks.length } : {}) }
+  const result: BenchResult = { version: 1, date: started.toISOString(), task: repo ? `${TASKS_FILE} at ${repo.sha.slice(0, 7)} in ${repo.repo}` : poly ? `polyglot: the first ${size} of ${POLYGLOT_MAX} Exercism JavaScript exercises` : builtin!.prompt, taskName, size, node: process.version, n, timeoutS, complete: false, harnesses,
+    ...(repo ? { tasksRepo: repo.repo, tasksSha: repo.sha, taskCount: repo.tasks.length } : poly ? { taskCount: size } : {}) }
   // tmp + rename in the same directory: the SIGINT handler exits immediately, and a half-written
   // JSON would be the only thing left of a 90-minute run. `.tmp`, not `.json`, so /api/bench skips it.
   const tmpOut = `${out}.${process.pid}.tmp`

@@ -658,7 +658,7 @@ test('POST /api/bench/new validates and passes only what it checked', async () =
   process.env.LHB_NEW_SET_API_KEY = 'k'.repeat(24)
   try {
     for (const bad of [{ harnesses: ['../x'] }, { harnesses: [5] }, { harnesses: ['nope'] }, { harnesses: [] }, { task: 'nope' }, { size: 2 }, { n: 0 }, { n: 51 }, { n: 1.5 },
-      { task: 'pool', size: 0 }, { backend: { ...form, kind: 'x' } }, { backend: { ...form, model: '' } }, { backend: { ...form, apiKeyEnv: 'LHB_NEW_UNSET_API_KEY' } }]) {
+      { task: 'pool', size: 0 }, { task: 'polyglot' }, { task: 'polyglot', size: 49 }, { backend: { ...form, kind: 'x' } }, { backend: { ...form, model: '' } }, { backend: { ...form, apiKeyEnv: 'LHB_NEW_UNSET_API_KEY' } }]) {
       const r = await post(bad)
       expect(r.status, JSON.stringify(bad)).toBe(400)
       expect((await r.json()).errors.length).toBeGreaterThan(0)
@@ -677,10 +677,14 @@ test('POST /api/bench/new validates and passes only what it checked', async () =
     await exited(b.children[1])
     expect((await post({ harnesses: ['keyed'], backend: { ...form, apiKeyEnv: 'LHB_NEW_SET_API_KEY' } })).status).toBe(201)
     expect(b.got[1].slice(0, 7)).toEqual(['--task=pool', '--size=3', '--n=2', '--model=m', '--base-url=http://127.0.0.1:9/v1', '--kind=openai', '--api-key-env=LHB_NEW_SET_API_KEY'])
+    await exited(b.children[2])
+    expect((await post({ task: 'polyglot', size: 5 })).status).toBe(201)
+    expect(b.got[3].slice(0, 2)).toEqual(['--task=polyglot', '--size=5'])
+    await exited(b.children[3])
     const headers = { host: `localhost:${b.s.port}`, origin: 'http://evil.example', 'content-type': 'text/plain' }
     expect(await rawReq('POST', '/api/bench/new', headers, JSON.stringify(ok), b.s.port)).toBe(403)
     expect(b.got[2]).toContain('--api-key-env=LHB_NEW_SET_API_KEY')
-    expect(b.got).toHaveLength(3)
+    expect(b.got).toHaveLength(4)
   } finally { await b.s.close(); delete process.env.LHB_NEW_SET_API_KEY }
 })
 

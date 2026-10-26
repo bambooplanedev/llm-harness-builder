@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest'
-import { median, formatTable, mmss, wilson, benchTotal, runTitle, type BenchHarness, type BenchRun } from '../src/core/bench'
+import { median, formatTable, mmss, wilson, benchTotal, runTitle, defaultSize, type BenchHarness, type BenchRun } from '../src/core/bench'
 
 test('median: lower-middle of a numerically sorted copy, [] → 0', () => {
   expect(median([])).toBe(0)
@@ -110,4 +110,23 @@ test('benchTotal counts the tasks of a tasks bench; runTitle names the task', ()
   expect(benchTotal({ ...r, taskCount: undefined })).toBe(6)
   expect(runTitle({ round: 2, task: 'limit' } as any)).toBe('#2 limit')
   expect(runTitle({ round: 2 } as any)).toBe('#2')
+})
+
+test('formatTable: a tests column only when a run carries tests, with its footer and no interval', () => {
+  const h = (name: string, runs: Partial<BenchRun>[], tests?: { passed: number; total: number }): BenchHarness =>
+    ({ name, config: {} as BenchHarness['config'], pass: 0, reasons: {}, median: { turns: 0, toolCalls: 0, ms: 0 }, runs: runs as BenchRun[], ...tests ? { tests } : {} })
+  const plain = formatTable([h('a', [{}])])
+  expect(plain.split('\n')[0]).not.toContain('tests')
+  expect(plain).not.toContain('green tests')
+  const t = formatTable([h('a', [{ tests: { passed: 3, total: 10 } }], { passed: 3, total: 10 }), h('b', [{}])]).split('\n')
+  expect(t[0]).toMatch(/\btests$/)
+  expect(t[1]).toMatch(/3\/10$/)
+  expect(t[2]).toMatch(/-$/)
+  expect(t.at(-1)).toBe('tests = green tests over all runs; no interval: the tests of one exercise are not independent')
+})
+
+test('defaultSize: polyglot starts at 5, the rest at their largest', () => {
+  expect(defaultSize('polyglot')).toBe(5)
+  expect(defaultSize('pool')).toBe(10)
+  expect(defaultSize('slug')).toBe(0)
 })

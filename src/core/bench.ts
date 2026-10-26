@@ -25,12 +25,16 @@ export type BenchRun = {
   editMiss?: number
   /** The task's name in a bench on the user's own tasks (bench --tasks). */
   task?: string
+  /** Green tests of a task that counts them (polyglot); total is fixed per exercise, also for a run that died before its check. */
+  tests?: { passed: number; total: number }
 }
 export type BenchHarness = {
   name: string; config: HarnessConfig; pass: number; reasons: Record<string, number>
   median: { turns: number; toolCalls: number; ms: number }; runs: BenchRun[]
   /** What preflight learnt from the server: its window (Ollama: the harness's numCtx) and llama-server's build. Absent in JSON written before v2.27, and under the test backend. */
   server?: { nCtx?: number; build?: string }
+  /** Sum of the runs' tests; set only when some run has them. */
+  tests?: { passed: number; total: number }
 }
 export type BenchResult = { version: 1; date: string; task: string; taskName?: string; size?: number; node?: string; n: number; timeoutS: number; complete: boolean;
   /** bench --tasks: the repo (real path) and the commit its lhb-tasks.json was read from; taskName is 'tasks'. */
@@ -47,7 +51,10 @@ export type ActiveTrace = { id: string; harness: string; round: number; started:
 export const autoApproves = (cmd: 'demo' | 'bench' | 'evolve') => `${cmd} approves everything without asking: the model's commands and the harness files' mcpServers and loop.untilBash, in fresh temp workdirs`
 
 /** The tasks `bench` runs and the largest size of each (0 = no sizes), for the page: tasks.ts reads files and cannot reach the browser. A test keeps the two equal. */
-export const BENCH_TASKS: Record<string, number> = { slug: 0, pool: 10, pool2: 10, pool3: 10, sift: 12, triage: 12, judge: 12 }
+export const BENCH_TASKS: Record<string, number> = { slug: 0, pool: 10, pool2: 10, pool3: 10, sift: 12, triage: 12, judge: 12, polyglot: 47 }
+
+/** What the Bench page starts a task's size at: polyglot is slow, so 5 of its 47; the rest start at their largest. */
+export const defaultSize = (task: string): number => task === 'polyglot' ? 5 : BENCH_TASKS[task]
 
 /** Lower-middle element of the numerically sorted copy; [] → 0. Never mutates xs. */
 /** The default name of a bench JSON, from local time: bench-YYYYMMDD-HHMMSS.json. */
@@ -80,8 +87,9 @@ export function formatTable(harnesses: BenchHarness[]): string {
   const cost = harnesses.some(h => h.runs.some(r => r.costUsd !== undefined))
   const guard = harnesses.some(h => h.runs.some(r => r.guardBlocks !== undefined))
   const miss = harnesses.some(h => h.runs.some(r => r.editMiss !== undefined))
+  const tests = harnesses.some(h => h.tests)
   const sum = (xs: (number | undefined)[]) => xs.reduce<number>((a, x) => a + (x ?? 0), 0)
-  const head = ['harness', 'PASS', '95% CI', 'reasons', 'med turns', 'med s', ...tools ? ['toolChars', 'med errs'] : [], ...cost ? ['med $'] : [], ...guard ? ['guard'] : [], ...miss ? ['editMiss'] : []]
+  const head = ['harness', 'PASS', '95% CI', 'reasons', 'med turns', 'med s', ...tools ? ['toolChars', 'med errs'] : [], ...cost ? ['med $'] : [], ...guard ? ['guard'] : [], ...miss ? ['editMiss'] : [], ...tests ? ['tests'] : []]
   const rows = harnesses.map(h => [
     h.name, `${h.pass}/${h.runs.length}`,
     wilson(h.pass, h.runs.length)?.map(x => x.toFixed(2)).join('–') ?? '-',
@@ -94,11 +102,13 @@ export function formatTable(harnesses: BenchHarness[]): string {
     // runs never defined guardBlocks had the guard off and could not produce one — "-", not 0.
     ...guard ? [h.runs.some(r => r.guardBlocks !== undefined) ? String(sum(h.runs.map(r => r.guardBlocks))) : '-'] : [],
     ...miss ? [String(sum(h.runs.map(r => r.editMiss)))] : [],
+    ...tests ? [h.tests ? `${h.tests.passed}/${h.tests.total}` : '-'] : [],
   ])
   const w = head.map((c, i) => Math.max(c.length, ...rows.map(r => r[i].length)) + 2)
   const line = (r: string[]) => r.map((c, i) => c.padEnd(w[i])).join('').trimEnd()
   return [line(head), ...rows.map(line), 'medians over all runs incl. failures; s = wall-clock per run',
-    '95% CI = Wilson interval of the PASS rate; two harnesses whose intervals overlap are not told apart by this bench'].join('\n')
+    '95% CI = Wilson interval of the PASS rate; two harnesses whose intervals overlap are not told apart by this bench',
+    ...tests ? ['tests = green tests over all runs; no interval: the tests of one exercise are not independent'] : []].join('\n')
 }
 
 /** How many runs a bench makes: n per harness, per task of a tasks bench. */

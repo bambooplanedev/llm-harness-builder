@@ -11,7 +11,7 @@ import { createBackend, type Backend } from '../core/backends/index.js'
 import { redactor } from '../core/redact.js'
 import { unreachable } from '../core/preflight.js'
 import type { HarnessEvent } from '../core/events.js'
-import { benchFileName } from '../core/bench.js'
+import { benchFileName, BENCH_TASKS } from '../core/bench.js'
 import { TASKS, checkSlug } from '../core/tasks.js'
 import { childEnv } from '../core/tools/env.js'
 
@@ -194,12 +194,12 @@ export async function startServer(opts: ServerOpts) {
         const errors: string[] = []
         const names = Array.isArray(body.harnesses) ? [...new Set(body.harnesses)] : []
         if (names.length < 1 || names.length > 8) errors.push('harnesses: pick 1 to 8')
-        const task = typeof body.task === 'string' && Object.hasOwn(TASKS, body.task) ? TASKS[body.task as keyof typeof TASKS] : undefined
-        if (!task) errors.push(`task must be one of ${Object.keys(TASKS).join('|')}`)
+        const max = typeof body.task === 'string' && Object.hasOwn(BENCH_TASKS, body.task) ? BENCH_TASKS[body.task] : undefined
+        if (max === undefined) errors.push(`task must be one of ${Object.keys(BENCH_TASKS).join('|')}`)
         const { size, n } = body
         // As the CLI wants it: a task with sizes needs one in range, a task without takes none.
-        if (task && (task.max ? !(Number.isInteger(size) && (size as number) >= 1 && (size as number) <= task.max) : size !== undefined))
-          errors.push(task.max ? `size must be an integer from 1 to ${task.max} for ${body.task}` : `size: ${body.task} has no sizes`)
+        if (max !== undefined && (max ? !(Number.isInteger(size) && (size as number) >= 1 && (size as number) <= max) : size !== undefined))
+          errors.push(max ? `size must be an integer from 1 to ${max} for ${body.task}` : `size: ${body.task} has no sizes`)
         if (!(Number.isInteger(n) && (n as number) >= 1 && (n as number) <= 50)) errors.push('n must be an integer from 1 to 50')
         const f = (body.backend ?? {}) as Record<string, unknown>
         const b = { kind: f.kind, baseUrl: f.baseUrl, model: f.model, temperature: 0, ...(f.apiKeyEnv !== undefined ? { apiKeyEnv: f.apiKeyEnv } : {}) }
