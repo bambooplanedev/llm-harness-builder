@@ -40,7 +40,9 @@ export async function readNotes(file: string): Promise<Note[]> {
 export async function appendNotes(file: string, notes: Note[]): Promise<void> {
   if (!notes.length) return
   await mkdir(path.dirname(file), { recursive: true })
-  await appendFile(file, notes.map(n => JSON.stringify(n) + '\n').join(''))
+  // A file a hand edit left without its last newline would glue the next note onto that line, losing both.
+  const last = await readFile(file).then(b => b.at(-1), () => undefined)
+  await appendFile(file, (last !== undefined && last !== 10 ? '\n' : '') + notes.map(n => JSON.stringify(n) + '\n').join(''))
 }
 
 const line = (n: Note) => `- ${n.text}`

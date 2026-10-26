@@ -32,6 +32,10 @@ function parseReply(content: string): string[] {
   throw new Error('reply has no {"notes": [strings]}')
 }
 
+// A long run's summary would not fit a small window, and long runs are the ones worth a note: its end, whole lines.
+const SUMMARY_MAX = 8000
+const summaryEnd = (s: string): string => s.length <= SUMMARY_MAX ? s : s.slice(s.indexOf('\n', s.length - SUMMARY_MAX) + 1)
+
 /** Whether `file` would sit inside `workdir`, where the model's own tools could write a note for the next run. */
 async function insideWorkdir(file: string, workdir: string): Promise<boolean> {
   const real = async (p: string): Promise<string> => { try { return await realpath(p) } catch { const d = path.dirname(p); return d === p ? p : path.join(await real(d), path.basename(p)) } }
@@ -62,7 +66,7 @@ export async function* withNotes(params: RunParams, opts: RunOpts, store: NotesS
   // A run that never got a reply has nothing to note, and a dead server would only be asked again.
   if (store.write && done.turns > 0 && !['aborted', 'backend_error', 'mcp_error'].includes(done.reason)) {
     const name = config.backend.apiKeyEnv
-    const redact = redactor(name === undefined ? undefined : apiKey(config.backend, process.env), name ?? '')
+    const redact = redactor(apiKey(config.backend, process.env), name ?? '')
     const written: Ev = await writeNotes(params, opts, store.file, sent, [...events, done], runId, redact)
     yield redact.deep({ ...written, seq: done.seq, turn: done.turn, ts: Date.now() } as HarnessEvent)
     yield { ...done, seq: done.seq + 1 }
@@ -89,7 +93,7 @@ async function writeNotes(params: RunParams, opts: RunOpts, file: string, existi
     messages: [
       // The harness's /no_think line rides along: without it a Qwen3 thinks by default and spends the reply cap on it.
       { role: 'system', content: NO_THINK_LINE.test(config.systemPrompt) ? WRITER_SYSTEM + '\n/no_think' : WRITER_SYSTEM },
-      { role: 'user', content: `Task:\n${task}\n\nRun summary:\n${traceSignals(events)}\n\nExisting notes:\n${existing.map(n => n.text).join('\n') || '(none)'}` },
+      { role: 'user', content: `Task:\n${task}\n\nRun summary:\n${summaryEnd(traceSignals(events))}\n\nExisting notes:\n${existing.map(n => n.text).join('\n') || '(none)'}` },
     ],
     // Only where the harness holds replies to a schema itself: a server without structured output refuses the field.
     ...(config.toolCalls.enforceSchema ? { responseSchema: NOTE_SCHEMA } : {}),
