@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // src/cli.ts
 import { parseArgs } from 'node:util'
-import { readFile, cp, mkdir } from 'node:fs/promises'
+import { readFile, cp, mkdir, writeFile } from 'node:fs/promises'
 import { existsSync, readFileSync, writeFileSync, renameSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline/promises'
@@ -11,6 +11,8 @@ import { fileURLToPath } from 'node:url'
 import { mayAsk, type RunOpts } from './core/run.js'
 import { withNotes, type NotesStore } from './core/notes-run.js'
 import { notesKey, notesPath, readNotes, selectNotes } from './core/notes.js'
+import { loadRepoTasks, consentText, hasConsent, saveConsent, TASKS_FILE, type RepoTasks } from './core/repo-tasks.js'
+import { cloneAt, linkNodeModules, protectedChanged, runCheck, patchOf, removeClone, removeCloneSync, prepareModules, modulesManifest, type Clone } from './core/repo-clone.js'
 import { validateConfig, sendsAnswerSchema, KEY_ENV, FLAG_WORDS, keyNameMessage, keyErrors, keyProblem, keyNote, apiKey, isHttpUrl, isLoopbackUrl, type HarnessConfig, type BackendKind } from './core/config.js'
 import { validateWorkdir } from './core/tools/sandbox.js'
 import type { Backend, Delta, NormalizedResponse } from './core/backends/types.js'
@@ -273,10 +275,10 @@ async function cmdDemo(argv: string[]) {
 const INT = /^[1-9]\d*$/
 
 /** One bench run: fresh task workdir → execRun (timed) → the task's check. Never throws; an exception becomes a FAIL row with reason 'error'. */
-async function benchOnce(config: HarnessConfig, round: number, timeoutS: number, out: string, task: Task, taskName: string, size?: number): Promise<BenchRun> {
+async function benchOnce(config: HarnessConfig, round: number, timeoutS: number, out: string, task: Task, notes: NotesStore, size?: number): Promise<BenchRun> {
   // An exception that escapes execRun is text nothing has cleaned yet, and it goes to the bench JSON and the terminal.
   const redact = redactor(apiKey(config.backend, process.env), config.backend.apiKeyEnv ?? '')
-  let workdir = '', parseErrors = 0, toolChars = 0, costUsd: number | undefined, peakTokens: number | undefined, toolErrors = 0, guardBlocks = 0, editMiss = 0, lastError: string | undefined, t0 = Date.now(), run: BenchRun
+  let workdir = '', traceId: string | undefined, parseErrors = 0, toolChars = 0, costUsd: number | undefined, peakTokens: number | undefined, toolErrors = 0, guardBlocks = 0, editMiss = 0, lastError: string | undefined, t0 = Date.now(), run: BenchRun
   process.stderr.write(`${config.name} #${round} `)
   try {
     workdir = await task.prepare(size)
@@ -285,7 +287,7 @@ async function benchOnce(config: HarnessConfig, round: number, timeoutS: number,
     const { id, last } = await execRun(config, task.input ? `${task.prompt}\n\n${task.input(size)}` : task.prompt, workdir, {
       yes: true, json: false, quiet: true, answerSchema: task.answerSchema?.(size), signal: AbortSignal.timeout(timeoutS * 1000), bench: { file: path.basename(out), round },
       // Read, never written: a note from run 1 would make run 2 depend on it, and the bench's runs must stay independent.
-      notes: { file: notesPath(`task-${taskName}`), write: false },
+      notes,
       onEvent: e => {
         if (e.type === 'parse_error') parseErrors++
         if (e.type === 'llm_response' && e.costUsd !== undefined) costUsd = (costUsd ?? 0) + e.costUsd
@@ -299,12 +301,19 @@ async function benchOnce(config: HarnessConfig, round: number, timeoutS: number,
         if (e.type === 'parse_error' || e.type === 'error') lastError = e.message
       },
     })
+    traceId = id
     const ms = Date.now() - t0
     const d = last.type === 'done' ? last : undefined
-    const verdict = task.check(workdir, size, d?.reason === 'final' ? d.text : undefined, childEnv(config.tools.bashEnv)) ? 'PASS' : 'FAIL'
-    run = { round, verdict, reason: d?.reason ?? 'error', turns: d?.turns ?? 0, toolCalls: d?.toolCallCount ?? 0, parseErrors, lastError, ms, workdir, trace: id, toolChars: toolChars || undefined, costUsd, peakTokens, toolErrors, guardBlocks: config.tools.requireReadBeforeEdit ? guardBlocks : undefined, editMiss }
+    const c = await task.check(workdir, size, d?.reason === 'final' ? d.text : undefined, childEnv(config.tools.bashEnv))
+    const checked = typeof c === 'boolean' ? { pass: c } : c
+    if (checked.reason) lastError = checked.reason
+    const verdict = checked.pass ? 'PASS' : 'FAIL'
+    run = { ...(task.name ? { task: task.name } : {}), round, verdict, reason: d?.reason ?? 'error', turns: d?.turns ?? 0, toolCalls: d?.toolCallCount ?? 0, parseErrors, lastError, ms, workdir, trace: id, toolChars: toolChars || undefined, costUsd, peakTokens, toolErrors, guardBlocks: config.tools.requireReadBeforeEdit ? guardBlocks : undefined, editMiss }
   } catch (e) {
-    run = { round, verdict: 'FAIL', reason: 'error', turns: 0, toolCalls: 0, parseErrors, lastError: redact.text(String(e)), ms: Date.now() - t0, workdir, toolChars: toolChars || undefined, costUsd, peakTokens, toolErrors, guardBlocks: config.tools.requireReadBeforeEdit ? guardBlocks : undefined, editMiss }
+    run = { ...(task.name ? { task: task.name } : {}), round, verdict: 'FAIL', reason: 'error', turns: 0, toolCalls: 0, parseErrors, lastError: redact.text(String(e)), ms: Date.now() - t0, workdir, toolChars: toolChars || undefined, costUsd, peakTokens, toolErrors, guardBlocks: config.tools.requireReadBeforeEdit ? guardBlocks : undefined, editMiss }
+  } finally {
+    // The clone of a task of the user's own goes away whatever happened; a failure to clean up is said, not thrown.
+    if (workdir && task.dispose) await task.dispose(workdir, traceId).catch(e => console.error(`cannot clean up ${workdir}: ${(e as Error).message}`))
   }
   const tail = (run.reason === 'error' || run.reason === 'aborted') && run.lastError ? `  ${showable(run.lastError.replace(/\s+/g, ' ').slice(0, 200))}` : ''
   process.stderr.write(`${run.verdict}  reason=${run.reason} turns=${run.turns} toolCalls=${run.toolCalls} parseErrors=${run.parseErrors} ${Math.round(run.ms / 1000)}s${run.trace ? ` trace=${run.trace}` : ''}${tail}\n`)
@@ -318,18 +327,56 @@ function rollup(h: BenchHarness) {
   h.median = { turns: median(h.runs.map(r => r.turns)), toolCalls: median(h.runs.map(r => r.toolCalls)), ms: median(h.runs.map(r => r.ms)) }
 }
 
+/** One Task per task of a repo's lhb-tasks.json: each run in its own clone, its check after a look at the protected files. */
+async function repoWork(repo: RepoTasks): Promise<{ tasks: Task[]; live: Map<string, Clone>; setupClone?: Clone; modules: string }> {
+  const live = new Map<string, Clone>()
+  const { from, setupClone } = await prepareModules(repo)
+  const tasks: Task[] = repo.tasks.map(rt => ({
+    name: rt.name, prompt: rt.prompt,
+    async prepare() { const c = await cloneAt(repo); live.set(c.dir, c); await linkNodeModules(c, from); return c.dir },
+    async check(dir, _size, _answer, env) {
+      const c = live.get(dir)!
+      const changed = await protectedChanged(c, repo)
+      if (changed.length) return { pass: false, reason: `changed a protected file: ${changed[0]}` }
+      return runCheck(c, rt, env ?? childEnv())
+    },
+    async dispose(dir, traceId) {
+      const c = live.get(dir)
+      if (!c) return
+      try {
+        const patch = traceId ? await patchOf(c) : ''
+        if (patch.trim()) await writeFile(path.join('runs', `${traceId}.patch`), patch)
+      } finally { live.delete(dir); await removeClone(c) }
+    },
+  }))
+  return { tasks, live, setupClone, modules: from }
+}
+
+/** Every clone a bench made, removed now: at the end, and from the SIGINT handler that exits right after. */
+function dropWork(w: { live: Map<string, Clone>; setupClone?: Clone }): void {
+  for (const c of w.live.values()) removeCloneSync(c)
+  w.live.clear()
+  if (w.setupClone) { removeCloneSync(w.setupClone); w.setupClone = undefined }
+}
+
 async function cmdBench(argv: string[]) {
   const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: COMMANDS.bench.options })
   if (values.help) return printHelp('bench')
   keyFlag('bench', values['api-key-env'])
   if (!INT.test(values.n)) argError('bench', '--n must be a positive integer')
   if (!INT.test(values.timeout)) argError('bench', '--timeout must be a positive integer')
-  const task: Task | undefined = Object.hasOwn(TASKS, values.task) ? TASKS[values.task as keyof typeof TASKS] : undefined
-  if (!task) argError('bench', `--task must be one of ${Object.keys(TASKS).join('|')}`)
+  if (values.tasks !== undefined && (values.task !== undefined || values.size !== undefined)) argError('bench', '--tasks cannot go with --task or --size')
+  let repo: RepoTasks | undefined
+  if (values.tasks !== undefined) try { repo = await loadRepoTasks(values.tasks) } catch (e) { argError('bench', (e as Error).message) }
+  const taskName = repo ? 'tasks' : values.task ?? 'slug'
+  const builtin: Task | undefined = repo ? undefined : Object.hasOwn(TASKS, taskName) ? TASKS[taskName as keyof typeof TASKS] : undefined
+  if (!repo && !builtin) argError('bench', `--task must be one of ${Object.keys(TASKS).join('|')}`)
   const size = values.size === undefined ? undefined : Number(values.size)
   // A task with sizes needs one in range; a task without sizes takes none.
-  const sizeOk = task.max === undefined ? size === undefined : values.size !== undefined && INT.test(values.size) && size! <= task.max
-  if (!sizeOk) argError('bench', task.max === undefined ? `--size: ${values.task} has no sizes` : `--size must be an integer from 1 to ${task.max} for ${values.task}`)
+  if (builtin) {
+    const sizeOk = builtin.max === undefined ? size === undefined : values.size !== undefined && INT.test(values.size) && size! <= builtin.max
+    if (!sizeOk) argError('bench', builtin.max === undefined ? `--size: ${taskName} has no sizes` : `--size must be an integer from 1 to ${builtin.max} for ${taskName}`)
+  }
   if (values['max-turns'] !== undefined && !INT.test(values['max-turns'])) argError('bench', '--max-turns must be a positive integer')
   const n = Number(values.n), timeoutS = Number(values.timeout)
   const started = new Date()
@@ -350,11 +397,31 @@ async function cmdBench(argv: string[]) {
     const key = keyNote(h.config.backend, process.env)
     if (key) console.error(`${h.name}: ${key}`)
   }
+  // The commands of a repo's tasks run without asking for the whole bench: they are accepted once, by hash, before anything runs.
+  let work: { tasks: Task[]; live: Map<string, Clone>; setupClone?: Clone; modules?: string } = { tasks: [builtin!], live: new Map() }
+  if (repo) {
+    console.error(`tasks: ${repo.tasks.length} from ${repo.repo} at ${repo.sha.slice(0, 7)}`)
+    if (repo.uncommitted) console.error('uncommitted changes are not in the clones')
+    if (!(await hasConsent(repo))) {
+      const text = consentText(repo)
+      if (values.yes) await saveConsent(repo)
+      else if (process.stdin.isTTY) {
+        const rl = createInterface({ input: process.stdin, output: process.stderr })
+        const answer = await rl.question(`${text}\n\nRun these commands? [y/N] `)
+        rl.close()
+        if (!/^y(es)?$/i.test(answer.trim())) die('not accepted; nothing ran')
+        await saveConsent(repo)
+      } else die(`${text}\n\npass --yes to accept these commands, or run in a terminal`)
+    }
+    work = await repoWork(repo)
+  }
+  const tasks = work.tasks
   // Before any JSON exists: a server that is down, or lacks the model, is a typo to report, not 90 minutes of 'error' rows.
-  const no = await preflightAll(harnesses, task, size)
-  if (no) die(no)
+  const no = await preflightAll(harnesses, tasks[0], size)
+  if (no) { dropWork(work); die(no) }
   await mkdir(path.dirname(out), { recursive: true })
-  const result: BenchResult = { version: 1, date: started.toISOString(), task: task.prompt, taskName: values.task, size, node: process.version, n, timeoutS, complete: false, harnesses }
+  const result: BenchResult = { version: 1, date: started.toISOString(), task: repo ? `${TASKS_FILE} at ${repo.sha.slice(0, 7)} in ${repo.repo}` : builtin!.prompt, taskName, size, node: process.version, n, timeoutS, complete: false, harnesses,
+    ...(repo ? { tasksRepo: repo.repo, tasksSha: repo.sha } : {}) }
   // tmp + rename in the same directory: the SIGINT handler exits immediately, and a half-written
   // JSON would be the only thing left of a 90-minute run. `.tmp`, not `.json`, so /api/bench skips it.
   const tmpOut = `${out}.${process.pid}.tmp`
@@ -372,20 +439,31 @@ async function cmdBench(argv: string[]) {
   console.error(`bench: ${files.length} harnesses × ${n} runs, timeout ${timeoutS}s per run, writing ${out}`)
   files.forEach((f, i) => console.error(`  ${harnesses[i].name.padEnd(13)} ${f}`))
   // bench never writes notes, and nothing else writes a task's file: an empty one means this bench measures notes off.
+  // bench reads notes and never writes them: a repo's are those of its folder, a built-in task's are in task-<name>.
+  const notes: NotesStore = { file: notesPath(repo ? await notesKey(repo.repo) : `task-${taskName}`), write: false }
   for (const h of harnesses) if (h.config.notes?.enabled) {
-    const file = notesPath(`task-${values.task}`), n = (await readNotes(file)).length
+    const file = notes.file, n = (await readNotes(file)).length
     console.error(`  ${h.name}: notes on, ${n ? `${n} in` : 'none in'} ${shortHome(file)}${n ? '' : ' — this bench runs as with notes off'}`)
   }
   // A failed write still prints the table: the terminal then holds what the JSON could not.
-  process.once('SIGINT', () => { result.stopped = true; try { save() } catch (e) { console.error(`cannot write ${out}: ${(e as Error).message}`) } finish(130) })
+  process.once('SIGINT', () => { dropWork(work); result.stopped = true; try { save() } catch (e) { console.error(`cannot write ${out}: ${(e as Error).message}`) } finish(130) })
+  const modulesDir = work.modules && path.join(work.modules, 'node_modules')
+  const modules0 = modulesDir && await modulesManifest(modulesDir)
   for (let round = 1; round <= n; round++) {
     console.error(`--- round ${round}/${n}`)
-    for (const h of harnesses) {
-      h.runs.push(await benchOnce(h.config, round, timeoutS, out, task, values.task, size))
+    for (const task of tasks) for (const h of harnesses) {
+      h.runs.push(await benchOnce(h.config, round, timeoutS, out, task, notes, size))
       rollup(h)
       save()
+      // The runs' node_modules is a link to a real one: a run that changed it would change every run after it, and the user's tree.
+      if (modulesDir && await modulesManifest(modulesDir) !== modules0) {
+        dropWork(work)
+        console.error(`the model changed the installed packages in ${modulesDir}; stopping`)
+        return finish(1)
+      }
     }
   }
+  dropWork(work)
   result.complete = true
   save()
   finish()

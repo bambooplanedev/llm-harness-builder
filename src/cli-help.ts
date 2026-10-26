@@ -47,7 +47,7 @@ export const COMMANDS = {
     args: '[harness.json ...]',
     options: {
       n: { type: 'string', default: '3' }, timeout: { type: 'string', default: '1800' }, out: { type: 'string' },
-      task: { type: 'string', default: 'slug' }, size: { type: 'string' }, 'max-turns': { type: 'string' }, ...backend, help,
+      task: { type: 'string' }, size: { type: 'string' }, tasks: { type: 'string' }, yes: { type: 'boolean', default: false }, 'max-turns': { type: 'string' }, ...backend, help,
     },
     docs: {
       n: ['<n>', 'runs per harness (default 3)'],
@@ -55,6 +55,8 @@ export const COMMANDS = {
       out: ['<file>', 'where the JSON goes (default runs/bench-<ts>.json)'],
       task: ['<name>', 'slug|pool|pool2|pool3|sift|triage|judge (default slug)'],
       size: ['<N>', 'task size, for a task that has sizes'],
+      tasks: ['<repo>', 'run your own tasks from <repo>/lhb-tasks.json (the last commit) instead of --task'],
+      yes: ['', 'accept the commands of --tasks without asking (needed without a terminal)'],
       'max-turns': ['<N>', 'turn limit, overriding the harness files'],
       ...backendDocs,
     },

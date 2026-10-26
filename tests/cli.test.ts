@@ -1,12 +1,12 @@
 import { test, expect } from 'vitest'
 import { spawn, spawnSync, execSync } from 'node:child_process'
 import { writeFile, readFile, readdir, stat, cp } from 'node:fs/promises'
-import { mkdtempSync, existsSync, writeFileSync, mkdirSync, readFileSync, readdirSync } from 'node:fs'
+import { mkdtempSync, existsSync, writeFileSync, mkdirSync, readFileSync, readdirSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { tmp } from './helpers.js'
+import { tmp, gitRepo } from './helpers.js'
 import { fakeOpenAI, toolTurn, textTurn } from './fake-openai.js'
 import { fakeAnthropic, toolReply, textReply } from './fake-anthropic.js'
 import { RunStore } from '../src/server/runs'
@@ -1367,4 +1367,99 @@ test('bench with notes on and no task notes says it measures notes off', async (
   await writeFile(fake, JSON.stringify([{ content: 'done' }]))
   const r = cli(['bench', '--n', '1', '--out', join(cwd, 'b.json'), await withNotesOn(cwd)], { LHB_FAKE_BACKEND: fake, LHB_NOTES_DIR: nd }, cwd)
   expect(r.stderr).toContain('this bench runs as with notes off')
+}, 60_000)
+
+// --- bench --tasks: a repo of the user's own, runs in clones. Every spawn gets its own TMPDIR, so "no clone is left"
+// is about this bench only, whatever other test files run alongside.
+const tasksRepo = (tasks: object[], extra: Record<string, string> = {}) => gitRepo({ 'lhb-tasks.json': JSON.stringify({ tasks }), ...extra })
+const tasksEnv = async (fake: unknown[]) => {
+  const d = await tmp('lhb-tasks-env-')
+  const tmpd = join(d, 'tmp'); mkdirSync(tmpd)
+  writeFileSync(join(d, 'fake.json'), JSON.stringify(fake))
+  return { TMPDIR: tmpd, LHB_FAKE_BACKEND: join(d, 'fake.json'), LHB_STATE_DIR: join(d, 'state'), LHB_NOTES_DIR: join(d, 'notes') }
+}
+const clonesIn = (env: { TMPDIR: string }) => readdirSync(env.TMPDIR).filter(f => f.startsWith('lhb-2'))
+const bashCall = (command: string) => ({ toolCalls: [{ name: 'bash', args: { command } }] })
+const TWO = [{ name: 'a', prompt: 'make done.txt', check: 'test -f done.txt' }, { name: 'b', prompt: 'b', check: 'exit 1' }]
+
+test('bench --tasks: runs each task in a clone, PASS and FAIL with a reason, patch kept, repo untouched', async () => {
+  const repo = await tasksRepo(TWO)
+  const env = await tasksEnv([bashCall('echo ok > done.txt'), { content: 'done' }, { content: 'done' }])
+  const cwd = await tmp('lhb-cwd-')
+  const r = cli(['bench', '--tasks', repo, '--n', '1', '--yes', '--out', join(cwd, 'b.json'), harness('bare')], env, cwd)
+  expect(r.status, r.stderr).toBe(0)
+  const j = JSON.parse(await readFile(join(cwd, 'b.json'), 'utf8'))
+  const sha = execSync('git rev-parse HEAD', { cwd: repo, encoding: 'utf8' }).trim()
+  expect(j).toMatchObject({ taskName: 'tasks', tasksRepo: realpathSync(repo), tasksSha: sha })
+  expect(j.harnesses[0].runs.map((x: any) => [x.task, x.verdict, x.lastError])).toEqual([['a', 'PASS', undefined], ['b', 'FAIL', 'check exited 1']])
+  expect(clonesIn(env)).toEqual([])
+  expect(execSync('git --no-optional-locks status --porcelain', { cwd: repo, encoding: 'utf8' })).toBe('')
+  expect(existsSync(join(repo, 'done.txt'))).toBe(false)
+  expect(readFileSync(join(cwd, 'runs', `${j.harnesses[0].runs[0].trace}.patch`), 'utf8')).toContain('done.txt')
+}, 60_000)
+
+test('bench --tasks: asks before running the commands, remembers, asks again when they change', async () => {
+  const repo = await tasksRepo(TWO)
+  const env = await tasksEnv([{ content: 'done' }, { content: 'done' }, { content: 'done' }, { content: 'done' }])
+  const cwd = await tmp('lhb-cwd-')
+  const args = ['bench', '--tasks', repo, '--n', '1', '--out', join(cwd, 'b.json'), harness('bare')]
+  const no = cli(args, env, cwd)
+  expect(no.status).toBe(2)
+  for (const s of ['make done.txt', "check — in each run's clone, after the run", 'pass --yes']) expect(no.stderr).toContain(s)
+  expect(cli([...args, '--yes'], env, cwd).status).toBe(0)
+  expect(cli(args, env, cwd).status).toBe(0)
+  writeFileSync(join(repo, 'lhb-tasks.json'), JSON.stringify({ tasks: [TWO[0], { ...TWO[1], check: 'exit 2' }] }))
+  execSync('git -c user.name=t -c user.email=t@t commit -qam next', { cwd: repo })
+  expect(cli(args, env, cwd).status).toBe(2)
+}, 90_000)
+
+test('bench --tasks: refuses --task or --size with it, and a folder that is not a repo', async () => {
+  const repo = await tasksRepo(TWO)
+  const env = await tasksEnv([])
+  for (const extra of [['--task', 'slug'], ['--size', '3']]) {
+    const r = cli(['bench', '--tasks', repo, ...extra, '--yes', harness('bare')], env)
+    expect(r.status).toBe(2); expect(r.stderr).toContain('--tasks cannot go with --task or --size')
+  }
+  const r = cli(['bench', '--tasks', await tmp('lhb-plain-'), '--yes', harness('bare')], env)
+  expect(r.status).toBe(2); expect(r.stderr).toContain('is not a git repository')
+}, 60_000)
+
+test('bench --tasks: a changed protected file is a FAIL and the check never runs', async () => {
+  const marker = join(await tmp('lhb-mark-'), 'ran')
+  const repo = await tasksRepo([{ name: 'a', prompt: 'p', check: `touch "${marker}"` }], { 'a.test.js': 't\n' })
+  const env = await tasksEnv([bashCall('echo hacked > a.test.js'), { content: 'done' }])
+  const cwd = await tmp('lhb-cwd-')
+  const r = cli(['bench', '--tasks', repo, '--n', '1', '--yes', '--out', join(cwd, 'b.json'), harness('bare')], env, cwd)
+  expect(r.status, r.stderr).toBe(0)
+  const run = JSON.parse(await readFile(join(cwd, 'b.json'), 'utf8')).harnesses[0].runs[0]
+  expect([run.verdict, run.lastError]).toEqual(['FAIL', 'changed a protected file: a.test.js'])
+  expect(existsSync(marker)).toBe(false)
+}, 60_000)
+
+test('bench --tasks: the model changing the shared node_modules stops the bench after its JSON', async () => {
+  const repo = await tasksRepo(TWO)
+  mkdirSync(join(repo, 'node_modules', 'x'), { recursive: true }); writeFileSync(join(repo, 'node_modules', 'x', 'index.js'), '1')
+  writeFileSync(join(repo, '.gitignore'), 'node_modules\n'); execSync('git -c user.name=t -c user.email=t@t add .gitignore && git -c user.name=t -c user.email=t@t commit -qm ig', { cwd: repo })
+  const env = await tasksEnv([bashCall('rm node_modules/x/index.js'), { content: 'done' }, { content: 'done' }])
+  const cwd = await tmp('lhb-cwd-')
+  const r = cli(['bench', '--tasks', repo, '--n', '1', '--yes', '--out', join(cwd, 'b.json'), harness('bare')], env, cwd)
+  expect(r.status).toBe(1)
+  expect(r.stderr).toContain('the model changed the installed packages')
+  expect(JSON.parse(await readFile(join(cwd, 'b.json'), 'utf8')).harnesses[0].runs).toHaveLength(1)
+  expect(clonesIn(env)).toEqual([])
+}, 60_000)
+
+test('bench --tasks: Ctrl-C leaves no clone behind, the setup clone included', async () => {
+  const repo = await gitRepo({ 'lhb-tasks.json': JSON.stringify({ tasks: TWO, setup: 'mkdir -p node_modules/x' }) })
+  const env = await tasksEnv([bashCall('sleep 20'), { content: 'done' }])
+  const cwd = await tmp('lhb-cwd-')
+  const child = spawn(join(ROOT, 'node_modules', '.bin', 'tsx'), [join(ROOT, 'src', 'cli.ts'), 'bench', '--tasks', repo, '--n', '1', '--yes', '--out', join(cwd, 'b.json'), harness('bare')],
+    { cwd, env: { ...process.env, ...env }, stdio: ['ignore', 'ignore', 'pipe'] })
+  let err = ''
+  await new Promise<void>(res => child.stderr!.on('data', d => { err += d; if (err.includes('--- round')) res() }))
+  await new Promise(r => setTimeout(r, 1500))
+  expect(clonesIn(env).length).toBeGreaterThan(0)
+  child.kill('SIGINT')
+  await new Promise(r => child.on('exit', r))
+  expect(clonesIn(env)).toEqual([])
 }, 60_000)

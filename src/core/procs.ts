@@ -16,10 +16,12 @@ function hook() {
     // Decide now, not when the signal fires: a `once` listener (e.g. bench's) removes itself
     // from the registry before later listeners run, so a fire-time count cannot tell "I am
     // alone" from "a peer's handler already fired and its async work is still in flight".
-    const owns = process.listenerCount(sig) === 0
+    // And at fire time too: a handler added after this one (bench's, when a setup command started the first child) is
+    // still registered when this one runs first, and it owns the exit then.
+    const first = process.listenerCount(sig) === 0
     process.on(sig, () => {
       killAll()
-      if (owns) process.exit(code)
+      if (first && process.listenerCount(sig) === 1) process.exit(code)
       // Someone else owns the exit (bench flushes its PASS table asynchronously first).
       // Back-stop it: if they have not exited shortly, we do, so Ctrl-C never hangs.
       else setTimeout(() => process.exit(code), 2000).unref()
