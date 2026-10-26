@@ -1,5 +1,5 @@
-import { describe, test, expect, vi } from 'vitest'
-import { cp, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises'
+import { describe, test, expect, vi, afterEach } from 'vitest'
+import { cp, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { childEnv } from '../src/core/tools/env.js'
@@ -12,11 +12,14 @@ const [first, second] = p.exercises
 const total = first.tests.length
 const proof = readFile(path.join('polyglot-proofs', `${first.name}.js`), 'utf8')
 const env = childEnv()
+const made: string[] = []
+afterEach(async () => { await Promise.all(made.splice(0).map(d => rm(d, { recursive: true, force: true }))) })
 
 /** A workdir holding `src` as the model's solution; the test file in it is the one given or the shipped one. */
 const run = async (src: string, opts: { test?: string; timeoutMs?: number; task?: ReturnType<typeof polyglotTasks>[number] } = {}) => {
   const task = opts.task ?? polyglotTasks(p, 1, opts.timeoutMs)[0]
   const dir = await task.prepare()
+  made.push(dir)
   await writeFile(path.join(dir, `${first.name}.js`), src)
   if (opts.test !== undefined) await writeFile(path.join(dir, `${first.name}.test.js`), opts.test)
   return task.check(dir, 1, undefined, env) as Promise<{ pass: boolean; reason?: string; tests: { passed: number; total: number } }>
@@ -34,6 +37,7 @@ test('prepare writes the five files; polyglotTasks takes the first size exercise
   expect(tasks.map(t => [t.name, t.tests])).toEqual([[first.name, total], [second.name, second.tests.length]])
   expect(tasks[0].prompt).toBe(`Implement ${first.name}.js so that the tests in ${first.name}.test.js pass: run \`node --test ${first.name}.test.js\`. INSTRUCTIONS.md describes the exercise. Keep the whole solution in ${first.name}.js. Do not edit ${first.name}.test.js or expect.js. Finally answer with a one-line summary.`)
   const dir = await tasks[0].prepare()
+  made.push(dir)
   expect((await readdir(dir)).sort()).toEqual(['INSTRUCTIONS.md', 'expect.js', `${first.name}.js`, `${first.name}.test.js`, 'package.json'].sort())
 })
 
@@ -56,6 +60,7 @@ describe('check', () => {
 
   test('uses the bytes loaded at start', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'lhb-polyglot-root-'))
+    made.push(root)
     await cp('examples-polyglot', root, { recursive: true })
     const q = loadPolyglot(root)
     await writeFile(path.join(root, first.name, `${first.name}.test.js`), "import test from 'node:test'\ntest('x', () => {})\n")
@@ -83,6 +88,14 @@ describe('check', () => {
     expect(await run(`process.exit(0)\n${await proof}`)).toMatchObject({ pass: false, reason })
   })
 
+  test('a word list holding "test" and "assert" is no tripwire', async () => {
+    expect((await run(`${await proof}\nexport const words = ['test', 'assert']\n`)).pass).toBe(true)
+  })
+
+  test('tripwire: dynamic import with backticks', async () => {
+    expect(await run(`${await proof}\nawait import(\`node:assert\`)\n`)).toMatchObject({ pass: false, reason: 'the solution touches the test runner' })
+  })
+
   test('the bridge holds against patched built-ins', async () => {
     const r = await run(`${p.exercises[0].stub}\nObject.is = () => true; String.prototype.includes = () => true\n`)
     expect(r.pass).toBe(false)
@@ -91,7 +104,8 @@ describe('check', () => {
   test('a missing solution is passed: 0', async () => {
     const task = polyglotTasks(p, 1)[0]
     const dir = await task.prepare()
-    await (await import('node:fs/promises')).rm(path.join(dir, `${first.name}.js`))
+    made.push(dir)
+    await rm(path.join(dir, `${first.name}.js`))
     expect(await task.check(dir, 1, undefined, env)).toMatchObject({ pass: false, tests: { passed: 0, total } })
   })
 })

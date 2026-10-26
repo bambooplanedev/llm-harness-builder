@@ -94,12 +94,14 @@ export function loadPolyglot(root = SET_ROOT): Polyglot {
   }
 }
 
-const TRIPWIRE = /['"](node:)?(assert|test)(\/strict)?['"]|process\s*(\.|\[)\s*['"]?(exit|reallyExit)/
+const TRIPWIRE = /(from|import\s*\(?|require\s*\()\s*['"`](node:)?(assert|test)(\/strict)?['"`]|process\s*(\.|\[)\s*['"`]?(exit|reallyExit)/
 
 const lay = async (p: Polyglot, e: Exercise, solution: string) => {
   const dir = await mkdtemp(path.join(tmpdir(), 'lhb-polyglot-'))
-  await Promise.all([[`${e.name}.js`, solution], [`${e.name}.test.js`, e.test], ['expect.js', p.expect], ['package.json', p.pkg], ['INSTRUCTIONS.md', e.instructions]]
-    .map(([f, c]) => writeFile(path.join(dir, f), c)))
+  try {
+    await Promise.all([[`${e.name}.js`, solution], [`${e.name}.test.js`, e.test], ['expect.js', p.expect], ['package.json', p.pkg], ['INSTRUCTIONS.md', e.instructions]]
+      .map(([f, c]) => writeFile(path.join(dir, f), c)))
+  } catch (err) { await rm(dir, { recursive: true, force: true }); throw err }
   return dir
 }
 
