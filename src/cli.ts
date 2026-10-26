@@ -551,10 +551,11 @@ async function cmdEvolve(argv: string[]) {
   const binding = bindingTokens({ names: repo.tasks.map(t => t.name), paths, prompts: repo.tasks.map(t => t.prompt) })
   let lines: JournalLine[] = [], torn = ''
   // The journal is the report's only source: under --report the refusals never advise deleting it.
-  const start = (what: string) => values.report ? `${what}; the report cannot be shown from ${jf}` : `${what}; delete ${jf} to start over`
+  const then = values.report ? `the report cannot be shown from ${jf}` : `delete ${jf} to start over`
+  const start = (what: string) => `${what}; ${then}`
   const rebuilt = (): EvolveState => {
     const r = replay(lines, raw, { binding, sets })
-    return 'error' in r ? die(values.report ? `${r.error} (${jf}); the report cannot be shown from ${jf}` : `${r.error} (${jf}); delete it to start over`) : r
+    return 'error' in r ? die(start(r.error)) : r
   }
   // The model's bash can rewrite files in cwd: every version must have read the snapshot the start line hashed.
   // Called only after rebuilt() succeeded, so a bad first line gets the journal's own error.
@@ -565,7 +566,7 @@ async function cmdEvolve(argv: string[]) {
   if (resuming) {
     const text = readFileSync(jf, 'utf8')
     const j = parseJournal(text)
-    if ('error' in j) return die(values.report ? `cannot resume: ${jf} ${j.error}; the report cannot be shown from ${jf}` : `cannot resume: ${jf} ${j.error}; delete it to start over`)
+    if ('error' in j) return die(start(`cannot resume: ${jf} ${j.error}`))
     lines = j.lines
     torn = text
     if (lines[0]?.type === 'start' && lines[0].sha !== repo.sha) die(start('the repo has a new commit since this evolve started'))
