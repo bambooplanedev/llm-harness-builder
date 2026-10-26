@@ -105,3 +105,14 @@ test('notesDir: LHB_NOTES_DIR wins, else under the state dir', () => {
   expect(notesDir({ LHB_STATE_DIR: '/s' })).toBe(join('/s', 'notes'))
   expect(notesDir({ LHB_STATE_DIR: '/s', LHB_NOTES_DIR: '/n' })).toBe('/n')
 })
+
+test('a protect pathspec git rejects is refused at load', async () => {
+  const repo = await gitRepo({ 'lhb-tasks.json': JSON.stringify({ ...good, protect: [':(bogus)x'] }) })
+  await expect(loadRepoTasks(repo)).rejects.toThrow(/^lhb-tasks\.json: protect: .*bogus/)
+})
+
+test('a committed node_modules is refused at load', async () => {
+  const repo = await gitRepo({ 'lhb-tasks.json': JSON.stringify(good), 'node_modules/x/index.js': '1' })
+  const sha7 = execFileSync('git', ['rev-parse', '--short=7', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim()
+  await expect(loadRepoTasks(repo)).rejects.toThrow(`node_modules is committed at ${sha7}; bench --tasks links its own: remove it from the repo`)
+})

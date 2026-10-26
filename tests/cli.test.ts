@@ -1532,3 +1532,11 @@ test('bench --tasks: setup gets the env names of the harnesses\' tools.bashEnv',
   const r = cli(['bench', '--tasks', repo, '--n', '1', '--yes', '--out', join(cwd, 'b.json'), h], { ...env, LHB_T_FOO: '1' }, cwd)
   expect(r.status, r.stderr).toBe(0)
 }, 60_000)
+
+test('bench --tasks: a bad tasks file is refused before the consent text', async () => {
+  const repo = await gitRepo({ 'lhb-tasks.json': JSON.stringify({ tasks: TWO, protect: [':(bogus)x'] }) })
+  const r = cli(['bench', '--tasks', repo, '--n', '1', harness('bare')], await tasksEnv([]))
+  expect(r.status).toBe(2)
+  expect(r.stderr).toContain('lhb-tasks.json: protect:')
+  expect(r.stderr).not.toContain('make done.txt')
+}, 60_000)

@@ -71,6 +71,12 @@ export async function loadRepoTasks(dir: string): Promise<RepoTasks> {
   try { x = JSON.parse(text) } catch (e) { throw new Error(`${TASKS_FILE}: not JSON: ${(e as Error).message}`) }
   const errors = validateTasksFile(x)
   if (errors.length) throw new Error(`${TASKS_FILE}: ${errors[0]}`)
+  const protect = [...DEFAULT_PROTECT, ...(x.protect ?? [])]
+  // Before any model time: a pathspec git rejects would fail every run's protect check only after its run.
+  try { await git(['diff', '--name-only', sha, sha, '--', ...protect], repo) } catch (e) { throw new Error(`${TASKS_FILE}: protect: ${(e as Error).message}`) }
+  // A committed node_modules is in every clone, where the link the runs get cannot go.
+  if ((await git(['ls-tree', '--name-only', sha, 'node_modules'], repo)).trim())
+    throw new Error(`node_modules is committed at ${sha.slice(0, 7)}; bench --tasks links its own: remove it from the repo`)
   let scripts: Record<string, string> = {}
   try {
     const p = JSON.parse(await git(['show', `${sha}:package.json`], repo))
@@ -79,7 +85,7 @@ export async function loadRepoTasks(dir: string): Promise<RepoTasks> {
   // --no-optional-locks: a plain status refreshes the user's index, and this must leave the repo as it is.
   const uncommitted = (await git(['--no-optional-locks', 'status', '--porcelain'], repo)).trim() !== ''
   return {
-    repo, sha, setup: x.setup, protect: [...DEFAULT_PROTECT, ...(x.protect ?? [])], scripts, uncommitted,
+    repo, sha, setup: x.setup, protect, scripts, uncommitted,
     tasks: x.tasks.map((t: any) => ({ name: t.name, prompt: t.prompt, check: t.check, ...(t.set ? { set: t.set } : {}), checkTimeoutS: t.checkTimeoutS ?? 300 })),
   }
 }
