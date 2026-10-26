@@ -71,6 +71,9 @@ async function probe<T>(c: Clone, fn: (g: (args: string[]) => Promise<string>) =
   try {
     await g(['read-tree', c.sha])
     await g(['add', '-A', '--', '.'])
+    // A .gitignore that ignores itself (or a folder's own) would hide everything the model added beside it.
+    const hidden = (await g(['ls-files', '-z', '-o', '-i', '--exclude-standard', '--', ':(glob)**/.gitignore'])).split('\0').filter(Boolean)
+    if (hidden.length) await g(['add', '-f', '--', ...hidden])
     return await fn(g)
   } finally { await rm(index, { force: true }) }
 }
@@ -155,6 +158,7 @@ export async function modulesManifest(nodeModules: string): Promise<string> {
     if (SKIP.has(name)) continue
     if (name.startsWith('@')) for (const sub of await readdir(path.join(nodeModules, name)).catch(() => [] as string[])) await pkg(path.join(name, sub))
     else if ((await stat(path.join(nodeModules, name)).catch(() => null))?.isDirectory()) await pkg(name)
+    else await add(name)
   }
   return createHash('sha256').update(lines.sort().join('\n')).digest('hex')
 }

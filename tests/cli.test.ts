@@ -2034,3 +2034,12 @@ test('evolve: a proposer reply in prose is a journaled rejection, no edit in the
   expect(r.stdout).toContain('no version beat the original')
   expect(clonesIn(env)).toEqual([])
 }, 120_000)
+
+test('bench --tasks --yes prints the commands before saving consent', async () => {
+  const repo = await tasksRepo(TWO)
+  const env = await tasksEnv([{ content: 'done' }, { content: 'done' }])
+  const cwd = await tmp('lhb-cwd-')
+  const r = cli(['bench', '--tasks', repo, '--n', '1', '--yes', '--out', join(cwd, 'b.json'), harness('bare')], env, cwd)
+  expect(r.status, r.stderr).toBe(0)
+  for (const s of ['make done.txt', "check — in each run's clone, after the run"]) expect(r.stderr).toContain(s)
+}, 60_000)

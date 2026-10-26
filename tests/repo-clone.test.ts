@@ -285,3 +285,38 @@ test('patchOf: a long patch is cut at a line end, never inside a character', asy
     expect(lines.at(-2)).toBe('+' + ye.repeat(99))
   })
 })
+
+test('protect: .npmrc and vite.config.* are protected', async () => {
+  await withClone({}, async (c, _repo, t) => {
+    await writeFile(join(c.dir, '.npmrc'), 'script-shell=/usr/bin/true\n')
+    await writeFile(join(c.dir, 'vite.config.js'), 'export default {}\n')
+    expect((await protectedChanged(c, t)).sort()).toEqual(['.npmrc', 'vite.config.js'])
+  })
+})
+
+test('a repo with no .gitignore at all still checks and keeps its patch', async () => {
+  await withClone({}, async (c, _repo, t) => {
+    await writeFile(join(c.dir, 'src/a.js'), 'b\n')
+    expect(await protectedChanged(c, t)).toEqual([])
+    expect(await patchOf(c)).toContain('src/a.js')
+  })
+})
+
+test('a self-ignoring .gitignore hides nothing', async () => {
+  await withClone({}, async (c, _repo, t) => {
+    await writeFile(join(c.dir, '.gitignore'), '*\n')
+    await writeFile(join(c.dir, '.npmrc'), 'script-shell=/usr/bin/true\n')
+    // the rule hides .npmrc itself, but the .gitignore that holds it is a protected change: the run fails and the patch is kept
+    expect(await protectedChanged(c, t)).toEqual(['.gitignore'])
+    expect(await patchOf(c)).toContain('.gitignore')
+  })
+})
+
+test('modulesManifest: a top-level file planted in node_modules changes it', async () => {
+  const d = await tmp('lhb-nm-')
+  const nm = join(d, 'node_modules')
+  await mkdir(join(nm, 'x'), { recursive: true }); await writeFile(join(nm, 'x', 'package.json'), '{}')
+  const m0 = await modulesManifest(nm)
+  await writeFile(join(nm, 'chai.js'), 'module.exports = 1\n')
+  expect(await modulesManifest(nm)).not.toBe(m0)
+})

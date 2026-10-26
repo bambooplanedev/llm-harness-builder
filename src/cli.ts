@@ -397,7 +397,7 @@ function dropWork(w: { live: Map<string, Clone>; setupClone?: Clone }): void {
 async function askConsent(repo: RepoTasks, yes: boolean, ev?: EvolveConsent): Promise<void> {
   if (await hasConsent(repo, ev)) return
   const text = consentText(repo, ev)
-  if (yes) return saveConsent(repo, ev)
+  if (yes) { console.error(text); return saveConsent(repo, ev) }
   if (!process.stdin.isTTY) die(`${text}\n\npass --yes to accept these commands, or run in a terminal`)
   const rl = createInterface({ input: process.stdin, output: process.stderr })
   const answer = await rl.question(`${text}\n\nRun these commands? [y/N] `)

@@ -24,7 +24,7 @@ export const TASKS_FILE = 'lhb-tasks.json'
 export const DEFAULT_PROTECT = [
   ':(glob)**/*.test.*', ':(glob)**/*.spec.*', ':(glob)**/test/**', ':(glob)**/tests/**', ':(glob)**/__tests__/**',
   ':(glob)**/package.json', ':(glob)**/package-lock.json', ':(glob)**/pnpm-lock.yaml', ':(glob)**/yarn.lock',
-  ':(glob)**/vitest.config.*', ':(glob)**/vitest.workspace.*', ':(glob)**/jest.config.*', ':(glob)**/.mocharc*',
+  ':(glob)**/vitest.config.*', ':(glob)**/vitest.workspace.*', ':(glob)**/jest.config.*', ':(glob)**/.mocharc*', ':(glob)**/vite.config.*', ':(glob)**/.npmrc',
   ':(glob)**/tsconfig*.json', ':(glob)**/.gitignore', TASKS_FILE,
 ]
 
@@ -103,8 +103,8 @@ export function consentText(t: RepoTasks, ev?: EvolveConsent): string {
     'setup — once, in a separate clone in the OS temp dir',
     "check — in each run's clone, after the run",
     'prompt — given to the model, whose bash runs as you, without asking, anywhere you can write', '',
-    `setup: ${t.setup ?? '(none)'}`,
-    ...t.tasks.flatMap(x => [`task ${x.name}`, `  prompt: ${x.prompt}`, `  check: ${x.check}`]),
+    `setup: ${t.setup === undefined ? '(none)' : JSON.stringify(t.setup)}`,
+    ...t.tasks.flatMap(x => [`task ${x.name}`, `  prompt: ${JSON.stringify(x.prompt)}`, `  check: ${JSON.stringify(x.check)}`]),
     'package.json scripts:', ...Object.entries(t.scripts).map(([k, v]) => `  ${JSON.stringify(k)}: ${JSON.stringify(v)}`),
     ...(ev ? ["mode: evolve — the model's own prompts run unreviewed while Evolve measures them", `proposer: ${host(ev.proposer)}`, `fields: ${ev.fields.join(', ')}`] : []),
   ].join('\n')

