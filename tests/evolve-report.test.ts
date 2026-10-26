@@ -120,6 +120,13 @@ describe('evolve report', () => {
     expect(evolveReport(strictOf(false))).toContain('1. Keep h.json; harnesses/h.v1.json is kept for reference.')
   })
 
+  it('strict mode is named in the Conclusion, right after the against line or the no-version line', () => {
+    expect(evolveReport(strictOf(true))).toContain('test tasks:\nstrict mode: 16 train + gate tasks, 8 test tasks\noriginal: ')
+    const t = evolveReport(golden({ accepted: cand(1, EDIT, false, 'within noise (p=0.25)'), mode: { strict: true, trainGate: 4, test: 2 } }))
+    expect(t).toContain('no version beat the original\nstrict mode: 4 train + gate tasks, 2 test tasks\n')
+    expect(evolveReport(golden())).not.toContain('strict mode:')
+  })
+
   it('nothing but the labelled paragraph leaks', () => {
     // A task name in each set, every run's free text: none of it may reach an output path.
     const mark = (x: ReportInput) => {

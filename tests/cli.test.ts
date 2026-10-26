@@ -1922,7 +1922,7 @@ test('evolve --report on an unfinished evolve says it has not finished', async (
 
 for (const [what, edit, says] of [
   ['a journal of another base', (s: any) => ({ ...s, base: 'x' }), 'written for another harness'],
-  ['a stage-3 journal', ({ notes, ...s }: any) => s, 'delete it to start over'],
+  ['a stage-3 journal', ({ notes, ...s }: any) => s, 'cannot resume'],
 ] as const) test(`evolve --report on ${what} is refused`, async () => {
   const { repo, env, cwd, h } = await evFirst()
   const lines = evRaw(cwd).trim().split('\n')
@@ -1930,11 +1930,15 @@ for (const [what, edit, says] of [
   const r = cli(['evolve', h, '--tasks', repo, '--report'], env, cwd)
   expect(r.status).toBe(2)
   expect(r.stderr).toContain(says)
+  // The journal is the report's only source: no advice to delete it.
+  expect(r.stderr).not.toContain('delete')
+  expect(r.stderr).toContain(`the report cannot be shown from ${join('harnesses', 'h.evolve.jsonl')}`)
   expect(r.stdout).toBe('')
   // The same check on a plain resume.
   const again = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
   expect(again.status).toBe(2)
   expect(again.stderr).toContain(says)
+  expect(again.stderr).toContain('delete')
   expect(clonesIn(env)).toEqual([])
 }, 120_000)
 for (const [what, tamper] of [

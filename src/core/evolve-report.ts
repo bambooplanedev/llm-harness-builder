@@ -48,14 +48,17 @@ export function evolveReport(r: ReportInput): string {
   const told = final ? verdict(final.orig, final.last, mode) : ''
 
   const conclusion: string[] = []
+  const strictLine = `strict mode: ${mode.trainGate} train + gate tasks, ${mode.test} test tasks`
   if (version && final) {
     const nums = (label: string, rs: RunLite[]) => {
       const n = numbersOf(rs)
       return `${label}: PASS ${n.pass}/${rs.length}, tokens per success ${n.tokensPerSuccess === undefined ? '—' : Math.round(n.tokensPerSuccess)}, first requests ${n.weight ?? '—'} tok`
     }
     conclusion.push(`${versionFile} against ${harness} on the ${sets.test.length} test tasks:`, nums('original', final.orig), nums(`v${version}`, final.last), told)
+    if (mode.strict) conclusion.splice(1, 0, strictLine)
   } else {
     conclusion.push('no version beat the original')
+    if (mode.strict) conclusion.push(strictLine)
     if (!mode.strict) conclusion.push(referenceLabel(mode))
   }
 

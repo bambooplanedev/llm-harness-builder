@@ -549,34 +549,35 @@ async function cmdEvolve(argv: string[]) {
   if (values.report && !resuming) die(`no evolve journal at ${jf}`)
   const paths = (await git(['ls-tree', '-r', '-z', '--name-only', repo.sha], repo.repo)).split('\0').filter(Boolean)
   const binding = bindingTokens({ names: repo.tasks.map(t => t.name), paths, prompts: repo.tasks.map(t => t.prompt) })
-  let lines: JournalLine[] = []
+  let lines: JournalLine[] = [], torn = ''
+  // The journal is the report's only source: under --report the refusals never advise deleting it.
+  const start = (what: string) => values.report ? `${what}; the report cannot be shown from ${jf}` : `${what}; delete ${jf} to start over`
   const rebuilt = (): EvolveState => {
     const r = replay(lines, raw, { binding, sets })
-    return 'error' in r ? die(`${r.error} (${jf}); delete it to start over`) : r
+    return 'error' in r ? die(values.report ? `${r.error} (${jf}); the report cannot be shown from ${jf}` : `${r.error} (${jf}); delete it to start over`) : r
   }
   // The model's bash can rewrite files in cwd: every version must have read the snapshot the start line hashed.
   // Called only after rebuilt() succeeded, so a bad first line gets the journal's own error.
   const snapOk = () => {
     try { return lstatSync(snap).isFile() && sha256(readFileSync(snap)) === (lines[0] as Extract<JournalLine, { type: 'start' }>).notes } catch { return false }
   }
-  const snapCheck = () => { if (!snapOk()) die(`the notes snapshot changed since this evolve started (${snap}); delete ${jf} to start over`) }
+  const snapCheck = () => { if (!snapOk()) die(start(`the notes snapshot changed since this evolve started (${snap})`)) }
   if (resuming) {
     const text = readFileSync(jf, 'utf8')
     const j = parseJournal(text)
-    if ('error' in j) return die(`cannot resume: ${jf} ${j.error}; delete it to start over`)
+    if ('error' in j) return die(values.report ? `cannot resume: ${jf} ${j.error}; the report cannot be shown from ${jf}` : `cannot resume: ${jf} ${j.error}; delete it to start over`)
     lines = j.lines
-    if (lines[0]?.type === 'start' && lines[0].sha !== repo.sha) die(`the repo has a new commit since this evolve started; delete ${jf} to start over`)
-    if (lines[0]?.type === 'start' && lines[0].pin !== pin) die(`the harness or its options changed since this evolve started; delete ${jf} to start over`)
-    if (lines[0]?.type === 'start' && lines[0].base !== base) die(`the journal was written for another harness; delete ${jf} to start over`)
-    // A torn last line goes, or the next line would be appended onto it; a report writes nothing.
-    if (!values.report && text && !text.endsWith('\n')) truncateSync(jf, Buffer.byteLength(text.slice(0, text.lastIndexOf('\n') + 1)))
+    torn = text
+    if (lines[0]?.type === 'start' && lines[0].sha !== repo.sha) die(start('the repo has a new commit since this evolve started'))
+    if (lines[0]?.type === 'start' && lines[0].pin !== pin) die(start('the harness or its options changed since this evolve started'))
+    if (lines[0]?.type === 'start' && lines[0].base !== base) die(start('the journal was written for another harness'))
   }
   // A new journal has no state until its start line.
   let state = resuming ? rebuilt() : undefined as unknown as EvolveState
   if (resuming) snapCheck()
   const all = Array.from({ length: rounds }, (_, i) => i + 1).every(round => lines.some(l => l.type === 'current' && l.round === round) &&
     Array.from({ length: CANDIDATES }, (_, i) => i + 1).every(index => lines.some(l => l.type === 'candidate' && l.round === round && l.index === index)))
-  if (resuming && all && !values.report) console.error(`all rounds are in the journal${state.version && !state.final ? '; measuring the final test again' : ''}`)
+  if (resuming && all && !values.report) console.error(`all rounds are in the journal${state.version ? '; measuring the final test' : ''}`)
   // The report reads only the journal, after replay re-checked it: a finished evolve started again prints it as it was, without a clone or a request.
   const report = (): string => evolveReport({ lines, state: { ...state, final: state.final! }, original: raw, mode, sets, harness: path.basename(file!), versionFile: state.version ? vf(state.version) : '' })
   if (values.report || (resuming && all && state.final)) {
@@ -586,6 +587,8 @@ async function cmdEvolve(argv: string[]) {
   }
   console.error(autoApproves('evolve'))
   await askConsent(repo, values.yes, { proposer: proposer.backend.baseUrl, fields: ALLOWED })
+  // A torn last line goes, or the next line would be appended onto it; only after consent, and only on the run path.
+  if (torn && !torn.endsWith('\n')) truncateSync(jf, Buffer.byteLength(torn.slice(0, torn.lastIndexOf('\n') + 1)))
   // The next version is checked now, not after a candidate's runs: a file the journal has no line for is not ours.
   const next = vf((resuming ? state.version : 0) + 1)
   if (isLink(next)) die(`${next} is a symbolic link; evolve writes only to a plain file there`)
