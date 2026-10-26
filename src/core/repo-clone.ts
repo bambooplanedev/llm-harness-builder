@@ -100,7 +100,10 @@ const PATCH_EXCLUDE = [':(exclude,glob)**/.env*', ':(exclude,glob)**/*.pem', ':(
 /** What the run changed, as a patch, without files that look like secrets; binary files as "Binary files differ"; at most 1 MiB. */
 export const patchOf = (c: Clone): Promise<string> => probe(c, async g => {
   const p = await g(['diff', '--cached', '--no-ext-diff', '--no-textconv', c.sha, '--', '.', ...PATCH_EXCLUDE])
-  return Buffer.byteLength(p) <= PATCH_MAX ? p : Buffer.from(p).subarray(0, PATCH_MAX).toString('utf8') + '\n[patch truncated at 1 MiB]\n'
+  if (Buffer.byteLength(p) <= PATCH_MAX) return p
+  // At the last line end before the cap: a newline is ASCII, so the cut never splits a character.
+  const buf = Buffer.from(p)
+  return buf.subarray(0, buf.lastIndexOf(10, PATCH_MAX) + 1).toString('utf8') + '[patch truncated at 1 MiB]\n'
 })
 
 /** The node_modules link first, so removing the clone can never reach what it points at. The probe and the registry

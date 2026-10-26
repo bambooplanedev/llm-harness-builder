@@ -269,3 +269,15 @@ test.skipIf(process.getuid?.() === 0)('finishRun: a clone that cannot be removed
     expect(existsSync(c.probe)).toBe(false)
   } finally { await chmod(locked, 0o700); await removeClone(c) }
 })
+
+test('patchOf: a long patch is cut at a line end, never inside a character', async () => {
+  await withClone({}, async c => {
+    const ye = '\u0454' // a two-byte character
+    await writeFile(join(c.dir, 'uk.txt'), (ye.repeat(99) + '\n').repeat(Math.ceil((3 << 20) / 199)))
+    const p = await patchOf(c)
+    expect(p).not.toContain('�')
+    const lines = p.trimEnd().split('\n')
+    expect(lines.at(-1)).toBe('[patch truncated at 1 MiB]')
+    expect(lines.at(-2)).toBe('+' + ye.repeat(99))
+  })
+})

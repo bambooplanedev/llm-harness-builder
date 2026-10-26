@@ -338,6 +338,12 @@ asks once; `--yes` accepts without a terminal, and a change to a command or to t
 in a package are not watched. What each run changed is kept as `runs/<trace>.patch` (files that look like secrets left
 out, at most 1 MiB).
 
+A clone is a full checkout of the commit, which is slow on a big monorepo, and its submodules are
+not initialised. `setup` runs with the env names the harnesses pass in `tools.bashEnv`. A server
+that is down is reported after the consent question and before `setup`. Traces and patches go to
+`./runs` of the folder you run `bench` from: from the repo itself (`bench --tasks .`) that leaves
+the repo with uncommitted files, so run it from another folder or add `runs/` to `.gitignore`.
+
 #### replay
 
 `replay` takes the request a recorded run sent at turn N (`runs/<id>.jsonl` keeps every one) and
