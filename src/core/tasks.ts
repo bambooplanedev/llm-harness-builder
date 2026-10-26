@@ -26,12 +26,14 @@ export type Task = {
   check(dir: string, size?: number, answer?: string, env?: NodeJS.ProcessEnv): CheckResult | Promise<CheckResult>
   /** A task of the user's own (bench --tasks): its name in the bench JSON. */
   name?: string
+  /** The fixed number of tests the check counts, when it counts them. */
+  tests?: number
   /** Runs after the check, also when the run threw: what the run leaves (a clone) goes away here. */
   dispose?(dir: string, traceId?: string): Promise<void>
 }
 
 /** true = PASS; the object form also says why a FAIL failed. */
-export type CheckResult = boolean | { pass: boolean; reason?: string }
+export type CheckResult = boolean | { pass: boolean; reason?: string; tests?: { passed: number; total: number } }
 
 /** The task every number in the README up to v2.6 was measured on. Moved here from cli.ts unchanged; tests/tasks.test.ts pins the bytes. */
 const slug: Task = {
