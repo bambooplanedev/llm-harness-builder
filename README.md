@@ -331,8 +331,8 @@ little optimistic. Each exercise's check has its own fixed 60 s limit, separate 
 model has network, and Exercism's solutions are public. The shell is not isolated, so determined
 cheating is not ruled out: a solution can rewrite the test file while it runs, or otherwise forge the
 test runner, and a model that does so on purpose can PASS. There are no hidden rules; the check runs
-what the model ran, and the workdir has `npm test`. The table header counts the real runs (size ×
-`--n`). The numbers do not compare
+what the model ran, and the workdir has `npm test`. The bench header counts the real runs per harness
+(size × `--n`). The numbers do not compare
 with Aider's leaderboard (there: two attempts, the second with the test output; here: one agent run).
 
 **Your own tasks.** `bench --tasks <repo>` runs your tasks instead of a built-in one, from a
@@ -354,9 +354,9 @@ and `bench` says so. Each run is a `git clone --shared` in the OS temp dir, at t
 remote, deleted after its check; the harness reads what a run changed through a git dir of its own,
 so whatever the model writes into the clone's `.git` does not reach your repo or the verdict. Tests,
 manifests, lock files, test-runner configs (`vite.config.*` too), `.npmrc` and `.gitignore` files are
-protected (add your own paths with `protect`); a `.gitignore` the run adds is always checked, and one
-that ignores itself fails the run, and so is the `node_modules` the run was given: a run that adds, changes or deletes
-one is a FAIL, and its check does not run. A `node --test` check
+protected (add your own paths with `protect`), and so is the `node_modules` the run was given: a run
+that adds, changes or deletes one is a FAIL, and its check does not run. A `.gitignore` the run adds
+is always checked, and one that ignores itself fails the run. A `node --test` check
 that finds 0 tests is a FAIL too. Before the first run `bench` shows every command it will run and
 where, and the prompt and check JSON-escaped, so a control character shows up as text, and asks
 once; `--yes` accepts without a terminal and prints the same commands before it saves the consent, and a change to a command or to the scripts of
@@ -390,9 +390,11 @@ llm-harness-builder evolve harnesses/tuned-nothink.json --tasks ../myrepo
 It writes to `./harnesses`: `<name>.evolve.jsonl` (the journal), `<name>.evolve.notes.jsonl` (a frozen
 copy of the repo's notes, so every version reads the same) and `<name>.v1.json`, `v2.json`… for each
 kept version. All three are private to the run: add them to your `.gitignore` (this package's own
-already does, and does not pack them). The proposer is told only fixed words and counts, as signals
-about failed runs: how each ended, which tool names it called, which file types it edited (from a
-fixed list of extensions) — no file contents, paths or task names. `--proposer` picks another harness
+already does, and does not pack them). Runs and traces go to `./runs` as in `bench` (`runs/evolve-<name>.json`). The proposer is told the
+harness's own current values (the system prompt, scrubbed, and the numbers), the edits already refused
+(values cut to 200 characters) and, for failed runs, fixed words and counts: how each ended, which tool
+names it called, which file types it edited (from a fixed list of extensions). Never repo files,
+paths or task names. `--proposer` picks another harness
 for the proposing backend.
 
 The journal is checked, not trusted. Every start and every resume replays it and re-checks each
@@ -642,7 +644,7 @@ delete a line, or the file, to drop a note. `$LHB_STATE_DIR` moves everything th
 repo's folder; it says so when the file is empty. A note is a line of JSON, e.g.
 `{"id":"n1","ts":1761000000000,"author":"user","text":"run npm test before finishing"}`;
 it is read back as one line cut at 300 characters, hand-written `author: "user"` notes too, and the
-secret scrub covers more shapes. `notes: { "enabled": false }` needs no `maxTokens`. See the [honest notes](docs/honest-notes.md) for what a note can get wrong.
+secret scrub catches `key=`/`token:` style secrets in any case and `Bearer` tokens. `notes: { "enabled": false }` needs no `maxTokens`. See the [honest notes](docs/honest-notes.md) for what a note can get wrong.
 
 **Thinking.** `backend.think` sets `chat_template_kwargs.enable_thinking` on an OpenAI-compatible
 server (llama-server reads it) and `think` on Ollama. Absent, nothing is sent and the model's own
