@@ -1,7 +1,7 @@
 import { test, expect } from 'vitest'
 import { spawn, spawnSync, execSync } from 'node:child_process'
 import { writeFile, readFile, readdir, stat, cp } from 'node:fs/promises'
-import { mkdtempSync, existsSync, writeFileSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
+import { chmodSync, mkdtempSync, existsSync, writeFileSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import http from 'node:http'
@@ -491,6 +491,37 @@ test('bench --task polyglot --size 2: the first two exercises, each run with its
     expect(h.tests).toEqual({ passed: 0, total: exercises[0].tests.length + exercises[1].tests.length })
   }
   expect(r.stdout).toMatch(/^harness\s+PASS.*\btests$/m)
+}, 120_000)
+
+test('bench --task polyglot: a model that writes the proof gets PASS and all its tests green, in the run, the harness and the table', async () => {
+  const wd = await tmp('lhb-cli-')
+  const fake = join(wd, 'fake.json'); const out = join(wd, 'w.json')
+  const first = loadPolyglot().exercises[0]
+  const proof = await readFile(join(ROOT, 'polyglot-proofs', `${first.name}.js`), 'utf8')
+  await writeFile(fake, JSON.stringify([{ content: JSON.stringify({ calls: [{ name: 'write_file', args: { path: `${first.name}.js`, content: proof } }], final: null }) }, { content: '{"calls":[],"final":"done"}' }]))
+  const r = cli(['bench', '--n', '1', '--task', 'polyglot', '--size', '1', '--out', out, harness('tuned')], { LHB_FAKE_BACKEND: fake })
+  expect(r.status).toBe(0)
+  const j = JSON.parse(await readFile(out, 'utf8'))
+  const run = j.harnesses[0].runs[0], total = first.tests.length
+  expect(total).toBeGreaterThan(0)
+  expect([run.verdict, run.reason, run.tests]).toEqual(['PASS', 'final', { passed: total, total }])
+  expect(j.harnesses[0].tests).toEqual({ passed: total, total })
+  expect(r.stdout).toMatch(new RegExp(`^tuned\\s.*${total}/${total}$`, 'm'))
+}, 120_000)
+
+test('bench --task polyglot: a run that throws before its check still carries tests {passed: 0, total}', async () => {
+  const wd = await tmp('lhb-cli-')
+  const fake = join(wd, 'fake.json'); const out = join(wd, 't.json')
+  await writeFile(fake, JSON.stringify([]))
+  // prepare makes its workdir in the temp dir: one that cannot be written to makes prepare throw (tsx keeps its own cache dir in it, made first).
+  const ro = join(wd, 'ro'); mkdirSync(join(ro, `tsx-${process.getuid!()}`), { recursive: true }); chmodSync(ro, 0o500)
+  const r = cli(['bench', '--n', '1', '--task', 'polyglot', '--size', '1', '--out', out, harness('tuned')], { LHB_FAKE_BACKEND: fake, TMPDIR: ro })
+  chmodSync(ro, 0o700)
+  expect(r.status).toBe(0)
+  const j = JSON.parse(await readFile(out, 'utf8'))
+  const run = j.harnesses[0].runs[0]
+  expect([run.verdict, run.reason, run.turns]).toEqual(['FAIL', 'error', 0])
+  expect(run.tests).toEqual({ passed: 0, total: loadPolyglot().exercises[0].tests.length })
 }, 120_000)
 
 test('bench without --task is the slug task, and says so', async () => {

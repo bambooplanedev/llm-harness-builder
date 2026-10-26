@@ -116,8 +116,8 @@ test('formatTable: a tests column only when a run carries tests, with its footer
   const h = (name: string, runs: Partial<BenchRun>[], tests?: { passed: number; total: number }): BenchHarness =>
     ({ name, config: {} as BenchHarness['config'], pass: 0, reasons: {}, median: { turns: 0, toolCalls: 0, ms: 0 }, runs: runs as BenchRun[], ...tests ? { tests } : {} })
   const plain = formatTable([h('a', [{}])])
-  expect(plain.split('\n')[0]).not.toContain('tests')
-  expect(plain).not.toContain('green tests')
+  // byte-identical to the table before polyglot existed
+  expect(plain).toBe('harness  PASS  95% CI     reasons  med turns  med s\na        0/1   0.00–0.79  -        0          0\nmedians over all runs incl. failures; s = wall-clock per run\n95% CI = Wilson interval of the PASS rate; two harnesses whose intervals overlap are not told apart by this bench')
   const t = formatTable([h('a', [{ tests: { passed: 3, total: 10 } }], { passed: 3, total: 10 }), h('b', [{}])]).split('\n')
   expect(t[0]).toMatch(/\btests$/)
   expect(t[1]).toMatch(/3\/10$/)
