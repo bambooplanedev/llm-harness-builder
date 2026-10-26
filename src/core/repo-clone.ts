@@ -1,13 +1,14 @@
 // One run of a user's task: a `git clone --shared` in the OS temp dir, and a probe git dir the harness reads it through.
 // The model can rewrite the clone's .git (a gitfile to the user's repo, core.worktree, a clean filter, replace refs, an
 // index entry marked unchanged); the probe has none of that, so what the harness sees of a run is the work tree itself.
-import { randomBytes } from 'node:crypto'
-import { appendFile, lstat, rm, unlink, writeFile } from 'node:fs/promises'
+import { createHash, randomBytes } from 'node:crypto'
+import { appendFile, lstat, readdir, rm, stat, unlink, writeFile } from 'node:fs/promises'
 import { lstatSync, rmSync, unlinkSync, existsSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { git, type RepoTask, type RepoTasks } from './repo-tasks.js'
 import { runShell } from './tools/bash.js'
+import { childEnv } from './tools/env.js'
 
 export type Clone = { dir: string; probe: string; sha: string }
 
@@ -86,4 +87,41 @@ export function removeCloneSync(c: Clone): void {
   try { if (lstatSync(path.join(c.dir, 'node_modules')).isSymbolicLink()) unlinkSync(path.join(c.dir, 'node_modules')) } catch { /* none */ }
   rmSync(c.dir, { recursive: true, force: true })
   rmSync(c.probe, { recursive: true, force: true })
+}
+
+// Tool caches the test runners write on every run: a change there is no change to the installed packages.
+const SKIP = new Set(['.cache', '.vite', '.vitest', '.pnpm', '.package-lock.json', '.bin'])
+
+/** A fingerprint of what the model could plant in a shared node_modules: every .bin entry, and each package's
+ *  package.json and top-level code files. '' when there is no node_modules. */
+export async function modulesManifest(nodeModules: string): Promise<string> {
+  let top: string[]
+  try { top = await readdir(nodeModules) } catch { return '' }
+  const lines: string[] = []
+  const add = async (rel: string) => { const s = await lstat(path.join(nodeModules, rel)); lines.push(`${rel}\t${s.size}\t${s.mtimeMs}`) }
+  const pkg = async (rel: string) => {
+    for (const f of await readdir(path.join(nodeModules, rel)).catch(() => [] as string[]))
+      if (f === 'package.json' || /\.(?:c|m)?js$/.test(f)) await add(path.join(rel, f))
+  }
+  for (const f of await readdir(path.join(nodeModules, '.bin')).catch(() => [] as string[])) await add(path.join('.bin', f))
+  for (const name of top) {
+    if (SKIP.has(name)) continue
+    if (name.startsWith('@')) for (const sub of await readdir(path.join(nodeModules, name)).catch(() => [] as string[])) await pkg(path.join(name, sub))
+    else if ((await stat(path.join(nodeModules, name)).catch(() => null))?.isDirectory()) await pkg(name)
+  }
+  return createHash('sha256').update(lines.sort().join('\n')).digest('hex')
+}
+
+/** Where the runs' node_modules link points: the user's repo, or — with a setup — a clone that ran it, so `npm ci`
+ *  never touches the user's own tree. */
+export async function prepareModules(t: RepoTasks): Promise<{ from: string; setupClone?: Clone }> {
+  if (!t.setup) return { from: t.repo }
+  const c = await cloneAt(t)
+  const r = await runShell(t.setup, { cwd: c.dir, env: childEnv(), timeoutMs: 1_800_000, maxBuffer: 1 << 20, keep: 'tail' })
+  if (r.code !== 0) {
+    await removeClone(c)
+    const last = r.out.trim().split('\n').at(-1) ?? ''
+    throw new Error(`setup failed (${r.killed ? 'timed out' : r.spawnError ?? `exit ${r.code}`}): ${last}`)
+  }
+  return { from: c.dir, setupClone: c }
 }

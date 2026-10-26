@@ -1,12 +1,12 @@
 import { test, expect } from 'vitest'
-import { writeFile, readFile, mkdir, chmod, unlink, rename } from 'node:fs/promises'
+import { writeFile, readFile, mkdir, chmod, unlink, rename, rm } from 'node:fs/promises'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join, basename } from 'node:path'
 import { loadRepoTasks } from '../src/core/repo-tasks.js'
-import { cloneAt, linkNodeModules, changedPaths, protectedChanged, runCheck, patchOf, removeClone, removeCloneSync, type Clone } from '../src/core/repo-clone.js'
+import { cloneAt, linkNodeModules, changedPaths, protectedChanged, runCheck, patchOf, removeClone, removeCloneSync, modulesManifest, prepareModules, type Clone } from '../src/core/repo-clone.js'
 import { childEnv } from '../src/core/tools/env.js'
 import { gitRepo, tmp } from './helpers.js'
 
@@ -160,3 +160,41 @@ test('linkNodeModules: nothing when the source has none', async () => {
   })
 })
 
+
+test('modulesManifest: stable, sees bin, code and removed packages, not tool caches', async () => {
+  const d = await tmp('lhb-nm-'), nm = join(d, 'node_modules')
+  await mkdir(join(nm, '.bin'), { recursive: true }); await writeFile(join(nm, '.bin', 'vitest'), 'x')
+  await mkdir(join(nm, 'x')); await writeFile(join(nm, 'x', 'package.json'), '{}'); await writeFile(join(nm, 'x', 'index.js'), '1')
+  await mkdir(join(nm, '@s', 'y'), { recursive: true }); await writeFile(join(nm, '@s', 'y', 'package.json'), '{}')
+  const m0 = await modulesManifest(nm)
+  expect(await modulesManifest(nm)).toBe(m0)
+  await mkdir(join(nm, '.vite', 'vitest'), { recursive: true }); await writeFile(join(nm, '.vite', 'vitest', 'r.json'), '{}')
+  expect(await modulesManifest(nm)).toBe(m0)
+  await writeFile(join(nm, 'x', 'index.js'), '22')
+  const m1 = await modulesManifest(nm); expect(m1).not.toBe(m0)
+  await writeFile(join(nm, '.bin', 'vitest'), 'evil')
+  const m2 = await modulesManifest(nm); expect(m2).not.toBe(m1)
+  await rm(join(nm, '@s'), { recursive: true })
+  expect(await modulesManifest(nm)).not.toBe(m2)
+  expect(await modulesManifest(join(d, 'none'))).toBe('')
+})
+
+test('prepareModules: setup runs in its own clone, never in the user repo', async () => {
+  const repo = await repoWith()
+  const t = await loadRepoTasks(repo)
+  expect(await prepareModules(t)).toEqual({ from: t.repo })
+  const withSetup = await repoWith({ 'lhb-tasks.json': JSON.stringify({ tasks: [{ name: 'a', prompt: 'p', check: 'true' }], setup: 'mkdir -p node_modules/x && echo 1 > node_modules/x/index.js' }) })
+  const r = await prepareModules(await loadRepoTasks(withSetup))
+  try {
+    expect(r.from).not.toBe(withSetup)
+    expect(readFileSync(join(r.from, 'node_modules', 'x', 'index.js'), 'utf8')).toBe('1\n')
+    expect(existsSync(join(withSetup, 'node_modules'))).toBe(false)
+  } finally { await removeClone(r.setupClone!) }
+})
+
+test('prepareModules: a failing setup throws and leaves no clone', async () => {
+  const repo = await repoWith({ 'lhb-tasks.json': JSON.stringify({ tasks: [{ name: 'a', prompt: 'p', check: 'true' }], setup: 'echo nope; exit 2' }) })
+  const before = readdirSync(tmpdir()).filter(f => f.startsWith('lhb-2')).length
+  await expect(prepareModules(await loadRepoTasks(repo))).rejects.toThrow('setup failed (exit 2): nope')
+  expect(readdirSync(tmpdir()).filter(f => f.startsWith('lhb-2')).length).toBe(before)
+})
