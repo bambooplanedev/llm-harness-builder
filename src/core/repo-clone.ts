@@ -60,6 +60,8 @@ export async function modulesTampered(c: Clone): Promise<boolean> {
   return !s?.isSymbolicLink() || await readlink(p) !== c.link
 }
 
+const CACHES = new Set(['.pytest_cache', '.mypy_cache', '.ruff_cache'])
+
 /** git through the probe, on the clone's work tree, with a throwaway index that holds the work tree as it is now. */
 async function probe<T>(c: Clone, fn: (g: (args: string[]) => Promise<string>) => Promise<T>): Promise<T> {
   const index = path.join(tmpdir(), `lhb-index-${randomBytes(4).toString('hex')}`)
@@ -67,14 +69,16 @@ async function probe<T>(c: Clone, fn: (g: (args: string[]) => Promise<string>) =
   try {
     await g(['read-tree', c.sha])
     await g(['add', '-A', '--', '.'])
-    // A .gitignore that ignores itself (or a folder's own) would hide everything the model added beside it; an ignored
-    // .npmrc (a committed rule, the user's global excludes) would still be read by npm. Both go in all the same — except
-    // a .gitignore in a folder the commit does not have: a tool's cache (pytest, ruff, mypy, a venv) ignores itself so.
+    // A .gitignore that ignores itself (or a folder's own) would hide everything the model added beside it (a shadow
+    // `pytest/`, a `node_modules/chai`); an ignored .npmrc (a committed rule, the user's global excludes) would still be
+    // read by npm. All go in, save a tool's cache that marks itself so in a folder the commit does not have: pytest,
+    // mypy, ruff, and a venv (`python -m venv`) under a dot name, which no import or require can reach.
     const hidden = (await g(['ls-files', '-z', '-o', '-i', '--exclude-standard', '--', ':(glob)**/.gitignore', ':(glob)**/.npmrc'])).split('\0').filter(Boolean)
-    const dirs = [...new Set(hidden.filter(f => f.includes('/') && path.posix.basename(f) === '.gitignore').map(f => path.posix.dirname(f)))]
-    const known = new Set(dirs.length ? (await g(['ls-tree', '-r', '-d', '-z', '--name-only', c.sha, '--', ...dirs])).split('\0') : [])
-    const add = hidden.filter(f => path.posix.basename(f) === '.npmrc' || !f.includes('/') || known.has(path.posix.dirname(f)))
-    if (add.length) await g(['add', '-f', '--', ...add])
+    const cache = (d: string) => CACHES.has(path.posix.basename(d)) || (path.posix.basename(d).startsWith('.') && existsSync(path.join(c.dir, d, 'pyvenv.cfg')))
+    const dirs = [...new Set(hidden.filter(f => path.posix.basename(f) === '.gitignore').map(f => path.posix.dirname(f)).filter(cache))]
+    const known = new Set(dirs.length ? (await g(['ls-tree', '-r', '-d', '-z', '--name-only', c.sha, '--', ...dirs.map(d => `:(literal)${d}`)])).split('\0') : [])
+    const add = hidden.filter(f => path.posix.basename(f) === '.npmrc' || !dirs.includes(path.posix.dirname(f)) || known.has(path.posix.dirname(f)))
+    if (add.length) await g(['add', '-f', '--', ...add.map(f => `:(literal)${f}`)])
     return await fn(g)
   } finally { await rm(index, { force: true }) }
 }

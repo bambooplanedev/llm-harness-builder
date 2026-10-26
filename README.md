@@ -356,8 +356,9 @@ so whatever the model writes into the clone's `.git` does not reach your repo or
 manifests, lock files, test-runner configs (`vite.config.*` too), `.npmrc` and `.gitignore` files are
 protected (add your own paths with `protect`), and so is the `node_modules` the run was given: a run
 that adds, changes or deletes one is a FAIL, and its check does not run. A `.gitignore` or `.npmrc` the run
-adds counts even when a rule ignores it, save a `.gitignore` that ignores itself in a folder your
-commit does not have: that is how tool caches (`.pytest_cache`, a venv) mark themselves. A `node --test` check
+adds counts even when a rule ignores it, save the `.gitignore` a tool cache writes into a new folder of its
+own: `.pytest_cache`, `.mypy_cache`, `.ruff_cache`, or a venv under a dot name (`.venv` with its
+`pyvenv.cfg`). A `node --test` check
 that finds 0 tests is a FAIL too. Before the first run `bench` shows every command it will run and
 where, and the prompt and check JSON-escaped, so a control character shows up as text, and asks
 once; `--yes` accepts without a terminal and prints the same commands before it saves the consent, and a change to a command or to the scripts of

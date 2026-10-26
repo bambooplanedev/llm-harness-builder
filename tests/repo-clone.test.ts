@@ -330,6 +330,33 @@ test('a self-ignoring .gitignore in a committed folder hides nothing', async () 
   })
 })
 
+test('a .gitignore of its own in a new folder hides nothing: a shadow package or node_modules is a protected change', async () => {
+  await withClone({}, async (c, _repo, t) => {
+    await mkdir(join(c.dir, 'pytest'))
+    await writeFile(join(c.dir, 'pytest', '.gitignore'), '*\n')
+    await writeFile(join(c.dir, 'pytest', '__main__.py'), 'raise SystemExit(0)\n')
+    await mkdir(join(c.dir, 'src', 'node_modules', 'chai'), { recursive: true })
+    await writeFile(join(c.dir, 'src', 'node_modules', '.gitignore'), '*\n')
+    await writeFile(join(c.dir, 'src', 'node_modules', 'chai', 'index.js'), 'module.exports = {}\n')
+    expect((await protectedChanged(c, t)).sort()).toEqual(['pytest/.gitignore', 'src/node_modules/.gitignore'])
+  })
+})
+
+test('a venv made in the run (.venv with pyvenv.cfg) is no protected change; pyvenv.cfg in a plain folder is no pass', async () => {
+  await withClone({}, async (c, _repo, t) => {
+    await mkdir(join(c.dir, '.venv', 'bin'), { recursive: true })
+    await writeFile(join(c.dir, '.venv', '.gitignore'), '# Created by venv; see https://docs.python.org/3/library/venv.html\n*\n')
+    await writeFile(join(c.dir, '.venv', 'pyvenv.cfg'), 'home = /usr/bin\n')
+    await writeFile(join(c.dir, '.venv', 'bin', 'python'), '')
+    expect(await protectedChanged(c, t)).toEqual([])
+    await mkdir(join(c.dir, 'pytest'))
+    await writeFile(join(c.dir, 'pytest', '.gitignore'), '*\n')
+    await writeFile(join(c.dir, 'pytest', 'pyvenv.cfg'), '')
+    await writeFile(join(c.dir, 'pytest', '__main__.py'), 'raise SystemExit(0)\n')
+    expect(await protectedChanged(c, t)).toEqual(['pytest/.gitignore'])
+  })
+})
+
 test('an ignored .npmrc is still a protected change', async () => {
   await withClone({ '.gitignore': '.npmrc\n' }, async (c, _repo, t) => {
     await writeFile(join(c.dir, '.npmrc'), 'script-shell=/usr/bin/true\n')
