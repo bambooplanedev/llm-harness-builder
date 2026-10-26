@@ -69,7 +69,7 @@ host() {
   h_entries() {
     local e f
     git -C "$repo" ls-files > "$tmp/tracked"
-    tar tzf "$tgz" > "$tmp/entries"
+    tar tzf "$tgz" > "$tmp/entries" || { echo "cannot read $tgz"; return 1; }
     while IFS= read -r e; do
       f=${e#package/}
       case $f in
@@ -85,7 +85,8 @@ host() {
   }
   h_leaks() {
     local hit email
-    mkdir "$tmp/unpacked" && tar xzf "$tgz" -C "$tmp/unpacked"
+    mkdir "$tmp/unpacked"
+    tar xzf "$tgz" -C "$tmp/unpacked" || { echo "cannot unpack $tgz"; return 1; }
     hit=$(grep -rlE '/Users/|/home/|/var/folders|/private/var|sk-ant-|sk-or-|Bearer [A-Za-z0-9._-]{16,}' "$tmp/unpacked" || true)
     [ -z "$hit" ] || { echo "path, key or bearer in: $(printf '%s' "$hit" | head -n 3 | tr '\n' ' ')"; return 1; }
     hit=$(grep -rlF -- "$(id -un)" "$tmp/unpacked" || true)
@@ -105,6 +106,7 @@ host() {
   }
 
   step tarball-and-clean-repo h_tree
+  [ -f "$tgz" ] || { finish; return; }
   step tarball-contents h_entries
   step no-machine-or-account-ids h_leaks
   h_sums
