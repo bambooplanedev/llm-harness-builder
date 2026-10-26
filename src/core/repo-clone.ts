@@ -67,9 +67,14 @@ async function probe<T>(c: Clone, fn: (g: (args: string[]) => Promise<string>) =
   try {
     await g(['read-tree', c.sha])
     await g(['add', '-A', '--', '.'])
-    // A .gitignore that ignores itself (or a folder's own) would hide everything the model added beside it.
-    const hidden = (await g(['ls-files', '-z', '-o', '-i', '--exclude-standard', '--', ':(glob)**/.gitignore'])).split('\0').filter(Boolean)
-    if (hidden.length) await g(['add', '-f', '--', ...hidden])
+    // A .gitignore that ignores itself (or a folder's own) would hide everything the model added beside it; an ignored
+    // .npmrc (a committed rule, the user's global excludes) would still be read by npm. Both go in all the same — except
+    // a .gitignore in a folder the commit does not have: a tool's cache (pytest, ruff, mypy, a venv) ignores itself so.
+    const hidden = (await g(['ls-files', '-z', '-o', '-i', '--exclude-standard', '--', ':(glob)**/.gitignore', ':(glob)**/.npmrc'])).split('\0').filter(Boolean)
+    const dirs = [...new Set(hidden.filter(f => f.includes('/') && path.posix.basename(f) === '.gitignore').map(f => path.posix.dirname(f)))]
+    const known = new Set(dirs.length ? (await g(['ls-tree', '-r', '-d', '-z', '--name-only', c.sha, '--', ...dirs])).split('\0') : [])
+    const add = hidden.filter(f => path.posix.basename(f) === '.npmrc' || !f.includes('/') || known.has(path.posix.dirname(f)))
+    if (add.length) await g(['add', '-f', '--', ...add])
     return await fn(g)
   } finally { await rm(index, { force: true }) }
 }

@@ -306,9 +306,36 @@ test('a self-ignoring .gitignore hides nothing', async () => {
   await withClone({}, async (c, _repo, t) => {
     await writeFile(join(c.dir, '.gitignore'), '*\n')
     await writeFile(join(c.dir, '.npmrc'), 'script-shell=/usr/bin/true\n')
-    // the rule hides .npmrc itself, but the .gitignore that holds it is a protected change: the run fails and the patch is kept
-    expect(await protectedChanged(c, t)).toEqual(['.gitignore'])
+    // the rule would hide .npmrc, but both are seen: the run fails and the patch is kept
+    expect((await protectedChanged(c, t)).sort()).toEqual(['.gitignore', '.npmrc'])
     expect(await patchOf(c)).toContain('.gitignore')
+  })
+})
+
+test('a tool cache that ignores itself (pytest, ruff, mypy, venv) is no protected change', async () => {
+  for (const files of [{}, { '.gitignore': '.pytest_cache/\n' }]) await withClone(files, async (c, _repo, t) => {
+    await mkdir(join(c.dir, '.pytest_cache', 'v'), { recursive: true })
+    await writeFile(join(c.dir, '.pytest_cache', '.gitignore'), '# Created by pytest automatically.\n*\n')
+    await writeFile(join(c.dir, '.pytest_cache', 'v', 'x'), '1')
+    await writeFile(join(c.dir, 'src/a.js'), 'b\n')
+    expect(await protectedChanged(c, t)).toEqual([])
+    expect(await changedPaths(c, ['.'])).toEqual(['src/a.js'])
+  })
+})
+
+test('a self-ignoring .gitignore in a committed folder hides nothing', async () => {
+  await withClone({ 'tests/b.js': 'b\n' }, async (c, _repo, t) => {
+    await writeFile(join(c.dir, 'tests', '.gitignore'), '*\n')
+    expect(await protectedChanged(c, t)).toEqual(['tests/.gitignore'])
+  })
+})
+
+test('an ignored .npmrc is still a protected change', async () => {
+  await withClone({ '.gitignore': '.npmrc\n' }, async (c, _repo, t) => {
+    await writeFile(join(c.dir, '.npmrc'), 'script-shell=/usr/bin/true\n')
+    await mkdir(join(c.dir, 'sub'))
+    await writeFile(join(c.dir, 'sub', '.npmrc'), 'script-shell=/usr/bin/true\n')
+    expect((await protectedChanged(c, t)).sort()).toEqual(['.npmrc', 'sub/.npmrc'])
   })
 })
 
