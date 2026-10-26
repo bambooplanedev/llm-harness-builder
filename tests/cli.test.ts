@@ -1360,6 +1360,26 @@ test("bench: a run's tokens are the sum of its replies' usage, firstPromptTokens
   expect(without.firstPromptTokens).toBeUndefined()
 }, 60_000)
 
+test('fake backend: an entry with when answers only requests that contain it, keep leaves it in', async () => {
+  const cwd = await tmp('lhb-cwd-')
+  const hfile = async (systemPrompt: string) => {
+    const h = JSON.parse(await readFile(harness('bare'), 'utf8'))
+    const f = join(cwd, `${systemPrompt}.json`)
+    await writeFile(f, JSON.stringify({ ...h, systemPrompt }))
+    return f
+  }
+  const fake = join(cwd, 'fake.json')
+  await writeFile(fake, JSON.stringify([{ when: 'OTHER', content: 'wrong' }, { when: 'MARK', keep: true, content: 'right' }]))
+  const env = { LHB_FAKE_BACKEND: fake }
+  for (let i = 0; i < 2; i++) {
+    const r = cli(['run', await hfile('MARK'), '--workdir', cwd, '--yes', 'x'], env, cwd)
+    expect(r.stderr + r.stdout).toContain('right')
+    expect(r.stderr + r.stdout).not.toContain('wrong')
+  }
+  const r = cli(['run', await hfile('plain'), '--workdir', cwd, '--yes', 'x'], env, cwd)
+  expect(r.stderr).toContain('no response for this request')
+}, 60_000)
+
 test('bench with notes on reads the task notes and never writes them', async () => {
   const cwd = await tmp('lhb-cwd-'), nd = await tmp('lhb-notes-')
   const file = join(nd, 'task-slug.jsonl')

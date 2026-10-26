@@ -52,18 +52,21 @@ const DEMO_HARNESSES = ['bare', 'tuned-nothink', 'tuned-hermes']
 const demoHarnesses = (kind?: string, apiKeyEnv?: string): string[] => kind === 'openai' && apiKeyEnv ? DEMO_HARNESSES.map(h => h === 'tuned-nothink' ? 'tuned' : h) : DEMO_HARNESSES
 
 let fakeCache: Promise<Backend | undefined> | undefined
-/** Test hook: LHB_FAKE_BACKEND=<file.json> with an array of Partial<NormalizedResponse>; an entry may carry `deltas` as well, which stream to the terminal before its reply returns. One shared queue per process. */
+/** Test hook: LHB_FAKE_BACKEND=<file.json> with an array of Partial<NormalizedResponse>; an entry may carry `deltas` as well, which stream to the terminal before its reply returns. An entry with `when` answers only a request whose JSON contains it, and `keep` leaves it in the queue; the first entry that fits is used. One shared queue per process. */
 function fakeBackendFromEnv(): Promise<Backend | undefined> {
   return (fakeCache ??= (async () => {
     const f = process.env.LHB_FAKE_BACKEND
     if (!f) return undefined
-    const queue: (Partial<NormalizedResponse> & { deltas?: Delta[] })[] = JSON.parse(await readFile(f, 'utf8'))
+    const queue: (Partial<NormalizedResponse> & { deltas?: Delta[]; when?: string; keep?: boolean })[] = JSON.parse(await readFile(f, 'utf8'))
     return {
       async listModels() { return ['fake'] }, buildPayload: r => r,
-      async send(_payload: unknown, _signal?: AbortSignal, onDelta?: (d: Delta) => void) {
-        const r = queue.shift()
-        if (!r) throw new Error('fake backend: no more responses')
-        const { deltas, ...reply } = r
+      async send(payload: unknown, _signal?: AbortSignal, onDelta?: (d: Delta) => void) {
+        const text = JSON.stringify(payload)
+        const i = queue.findIndex(e => e.when === undefined || text.includes(e.when))
+        if (i < 0) throw new Error(queue.length ? 'fake backend: no response for this request' : 'fake backend: no more responses')
+        const r = queue[i]!
+        if (!r.keep) queue.splice(i, 1)
+        const { deltas, when: _w, keep: _k, ...reply } = r
         for (const d of deltas ?? []) onDelta?.(d)
         return { content: '', toolCalls: [], raw: {}, ...reply }
       },
