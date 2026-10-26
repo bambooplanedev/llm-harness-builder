@@ -509,12 +509,12 @@ test('bench --task polyglot: a model that writes the proof gets PASS and all its
   expect(r.stdout).toMatch(new RegExp(`^tuned\\s.*${total}/${total}$`, 'm'))
 }, 120_000)
 
-test('bench --task polyglot: a run that throws before its check still carries tests {passed: 0, total}', async () => {
+test.skipIf(process.getuid?.() === 0)('bench --task polyglot: a run that throws before its check still carries tests {passed: 0, total}', async () => {
   const wd = await tmp('lhb-cli-')
   const fake = join(wd, 'fake.json'); const out = join(wd, 't.json')
   await writeFile(fake, JSON.stringify([]))
   // prepare makes its workdir in the temp dir: one that cannot be written to makes prepare throw (tsx keeps its own cache dir in it, made first).
-  const ro = join(wd, 'ro'); mkdirSync(join(ro, `tsx-${process.getuid!()}`), { recursive: true }); chmodSync(ro, 0o500)
+  const ro = join(wd, 'ro'); mkdirSync(join(ro, `tsx-${process.getuid?.()}`), { recursive: true }); chmodSync(ro, 0o500)
   const r = cli(['bench', '--n', '1', '--task', 'polyglot', '--size', '1', '--out', out, harness('tuned')], { LHB_FAKE_BACKEND: fake, TMPDIR: ro })
   chmodSync(ro, 0o700)
   expect(r.status).toBe(0)
