@@ -1,5 +1,5 @@
 import { describe, test, expect, vi } from 'vitest'
-import { cp, copyFile, mkdtemp, writeFile } from 'node:fs/promises'
+import { cp, copyFile, mkdtemp, realpath, writeFile } from 'node:fs/promises'
 import { existsSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -21,7 +21,7 @@ const check = async (name: string, solution: string) => {
   for (const f of ['expect.js', 'package.json']) await copyFile(path.join(SET, f), path.join(dir, f))
   await copyFile(solution, path.join(dir, `${name}.js`))
   const { results, exit } = await runTests(dir, `${name}.test.js`, childEnv())
-  return score(results, exercises.find(e => e.name === name)!.tests, exit, `${name}.test.js`)
+  return score(results, exercises.find(e => e.name === name)!.tests, exit, path.join(await realpath(dir), `${name}.test.js`))
 }
 
 test('the set', () => {
@@ -85,5 +85,5 @@ test('not', () => { expect(answer()).not.toBe(1) });
 test('deep', () => { expect({ a: answer() }).toEqual({ a: 2 }) });
 `)
   const { results, exit } = await runTests(dir, 'x.test.js', childEnv())
-  expect(score(results, ['equal', 'be', 'throw', 'not', 'deep'], exit, 'x.test.js')).toMatchObject({ pass: false, passed: 0, total: 5 })
+  expect(score(results, ['equal', 'be', 'throw', 'not', 'deep'], exit, path.join(await realpath(dir), 'x.test.js'))).toMatchObject({ pass: false, passed: 0, total: 5 })
 })

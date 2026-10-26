@@ -26,7 +26,7 @@ import { TraceWriter, type Meta } from './server/runs.js'
 import { TASKS, type Task } from './core/tasks.js'
 import { loadPolyglot, polyglotTasks, POLYGLOT_MAX } from './core/polyglot.js'
 import { childEnv, bashEnvNote } from './core/tools/env.js'
-import { median, formatTable, BENCH_TASKS, benchFileName, autoApproves, type BenchRun, type BenchHarness, type BenchResult } from './core/bench.js'
+import { median, formatTable, BENCH_TASKS, benchTotal, runTitle, benchFileName, autoApproves, type BenchRun, type BenchHarness, type BenchResult } from './core/bench.js'
 import { GUARD_BLOCKED, EDIT_MISS } from './core/tools/fs.js'
 import { createBackend } from './core/backends/index.js'
 import { redactor } from './core/redact.js'
@@ -295,7 +295,7 @@ async function benchOnce(config: HarnessConfig, round: number, timeoutS: number,
   // An exception that escapes execRun is text nothing has cleaned yet, and it goes to the bench JSON and the terminal.
   const redact = redactor(apiKey(config.backend, process.env), config.backend.apiKeyEnv ?? '')
   let workdir = '', traceId: string | undefined, parseErrors = 0, toolChars = 0, costUsd: number | undefined, peakTokens: number | undefined, tokens: number | undefined, firstPromptTokens: number | undefined, seenFirst = false, toolErrors = 0, guardBlocks = 0, editMiss = 0, lastError: string | undefined, t0 = Date.now(), run: BenchRun
-  process.stderr.write(`${config.name} #${round} `)
+  process.stderr.write(`${config.name} ${runTitle({ round, task: task.name })} `)
   try {
     workdir = await task.prepare(size)
     process.stderr.write(`${workdir} ... `)
@@ -480,7 +480,7 @@ async function cmdBench(argv: string[]) {
   // The first save happens before any run, so an unwritable --out (a directory, a bad path) is a
   // typo to report, not a crash after 90 minutes.
   try { save() } catch (e) { die(`cannot write ${out}:\n  ${(e as Error).message}`) }
-  console.error(`bench: ${files.length} harnesses × ${n} runs, timeout ${timeoutS}s per run, writing ${out}`)
+  console.error(`bench: ${files.length} harnesses × ${benchTotal(result) / harnesses.length} runs, timeout ${timeoutS}s per run, writing ${out}`)
   files.forEach((f, i) => console.error(`  ${harnesses[i].name.padEnd(13)} ${f}`))
   // bench never writes notes, and nothing else writes a task's file: an empty one means this bench measures notes off.
   // bench reads notes and never writes them: a repo's are those of its folder, a built-in task's are in task-<name>.

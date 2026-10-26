@@ -491,6 +491,9 @@ test('bench --task polyglot --size 2: the first two exercises, each run with its
     expect(h.tests).toEqual({ passed: 0, total: exercises[0].tests.length + exercises[1].tests.length })
   }
   expect(r.stdout).toMatch(/^harness\s+PASS.*\btests$/m)
+  // size 2 × n 1 = 2 real runs per harness, each line names its exercise
+  expect(r.stderr).toMatch(/^bench: 2 harnesses × 2 runs,/m)
+  for (const e of exercises.slice(0, 2)) expect(r.stderr).toContain(`tuned #1 ${e.name} `)
 }, 120_000)
 
 test('bench --task polyglot: a model that writes the proof gets PASS and all its tests green, in the run, the harness and the table', async () => {
@@ -1486,6 +1489,8 @@ test('bench --tasks: runs each task in a clone, PASS and FAIL with a reason, pat
   expect(r.status, r.stderr).toBe(0)
   const j = JSON.parse(await readFile(join(cwd, 'b.json'), 'utf8'))
   const sha = execSync('git rev-parse HEAD', { cwd: repo, encoding: 'utf8' }).trim()
+  expect(r.stderr).toMatch(/^bench: 1 harnesses × 2 runs,/m)
+  expect(r.stderr).toContain('bare #1 a ')
   expect(j).toMatchObject({ taskName: 'tasks', tasksRepo: realpathSync(repo), tasksSha: sha })
   expect(j.harnesses[0].runs.map((x: any) => [x.task, x.verdict, x.lastError])).toEqual([['a', 'PASS', undefined], ['b', 'FAIL', 'check exited 1']])
   expect(clonesIn(env)).toEqual([])

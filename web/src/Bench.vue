@@ -281,7 +281,7 @@ onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer); unsub?.(); d
       <template v-if="result">
         <div class="bench-head">
           <div>
-          <h2>{{ result.taskName ?? 'bench' }}<template v-if="result.size"> · size {{ result.size }}</template> · {{ result.harnesses.length }} harnesses × {{ result.n }} runs</h2>
+          <h2>{{ result.taskName ?? 'bench' }}<template v-if="result.size"> · size {{ result.size }}</template> · {{ result.harnesses.length }} harnesses × {{ total / result.harnesses.length }} runs</h2>
           <div class="muted">{{ shown(backend?.model ?? '', names) }} · {{ backend?.kind }} {{ shown(backend?.baseUrl ?? '', names) }}<template v-if="nCtx"> · window {{ nCtx.toLocaleString(lang) }}</template> · timeout {{ mmss(result.timeoutS * 1000) }} · {{ new Date(result.date).toLocaleString(lang) }}</div>
           <div class="muted">{{ runs.length }}/{{ total }} runs<template v-if="!result.complete"> · {{ result.stopped ? 'stopped' : 'incomplete' }}</template> · {{ mmss(msDone) }} in</div>
           </div>
