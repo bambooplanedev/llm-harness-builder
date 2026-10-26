@@ -535,9 +535,11 @@ budget stubs old results (`budgetTokens: 0` still means no budget, so older file
 Present, they must be a positive integer and a non-negative integer.
 
 **Notes.** A harness with `notes: { "enabled": true, "maxTokens": 400 }` keeps notes per folder in
-`runs/notes/<key>.jsonl` — outside the project, so the model neither reads nor edits them and
-nothing gets committed. `run` and the UI print how many were sent; delete a line, or the file, to
-drop a note. See the [honest notes](docs/honest-notes.md) for what a note can get wrong.
+`~/.local/state/llm-harness-builder/notes/<key>.jsonl` (`$XDG_STATE_HOME` if set, `LHB_NOTES_DIR`
+to choose) — outside the project, so its file tools cannot write a note and nothing gets committed;
+a notes dir inside the workdir is refused. `run` prints how many were sent and from which file;
+delete a line, or the file, to drop a note. `bench` only reads `task-<name>.jsonl` there and says so
+when it is empty. See the [honest notes](docs/honest-notes.md) for what a note can get wrong.
 
 **Thinking.** `backend.think` sets `chat_template_kwargs.enable_thinking` on an OpenAI-compatible
 server (llama-server reads it) and `think` on Ollama. Absent, nothing is sent and the model's own

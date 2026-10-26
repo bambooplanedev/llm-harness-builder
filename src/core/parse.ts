@@ -15,17 +15,20 @@ function tryParse(s: string): unknown | undefined {
  */
 const stripThink = (t: string) => t.replace(/<think>[\s\S]*?<\/think>/g, '').replace(/^[\s\S]*?<\/think>/, '')
 
-/** Finds a {calls, final} object in model text: bare JSON, ```json fence, or embedded in prose. */
-export function parsePrompted(text: string): ParsedPrompted {
+/** The JSON values in model text, likeliest first, reasoning dropped: bare JSON, a ```json fence, or embedded in prose. */
+export function jsonCandidates(text: string): unknown[] {
   text = stripThink(text)
   const candidates = [text.trim()]
   const fence = /```(?:json)?\s*([\s\S]*?)```/.exec(text)
   if (fence) candidates.push(fence[1].trim())
   const first = text.indexOf('{'), last = text.lastIndexOf('}')
   if (first !== -1 && last > first) candidates.push(text.slice(first, last + 1))
+  return candidates.map(tryParse)
+}
 
-  for (const c of candidates) {
-    const v = tryParse(c)
+/** Finds a {calls, final} object in model text: bare JSON, ```json fence, or embedded in prose. */
+export function parsePrompted(text: string): ParsedPrompted {
+  for (const v of jsonCandidates(text)) {
     if (!isObj(v) || !Array.isArray(v.calls)) continue
     if (v.final !== null && typeof v.final !== 'string') continue
     const calls: { name: string; args: Record<string, unknown> }[] = []

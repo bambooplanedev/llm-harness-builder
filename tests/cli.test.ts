@@ -1321,31 +1321,50 @@ const withNotesOn = async (dir: string) => {
   return f
 }
 
-test('run with notes on: writes the note to runs/notes/<key>.jsonl and says so', async () => {
-  const wd = await tmp('lhb-cli-'), cwd = await tmp('lhb-cwd-')
+test('run with notes on: writes the note to the notes dir, outside the project, and says so', async () => {
+  const wd = await tmp('lhb-cli-'), cwd = await tmp('lhb-cwd-'), nd = await tmp('lhb-notes-')
   const fake = join(wd, 'fake.json')
   await writeFile(fake, JSON.stringify([{ content: 'done' }, { content: JSON.stringify({ notes: ['tests run with npm test'] }) }]))
-  const r = cli(['run', await withNotesOn(cwd), '--workdir', wd, '--yes', 'x'], { LHB_FAKE_BACKEND: fake }, cwd)
+  const r = cli(['run', await withNotesOn(cwd), '--workdir', wd, '--yes', 'x'], { LHB_FAKE_BACKEND: fake, LHB_NOTES_DIR: nd }, cwd)
   expect(r.status).toBe(0)
-  const rel = join('runs', 'notes', `${await notesKey(wd)}.jsonl`)
-  expect(r.stderr).toContain(`notes: 0 loaded from ${rel}`)
+  const file = join(nd, `${await notesKey(wd)}.jsonl`)
+  expect(r.stderr).toContain(`notes: 0 loaded from ${file}`)
   expect(r.stderr).toContain('note: tests run with npm test')
-  expect((await readNotes(join(cwd, rel))).map(n => n.text)).toEqual(['tests run with npm test'])
+  expect((await readNotes(file)).map(n => n.text)).toEqual(['tests run with npm test'])
+  expect(existsSync(join(cwd, 'runs', 'notes'))).toBe(false)
+}, 30_000)
+
+test('run with notes on from the project root: a notes dir inside the workdir is refused', async () => {
+  const wd = await tmp('lhb-cli-')
+  const fake = join(wd, 'fake.json')
+  await writeFile(fake, JSON.stringify([{ content: 'done' }]))
+  const r = cli(['run', await withNotesOn(wd), '--workdir', wd, '--yes', 'x'], { LHB_FAKE_BACKEND: fake, LHB_NOTES_DIR: join(wd, 'runs', 'notes') }, wd)
+  expect(r.status).toBe(0)
+  expect(r.stderr).toContain('is inside the workdir')
+  expect(existsSync(join(wd, 'runs', 'notes'))).toBe(false)
 }, 30_000)
 
 test('bench with notes on reads the task notes and never writes them', async () => {
-  const cwd = await tmp('lhb-cwd-')
-  const file = join(cwd, 'runs', 'notes', 'task-slug.jsonl')
-  mkdirSync(join(cwd, 'runs', 'notes'), { recursive: true })
+  const cwd = await tmp('lhb-cwd-'), nd = await tmp('lhb-notes-')
+  const file = join(nd, 'task-slug.jsonl')
   writeFileSync(file, JSON.stringify({ id: 'n1', ts: 1, author: 'user', text: 'kept' }) + '\n')
   const fake = join(cwd, 'fake.json')
   // one reply: a writer request would find the queue empty and fail the run's last event
   await writeFile(fake, JSON.stringify([{ content: 'done' }]))
-  const r = cli(['bench', '--n', '1', '--out', join(cwd, 'b.json'), await withNotesOn(cwd)], { LHB_FAKE_BACKEND: fake }, cwd)
+  const r = cli(['bench', '--n', '1', '--out', join(cwd, 'b.json'), await withNotesOn(cwd)], { LHB_FAKE_BACKEND: fake, LHB_NOTES_DIR: nd }, cwd)
   expect(r.status).toBe(0)
+  expect(r.stderr).toContain('notes on, 1 in')
   expect(readFileSync(file, 'utf8')).toBe(JSON.stringify({ id: 'n1', ts: 1, author: 'user', text: 'kept' }) + '\n')
   const trace = JSON.parse(await readFile(join(cwd, 'b.json'), 'utf8')).harnesses[0].runs[0].trace
   const events = (await readFile(join(cwd, 'runs', `${trace}.jsonl`), 'utf8')).trim().split('\n').map(l => JSON.parse(l))
   expect(events.some(e => e.type === 'notes_loaded')).toBe(true)
   expect(events.some(e => e.type === 'note_written')).toBe(false)
+}, 60_000)
+
+test('bench with notes on and no task notes says it measures notes off', async () => {
+  const cwd = await tmp('lhb-cwd-'), nd = await tmp('lhb-notes-')
+  const fake = join(cwd, 'fake.json')
+  await writeFile(fake, JSON.stringify([{ content: 'done' }]))
+  const r = cli(['bench', '--n', '1', '--out', join(cwd, 'b.json'), await withNotesOn(cwd)], { LHB_FAKE_BACKEND: fake, LHB_NOTES_DIR: nd }, cwd)
+  expect(r.stderr).toContain('this bench runs as with notes off')
 }, 60_000)

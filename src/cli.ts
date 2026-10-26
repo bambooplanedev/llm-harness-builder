@@ -5,6 +5,7 @@ import { readFile, cp, mkdir } from 'node:fs/promises'
 import { existsSync, readFileSync, writeFileSync, renameSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline/promises'
+import { homedir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { mayAsk, type RunOpts } from './core/run.js'
@@ -157,10 +158,10 @@ async function execRun(config: HarnessConfig, task: string, workdir: string, o: 
   let last: HarnessEvent | undefined, cost: number | undefined
   try {
     if (o.notes && config.notes?.enabled && !o.quiet)
-      console.error(`notes: ${selectNotes(await readNotes(o.notes.file), config.notes.maxTokens).length} loaded from ${path.relative(process.cwd(), o.notes.file)}`)
+      console.error(`notes: ${selectNotes(await readNotes(o.notes.file), config.notes.maxTokens).length} loaded from ${shortHome(o.notes.file)}`)
     for await (const e of withNotes({ config, task, workdir, answerSchema: o.answerSchema }, opts, o.notes, trace.id)) {
       last = e
-      if (e.type === 'llm_response' && e.costUsd !== undefined) cost = (cost ?? 0) + e.costUsd
+      if ((e.type === 'llm_response' || e.type === 'note_written') && e.costUsd !== undefined) cost = (cost ?? 0) + e.costUsd
       await trace.append(e)
       if (o.json) process.stdout.write(JSON.stringify(e) + '\n')
       if (streamed) process.stderr.write('\n')
@@ -176,6 +177,9 @@ async function execRun(config: HarnessConfig, task: string, workdir: string, o: 
   if (!o.quiet) console.error(`trace ${trace.file}`)
   return { id: trace.id, last: last! }
 }
+
+/** A path under the home dir as ~/…, for the terminal. */
+const shortHome = (p: string): string => { const h = homedir(); return p.startsWith(h + path.sep) ? '~' + p.slice(h.length) : p }
 
 const NO_TTY = 'stdin is not a terminal, so nothing can answer an approval prompt: pass --yes to approve every command, or run in a terminal'
 
@@ -203,7 +207,7 @@ async function cmdRun(argv: string[]) {
   if (note) console.error(note)
   const key = keyNote(config.backend, process.env)
   if (key) console.error(key)
-  const notes = { file: notesPath('runs', await notesKey(workdir)), write: true }
+  const notes = { file: notesPath(await notesKey(workdir)), write: true }
   const { last } = await execRun(config, taskParts.join(' '), workdir, { yes: values.yes, json: values.json, answerSchema, notes })
   const final = last.type === 'done' && last.reason === 'final' ? last : undefined
   let ok = final !== undefined
@@ -281,7 +285,7 @@ async function benchOnce(config: HarnessConfig, round: number, timeoutS: number,
     const { id, last } = await execRun(config, task.input ? `${task.prompt}\n\n${task.input(size)}` : task.prompt, workdir, {
       yes: true, json: false, quiet: true, answerSchema: task.answerSchema?.(size), signal: AbortSignal.timeout(timeoutS * 1000), bench: { file: path.basename(out), round },
       // Read, never written: a note from run 1 would make run 2 depend on it, and the bench's runs must stay independent.
-      notes: { file: notesPath('runs', `task-${taskName}`), write: false },
+      notes: { file: notesPath(`task-${taskName}`), write: false },
       onEvent: e => {
         if (e.type === 'parse_error') parseErrors++
         if (e.type === 'llm_response' && e.costUsd !== undefined) costUsd = (costUsd ?? 0) + e.costUsd
@@ -367,6 +371,11 @@ async function cmdBench(argv: string[]) {
   try { save() } catch (e) { die(`cannot write ${out}:\n  ${(e as Error).message}`) }
   console.error(`bench: ${files.length} harnesses × ${n} runs, timeout ${timeoutS}s per run, writing ${out}`)
   files.forEach((f, i) => console.error(`  ${harnesses[i].name.padEnd(13)} ${f}`))
+  // bench never writes notes, and nothing else writes a task's file: an empty one means this bench measures notes off.
+  for (const h of harnesses) if (h.config.notes?.enabled) {
+    const file = notesPath(`task-${values.task}`), n = (await readNotes(file)).length
+    console.error(`  ${h.name}: notes on, ${n ? `${n} in` : 'none in'} ${shortHome(file)}${n ? '' : ' — this bench runs as with notes off'}`)
+  }
   // A failed write still prints the table: the terminal then holds what the JSON could not.
   process.once('SIGINT', () => { result.stopped = true; try { save() } catch (e) { console.error(`cannot write ${out}: ${(e as Error).message}`) } finish(130) })
   for (let round = 1; round <= n; round++) {

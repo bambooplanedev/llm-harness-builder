@@ -19,11 +19,12 @@ Limits of [llm-harness-builder](../README.md) and of what its [findings](finding
   MCP tool calls never ask; `demo` and `bench` approve everything, the harness files' `mcpServers`
   and `loop.untilBash` included.
 - A note (`notes.enabled`) is the model's own summary of a run, written from the names of its calls,
-  argument keys, paths and verdicts (a name or path that is not a plain token is passed as `<odd>`),
-  never from file contents or tool output; it is scrubbed for the
-  backend key, common secret shapes and the home path by pattern, not by proof. A wrong note is sent
-  after the task of every later run on that folder until you delete its line in
-  `runs/notes/<key>.jsonl`. `bench` reads notes and never writes them, so its runs stay independent:
+  argument keys, paths and verdicts (a name or path that is not a plain token of up to 64 characters is
+  passed as `<odd>` — a plain file name can still carry words), never from file contents or tool
+  output; it is scrubbed for the backend key, common secret shapes and the home path by pattern, not
+  by proof. A wrong note is sent after the task of every later run on that folder until you delete
+  its line in the notes file `run` names. The file is outside the project, but `bash` runs as you
+  and can write it like any other file. `bench` reads notes and never writes them, so its runs stay independent:
   measure notes as off against a fixed file, not as a bench that keeps writing.
 - The environment of what the model runs — `bash`, `loop.untilBash`, and the task checks, which
   execute the model's code — is `PATH`, `HOME`, `LANG`, `LC_ALL`, `LC_CTYPE`, `LC_COLLATE`,

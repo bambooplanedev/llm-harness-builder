@@ -16,6 +16,7 @@ const config = (over: Partial<HarnessConfig> = {}) =>
   harness({ tools: { enabled: ['bash'], approveBash: true }, context: { maxToolOutputChars: 100, budgetTokens: 0 }, loop: { maxTurns: 3 }, ...over })
 
 const runsDir = await tmp('lhb-runs-')
+process.env.LHB_NOTES_DIR = await tmp('lhb-notes-')
 const harnessesDir = await tmp('lhb-h-')
 const workdir = await tmp('lhb-wd-')
 let queue: FakeResponse[] = []
@@ -789,6 +790,6 @@ test('a run with notes on: note_written comes over SSE before done, and the note
   const { runId } = await r.json()
   const all = await collectSSE(`${base}/api/runs/${runId}/events`)
   expect(all.map(e => e.type).slice(-2)).toEqual(['note_written', 'done'])
-  const saved = await readNotes(notesPath(runsDir, await notesKey(wd)))
+  const saved = await readNotes(notesPath(await notesKey(wd)))
   expect(saved.map(n => [n.text, n.run])).toEqual([['use npm test', runId]])
 })

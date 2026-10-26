@@ -135,7 +135,7 @@ export class RunStore {
       let seq = 0
       try {
         const onDelta = (d: Delta) => { for (const fn of a.listeners) fn({ type: 'delta', ...d }) }
-        const notes = { file: notesPath(this.dir, await notesKey(workdir)), write: true }
+        const notes = { file: notesPath(await notesKey(workdir)), write: true }
         for await (const e of withNotes(params, { signal: a.abort.signal, approve, backend, onDelta }, notes, id)) {
           seq = e.seq + 1
           await trace.append(e)
