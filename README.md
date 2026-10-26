@@ -355,8 +355,9 @@ remote, deleted after its check; the harness reads what a run changed through a 
 so whatever the model writes into the clone's `.git` does not reach your repo or the verdict. Tests,
 manifests, lock files, test-runner configs (`vite.config.*` too), `.npmrc` and `.gitignore` files are
 protected (add your own paths with `protect`), and so is the `node_modules` the run was given: a run
-that adds, changes or deletes one is a FAIL, and its check does not run. A `.gitignore` the run adds
-is always checked, and one that ignores itself fails the run. A `node --test` check
+that adds, changes or deletes one is a FAIL, and its check does not run. A `.gitignore` or `.npmrc` the run
+adds counts even when a rule ignores it, save a `.gitignore` that ignores itself in a folder your
+commit does not have: that is how tool caches (`.pytest_cache`, a venv) mark themselves. A `node --test` check
 that finds 0 tests is a FAIL too. Before the first run `bench` shows every command it will run and
 where, and the prompt and check JSON-escaped, so a control character shows up as text, and asks
 once; `--yes` accepts without a terminal and prints the same commands before it saves the consent, and a change to a command or to the scripts of
@@ -400,7 +401,8 @@ for the proposing backend.
 The journal is checked, not trusted. Every start and every resume replays it and re-checks each
 decision against its own numbers; a journal edited by hand, a changed harness or option, a new commit
 in the repo or a changed notes snapshot is refused, and the message says how to start over: delete
-the journal and move away `harnesses/<name>.v*.json`. A resumed evolve continues at the step it
+the journal and move away `harnesses/<name>.v*.json`; for a finished evolve whose journal is intact it
+points at `--report` and says to move the journal away, not to delete it. A resumed evolve continues at the step it
 stopped on. `--report` prints the report of a finished evolve from the journal alone, with no run
 (give it the same options): it reads the tasks at the commit the journal started at, so it prints
 even after new commits or a deleted notes snapshot, and it says when `vN.json` on disk differs from

@@ -93,9 +93,11 @@ describe('check', () => {
 
   // The old tripwire's cheats still fail: by the file check, the unknown-test check or the frozen assert, with no rule of its own.
   test('patching assert or exiting at the top does not pass', async () => {
+    // Each dies before its tests report: the only result left is the file's own, under a name not in the set.
+    const reason = `unexpected test "${first.name}.test.js"`
     for (const extra of ["import assert from 'assert'; assert.equal = () => {}\n", 'process.exit(0)\n'])
-      expect(await run(`${await proof}\n${extra}`)).toMatchObject({ pass: false, tests: { total } })
-    expect(await run(`process.exit(0)\n${await proof}`)).toMatchObject({ pass: false })
+      expect(await run(`${await proof}\n${extra}`)).toMatchObject({ pass: false, tests: { total }, reason })
+    expect(await run(`process.exit(0)\n${await proof}`)).toMatchObject({ pass: false, reason })
   })
 
   test('a correct solution that imports node:assert passes', async () => {
@@ -126,8 +128,9 @@ export const age = () => 0
   })
 
   test('fake top-level tests through getBuiltinModule fail', async () => {
-    const r = await run(`${first.stub}\nconst t = process.getBuiltinModule('node:test')\nfor (const n of ${JSON.stringify(first.tests)}) t.test(n, () => {})\n`)
+    const r = await run(`${await proof}\nconst t = process.getBuiltinModule('node:test')\nfor (const n of ${JSON.stringify(first.tests)}) t.test(n, () => {})\n`)
     expect(r.pass).toBe(false)
+    expect(r.reason).toMatch(/unexpected test .* from /)
   })
 
   // The check lays the solution alone in a fresh dir, so the cheat writes its fake test file at import time.

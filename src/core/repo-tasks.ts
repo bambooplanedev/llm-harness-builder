@@ -100,12 +100,12 @@ export async function loadRepoTasks(dir: string, at?: string): Promise<RepoTasks
 
 const SHA_LINE = (sha: string) => `commit: ${sha}`
 
-/** What `bench --tasks` will run and where, as the user is asked to accept it. `npm test` runs the package's scripts, so they are in it. */
 /** The host of a URL; what does not parse is kept as it is. */
 export const hostOf = (u: string): string => { try { return new URL(u).host || u } catch { return u } }
 
 export type EvolveConsent = { proposer: string; fields: string[] }
 
+/** What `bench --tasks` will run and where, as the user is asked to accept it. `npm test` runs the package's scripts, so they are in it. */
 /** `evolve` asks on top of the bench text, never in place of it: lines after it, so a bench hash stays what it was. */
 export function consentText(t: RepoTasks, ev?: EvolveConsent): string {
   return [
