@@ -11,6 +11,7 @@ import { normPath } from './analyze.js'
 import { startServers, type McpSession } from './mcp.js'
 import { redactor } from './redact.js'
 import { costOf } from './cost.js'
+import { notesBlock } from './notes.js'
 import { knobsOff } from './knobs.js'
 
 export type RunOpts = {
@@ -33,7 +34,10 @@ export const mayAsk = (c: HarnessConfig): boolean =>
   (c.tools.approveBash && c.tools.enabled.includes('bash')) || c.loop.untilBash !== undefined || Object.keys(c.mcpServers ?? {}).length > 0
 
 export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGenerator<HarnessEvent> {
-  const { config, task, workdir, answerSchema } = params
+  const { config, workdir, answerSchema } = params
+  // Notes ride on the task itself, so a freshContext reset sends them again with it.
+  const block = notesBlock(params.notes ?? [])
+  const task = block ? params.task + '\n\n' + block : params.task
   const backend = opts.backend ?? createBackend(config.backend)
   // The backend key's value never enters the history from tool or check output, and never reaches an event: that output
   // is cleaned before the history takes it, every event is a cleaned copy, and what goes to the server or to a tool is
@@ -117,6 +121,7 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
       ? config.systemPrompt + '\n\n' + config.toolCalls.promptedTemplate.split('{{tools}}').join(renderTools(schemas, config.toolCalls.format))
       : config.systemPrompt
     const messages: ChatMessage[] = [{ role: 'system', content: system }, { role: 'user', content: task }]
+    if (block) yield ev({ type: 'notes_loaded', ids: params.notes!.map(n => n.id), chars: block.length })
     // loop.repeatThinkTokens: the system message of a thinking turn. It is sent for that turn only and never enters the history.
     const thinkTokens = config.loop.repeatThinkTokens
     const systemThinking = system.replace(NO_THINK_LINE, '/think')

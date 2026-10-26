@@ -1,4 +1,5 @@
 import { isShowable } from './events.js'
+import type { Note } from './notes.js'
 
 export type ToolName = 'list_dir' | 'read_file' | 'write_file' | 'edit_file' | 'bash'
 export const TOOL_NAMES: ToolName[] = ['list_dir', 'read_file', 'write_file', 'edit_file', 'bash']
@@ -121,8 +122,9 @@ export type HarnessConfig = {
   notes?: { enabled: boolean; maxTokens: number }
 }
 
-/** `answerSchema`: the JSON form of the final answer, when the task has one. It is enforced only by a harness with no tools at all and `toolCalls.enforceSchema` on. */
-export type RunParams = { config: HarnessConfig; task: string; workdir: string; answerSchema?: Record<string, unknown> }
+/** `answerSchema`: the JSON form of the final answer, when the task has one. It is enforced only by a harness with no tools at all and `toolCalls.enforceSchema` on.
+ *  `notes`: already selected (notes.ts selectNotes), sent after the task. */
+export type RunParams = { config: HarnessConfig; task: string; workdir: string; answerSchema?: Record<string, unknown>; notes?: Note[] }
 
 /** Whether a run of this harness sends `answerSchema` at all — what `run --answer-schema` asks before any model time. The run itself looks at the tools it ended up with. */
 export const sendsAnswerSchema = (c: HarnessConfig): boolean =>
