@@ -96,7 +96,7 @@ descriptions are part of the system prompt; each share is rounded on its own):
 
 ## Installation
 
-Nothing to install for a try — `npx` fetches it (pin a version with `npx llm-harness-builder@0.4.0`):
+Nothing to install for a try — `npx` fetches it (pin a version with `npx llm-harness-builder@0.5.0`):
 
     npx llm-harness-builder --help
 
@@ -106,12 +106,12 @@ Or install it globally:
 
 Or as a dev dependency of a project, then run it with `npx`:
 
-    npm i -D llm-harness-builder@0.4.0
+    npm i -D llm-harness-builder@0.5.0
     npx llm-harness-builder
 
 Without the npm registry, from the archive on the [GitHub release](https://github.com/bambooplanedev/llm-harness-builder/releases) page:
 
-    npm i -g https://github.com/bambooplanedev/llm-harness-builder/releases/download/v0.4.0/llm-harness-builder-0.4.0.tgz
+    npm i -g https://github.com/bambooplanedev/llm-harness-builder/releases/download/v0.5.0/llm-harness-builder-0.5.0.tgz
 
 In a container, for the CLI only — the commands the model runs then run inside the container, not on
 your machine:
@@ -925,6 +925,17 @@ say: [docs/honest-notes.md](docs/honest-notes.md).
 The CLI and the server are TypeScript in `src/`, the page is Vue 3 in `web/src/`, and the tests in
 `tests/` run against fake backends. Issues and pull requests are welcome; a change to a knob should
 come with a test, and a claim about what a knob does with the bench and traces behind it.
+
+Before a release, `scripts/launch-check.sh <tgz>` runs the checklist in its header on the packed
+tarball, in a `node:22.12-slim` container (Docker needed). Keys go in by name only; a step whose key
+is not set is `SKIP`, and a run with a skip is not green. The release:
+
+    npm ci && npm pack --pack-destination ..    # in a fresh clone of the release commit
+    scripts/launch-check.sh ../llm-harness-builder-X.Y.Z.tgz
+    git tag -a vX.Y.Z && git push origin vX.Y.Z
+    gh release create vX.Y.Z ../llm-harness-builder-X.Y.Z.tgz
+    npm publish ../llm-harness-builder-X.Y.Z.tgz    # 2FA
+    npm view llm-harness-builder@X.Y.Z dist.shasum    # equals the sha1 the check printed
 
 ## License
 

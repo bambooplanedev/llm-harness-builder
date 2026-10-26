@@ -1,7 +1,7 @@
 import { test, expect } from 'vitest'
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { execSync } from 'node:child_process'
+import { execSync, spawnSync } from 'node:child_process'
 
 const pkg = JSON.parse(readFileSync('package.json', 'utf8'))
 const files = (d: string): string[] => readdirSync(d).flatMap(f => { const p = join(d, f); return statSync(p).isDirectory() ? files(p) : [p] })
@@ -65,4 +65,12 @@ test('the docs hold nothing that ties them to a machine, an account or the priva
     expect([f, /\/Users\/|\/home\/|\/var\/folders|\/private\/|\.superpowers|https?:\/\/(?!github\.com\/(bambooplanedev\/llm-harness-builder|coleam00\/Archon)|raw\.githubusercontent\.com\/bambooplanedev\/llm-harness-builder\/|127\.0\.0\.1|localhost:11434|host\.docker\.internal:11434|ollama\.com\/download|openrouter\.ai\/api\/v1)\S+/.exec(s)?.[0]]).toEqual([f, undefined])
     for (const e of emails) expect([f, s.includes(e)]).toEqual([f, false])
   }
+})
+
+test('the launch check is a script of the repo, not of the package, and never traces itself', () => {
+  expect(spawnSync('bash', ['-n', 'scripts/launch-check.sh']).status).toBe(0)
+  const s = readFileSync('scripts/launch-check.sh', 'utf8')
+  expect(/^\s*set\s+-[a-z]*x|bash\s+-[a-z]*x|set\s+-o\s+xtrace/m.exec(s)?.[0]).toBeUndefined()
+  expect(/\$\{?(OPENROUTER|ANTHROPIC)_API_KEY\}?/.exec(s)?.[0]).toBeUndefined()
+  expect(pkg.files.filter((f: string) => f.startsWith('scripts'))).toEqual([])
 })
