@@ -15,9 +15,12 @@ export type Note = { id: string; ts: number; run?: string; author: 'model' | 'us
 export const notesKey = async (workdir: string): Promise<string> =>
   createHash('sha256').update(await realpath(workdir)).digest('hex').slice(0, 16)
 
-/** LHB_NOTES_DIR, else $XDG_STATE_HOME (or ~/.local/state)/llm-harness-builder/notes. */
-export const notesDir = (env: NodeJS.ProcessEnv = process.env): string =>
-  env.LHB_NOTES_DIR || path.join(env.XDG_STATE_HOME || path.join(homedir(), '.local', 'state'), 'llm-harness-builder', 'notes')
+/** Where the harness keeps what outlives a run (notes, consent): LHB_STATE_DIR, else $XDG_STATE_HOME (or ~/.local/state)/llm-harness-builder. */
+export const stateDir = (env: NodeJS.ProcessEnv = process.env): string =>
+  env.LHB_STATE_DIR || path.join(env.XDG_STATE_HOME || path.join(homedir(), '.local', 'state'), 'llm-harness-builder')
+
+/** LHB_NOTES_DIR, else <stateDir>/notes. */
+export const notesDir = (env: NodeJS.ProcessEnv = process.env): string => env.LHB_NOTES_DIR || path.join(stateDir(env), 'notes')
 
 export const notesPath = (key: string, dir = notesDir()): string => path.join(dir, `${key}.jsonl`)
 
