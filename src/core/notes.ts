@@ -73,14 +73,17 @@ const SECRETS = [
 const INVISIBLE = /[\p{Cf}]/gu
 export const NOTE_MAX_CHARS = 300
 
-/** The backend key, secret-looking tokens and the home path out of a note, whitespace collapsed, cut to NOTE_MAX_CHARS. */
-export function scrubNote(text: string, redact: Redactor, home: string): string {
+/** The backend key, secret-looking tokens and the home path out of a text, whitespace collapsed; no length cap. */
+export function scrubText(text: string, redact: Redactor, home: string): string {
   // Format characters first: a zero-width space inside a key would hide it from the patterns.
   let s = redact.text(text.replace(INVISIBLE, ''))
   for (const re of SECRETS) s = s.replace(re, '[secret]')
   if (home) s = s.replace(new RegExp(home.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?=/|$)', 'g'), '~')
-  return s.replace(/\s+/g, ' ').trim().slice(0, NOTE_MAX_CHARS)
+  return s.replace(/\s+/g, ' ').trim()
 }
+
+/** scrubText cut to NOTE_MAX_CHARS. */
+export const scrubNote = (text: string, redact: Redactor, home: string): string => scrubText(text, redact, home).slice(0, NOTE_MAX_CHARS)
 
 // The model picks names, keys and paths too, and a path can be text it read: anything but a plain short token is <odd>.
 // 64 chars: a file name long enough to be a sentence is a sentence.
