@@ -295,7 +295,6 @@ describe('evolve journal', () => {
     expect(parseJournal(jsonl({ ...start, pin: 'x' }))).toEqual({ error: expect.stringMatching(/^line 1: pin: /) })
   })
 
-  const sorted = (a: string[]) => [...a].sort()
   const tr = (ok = true) => [run('t3', ok)]
   const fin = (o: object = {}) => ({ v: 1, type: 'final', version: 1, orig: tr(false), last: tr(true), ...o })
 
@@ -318,8 +317,11 @@ describe('evolve journal', () => {
     expect(replay(lines(start, cur, a1, fin({ orig: [run('t0', false)] })), harness(), ctx)).toEqual({ error: expect.stringContaining('final') })
     const two = { ...ctx, sets: { ...sets, test: ['t3', 't4'] } }
     const s2 = { ...start, sets: two.sets }
-    expect(replay(lines(s2, cur, a1, fin({ orig: [run('t3', false), run('t3', false)] })), harness(), two)).toEqual({ error: expect.stringContaining('final') })
-    expect(sorted(two.sets.test)).toEqual(['t3', 't4'])
+    const both = [run('t4', true), run('t3', true)]
+    // Order does not matter; a name repeated in place of another does.
+    expect((replay(lines(s2, cur, a1, fin({ orig: both, last: both })), harness(), two) as any).final).toEqual({ orig: both, last: both })
+    expect(replay(lines(s2, cur, a1, fin({ orig: [run('t3', false), run('t3', false)], last: both })), harness(), two)).toEqual({ error: expect.stringContaining('final') })
+    expect(replay(lines(start, cur, a1, { v: 1, type: 'final', version: 1, orig: tr() }), harness(), ctx)).toEqual({ error: expect.stringContaining('final') })
   })
 
   it('a final line for version 0 has no runs', () => {
