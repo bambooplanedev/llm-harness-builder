@@ -1344,6 +1344,22 @@ test('run with notes on from the project root: a notes dir inside the workdir is
   expect(existsSync(join(wd, 'runs', 'notes'))).toBe(false)
 }, 30_000)
 
+test("bench: a run's tokens are the sum of its replies' usage, firstPromptTokens the first prompt", async () => {
+  const cwd = await tmp('lhb-cwd-')
+  const bench = async (replies: object[]) => {
+    const fake = join(cwd, 'fake.json'), out = join(cwd, 'b.json')
+    await writeFile(fake, JSON.stringify(replies))
+    expect(cli(['bench', '--n', '1', '--out', out, harness('bare')], { LHB_FAKE_BACKEND: fake }, cwd).status).toBe(0)
+    return JSON.parse(await readFile(out, 'utf8')).harnesses[0].runs[0]
+  }
+  const withUsage = await bench([{ toolCalls: [{ name: 'bash', args: { command: 'true' } }], usage: { promptTokens: 100, completionTokens: 10 } }, { content: 'done', usage: { promptTokens: 150, completionTokens: 5 } }])
+  expect(withUsage.tokens).toBe(265)
+  expect(withUsage.firstPromptTokens).toBe(100)
+  const without = await bench([{ toolCalls: [{ name: 'bash', args: { command: 'true' } }] }, { content: 'done' }])
+  expect(without.tokens).toBeUndefined()
+  expect(without.firstPromptTokens).toBeUndefined()
+}, 60_000)
+
 test('bench with notes on reads the task notes and never writes them', async () => {
   const cwd = await tmp('lhb-cwd-'), nd = await tmp('lhb-notes-')
   const file = join(nd, 'task-slug.jsonl')

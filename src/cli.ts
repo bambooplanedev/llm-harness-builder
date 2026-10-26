@@ -279,7 +279,7 @@ const INT = /^[1-9]\d*$/
 async function benchOnce(config: HarnessConfig, round: number, timeoutS: number, out: string, task: Task, notes: NotesStore, size?: number): Promise<BenchRun> {
   // An exception that escapes execRun is text nothing has cleaned yet, and it goes to the bench JSON and the terminal.
   const redact = redactor(apiKey(config.backend, process.env), config.backend.apiKeyEnv ?? '')
-  let workdir = '', traceId: string | undefined, parseErrors = 0, toolChars = 0, costUsd: number | undefined, peakTokens: number | undefined, toolErrors = 0, guardBlocks = 0, editMiss = 0, lastError: string | undefined, t0 = Date.now(), run: BenchRun
+  let workdir = '', traceId: string | undefined, parseErrors = 0, toolChars = 0, costUsd: number | undefined, peakTokens: number | undefined, tokens: number | undefined, firstPromptTokens: number | undefined, toolErrors = 0, guardBlocks = 0, editMiss = 0, lastError: string | undefined, t0 = Date.now(), run: BenchRun
   process.stderr.write(`${config.name} #${round} `)
   try {
     workdir = await task.prepare(size)
@@ -293,6 +293,7 @@ async function benchOnce(config: HarnessConfig, round: number, timeoutS: number,
         if (e.type === 'parse_error') parseErrors++
         if (e.type === 'llm_response' && e.costUsd !== undefined) costUsd = (costUsd ?? 0) + e.costUsd
         if (e.type === 'llm_response' && e.usage) peakTokens = Math.max(peakTokens ?? 0, e.usage.promptTokens + e.usage.completionTokens)
+        if (e.type === 'llm_response' && e.usage) { tokens = (tokens ?? 0) + e.usage.promptTokens + e.usage.completionTokens; firstPromptTokens ??= e.usage.promptTokens }
         if (e.type === 'mcp_server_start') toolChars += e.descriptionChars + e.schemaChars
         if (e.type === 'tool_result' && e.error) {
           toolErrors++
@@ -311,9 +312,9 @@ async function benchOnce(config: HarnessConfig, round: number, timeoutS: number,
     const checked = typeof c === 'boolean' ? { pass: c } : c
     if (checked.reason) lastError = checked.reason
     const verdict = checked.pass ? 'PASS' : 'FAIL'
-    run = { ...(task.name ? { task: task.name } : {}), round, verdict, reason: d?.reason ?? 'error', turns: d?.turns ?? 0, toolCalls: d?.toolCallCount ?? 0, parseErrors, lastError, ms, workdir, trace: id, toolChars: toolChars || undefined, costUsd, peakTokens, toolErrors, guardBlocks: config.tools.requireReadBeforeEdit ? guardBlocks : undefined, editMiss }
+    run = { ...(task.name ? { task: task.name } : {}), round, verdict, reason: d?.reason ?? 'error', turns: d?.turns ?? 0, toolCalls: d?.toolCallCount ?? 0, parseErrors, lastError, ms, workdir, trace: id, toolChars: toolChars || undefined, costUsd, peakTokens, tokens, firstPromptTokens, toolErrors, guardBlocks: config.tools.requireReadBeforeEdit ? guardBlocks : undefined, editMiss }
   } catch (e) {
-    run = { ...(task.name ? { task: task.name } : {}), round, verdict: 'FAIL', reason: 'error', turns: 0, toolCalls: 0, parseErrors, lastError: redact.text(String(e)), ms: Date.now() - t0, workdir, toolChars: toolChars || undefined, costUsd, peakTokens, toolErrors, guardBlocks: config.tools.requireReadBeforeEdit ? guardBlocks : undefined, editMiss }
+    run = { ...(task.name ? { task: task.name } : {}), round, verdict: 'FAIL', reason: 'error', turns: 0, toolCalls: 0, parseErrors, lastError: redact.text(String(e)), ms: Date.now() - t0, workdir, toolChars: toolChars || undefined, costUsd, peakTokens, tokens, firstPromptTokens, toolErrors, guardBlocks: config.tools.requireReadBeforeEdit ? guardBlocks : undefined, editMiss }
   } finally {
     // The check's own leftovers too, and a run that threw: nothing keeps writing into a clone being removed.
     await killTracked()
