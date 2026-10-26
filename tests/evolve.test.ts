@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ALPHA, applyEdit, parseJournal, replay, verdict, bindingTokens, checkEdit, decide, failureGroups, modeOf, neededFlips, parseProposal, proposerInput, proposerRequest, referenceLabel, signP, splitSets, PROPOSAL_SCHEMA, type Edit, type Mode, type RunLite } from '../src/core/evolve.js'
+import { ALPHA, applyEdit, numbersOf, usable, parseJournal, replay, verdict, bindingTokens, checkEdit, decide, failureGroups, modeOf, neededFlips, parseProposal, proposerInput, proposerRequest, referenceLabel, signP, splitSets, PROPOSAL_SCHEMA, type Edit, type Mode, type RunLite } from '../src/core/evolve.js'
 import type { HarnessEvent } from '../src/core/events.js'
 import { harness } from './helpers.js'
 import type { RepoTask } from '../src/core/repo-tasks.js'
@@ -53,7 +53,19 @@ describe('evolve decide', () => {
   it('reference: one more PASS accepted, equal PASS refused', () => {
     const c = [run('a', true), run('b', false), run('c', false)]
     expect(decide(c, [run('a', true), run('b', true), run('c', false)], c, ['c'], ref).accepted).toBe(true)
-    expect(decide(c, [run('a', false), run('b', true), run('c', false)], c, ['c'], ref)).toMatchObject({ accepted: false, reason: 'fewer PASS than current' })
+    expect(decide(c, [run('a', false), run('b', true), run('c', false)], c, ['c'], ref)).toMatchObject({ accepted: false, reason: 'no more PASS than current' })
+  })
+
+  it('usage: an original run without usage refuses; a run that got no reply (tokens 0, no first request) does not poison the sums; a zero original never gives NaN', () => {
+    const cand = [run('a', true), run('b', false)]
+    expect(decide(cand, cand, [{ task: 'a', verdict: 'FAIL', firstPromptTokens: 10 }, run('b', false)], [], ref).reason).toBe('the server gave no usage')
+    const noReply: RunLite = { task: 'b', verdict: 'FAIL', tokens: 0 }
+    expect(numbersOf([run('a', true, 100, 10), noReply])).toEqual({ pass: 1, tokens: 100, tokensPerSuccess: 100, weight: 10 })
+    expect(decide([run('a', false), noReply], [run('a', true), noReply], [run('a', false), noReply], [], ref)).toMatchObject({ accepted: true })
+    const zero: RunLite[] = [{ task: 'a', verdict: 'FAIL', tokens: 0 }, noReply]
+    expect(decide(zero, cand, zero, [], ref)).toMatchObject({ accepted: false, reason: 'the server gave no usage' })
+    expect(usable(zero)).toBe(false)
+    expect(usable(cand)).toBe(true)
   })
 
   it('tokens: vs the original, not the current', () => {
@@ -214,7 +226,7 @@ describe('evolve signals', () => {
 
 describe('evolve journal', () => {
   const sets = { train: ['t0', 't1'], gate: ['t2'], test: ['t3'] }
-  const start = { v: 1, type: 'start', base: 'h', sha: 'abc', sets, strict: false, proposer: 'http://p/v1' }
+  const start = { v: 1, type: 'start', base: 'h', sha: 'abc', pin: 'a'.repeat(64), sets, strict: false, proposer: 'http://p/v1' }
   const cur = { v: 1, type: 'current', round: 1, runs: [run('t0', false), run('t1', true), run('t2', true)] }
   const cand = (index: number, edit: Edit, accepted: boolean, reason: string, round = 1) =>
     ({ v: 1, type: 'candidate', round, index, input: '{}', edit, accepted, reason, numbers: { pass: 3, tokens: 300, tokensPerSuccess: 100, weight: 30 }, runs: cur.runs, ...(accepted ? { version: 1 } : {}) })
@@ -239,6 +251,9 @@ describe('evolve journal', () => {
     expect(parseJournal(jsonl(start, cur, { ...a1, edit: { ...a1.edit, extra: 1 } }))).toEqual({ error: expect.stringMatching(/^line 3: /) })
     expect(parseJournal(jsonl({ ...start, v: 2 }))).toEqual({ error: expect.stringMatching(/^line 1: /) })
     expect(parseJournal(jsonl({ ...start, sets: { ...sets, more: [] } }))).toEqual({ error: expect.stringMatching(/^line 1: /) })
+    const { pin: _, ...noPin } = start
+    expect(parseJournal(jsonl(noPin))).toEqual({ error: 'line 1: missing pin' })
+    expect(parseJournal(jsonl({ ...start, pin: 'x' }))).toEqual({ error: expect.stringMatching(/^line 1: pin: /) })
   })
 
   it('parseJournal: an inherited or prototype key is refused with its line number, never a throw', () => {
@@ -278,6 +293,10 @@ describe('evolve journal', () => {
     const dup = cand(2, a1.edit, true, 'accepted')
     expect(replay([start, cur, a1, dup] as any, harness(), ctx)).toEqual({ error: 'cannot resume: accepted edit 2: already tried' })
     expect(replay([cur] as any, harness(), ctx)).toEqual({ error: expect.stringMatching(/^cannot resume: /) })
+    // No round 1 current first: there is no baseline to compare with.
+    expect(replay([start, a1] as any, harness(), ctx)).toEqual({ error: expect.stringMatching(/^cannot resume: .*round 1/) })
+    expect(replay([start, { ...cur, round: 2 }] as any, harness(), ctx)).toEqual({ error: expect.stringMatching(/^cannot resume: .*round 1/) })
+    expect(replay([start] as any, harness(), ctx)).toMatchObject({ version: 0, baseline: undefined })
   })
 
   it('refuses sets that differ from the file\'s', () => {

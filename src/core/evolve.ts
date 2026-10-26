@@ -63,18 +63,19 @@ export function neededFlips(): number {
 export type RunLite = { task: string; verdict: 'PASS' | 'FAIL'; tokens?: number; firstPromptTokens?: number; trace?: string; reason?: string; lastError?: string }
 export type Numbers = { pass: number; tokensPerSuccess?: number; tokens?: number; weight?: number }
 
-const sum = (runs: RunLite[], k: 'tokens' | 'firstPromptTokens'): number | undefined =>
-  runs.every(r => r[k] !== undefined) ? runs.reduce((a, r) => a + r[k]!, 0) : undefined
-
 export function numbersOf(runs: RunLite[]): Numbers {
   const pass = runs.filter(r => r.verdict === 'PASS').length
-  const tokens = sum(runs, 'tokens')
   const n: Numbers = { pass }
-  if (tokens !== undefined) { n.tokens = tokens; if (pass) n.tokensPerSuccess = tokens / pass }
-  const weight = sum(runs, 'firstPromptTokens')
-  if (weight !== undefined) n.weight = weight
+  // A run that got no reply has tokens 0; one with replies but no usage has none, and the sum has none either.
+  if (runs.every(r => r.tokens !== undefined)) { n.tokens = runs.reduce((a, r) => a + r.tokens!, 0); if (pass) n.tokensPerSuccess = n.tokens / pass }
+  // A run without a first reply put nothing in front of the model: it is left out of the weight, not counted as 0.
+  const fp = runs.filter(r => r.firstPromptTokens !== undefined)
+  if (fp.length) n.weight = fp.reduce((a, r) => a + r.firstPromptTokens!, 0)
   return n
 }
+
+/** Runs the gates can divide by: token counts on every run, and some of them, and some first request. */
+export const usable = (runs: RunLite[]): boolean => { const n = numbersOf(runs); return !!n.tokens && !!n.weight }
 
 const pct = (ratio: number) => Math.round((ratio - 1) * 100)
 
@@ -83,8 +84,8 @@ export function decide(cur: RunLite[], cand: RunLite[], orig: RunLite[], gateNam
   const numbers = numbersOf(cand)
   const no = (reason: string) => ({ accepted: false, reason, numbers })
   const o = numbersOf(orig)
-  const usage = (rs: RunLite[]) => rs.every(r => r.tokens !== undefined && r.firstPromptTokens !== undefined)
-  if (!usage(cand) || !usage(orig)) return no('the server gave no usage')
+  // Every ratio below divides by the original's sums: a 0 there would be NaN or Infinity, never a refusal.
+  if (!usable(cand) || !usable(orig)) return no('the server gave no usage')
   if (!numbers.pass) return no('0 PASS')
   const c = numbersOf(cur)
   if (mode.strict) {
@@ -97,7 +98,7 @@ export function decide(cur: RunLite[], cand: RunLite[], orig: RunLite[], gateNam
     }
     const p = signP(b, w)
     if (!(p < ALPHA)) return no(`within noise (p=${p.toFixed(2)})`)
-  } else if (numbers.pass <= c.pass) return no('fewer PASS than current')
+  } else if (numbers.pass <= c.pass) return no('no more PASS than current')
   const gate = (rs: RunLite[]) => numbersOf(rs.filter(r => gateNames.includes(r.task))).pass
   if (gate(cand) < gate(cur)) return no('worse on gate')
   if (o.pass) {
@@ -247,7 +248,7 @@ export function parseProposal(content: string): Edit {
 }
 
 export type JournalLine =
-  | { v: 1; type: 'start'; base: string; sha: string; sets: Record<SetName, string[]>; strict: boolean; proposer: string }
+  | { v: 1; type: 'start'; base: string; sha: string; pin: string; sets: Record<SetName, string[]>; strict: boolean; proposer: string }
   | { v: 1; type: 'current'; round: number; runs: RunLite[] }
   | { v: 1; type: 'candidate'; round: number; index: number; input: string; edit?: Edit; accepted: boolean; reason: string; numbers?: Numbers; runs?: RunLite[]; version?: number }
 
@@ -277,7 +278,7 @@ const RUN = shape({ task: name, verdict: x => x === 'PASS' || x === 'FAIL' ? und
 const EDIT = shape({ field: str, value: x => typeof x === 'string' || (typeof x === 'number' && Number.isFinite(x)) ? undefined : 'not a string or a number' }, { why: str })
 const v1: Check = x => x === 1 ? undefined : 'not 1'
 const LINE: Record<string, Check> = {
-  start: shape({ v: v1, type: str, base: str, sha: str, sets: shape({ train: arr(name), gate: arr(name), test: arr(name) }), strict: bool, proposer: str }),
+  start: shape({ v: v1, type: str, base: str, sha: str, pin: x => typeof x === 'string' && /^[0-9a-f]{64}$/.test(x) ? undefined : 'not a sha256', sets: shape({ train: arr(name), gate: arr(name), test: arr(name) }), strict: bool, proposer: str }),
   current: shape({ v: v1, type: str, round: pos, runs: arr(RUN) }),
   candidate: shape({ v: v1, type: str, round: pos, index: pos, input: str, accepted: bool, reason: str },
     { edit: EDIT, numbers: shape({ pass: num }, { tokensPerSuccess: num, tokens: num, weight: num }), runs: arr(RUN), version: pos }),
@@ -302,7 +303,7 @@ export function parseJournal(text: string): { lines: JournalLine[] } | { error: 
 // The reasons the edit checks and `decide` write. Rejected edits reach the proposer, maybe in the cloud, and the
 // journal is bash-writable: anything else is passed on as `other`.
 const REASON_RE = [
-  /^(?:field not allowed|bad value|looks like a command or an address|tied to a task|already tried|changes more than one field|the server gave no usage|0 PASS|fewer PASS than current|worse on gate|no edit in the reply)$/,
+  /^(?:field not allowed|bad value|looks like a command or an address|tied to a task|already tried|changes more than one field|the server gave no usage|0 PASS|no more PASS than current|worse on gate|no edit in the reply)$/,
   /^within noise \(p=\d\.\d\d\)$/, /^costs \d+% more tokens(?: per success)? than the original$/, /^first request \d+% heavier than the original$/, /^invalid config: /,
 ]
 
@@ -315,6 +316,8 @@ export function replay(lines: JournalLine[], original: object, ctx: { binding: s
   if (JSON.stringify(first.sets) !== JSON.stringify(ctx.sets)) return { error: 'cannot resume: the sets differ from the tasks file' }
   let current = original, version = 0, baseline: RunLite[] | undefined
   const done: { round: number; index: number }[] = [], tried: Edit[] = [], rejected: Rejected[] = []
+  // Every candidate is weighed against round 1's current runs: a journal that does not go on with them has no baseline.
+  if (rest.length && !(rest[0]!.type === 'current' && rest[0]!.round === 1)) return { error: 'cannot resume: the line after the start line is not round 1\'s current runs' }
   for (const l of rest) {
     if (l.type === 'start') return { error: 'cannot resume: a second start line' }
     if (l.type === 'current') {

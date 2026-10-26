@@ -13,7 +13,7 @@ export type BenchRun = {
   costUsd?: number
   /** The biggest prompt + reply of the run, in the server's own tokens: how close it came to the window. Absent when the server reported no usage, and in older JSON. */
   peakTokens?: number
-  /** The run's replies' prompt + completion tokens added up: what the run cost in the server's own tokens. Absent when the server reported no usage, and in older JSON. */
+  /** The run's replies' prompt + completion tokens added up: what the run cost in the server's own tokens. 0 when no reply came at all; absent when replies came without usage, and in older JSON. */
   tokens?: number
   /** The prompt tokens of the run's first reply: what the harness puts in front of the model before any work. Absent when that reply had no usage. */
   firstPromptTokens?: number

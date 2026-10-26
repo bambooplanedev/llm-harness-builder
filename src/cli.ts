@@ -4,6 +4,7 @@ import { parseArgs } from 'node:util'
 import { readFile, cp, mkdir, writeFile } from 'node:fs/promises'
 import { existsSync, readFileSync, writeFileSync, renameSync, appendFileSync, lstatSync, truncateSync } from 'node:fs'
 import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { createInterface } from 'node:readline/promises'
 import { homedir } from 'node:os'
 import path from 'node:path'
@@ -12,7 +13,7 @@ import { mayAsk, type RunOpts } from './core/run.js'
 import { killTracked } from './core/procs.js'
 import { withNotes, type NotesStore } from './core/notes-run.js'
 import { notesKey, notesPath, readNotes, selectNotes, scrubText } from './core/notes.js'
-import { ALLOWED, CANDIDATES, splitSets, modeOf, referenceLabel, neededFlips, numbersOf, decide, applyEdit, bindingTokens, checkEdit, failureGroups, proposerInput, proposerRequest, parseProposal, parseJournal, replay, verdict, type Edit, type JournalLine, type RunLite } from './core/evolve.js'
+import { ALLOWED, CANDIDATES, splitSets, modeOf, referenceLabel, neededFlips, numbersOf, usable, decide, applyEdit, bindingTokens, checkEdit, failureGroups, proposerInput, proposerRequest, parseProposal, parseJournal, replay, verdict, type Edit, type JournalLine, type RunLite } from './core/evolve.js'
 import { loadRepoTasks, consentText, hasConsent, saveConsent, git, TASKS_FILE, type RepoTasks, type EvolveConsent } from './core/repo-tasks.js'
 import { cloneAt, linkNodeModules, protectedChanged, runCheck, finishRun, removeAllClonesSync, prepareModules, modulesManifest, modulesTampered, type Clone } from './core/repo-clone.js'
 import { validateConfig, sendsAnswerSchema, KEY_ENV, FLAG_WORDS, keyNameMessage, keyErrors, keyProblem, keyNote, apiKey, NO_THINK_LINE, isHttpUrl, isLoopbackUrl, type HarnessConfig, type BackendKind } from './core/config.js'
@@ -326,9 +327,9 @@ async function benchOnce(config: HarnessConfig, round: number, timeoutS: number,
     const checked = typeof c === 'boolean' ? { pass: c } : c
     if (checked.reason) lastError = checked.reason
     const verdict = checked.pass ? 'PASS' : 'FAIL'
-    run = { ...(task.name ? { task: task.name } : {}), round, verdict, reason: d?.reason ?? 'error', turns: d?.turns ?? 0, toolCalls: d?.toolCallCount ?? 0, parseErrors, lastError, ms, workdir, trace: id, toolChars: toolChars || undefined, costUsd, peakTokens, tokens, firstPromptTokens, toolErrors, guardBlocks: config.tools.requireReadBeforeEdit ? guardBlocks : undefined, editMiss }
+    run = { ...(task.name ? { task: task.name } : {}), round, verdict, reason: d?.reason ?? 'error', turns: d?.turns ?? 0, toolCalls: d?.toolCallCount ?? 0, parseErrors, lastError, ms, workdir, trace: id, toolChars: toolChars || undefined, costUsd, peakTokens, tokens: seenFirst ? tokens : 0, firstPromptTokens, toolErrors, guardBlocks: config.tools.requireReadBeforeEdit ? guardBlocks : undefined, editMiss }
   } catch (e) {
-    run = { ...(task.name ? { task: task.name } : {}), round, verdict: 'FAIL', reason: 'error', turns: 0, toolCalls: 0, parseErrors, lastError: redact.text(String(e)), ms: Date.now() - t0, workdir, toolChars: toolChars || undefined, costUsd, peakTokens, tokens, firstPromptTokens, toolErrors, guardBlocks: config.tools.requireReadBeforeEdit ? guardBlocks : undefined, editMiss }
+    run = { ...(task.name ? { task: task.name } : {}), round, verdict: 'FAIL', reason: 'error', turns: 0, toolCalls: 0, parseErrors, lastError: redact.text(String(e)), ms: Date.now() - t0, workdir, toolChars: toolChars || undefined, costUsd, peakTokens, tokens: seenFirst ? tokens : 0, firstPromptTokens, toolErrors, guardBlocks: config.tools.requireReadBeforeEdit ? guardBlocks : undefined, editMiss }
   } finally {
     // The check's own leftovers too, and a run that threw: nothing keeps writing into a clone being removed.
     await killTracked()
@@ -524,11 +525,14 @@ async function cmdEvolve(argv: string[]) {
   if (!INT.test(values.timeout)) argError('evolve', '--timeout must be a positive integer')
   const rounds = Number(values.rounds), timeoutS = Number(values.timeout)
   // Read once: edits go onto this JSON and versions are saved from it, without the overrides; the file is never written.
-  let raw: object
-  try { raw = JSON.parse(await readFile(file!, 'utf8')) } catch (e) { return die(`cannot read harness ${file}:\n  ${(e as Error).message}`) }
+  let raw: object, bytes: Buffer
+  try { bytes = await readFile(file!); raw = JSON.parse(bytes.toString('utf8')) } catch (e) { return die(`cannot read harness ${file}:\n  ${(e as Error).message}`) }
   const over = { model: values.model, baseUrl: values['base-url'], kind: values.kind, apiKeyEnv: values['api-key-env'] }
   const config = overridden(raw, over, file!)
   const proposer = values.proposer === undefined ? config : await loadHarness(values.proposer, {})
+  // What the runs depend on besides the tasks: a resume with another harness or other flags would mix two evolves.
+  const sha256 = (b: Buffer | string) => createHash('sha256').update(b).digest('hex')
+  const pin = sha256(JSON.stringify({ harness: sha256(bytes), over, timeoutS, proposer: values.proposer === undefined ? null : sha256(readFileSync(values.proposer)) }))
   let repo!: RepoTasks
   try { repo = await loadRepoTasks(values.tasks!) } catch (e) { argError('evolve', (e as Error).message) }
   const sets = splitSets(repo.tasks), mode = modeOf(sets)
@@ -541,9 +545,8 @@ async function cmdEvolve(argv: string[]) {
   const base = path.basename(file!).replace(/\.json$/, '')
   const dir = 'harnesses', jf = path.join(dir, `${base}.evolve.jsonl`), snap = path.join(dir, `${base}.evolve.notes.jsonl`)
   const vf = (n: number) => path.join(dir, `${base}.v${n}.json`)
-  for (const p of [dir, jf, snap, vf(1)]) if (isLink(p)) die(`${p} is a symbolic link; evolve writes only to a plain file there`)
+  for (const p of [dir, jf, snap]) if (isLink(p)) die(`${p} is a symbolic link; evolve writes only to a plain file there`)
   const resuming = existsSync(jf)
-  if (!resuming && existsSync(vf(1))) die(`${vf(1)} already exists from an earlier evolve; move it away first — evolve never overwrites a version`)
   await askConsent(repo, values.yes, { proposer: proposer.backend.baseUrl, fields: ALLOWED })
   const paths = (await git(['ls-tree', '-r', '-z', '--name-only', repo.sha], repo.repo)).split('\0').filter(Boolean)
   const binding = bindingTokens({ names: repo.tasks.map(t => t.name), paths, prompts: repo.tasks.map(t => t.prompt) })
@@ -558,21 +561,27 @@ async function cmdEvolve(argv: string[]) {
     if ('error' in j) return die(`cannot resume: ${jf} ${j.error}; delete it to start over`)
     lines = j.lines
     if (lines[0]?.type === 'start' && lines[0].sha !== repo.sha) die(`the repo has a new commit since this evolve started; delete ${jf} to start over`)
+    if (lines[0]?.type === 'start' && lines[0].pin !== pin) die(`the harness or its options changed since this evolve started; delete ${jf} to start over`)
     // A torn last line goes, or the next line would be appended onto it.
     if (text && !text.endsWith('\n')) truncateSync(jf, Buffer.byteLength(text.slice(0, text.lastIndexOf('\n') + 1)))
   }
   // A new journal has no state until its start line.
   let state = resuming ? rebuilt() : undefined as unknown as EvolveState
+  // The next version is checked now, not after a candidate's runs: a file the journal has no line for is not ours.
+  const next = vf((resuming ? state.version : 0) + 1)
+  if (isLink(next)) die(`${next} is a symbolic link; evolve writes only to a plain file there`)
+  if (existsSync(next)) die(`${next} already exists and the journal has no line for it; move it away first — evolve never overwrites a version`)
   // One whole line per write: a Ctrl-C leaves the journal at a completed step.
   const append = (l: JournalLine) => { appendFileSync(jf, JSON.stringify(l) + '\n'); lines.push(l); state = rebuilt() }
   if (!resuming) {
     if (!existsSync(dir)) await mkdir(dir)
     let host = proposer.backend.baseUrl
     try { host = new URL(host).host || host } catch { /* kept as it is */ }
-    append({ v: 1, type: 'start', base, sha: repo.sha, sets, strict: mode.strict, proposer: host })
     // Every version reads this frozen copy: a note written during evolve would make one version's runs depend on another's.
+    // Before the start line: a journal is never without its snapshot.
     const live = notesPath(await notesKey(repo.repo))
     writeFileSync(snap, existsSync(live) ? readFileSync(live) : '')
+    append({ v: 1, type: 'start', base, sha: repo.sha, pin, sets, strict: mode.strict, proposer: host })
   }
   const work = repoWork(repo)
   const byName = new Map(work.tasks.map(t => [t.name!, t]))
@@ -620,18 +629,20 @@ async function cmdEvolve(argv: string[]) {
       const r = await pBackend.send(pBackend.buildPayload(req), AbortSignal.timeout(timeoutS * 1000))
       if (r.usage) proposerTokens += r.usage.promptTokens + r.usage.completionTokens
       content = r.content
-    } catch (e) { return { reason: `proposer failed: ${pRedact.text((e as Error).message)}` } }
+    // Not a rejection: a journaled one would never be asked again, and the next evolve continues at this candidate.
+    } catch (e) { dropWork(work); return die(`proposer failed: ${showable(pRedact.text((e as Error).message))}`) }
     try { return { edit: parseProposal(content) } } catch { return { reason: 'no edit in the reply' } }
   }
   const writeVersion = (n: number, cfg: object) => {
     const p = vf(n), text = JSON.stringify({ ...cfg, name: `${base}.v${n}` }, null, 2) + '\n'
     if (isLink(p)) die(`${p} is a symbolic link; evolve writes only to a plain file there`)
-    try { writeFileSync(p, text, { flag: 'wx' }) } catch (e) {
-      // Stopped between this write and its journal line: the same bytes are this version; other bytes are not ours to replace.
-      if ((e as NodeJS.ErrnoException).code !== 'EEXIST' || readFileSync(p, 'utf8') !== text) die(`${p} already exists with other content; move it away first — evolve never overwrites a version`)
-    }
+    // Checked free before the runs; one that appeared since is not ours to replace.
+    try { writeFileSync(p, text, { flag: 'wx' }) } catch { die(`${p} already exists; move it away first — evolve never overwrites a version`) }
   }
   const trainGate = [...sets.train, ...sets.gate]
+  const all = Array.from({ length: rounds }, (_, i) => i + 1).every(round => lines.some(l => l.type === 'current' && l.round === round) &&
+    Array.from({ length: CANDIDATES }, (_, i) => i + 1).every(index => lines.some(l => l.type === 'candidate' && l.round === round && l.index === index)))
+  if (resuming && all) console.error(`all rounds are in the journal${state.version ? '; measuring the final test again' : ''}`)
   for (let round = 1; round <= rounds; round++) {
     console.error(`--- round ${round}/${rounds}`)
     const cur = lines.find(l => l.type === 'current' && l.round === round) as Extract<JournalLine, { type: 'current' }> | undefined
@@ -642,6 +653,8 @@ async function cmdEvolve(argv: string[]) {
       if (stopped) return stop()
       append({ v: 1, type: 'current', round, runs: cmp })
     }
+    // Every gate divides by the original's tokens: without them each candidate's runs would be spent for a sure refusal.
+    if (!usable(state.baseline!)) { dropWork(work); die('the server gave no usage for the original\'s runs; evolve needs a server that reports token usage') }
     for (let index = 1; index <= CANDIDATES; index++) {
       const done = lines.find(l => l.type === 'candidate' && l.round === round && l.index === index) as Extract<JournalLine, { type: 'candidate' }> | undefined
       if (done) { if (done.accepted && done.runs) cmp = done.runs; continue }
@@ -666,7 +679,7 @@ async function cmdEvolve(argv: string[]) {
   }
   const report: string[] = []
   if (lines.some(l => l.type === 'candidate' && l.reason === 'the server gave no usage'))
-    report.push('the server gave no usage (token counts), so no candidate could pass the gates: evolve needs a server that reports them')
+    report.push(state.version ? 'the server gave no usage (token counts) for some candidates\' runs, so those could not pass the gates' : 'the server gave no usage (token counts), so no candidate could pass the gates: evolve needs a server that reports them')
   if (state.version) {
     const orig = await runOn(raw, `${base}.orig`, sets.test, 1)
     if (stopped) return stop()

@@ -1,7 +1,7 @@
 import { test, expect } from 'vitest'
 import { spawn, spawnSync, execSync } from 'node:child_process'
 import { writeFile, readFile, readdir, stat, cp } from 'node:fs/promises'
-import { mkdtempSync, existsSync, writeFileSync, mkdirSync, readFileSync, readdirSync, realpathSync } from 'node:fs'
+import { mkdtempSync, existsSync, writeFileSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import http from 'node:http'
@@ -1767,5 +1767,104 @@ test('evolve: a new commit in the repo refuses to resume', async () => {
   expect(r.status).toBe(2)
   expect(r.stderr).toContain('the repo has a new commit since this evolve started')
   expect(evRaw(cwd)).toBe(before)
+  expect(clonesIn(env)).toEqual([])
+}, 120_000)
+
+// --- evolve: what costs a night if it goes wrong is refused before the runs it would waste.
+const types = (cwd: string) => journal(cwd).map(l => l.type)
+
+test('evolve: a server that gives no usage stops after the original\'s runs, before any candidate', async () => {
+  const repo = await tasksRepo(evTasks(ONE_EACH))
+  const env = await tasksEnv(evFake().map(({ usage: _, ...e }) => e))
+  const cwd = await tmp('lhb-cwd-')
+  const r = cli(['evolve', evHarness(cwd), '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
+  expect(r.status).toBe(2)
+  expect(r.stderr).toContain('the server gave no usage for the original\'s runs; evolve needs a server that reports token usage')
+  expect(types(cwd)).toEqual(['start', 'current'])
+  expect(clonesIn(env)).toEqual([])
+}, 120_000)
+
+test('evolve: an edited harness or another --model refuses to resume', async () => {
+  const { repo, env, cwd, h } = await evFirst()
+  const before = evRaw(cwd)
+  const m = cli(['evolve', h, '--tasks', repo, '--rounds', '2', '--yes', '--model', 'other'], env, cwd)
+  expect(m.status).toBe(2)
+  expect(m.stderr).toContain(`the harness or its options changed since this evolve started; delete ${join('harnesses', 'h.evolve.jsonl')} to start over`)
+  writeFileSync(h, readFileSync(h, 'utf8') + '\n')
+  const e = cli(['evolve', h, '--tasks', repo, '--rounds', '2', '--yes'], env, cwd)
+  expect(e.status).toBe(2)
+  expect(e.stderr).toContain('the harness or its options changed since this evolve started')
+  expect(evRaw(cwd)).toBe(before)
+  expect(clonesIn(env)).toEqual([])
+}, 120_000)
+
+test('evolve: a proposer that cannot be reached stops without a candidate line; the next evolve continues at that candidate', async () => {
+  const repo = await tasksRepo(evTasks(ONE_EACH))
+  const [, always, done] = evFake()
+  // No entry answers the proposer: its send throws, as a refused connection would.
+  const env = await tasksEnv([always, { ...done, when: 'make the file' }])
+  const cwd = await tmp('lhb-cwd-')
+  const h = evHarness(cwd)
+  const r = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
+  expect(r.status).toBe(2)
+  expect(r.stderr).toContain('proposer failed: fake backend: no response for this request')
+  expect(types(cwd)).toEqual(['start', 'current'])
+  expect(clonesIn(env)).toEqual([])
+  const before = evRaw(cwd)
+  writeFileSync(env.LHB_FAKE_BACKEND, JSON.stringify(evFake()))
+  const again = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
+  expect(again.status, again.stderr).toBe(0)
+  expect(evRaw(cwd).startsWith(before)).toBe(true)
+  expect(journal(cwd).filter(l => l.type === 'candidate').map(c => c.index)).toEqual([1, 2])
+  expect(clonesIn(env)).toEqual([])
+}, 120_000)
+
+test('evolve: on resume the next version file existing or a link is refused before any run', async () => {
+  const { repo, env, cwd, h } = await evFirst()
+  const v2 = join(cwd, 'harnesses', 'h.v2.json'), before = evRaw(cwd)
+  writeFileSync(v2, '{}\n')
+  const r = cli(['evolve', h, '--tasks', repo, '--rounds', '2', '--yes'], env, cwd)
+  expect(r.status).toBe(2)
+  expect(r.stderr).toContain(`${join('harnesses', 'h.v2.json')} already exists`)
+  rmSync(v2); symlinkSync(join(cwd, 'elsewhere.json'), v2)
+  const l = cli(['evolve', h, '--tasks', repo, '--rounds', '2', '--yes'], env, cwd)
+  expect(l.status).toBe(2)
+  expect(l.stderr).toContain('is a symbolic link')
+  expect(evRaw(cwd)).toBe(before)
+  expect(existsSync(join(cwd, 'elsewhere.json'))).toBe(false)
+  expect(clonesIn(env)).toEqual([])
+}, 120_000)
+
+test('evolve: resuming a finished journal says it measures the final test again', async () => {
+  const { repo, env, cwd, h } = await evFirst()
+  const before = evRaw(cwd)
+  const r = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
+  expect(r.status, r.stderr).toBe(0)
+  expect(r.stderr).toContain('all rounds are in the journal; measuring the final test again')
+  expect(evRaw(cwd)).toBe(before)
+}, 120_000)
+
+test('evolve: ./harnesses as a symbolic link is refused before anything is written', async () => {
+  const repo = await tasksRepo(evTasks(ONE_EACH))
+  const env = await tasksEnv(evFake())
+  const cwd = await tmp('lhb-cwd-'), away = await tmp('lhb-away-')
+  symlinkSync(away, join(cwd, 'harnesses'))
+  const r = cli(['evolve', evHarness(cwd), '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
+  expect(r.status).toBe(2)
+  expect(r.stderr).toContain('harnesses is a symbolic link')
+  expect(readdirSync(away)).toEqual([])
+  expect(existsSync(join(cwd, 'runs'))).toBe(false)
+  expect(clonesIn(env)).toEqual([])
+}, 120_000)
+
+test('evolve: a proposer reply in prose is a journaled rejection, no edit in the reply', async () => {
+  const repo = await tasksRepo(evTasks(ONE_EACH))
+  const [p, ...rest] = evFake()
+  const env = await tasksEnv([{ ...p, content: 'I would tell it to plan first.' }, ...rest])
+  const cwd = await tmp('lhb-cwd-')
+  const r = cli(['evolve', evHarness(cwd), '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
+  expect(r.status, r.stderr).toBe(0)
+  expect(journal(cwd).filter(l => l.type === 'candidate').map(c => c.reason)).toEqual(['no edit in the reply', 'no edit in the reply'])
+  expect(r.stdout).toContain('no version beat the original')
   expect(clonesIn(env)).toEqual([])
 }, 120_000)
