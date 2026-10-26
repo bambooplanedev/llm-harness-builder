@@ -46,7 +46,7 @@ export async function runTests(dir: string, testFile: string, env: NodeJS.Proces
       // The last chunk may still be in the pipe at 'exit'; a stray holder of the pipe cannot delay us past this.
       const done = () => resolve({ results: parse(out), exit, ...(timedOut ? { reason: 'timeout' as const } : {}) })
       child.stdout.once('close', done)
-      setTimeout(done, 200).unref()
+      setTimeout(done, 200)
     }
     child.on('exit', code => end(code))
     child.on('error', () => end(null))

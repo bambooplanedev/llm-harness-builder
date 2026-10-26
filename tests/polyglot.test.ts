@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { spawnSync } from 'node:child_process'
 import { runTests, score, type TestResult } from '../src/core/polyglot.js'
 
 const HEAD = "import { describe, test } from 'node:test'\n"
@@ -46,6 +47,16 @@ describe('runTests', () => {
     const { results } = await run('process.exit(0)')
     expect(results.map(x => x.path)).toEqual(['x.test.js'])
     expect(score(results, ['a'], 0).pass).toBe(false)
+  })
+
+  // Nothing else keeps a plain script's event loop alive: the result must not wait on an unref'd timer.
+  it('resolves in a script with nothing else to wait on', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'lhb-polyglot-test-'))
+    await writeFile(path.join(dir, 'package.json'), '{"type":"module"}')
+    await writeFile(path.join(dir, 'x.test.js'), HEAD + "test('a', () => {})")
+    const src = `import { runTests } from ${JSON.stringify(path.resolve('src/core/polyglot.ts'))}; const r = await runTests(${JSON.stringify(dir)}, 'x.test.js', process.env); console.log(r.results.length)`
+    const out = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', src], { encoding: 'utf8' })
+    expect(out.stdout.trim()).toBe('1')
   })
 })
 
