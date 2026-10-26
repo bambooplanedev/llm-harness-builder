@@ -232,3 +232,11 @@ test('removeAllClonesSync removes every clone still alive', async () => {
   removeAllClonesSync()
   for (const c of [a, b]) { expect(existsSync(c.dir)).toBe(false); expect(existsSync(c.probe)).toBe(false) }
 })
+
+test('prepareModules: setup runs with the env it is given', async () => {
+  const repo = await repoWith({ 'lhb-tasks.json': JSON.stringify({ tasks: [{ name: 'a', prompt: 'p', check: 'true' }], setup: 'test "$LHB_T_FOO" = 1' }) })
+  const t = await loadRepoTasks(repo)
+  await expect(prepareModules(t)).rejects.toThrow('setup failed (exit 1)')
+  const r = await prepareModules(t, { ...childEnv(), LHB_T_FOO: '1' })
+  await removeClone(r.setupClone!)
+})

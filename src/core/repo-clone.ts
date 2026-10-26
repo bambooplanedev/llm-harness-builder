@@ -144,10 +144,10 @@ export async function modulesManifest(nodeModules: string): Promise<string> {
 
 /** Where the runs' node_modules link points: the user's repo, or — with a setup — a clone that ran it, so `npm ci`
  *  never touches the user's own tree. */
-export async function prepareModules(t: RepoTasks): Promise<{ from: string; setupClone?: Clone }> {
+export async function prepareModules(t: RepoTasks, env: NodeJS.ProcessEnv = childEnv()): Promise<{ from: string; setupClone?: Clone }> {
   if (!t.setup) return { from: t.repo }
   const c = await cloneAt(t)
-  const r = await runShell(t.setup, { cwd: c.dir, env: childEnv(), timeoutMs: 1_800_000, maxBuffer: 1 << 20, keep: 'tail' })
+  const r = await runShell(t.setup, { cwd: c.dir, env, timeoutMs: 1_800_000, maxBuffer: 1 << 20, keep: 'tail' })
   if (r.code !== 0) {
     await removeClone(c)
     const last = r.out.trim().split('\n').at(-1) ?? ''

@@ -333,12 +333,19 @@ function rollup(h: BenchHarness) {
 }
 
 /** One Task per task of a repo's lhb-tasks.json: each run in its own clone, its check after a look at the protected files. */
-async function repoWork(repo: RepoTasks): Promise<{ tasks: Task[]; live: Map<string, Clone>; setupClone?: Clone; modules: string }> {
-  const live = new Map<string, Clone>()
-  const { from, setupClone } = await prepareModules(repo)
-  const tasks: Task[] = repo.tasks.map(rt => ({
+type Work = { tasks: Task[]; live: Map<string, Clone>; setupClone?: Clone; modules?: string; ready(env: NodeJS.ProcessEnv): Promise<void> }
+
+/** The Tasks at once (preflight needs one), their node_modules only from ready(): setup runs after preflight, so a
+ *  server that is down is said in seconds, not after `npm ci`. */
+function repoWork(repo: RepoTasks): Work {
+  const w: Work = {
+    tasks: [], live: new Map(),
+    async ready(env) { const { from, setupClone } = await prepareModules(repo, env); w.modules = from; w.setupClone = setupClone },
+  }
+  const live = w.live
+  w.tasks = repo.tasks.map(rt => ({
     name: rt.name, prompt: rt.prompt,
-    async prepare() { const c = await cloneAt(repo); live.set(c.dir, c); await linkNodeModules(c, from); return c.dir },
+    async prepare() { const c = await cloneAt(repo); live.set(c.dir, c); await linkNodeModules(c, w.modules!); return c.dir },
     async check(dir, _size, _answer, env) {
       const c = live.get(dir)!
       const changed = await protectedChanged(c, repo)
@@ -356,7 +363,7 @@ async function repoWork(repo: RepoTasks): Promise<{ tasks: Task[]; live: Map<str
       } finally { live.delete(dir); await removeClone(c) }
     },
   }))
-  return { tasks, live, setupClone, modules: from }
+  return w
 }
 
 /** Every clone a bench made, removed now: at the end, and from the SIGINT handler that exits right after. An exit
@@ -406,7 +413,7 @@ async function cmdBench(argv: string[]) {
     if (key) console.error(`${h.name}: ${key}`)
   }
   // The commands of a repo's tasks run without asking for the whole bench: they are accepted once, by hash, before anything runs.
-  let work: { tasks: Task[]; live: Map<string, Clone>; setupClone?: Clone; modules?: string } = { tasks: [builtin!], live: new Map() }
+  let work: Work = { tasks: [builtin!], live: new Map(), async ready() {} }
   if (repo) {
     console.error(`tasks: ${repo.tasks.length} from ${repo.repo} at ${repo.sha.slice(0, 7)}`)
     if (repo.uncommitted) console.error('uncommitted changes are not in the clones')
@@ -421,12 +428,14 @@ async function cmdBench(argv: string[]) {
         await saveConsent(repo)
       } else die(`${text}\n\npass --yes to accept these commands, or run in a terminal`)
     }
-    try { work = await repoWork(repo) } catch (e) { die((e as Error).message) }
+    work = repoWork(repo)
   }
   const tasks = work.tasks
   // Before any JSON exists: a server that is down, or lacks the model, is a typo to report, not 90 minutes of 'error' rows.
   const no = await preflightAll(harnesses, tasks[0], size)
   if (no) { dropWork(work); die(no) }
+  // setup runs once for every harness: it gets the env names any of them passes to its commands.
+  try { await work.ready(childEnv([...new Set(harnesses.flatMap(h => h.config.tools.bashEnv ?? []))])) } catch (e) { die((e as Error).message) }
   await mkdir(path.dirname(out), { recursive: true })
   const result: BenchResult = { version: 1, date: started.toISOString(), task: repo ? `${TASKS_FILE} at ${repo.sha.slice(0, 7)} in ${repo.repo}` : builtin!.prompt, taskName, size, node: process.version, n, timeoutS, complete: false, harnesses,
     ...(repo ? { tasksRepo: repo.repo, tasksSha: repo.sha, taskCount: repo.tasks.length } : {}) }

@@ -1512,3 +1512,23 @@ test('bench --tasks: what a run left in the background is dead before its check'
   expect([run.verdict, run.lastError]).toEqual(['PASS', undefined])
   expect(() => process.kill(Number(readFileSync(pidFile, 'utf8')), 0)).toThrow()
 }, 60_000)
+
+test('bench --tasks: a server that is down is reported before setup runs', async () => {
+  const marker = join(await tmp('lhb-mark-'), 'ran')
+  const repo = await gitRepo({ 'lhb-tasks.json': JSON.stringify({ tasks: TWO, setup: `touch "${marker}"` }) })
+  const env = await tasksEnv([])
+  const { LHB_FAKE_BACKEND: _, ...noFake } = env
+  const r = cli(['bench', '--tasks', repo, '--n', '1', '--yes', '--kind', 'ollama', '--base-url', 'http://127.0.0.1:1', harness('bare')], noFake)
+  expect(r.status).toBe(2)
+  expect(existsSync(marker)).toBe(false)
+}, 60_000)
+
+test('bench --tasks: setup gets the env names of the harnesses\' tools.bashEnv', async () => {
+  const repo = await gitRepo({ 'lhb-tasks.json': JSON.stringify({ tasks: [{ name: 'a', prompt: 'p', check: 'true' }], setup: 'test "$LHB_T_FOO" = 1' }) })
+  const env = await tasksEnv([{ content: 'done' }])
+  const cwd = await tmp('lhb-cwd-')
+  const h = join(cwd, 'h.json')
+  writeFileSync(h, JSON.stringify({ ...JSON.parse(readFileSync(harness('bare'), 'utf8')), tools: { enabled: ['bash'], approveBash: true, bashEnv: ['LHB_T_FOO'] } }))
+  const r = cli(['bench', '--tasks', repo, '--n', '1', '--yes', '--out', join(cwd, 'b.json'), h], { ...env, LHB_T_FOO: '1' }, cwd)
+  expect(r.status, r.stderr).toBe(0)
+}, 60_000)
