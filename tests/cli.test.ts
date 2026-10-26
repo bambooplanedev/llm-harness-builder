@@ -1520,7 +1520,7 @@ test('bench --tasks: asks before running the commands, remembers, asks again whe
   expect(cli([...args, '--yes'], env, cwd).status).toBe(0)
   expect(cli(args, env, cwd).status).toBe(0)
   writeFileSync(join(repo, 'lhb-tasks.json'), JSON.stringify({ tasks: [TWO[0], { ...TWO[1], check: 'exit 2' }] }))
-  execSync('git -c user.name=t -c user.email=t@t commit -qam next', { cwd: repo })
+  await gitCommit(repo)
   expect(cli(args, env, cwd).status).toBe(2)
 }, 90_000)
 
@@ -1550,7 +1550,7 @@ test('bench --tasks: a changed protected file is a FAIL and the check never runs
 test('bench --tasks: the model changing the shared node_modules stops the bench after its JSON', async () => {
   const repo = await tasksRepo(TWO)
   mkdirSync(join(repo, 'node_modules', 'x'), { recursive: true }); writeFileSync(join(repo, 'node_modules', 'x', 'index.js'), '1')
-  writeFileSync(join(repo, '.gitignore'), 'node_modules\n'); execSync('git -c user.name=t -c user.email=t@t add .gitignore && git -c user.name=t -c user.email=t@t commit -qm ig', { cwd: repo })
+  writeFileSync(join(repo, '.gitignore'), 'node_modules\n'); await gitCommit(repo, 'ig')
   const env = await tasksEnv([bashCall('rm node_modules/x/index.js'), { content: 'done' }, { content: 'done' }])
   const cwd = await tmp('lhb-cwd-')
   const r = cli(['bench', '--tasks', repo, '--n', '1', '--yes', '--out', join(cwd, 'b.json'), harness('bare')], env, cwd)
@@ -1875,7 +1875,7 @@ test('evolve: an edited harness or another --model refuses to resume', async () 
   const before = evRaw(cwd)
   const m = cli(['evolve', h, '--tasks', repo, '--rounds', '2', '--yes', '--model', 'other'], env, cwd)
   expect(m.status).toBe(2)
-  expect(m.stderr).toContain(`the harness or its options changed since this evolve started; delete ${join('harnesses', 'h.evolve.jsonl')} and move away ${join('harnesses', 'h.v*.json')} to start over`)
+  expect(m.stderr).toContain(`the harness or its options changed since this evolve started; this evolve has finished: see its results with --report and the harness and options it ran with, or move away ${join('harnesses', 'h.evolve.jsonl')} and ${join('harnesses', 'h.v*.json')} to start over`)
   writeFileSync(h, readFileSync(h, 'utf8') + '\n')
   const e = cli(['evolve', h, '--tasks', repo, '--rounds', '2', '--yes'], env, cwd)
   expect(e.status).toBe(2)
@@ -2000,9 +2000,20 @@ test('evolve: --report when the start commit is no longer in the repo says so', 
 
 test('evolve: the start-over hint names the version files', async () => {
   const { repo, env, cwd, h } = await evFirst()
+  // Unfinished: the final test is not in the journal.
+  writeFileSync(join(cwd, 'harnesses', 'h.evolve.jsonl'), journal(cwd).filter(l => l.type !== 'final').map(l => JSON.stringify(l)).join('\n') + '\n')
   const m = cli(['evolve', h, '--tasks', repo, '--rounds', '2', '--yes', '--model', 'other'], env, cwd)
   expect(m.status).toBe(2)
   expect(m.stderr).toContain(`; delete ${join('harnesses', 'h.evolve.jsonl')} and move away ${join('harnesses', 'h.v*.json')} to start over`)
+}, 120_000)
+
+test('evolve: a finished evolve started again after a new commit points at --report, not at deleting its results', async () => {
+  const { repo, env, cwd, h } = await evFirst()
+  await writeFile(join(repo, 'other.txt'), 'x'); await gitCommit(repo)
+  const r = cli(['evolve', h, '--tasks', repo, '--yes'], env, cwd)
+  expect(r.status).toBe(2)
+  expect(r.stderr).toContain(`the repo has a new commit since this evolve started; this evolve has finished: see its results with --report and the harness and options it ran with, or move away ${join('harnesses', 'h.evolve.jsonl')} and ${join('harnesses', 'h.v*.json')} to start over`)
+  expect(r.stderr).not.toContain('delete')
 }, 120_000)
 
 test('evolve: a journal with a flipped decision is refused on resume and on --report', async () => {
@@ -2088,7 +2099,7 @@ for (const [what, tamper] of [
   const r = cli(['evolve', h, '--tasks', repo, '--rounds', '2', '--yes'], env, cwd)
   expect(r.status).toBe(2)
   expect(r.stderr).toContain('the notes snapshot changed')
-  expect(r.stderr).toContain(`delete ${join('harnesses', 'h.evolve.jsonl')}`)
+  expect(r.stderr).toContain(`; this evolve has finished: see its results with --report and the harness and options it ran with, or move away ${join('harnesses', 'h.evolve.jsonl')} and ${join('harnesses', 'h.v*.json')} to start over`)
   expect(journal(cwd).some(l => l.round === 2)).toBe(false)
   expect(clonesIn(env)).toEqual([])
 }, 120_000)

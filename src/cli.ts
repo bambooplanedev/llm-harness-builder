@@ -547,8 +547,13 @@ async function cmdEvolve(argv: string[]) {
   let lines: JournalLine[] = [], torn = ''
   // The journal is the report's only source: under --report the refusals never advise deleting it.
   // Its version files stay behind a deleted journal, and the next start refuses to overwrite v1.
-  const then = values.report ? `the report cannot be shown from ${jf}` : `delete ${jf} and move away ${path.join(dir, `${base}.v*.json`)} to start over`
+  const versions = path.join(dir, `${base}.v*.json`)
+  const then = values.report ? `the report cannot be shown from ${jf}` : `delete ${jf} and move away ${versions} to start over`
   const start = (what: string) => `${what}; ${then}`
+  // A sound journal that moved out of step with the repo, the harness or the snapshot: when it is finished it holds the
+  // only results, and a refused restart points at them, never at deleting them.
+  const moved = (what: string) => values.report || !lines.some(l => l.type === 'final') ? start(what)
+    : `${what}; this evolve has finished: see its results with --report and the harness and options it ran with, or move away ${jf} and ${versions} to start over`
   if (resuming) {
     const text = readFileSync(jf, 'utf8')
     const j = parseJournal(text)
@@ -576,11 +581,11 @@ async function cmdEvolve(argv: string[]) {
   const snapOk = () => {
     try { return lstatSync(snap).isFile() && sha256(readFileSync(snap)) === (lines[0] as Extract<JournalLine, { type: 'start' }>).notes } catch { return false }
   }
-  const snapCheck = () => { if (!snapOk()) die(start(`the notes snapshot changed since this evolve started (${snap})`)) }
+  const snapCheck = () => { if (!snapOk()) die(moved(`the notes snapshot changed since this evolve started (${snap})`)) }
   if (resuming) {
     // Under --report the tasks were read at this very commit.
-    if (lines[0]?.type === 'start' && lines[0].sha !== repo.sha) die(start('the repo has a new commit since this evolve started'))
-    if (lines[0]?.type === 'start' && lines[0].pin !== pin) die(start('the harness or its options changed since this evolve started'))
+    if (lines[0]?.type === 'start' && lines[0].sha !== repo.sha) die(moved('the repo has a new commit since this evolve started'))
+    if (lines[0]?.type === 'start' && lines[0].pin !== pin) die(moved('the harness or its options changed since this evolve started'))
     if (lines[0]?.type === 'start' && lines[0].base !== base) die(start('the journal was written for another harness'))
   }
   // A new journal has no state until its start line.
