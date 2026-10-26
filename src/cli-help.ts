@@ -1,6 +1,7 @@
 // src/cli-help.ts — each command's options, usage line and help text, in one place. cli.ts parses
 // with these options, so --help can never describe a flag the parser does not take, or miss one.
 import type { ParseArgsConfig } from 'node:util'
+import { ROUNDS } from './core/evolve.js'
 
 type Options = NonNullable<ParseArgsConfig['options']>
 /** One entry per option except --help: the value placeholder ('' for a flag) and what it does. */
@@ -58,6 +59,22 @@ export const COMMANDS = {
       tasks: ['<repo>', 'run your own tasks from <repo>/lhb-tasks.json (the last commit) instead of --task'],
       yes: ['', 'accept the commands of --tasks without asking (needed without a terminal)'],
       'max-turns': ['<N>', 'turn limit, overriding the harness files'],
+      ...backendDocs,
+    },
+  }),
+  evolve: command({
+    summary: 'Improve a harness on your own tasks: propose one edit at a time, keep it only if it wins on tasks the proposer never saw.',
+    args: '<harness.json>',
+    options: {
+      tasks: { type: 'string' }, rounds: { type: 'string', default: String(ROUNDS) }, proposer: { type: 'string' },
+      timeout: { type: 'string', default: '1800' }, yes: { type: 'boolean', default: false }, ...backend, help,
+    },
+    docs: {
+      tasks: ['<repo>', 'the tasks of <repo>/lhb-tasks.json (the last commit) to train, gate and test on (required)'],
+      rounds: ['<N>', `rounds of proposals (default ${ROUNDS})`],
+      proposer: ['<harness.json>', 'the harness whose backend proposes the edits (default: the one being improved)'],
+      timeout: ['<s>', 'seconds per run (default 1800)'],
+      yes: ['', 'accept the commands of --tasks without asking (needed without a terminal)'],
       ...backendDocs,
     },
   }),

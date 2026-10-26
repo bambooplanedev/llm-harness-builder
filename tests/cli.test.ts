@@ -1590,3 +1590,121 @@ test('bench --tasks: what setup leaves in the background is gone before the firs
   expect(r.status, r.stderr).toBe(0)
   expect(JSON.parse(await readFile(join(cwd, 'b.json'), 'utf8')).harnesses[0].runs[0].verdict).toBe('PASS')
 }, 60_000)
+
+// --- evolve: the same clones and fake as bench --tasks. The fake answers by what the request holds: the proposer's
+// system prompt, the paragraph it proposes (bash makes done.txt: PASS), or neither (a final answer: FAIL). The
+// proposer's entry goes first — after an acceptance its input holds the paragraph too, and the first entry that fits wins.
+const ALWAYS = 'ALWAYS make done.txt before you answer.'
+const evFake = (o: { value?: string; prompt?: number; doneUsage?: object } = {}) => [
+  { when: 'You improve the harness', keep: true, content: JSON.stringify({ field: 'systemPrompt', value: o.value ?? ALWAYS }), usage: { promptTokens: 50, completionTokens: 5 } },
+  { when: 'ALWAYS make done.txt', keep: true, ...bashCall('echo ok > done.txt'), usage: { promptTokens: o.prompt ?? 100, completionTokens: 10 } },
+  { keep: true, content: 'done', usage: o.doneUsage ?? { promptTokens: 100, completionTokens: 10 } },
+]
+const evHarness = (cwd: string) => {
+  const h = join(cwd, 'h.json')
+  writeFileSync(h, JSON.stringify({ ...JSON.parse(readFileSync(harness('bare'), 'utf8')), name: 'h', tools: { enabled: ['bash'], approveBash: true }, loop: { maxTurns: 1 } }, null, 2))
+  return h
+}
+const evTasks = (sets: Record<'train' | 'gate' | 'test', number>, prefix = 'job') =>
+  Object.entries(sets).flatMap(([set, n]) => Array.from({ length: n }, (_, i) => ({ name: `${prefix}-${set}-${i}`, prompt: 'make the file', check: 'test -f done.txt', set })))
+const journal = (cwd: string) => readFileSync(join(cwd, 'harnesses', 'h.evolve.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l))
+const ONE_EACH = { train: 1, gate: 1, test: 1 }
+
+test('evolve: a candidate that turns the fake to PASS is accepted, v1 written, original byte for byte', async () => {
+  const repo = await tasksRepo(evTasks({ train: 12, gate: 4, test: 8 }))
+  const env = await tasksEnv(evFake())
+  const cwd = await tmp('lhb-cwd-')
+  const h = evHarness(cwd), before = readFileSync(h)
+  const r = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes', '--model', 'other'], env, cwd)
+  expect(r.status, r.stderr).toBe(0)
+  const lines = journal(cwd)
+  const cands = lines.filter(l => l.type === 'candidate')
+  expect(cands.map(c => [c.index, c.accepted, c.reason])).toEqual([[1, true, 'accepted'], [2, false, 'already tried']])
+  const v1 = JSON.parse(readFileSync(join(cwd, 'harnesses', 'h.v1.json'), 'utf8'))
+  expect(v1.name).toBe('h.v1')
+  expect(v1.systemPrompt).toContain(ALWAYS)
+  expect(v1.backend.model).toBe(JSON.parse(before.toString()).backend.model)
+  expect(readFileSync(h).equals(before)).toBe(true)
+  expect(r.stdout).toContain('better on the tasks of this repo Evolve did not see')
+  expect(r.stdout).toContain(ALWAYS)
+  expect(clonesIn(env)).toEqual([])
+}, 120_000)
+
+test('evolve: the proposer\'s request has no repo path or task name', async () => {
+  const repo = await tasksRepo(evTasks(ONE_EACH, 'quartz'), { 'src/widget_parser.ts': 'export {}\n' })
+  const env = await tasksEnv(evFake())
+  const cwd = await tmp('lhb-cwd-')
+  const r = cli(['evolve', evHarness(cwd), '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
+  expect(r.status, r.stderr).toBe(0)
+  const inputs = journal(cwd).filter(l => l.type === 'candidate').map(l => l.input)
+  expect(inputs).toHaveLength(2)
+  for (const i of inputs) for (const s of ['quartz', 'widget_parser', 'lhb-tasks', 'src/', realpathSync(repo)]) expect(i).not.toContain(s)
+  expect(JSON.parse(inputs[0]).failures[0]).toMatchObject({ count: 1, calls: {} })
+  expect(clonesIn(env)).toEqual([])
+}, 120_000)
+
+test('evolve: reference mode on 1+1+1 says \u041e\u0420\u0406\u0404\u041d\u0422\u0418\u0420 in the output and the journal start line has strict false', async () => {
+  const repo = await tasksRepo(evTasks(ONE_EACH))
+  const env = await tasksEnv(evFake())
+  const cwd = await tmp('lhb-cwd-')
+  const r = cli(['evolve', evHarness(cwd), '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
+  expect(r.status, r.stderr).toBe(0)
+  expect(r.stdout + r.stderr).toContain('\u041e\u0420\u0406\u0404\u041d\u0422\u0418\u0420, \u041d\u0415 \u0414\u041e\u041a\u0410\u0417')
+  expect(r.stdout).toContain('more PASS')
+  expect(journal(cwd)[0]).toMatchObject({ type: 'start', strict: false })
+  expect(clonesIn(env)).toEqual([])
+}, 120_000)
+
+test('evolve: a proposal with a URL is refused before any run', async () => {
+  const repo = await tasksRepo(evTasks(ONE_EACH))
+  const env = await tasksEnv(evFake({ value: 'see https://x.io' }))
+  const cwd = await tmp('lhb-cwd-')
+  const r = cli(['evolve', evHarness(cwd), '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
+  expect(r.status, r.stderr).toBe(0)
+  const cands = journal(cwd).filter(l => l.type === 'candidate')
+  expect(cands).toHaveLength(2)
+  for (const c of cands) { expect(c.reason).toBe('looks like a command or an address'); expect(c.runs).toBeUndefined() }
+  expect(r.stdout).toContain('no version beat the original')
+  expect(existsSync(join(cwd, 'harnesses', 'h.v1.json'))).toBe(false)
+  expect(clonesIn(env)).toEqual([])
+}, 120_000)
+
+test('evolve: a candidate whose first request is heavier than the ceiling is refused', async () => {
+  const repo = await tasksRepo(evTasks(ONE_EACH))
+  // The same total tokens per run on both sides, so only the first request's weight differs.
+  const env = await tasksEnv(evFake({ prompt: 200, doneUsage: { promptTokens: 100, completionTokens: 110 } }))
+  const cwd = await tmp('lhb-cwd-')
+  const r = cli(['evolve', evHarness(cwd), '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
+  expect(r.status, r.stderr).toBe(0)
+  const c = journal(cwd).find(l => l.type === 'candidate')
+  expect([c.accepted, c.reason]).toEqual([false, 'first request 100% heavier than the original'])
+  expect(c.runs).toHaveLength(2)
+  expect(r.stdout).toContain('no version beat the original')
+  expect(clonesIn(env)).toEqual([])
+}, 120_000)
+
+test('evolve: refuses when harnesses/h.v1.json already exists, before any run', async () => {
+  const repo = await tasksRepo(evTasks(ONE_EACH))
+  const env = await tasksEnv(evFake())
+  const cwd = await tmp('lhb-cwd-')
+  mkdirSync(join(cwd, 'harnesses')); writeFileSync(join(cwd, 'harnesses', 'h.v1.json'), '{}\n')
+  const r = cli(['evolve', evHarness(cwd), '--tasks', repo, '--yes'], env, cwd)
+  expect(r.status).toBe(2)
+  expect(r.stderr).toContain(join('harnesses', 'h.v1.json'))
+  expect(readFileSync(join(cwd, 'harnesses', 'h.v1.json'), 'utf8')).toBe('{}\n')
+  expect(existsSync(join(cwd, 'runs'))).toBe(false)
+  expect(existsSync(join(cwd, 'harnesses', 'h.evolve.jsonl'))).toBe(false)
+  expect(clonesIn(env)).toEqual([])
+}, 120_000)
+
+test('evolve: without consent and without a terminal it shows the evolve consent and stops', async () => {
+  const repo = await tasksRepo(evTasks(ONE_EACH))
+  const env = await tasksEnv(evFake())
+  const cwd = await tmp('lhb-cwd-')
+  const r = cli(['evolve', evHarness(cwd), '--tasks', repo], env, cwd)
+  expect(r.status).toBe(2)
+  for (const s of ['mode: evolve', 'fields: systemPrompt', 'pass --yes']) expect(r.stderr).toContain(s)
+  expect(existsSync(join(cwd, 'harnesses', 'h.evolve.jsonl'))).toBe(false)
+  expect(existsSync(join(cwd, 'runs'))).toBe(false)
+  expect(clonesIn(env)).toEqual([])
+}, 120_000)
