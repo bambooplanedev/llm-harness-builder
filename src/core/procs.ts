@@ -30,7 +30,35 @@ function hook() {
 }
 
 /** Remember a detached group so it dies with us. Safe to call for every child. */
-export function track(pid: number): void { live.add(pid); hook() }
+export function track(pid: number): void { live.add(pid); hook(); prune() }
 
-/** Forget a group that has already exited. */
-export function untrack(pid: number): void { live.delete(pid) }
+const groupAlive = (pid: number): boolean => { try { process.kill(-pid, 0); return true } catch { return false } }
+
+/** Forget a group. `keepIfAlive`: only once it is empty — a command that left a child in the background (`&`) keeps its
+ *  group here, so the child dies with the run instead of outliving it. Never for a group just killed: its leader is not
+ *  reaped yet and would look alive, and a pgid kept past its group would one day SIGKILL whoever reuses the number. */
+export function untrack(pid: number, o: { keepIfAlive?: boolean } = {}): void {
+  if (!o.keepIfAlive || !groupAlive(pid)) live.delete(pid)
+}
+
+// While anything is tracked, once a second: a group that is gone, or whose pgid answers EPERM (reused by another
+// user), is dropped, so the set never holds a number some other process group may own later.
+let pruner: NodeJS.Timeout | undefined
+function prune() {
+  if (pruner || !live.size) return
+  pruner = setInterval(() => {
+    for (const pid of live) if (!groupAlive(pid)) live.delete(pid)
+    if (!live.size) { clearInterval(pruner); pruner = undefined }
+  }, 1000).unref()
+}
+
+/** SIGKILL every tracked group, wait (at most 1 s) until each is gone, and forget them: what a run left behind dies
+ *  before its check looks at the files. */
+export async function killTracked(): Promise<void> {
+  const pids = [...live]
+  for (const pid of pids) try { process.kill(-pid, 'SIGKILL') } catch {}
+  for (let t = 0; t < 50 && pids.some(groupAlive); t++) await new Promise(r => setTimeout(r, 20))
+  for (const pid of pids) live.delete(pid)
+}
+
+export const trackedCount = (): number => live.size

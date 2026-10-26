@@ -9,6 +9,7 @@ import { homedir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { mayAsk, type RunOpts } from './core/run.js'
+import { killTracked } from './core/procs.js'
 import { withNotes, type NotesStore } from './core/notes-run.js'
 import { notesKey, notesPath, readNotes, selectNotes } from './core/notes.js'
 import { loadRepoTasks, consentText, hasConsent, saveConsent, TASKS_FILE, type RepoTasks } from './core/repo-tasks.js'
@@ -302,6 +303,8 @@ async function benchOnce(config: HarnessConfig, round: number, timeoutS: number,
       },
     })
     traceId = id
+    // What the run left in the background (`&`, nohup) dies before the check reads the files it could still be writing.
+    await killTracked()
     const ms = Date.now() - t0
     const d = last.type === 'done' ? last : undefined
     const c = await task.check(workdir, size, d?.reason === 'final' ? d.text : undefined, childEnv(config.tools.bashEnv))
@@ -312,6 +315,8 @@ async function benchOnce(config: HarnessConfig, round: number, timeoutS: number,
   } catch (e) {
     run = { ...(task.name ? { task: task.name } : {}), round, verdict: 'FAIL', reason: 'error', turns: 0, toolCalls: 0, parseErrors, lastError: redact.text(String(e)), ms: Date.now() - t0, workdir, toolChars: toolChars || undefined, costUsd, peakTokens, toolErrors, guardBlocks: config.tools.requireReadBeforeEdit ? guardBlocks : undefined, editMiss }
   } finally {
+    // The check's own leftovers too, and a run that threw: nothing keeps writing into a clone being removed.
+    await killTracked()
     // The clone of a task of the user's own goes away whatever happened; a failure to clean up is said, not thrown.
     if (workdir && task.dispose) await task.dispose(workdir, traceId).catch(e => console.error(`cannot clean up ${workdir}: ${(e as Error).message}`))
   }

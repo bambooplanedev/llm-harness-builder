@@ -5,6 +5,9 @@ import { tmp } from './helpers.js'
 import { execSync, spawn } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
 import { bash, runShell } from '../src/core/tools/bash.js'
+import { track, untrack, killTracked, trackedCount } from '../src/core/procs.js'
+
+const alive = (pid: number) => { try { process.kill(pid, 0); return true } catch { return false } }
 
 const ctx = async () => ({ workdir: await tmp('lhb-sh-'), maxToolOutputChars: 4000 })
 
@@ -100,4 +103,36 @@ test('runShell: keep tail keeps the end of a long output', async () => {
   expect(r.capped).toBe(true)
   expect(r.out.trimEnd().endsWith('line 299999')).toBe(true)
   expect(Buffer.byteLength(r.out)).toBeLessThanOrEqual(1 << 20)
+})
+
+// The registry as runShell uses it: these share its one module instance, so they live here and not in procs.test.ts,
+// whose fresh instances diff the process listeners around each test.
+test('a group with a background child stays tracked until killTracked, which waits until it is gone', async () => {
+  const r = await sh('sleep 30 >/dev/null 2>&1 & echo $!')
+  const pid = Number(r.out.trim())
+  expect(alive(pid)).toBe(true)
+  expect(trackedCount()).toBeGreaterThan(0)
+  await killTracked()
+  expect(alive(pid)).toBe(false)
+  expect(trackedCount()).toBe(0)
+})
+
+test('a command with no background child leaves nothing tracked', async () => {
+  await sh('true')
+  expect(trackedCount()).toBe(0)
+})
+
+test('a kept group whose members die elsewhere is pruned', async () => {
+  const r = await sh('sleep 30 >/dev/null 2>&1 & echo $!')
+  process.kill(Number(r.out.trim()), 'SIGKILL')
+  await new Promise(res => setTimeout(res, 2000))
+  expect(trackedCount()).toBe(0)
+}, 10_000)
+
+test('untrack without keepIfAlive forgets a live group at once', async () => {
+  const child = spawn('sh', ['-c', 'sleep 30'], { detached: true, stdio: 'ignore' })
+  track(child.pid!)
+  untrack(child.pid!)
+  expect(trackedCount()).toBe(0)
+  process.kill(-child.pid!, 'SIGKILL')
 })

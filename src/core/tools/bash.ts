@@ -16,7 +16,9 @@ export function runShell(command: string, o: ShellOpts): Promise<ShellResult> {
     const child = spawn('sh', ['-c', command], { cwd: o.cwd, env: o.env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
     const pid = child.pid
     if (pid) track(pid)
-    const release = () => { clearTimeout(timer); if (pid) untrack(pid) }
+    let killed = false
+    // A normal close keeps a group with a background child in it (it dies with the run); a killed one is forgotten.
+    const release = () => { clearTimeout(timer); if (pid) untrack(pid, { keepIfAlive: !killed }) }
     let chunks: Buffer[] = []
     let bytes = 0
     let capped = false
@@ -33,7 +35,6 @@ export function runShell(command: string, o: ShellOpts): Promise<ShellResult> {
     }
     child.stdout.on('data', collect)
     child.stderr.on('data', collect)
-    let killed = false
     const timer = setTimeout(() => { killed = true; try { process.kill(-child.pid!, 'SIGKILL') } catch {} }, o.timeoutMs)
     child.on('close', code => { release(); resolve({ code, killed, out: Buffer.concat(chunks).toString('utf8'), capped }) })
     child.on('error', err => { release(); resolve({ code: null, killed: false, out: '', capped: false, spawnError: err.message }) })

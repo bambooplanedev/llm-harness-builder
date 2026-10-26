@@ -1500,3 +1500,15 @@ test('bench --tasks: swapping the node_modules link for a folder of the model\'s
   expect([run.verdict, run.lastError]).toEqual(['FAIL', 'changed a protected file: node_modules'])
   expect(readFileSync(join(repo, 'node_modules', 'x', 'index.js'), 'utf8')).toBe('1')
 }, 60_000)
+
+test('bench --tasks: what a run left in the background is dead before its check', async () => {
+  const repo = await tasksRepo([{ name: 'a', prompt: 'p', check: 'a=$(wc -c < grow.txt); sleep 0.5; test "$(wc -c < grow.txt)" = "$a"' }])
+  const pidFile = join(await tmp('lhb-pid-'), 'pid')
+  const env = await tasksEnv([bashCall(`(while :; do echo x >> grow.txt; sleep 0.05; done) >/dev/null 2>&1 & sleep 30 >/dev/null 2>&1 & echo $! > "${pidFile}"; echo started`), { content: 'done' }])
+  const cwd = await tmp('lhb-cwd-')
+  const r = cli(['bench', '--tasks', repo, '--n', '1', '--yes', '--out', join(cwd, 'b.json'), harness('bare')], env, cwd)
+  expect(r.status, r.stderr).toBe(0)
+  const run = JSON.parse(await readFile(join(cwd, 'b.json'), 'utf8')).harnesses[0].runs[0]
+  expect([run.verdict, run.lastError]).toEqual(['PASS', undefined])
+  expect(() => process.kill(Number(readFileSync(pidFile, 'utf8')), 0)).toThrow()
+}, 60_000)

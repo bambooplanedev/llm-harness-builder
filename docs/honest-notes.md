@@ -30,6 +30,8 @@ Limits of [llm-harness-builder](../README.md) and of what its [findings](finding
   not `bash`: the model's commands still run as you, without asking, for the whole bench. The
   `node_modules` link is watched, not protected — a change to its `.bin`, a `package.json` or a
   package's top-level code stops the bench after the fact, and deeper files are not watched.
+- In `bench`, a run's processes are killed when the run ends, before its check; one that left its
+  session (`setsid`) is not.
 - The environment of what the model runs — `bash`, `loop.untilBash`, and the task checks, which
   execute the model's code — is `PATH`, `HOME`, `LANG`, `LC_ALL`, `LC_CTYPE`, `LC_COLLATE`,
   `LC_MESSAGES`, `LC_MONETARY`, `LC_NUMERIC`, `LC_TIME`, `TERM`, `TMPDIR` and the names in
