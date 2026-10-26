@@ -17,10 +17,12 @@
 #   5. Docker is running
 #   6. the container: Node 22.12, `npm i` without EBADENGINE, --version and --help,
 #      demo without a server, serve + example runs + bench + harnesses/bare.json,
-#      analyze (1710 s), OpenRouter demo, Anthropic bench, links, no key in logs
+#      analyze (1710 s), links, no key in logs; with keys, that OpenRouter and Anthropic answer
+#      (the demo and the bench end without backend_error; not that the model does well)
 #   7. MANUAL: the page in a browser (serve; Run tab, Bench tab, a theme switch)
 #   8. MANUAL: README renders on GitHub, both languages, the GIF plays
-#   9. MANUAL: `git tag -a vX.Y.Z`, `gh release create vX.Y.Z <tgz>`, `npm publish <tgz>` (2FA)
+#   9. MANUAL: `git tag -a vX.Y.Z`, `git push origin vX.Y.Z`, `gh release create vX.Y.Z <tgz>`,
+#      `npm publish <tgz>` (2FA)
 #  10. MANUAL: `npm view llm-harness-builder@X.Y.Z dist.shasum` equals the sha1 of step 4
 #
 # Free model gone or rate-limited: rerun with OPENROUTER_MODEL=<another :free id with tool
@@ -59,7 +61,7 @@ host() {
   here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
   repo=$(cd "$here/.." && pwd)
   tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
+  trap "rm -rf '$tmp'" EXIT # expanded now: $tmp is local, the trap fires after host() returned
 
   h_tree() {
     [ -f "$tgz" ] || { echo "no such file: $tgz"; return 1; }
@@ -78,6 +80,10 @@ host() {
       esac
       grep -qxF -- "$f" "$tmp/tracked" || { echo "not tracked: $f"; return 1; }
     done < "$tmp/entries"
+    local want got
+    want=$(node -p 'JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).version' "$repo/package.json")
+    got=$(tar xzOf "$tgz" package/package.json | node -p 'JSON.parse(require("fs").readFileSync(0,"utf8")).version')
+    [ "$got" = "$want" ] || { echo "the tarball is $got, the repo is $want"; return 1; }
     for f in dist/cli.js web/dist/index.html harnesses/bare.json example-runs/bench-example.json; do
       grep -qxF -- "package/$f" "$tmp/entries" || { echo "missing: $f"; return 1; }
     done
@@ -187,21 +193,25 @@ inside() {
     $bin analyze "$pkgdir/example-runs/bench-example.json" | grep d63e9548 | grep -q '1710 s' \
       || { echo "the d63e9548 row lacks '1710 s'"; return 1; }
   }
+  # the last line of a failed CLI output that mentions an error (the CLI redacts keys)
+  errline() { printf '%s\n' "$1" | grep -i error | tail -n 1 | cut -c1-200 || true; }
   c_openrouter() {
     printenv OPENROUTER_API_KEY > /dev/null 2>&1 || { echo "OPENROUTER_API_KEY not set"; return 77; }
     local model=${OPENROUTER_MODEL:-nvidia/nemotron-3.5-super-vl:free} out rc=0
     out=$($bin demo --kind openai --base-url https://openrouter.ai/api/v1 --api-key-env OPENROUTER_API_KEY --model "$model" 2>&1) || rc=$?
-    [ "$rc" -eq 0 ] || { echo "demo exited $rc; rerun with OPENROUTER_MODEL=<another :free id with tools> ($model)"; return 1; }
+    printf '%s\n' "$out" >> /tmp/cli.log
+    [ "$rc" -eq 0 ] || { echo "demo exited $rc; rerun with OPENROUTER_MODEL=<another :free id with tools> ($model) $(errline "$out")"; return 1; }
     [ "$(printf '%s\n' "$out" | grep -c 'trace=')" -eq 3 ] || { echo "not three rows with trace= (OPENROUTER_MODEL=$model)"; return 1; }
-    ! printf '%s' "$out" | grep -q 'reason=backend_error' || { echo "reason=backend_error; rerun with another OPENROUTER_MODEL ($model)"; return 1; }
+    ! printf '%s' "$out" | grep -q 'reason=backend_error' || { echo "reason=backend_error; rerun with another OPENROUTER_MODEL ($model) $(errline "$out")"; return 1; }
   }
   c_anthropic() {
     printenv ANTHROPIC_API_KEY > /dev/null 2>&1 || { echo "ANTHROPIC_API_KEY not set"; return 77; }
     local out rc=0
     out=$($bin bench "$pkgdir/harnesses/native-anthropic.json" --n 1 --timeout 300 2>&1) || rc=$?
-    [ "$rc" -eq 0 ] || { echo "bench exited $rc"; return 1; }
+    printf '%s\n' "$out" >> /tmp/cli.log
+    [ "$rc" -eq 0 ] || { echo "bench exited $rc $(errline "$out")"; return 1; }
     printf '%s' "$out" | grep -qF 'med $' || { echo "the bench table lacks 'med \$'"; return 1; }
-    ! printf '%s' "$out" | grep -q 'backend_error' || { echo "the run ended in backend_error"; return 1; }
+    ! printf '%s' "$out" | grep -q 'backend_error' || { echo "the run ended in backend_error $(errline "$out")"; return 1; }
   }
   c_links() {
     local u
@@ -215,11 +225,11 @@ inside() {
     local name where=""
     for name in OPENROUTER_API_KEY ANTHROPIC_API_KEY; do
       printenv "$name" | grep -q . || continue
-      if grep -rqF -f <(printenv "$name") runs /tmp/launch.log 2> /dev/null; then
+      if grep -rqF -f <(printenv "$name") runs /tmp/launch.log /tmp/cli.log 2> /dev/null; then
         where="$where $name"
       fi
     done
-    [ -z "$where" ] || { echo "key found in runs/ or the log:$where"; return 1; }
+    [ -z "$where" ] || { echo "key found in runs/ or a log:$where"; return 1; }
   }
 
   step node c_node

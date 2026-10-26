@@ -100,7 +100,7 @@
 ## Встановлення
 
 Щоб спробувати, нічого встановлювати не треба — `npx` завантажить сам (версію можна закріпити:
-`npx llm-harness-builder@0.4.0`):
+`npx llm-harness-builder@0.5.0`):
 
     npx llm-harness-builder --help
 
@@ -110,12 +110,12 @@
 
 Або як dev-залежність проєкту, а запускайте через `npx`:
 
-    npm i -D llm-harness-builder@0.4.0
+    npm i -D llm-harness-builder@0.5.0
     npx llm-harness-builder
 
 Без реєстру npm — з архіву на сторінці [релізу на GitHub](https://github.com/bambooplanedev/llm-harness-builder/releases):
 
-    npm i -g https://github.com/bambooplanedev/llm-harness-builder/releases/download/v0.4.0/llm-harness-builder-0.4.0.tgz
+    npm i -g https://github.com/bambooplanedev/llm-harness-builder/releases/download/v0.5.0/llm-harness-builder-0.5.0.tgz
 
 У контейнері, лише для CLI — тоді команди, які запускає модель, виконуються всередині контейнера, а
 не на вашій машині:

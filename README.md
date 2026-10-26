@@ -96,7 +96,7 @@ descriptions are part of the system prompt; each share is rounded on its own):
 
 ## Installation
 
-Nothing to install for a try — `npx` fetches it (pin a version with `npx llm-harness-builder@0.4.0`):
+Nothing to install for a try — `npx` fetches it (pin a version with `npx llm-harness-builder@0.5.0`):
 
     npx llm-harness-builder --help
 
@@ -106,12 +106,12 @@ Or install it globally:
 
 Or as a dev dependency of a project, then run it with `npx`:
 
-    npm i -D llm-harness-builder@0.4.0
+    npm i -D llm-harness-builder@0.5.0
     npx llm-harness-builder
 
 Without the npm registry, from the archive on the [GitHub release](https://github.com/bambooplanedev/llm-harness-builder/releases) page:
 
-    npm i -g https://github.com/bambooplanedev/llm-harness-builder/releases/download/v0.4.0/llm-harness-builder-0.4.0.tgz
+    npm i -g https://github.com/bambooplanedev/llm-harness-builder/releases/download/v0.5.0/llm-harness-builder-0.5.0.tgz
 
 In a container, for the CLI only — the commands the model runs then run inside the container, not on
 your machine:
