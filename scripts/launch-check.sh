@@ -93,7 +93,8 @@ host() {
     [ -z "$hit" ] || { echo "the user name is in: $(printf '%s' "$hit" | head -n 3 | tr '\n' ' ')"; return 1; }
     email=$(git -C "$repo" config user.email || true)
     if [ -n "$email" ]; then
-      hit=$(grep -rlF -- "$email" "$tmp/unpacked" || true)
+      # package.json carries the public author address on purpose (npm shows it); anywhere else is a leak
+      hit=$(grep -rlF --exclude=package.json -- "$email" "$tmp/unpacked" || true)
       [ -z "$hit" ] || { echo "the git email is in: $(printf '%s' "$hit" | head -n 3 | tr '\n' ' ')"; return 1; }
     fi
   }
