@@ -74,3 +74,10 @@ test('the launch check is a script of the repo, not of the package, and never tr
   expect(/\$\{?(OPENROUTER|ANTHROPIC)_API_KEY\}?/.exec(s)?.[0]).toBeUndefined()
   expect(pkg.files.filter((f: string) => f.startsWith('scripts'))).toEqual([])
 })
+
+test('the package ships the polyglot set without its proofs', () => {
+  const out = execSync('npm pack --dry-run --json --ignore-scripts', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+  const paths: string[] = JSON.parse(out)[0].files.map((f: { path: string }) => f.path)
+  for (const p of ['set.json', 'expect.js', 'NOTICE.md', 'LICENSE-exercism-javascript', 'LICENSE-problem-specifications']) expect(paths).toContain(`examples-polyglot/${p}`)
+  expect(paths.filter(p => /proof/.test(p))).toEqual([])
+})
