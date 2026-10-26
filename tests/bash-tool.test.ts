@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { tmp } from './helpers.js'
 import { execSync, spawn } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
-import { bash } from '../src/core/tools/bash.js'
+import { bash, runShell } from '../src/core/tools/bash.js'
 
 const ctx = async () => ({ workdir: await tmp('lhb-sh-'), maxToolOutputChars: 4000 })
 
@@ -78,4 +78,26 @@ test('ctx.bashMaxBytes and ctx.bashTimeoutS replace the defaults; absent keeps t
   expect(await bash({ command: 'printf 0123456789' }, { ...c, bashMaxBytes: 4 })).toBe('0123\n[output truncated]\n[exit 0]')
   expect(await bash({ command: 'sleep 5' }, { ...c, bashTimeoutS: 1 })).toContain('[killed: timeout after 1s]')
   expect(await bash({ command: 'printf 0123456789' }, c)).toBe('0123456789\n[exit 0]')
+})
+
+const sh = (command: string, o: Partial<Parameters<typeof runShell>[1]> = {}) =>
+  runShell(command, { cwd: process.cwd(), env: process.env, timeoutMs: 10_000, maxBuffer: 1 << 20, ...o })
+
+test('runShell: the exit code', async () => {
+  expect(await sh('exit 3')).toMatchObject({ code: 3, killed: false, capped: false })
+})
+
+test('runShell: a timeout kills the whole group, background children too', async () => {
+  const r = await sh('sleep 5 & echo $!; wait', { timeoutMs: 300 })
+  expect(r.killed).toBe(true)
+  const pid = Number(r.out.trim().split('\n')[0])
+  await new Promise(res => setTimeout(res, 1000))
+  expect(() => process.kill(pid, 0)).toThrow()
+})
+
+test('runShell: keep tail keeps the end of a long output', async () => {
+  const r = await sh(`node -e "for (let i = 0; i < 300000; i++) console.log('line ' + i)"`, { keep: 'tail', maxBuffer: 1 << 20 })
+  expect(r.capped).toBe(true)
+  expect(r.out.trimEnd().endsWith('line 299999')).toBe(true)
+  expect(Buffer.byteLength(r.out)).toBeLessThanOrEqual(1 << 20)
 })
