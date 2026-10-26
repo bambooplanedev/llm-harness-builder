@@ -1,5 +1,5 @@
-import { test, expect } from 'vitest'
-import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
+import { test, expect, afterAll } from 'vitest'
+import { cpSync, existsSync, mkdtempSync, rmSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execSync, spawnSync } from 'node:child_process'
@@ -83,9 +83,13 @@ test('the package ships the polyglot set without its proofs', () => {
   expect(paths.filter(p => /proof/.test(p))).toEqual([])
 })
 
+const packDirs: string[] = []
+afterAll(() => { for (const d of packDirs) rmSync(d, { recursive: true, force: true }) })
+
 // evolve writes its journal, notes snapshot and versions into ./harnesses of the cwd: run from this repo, none may ship.
 test('what evolve leaves in harnesses/ is not packed', () => {
   const d = mkdtempSync(join(tmpdir(), 'lhb-pack-'))
+  packDirs.push(d)
   cpSync('package.json', join(d, 'package.json'))
   cpSync('harnesses', join(d, 'harnesses'), { recursive: true })
   for (const f of ['h.evolve.jsonl', 'h.evolve.notes.jsonl', 'h.v1.json']) writeFileSync(join(d, 'harnesses', f), '{}\n')

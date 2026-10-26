@@ -8,7 +8,7 @@ import { join, basename } from 'node:path'
 import { loadRepoTasks } from '../src/core/repo-tasks.js'
 import { cloneAt, linkNodeModules, changedPaths, protectedChanged, runCheck, patchOf, removeClone, removeCloneSync, modulesManifest, prepareModules, modulesTampered, removeAllClonesSync, finishRun, type Clone } from '../src/core/repo-clone.js'
 import { childEnv } from '../src/core/tools/env.js'
-import { gitRepo, tmp } from './helpers.js'
+import { gitRepo, tmp, GIT_TEST } from './helpers.js'
 
 // Every test here runs several git commands; under a full parallel suite the default 5 s can run out, and a timed-out
 // worker is killed before its clones are removed.
@@ -16,7 +16,7 @@ vi.setConfig({ testTimeout: 30_000 })
 
 const TASKS = JSON.stringify({ tasks: [{ name: 'a', prompt: 'p', check: 'node --test' }] })
 const repoWith = (files: Record<string, string> = {}) => gitRepo({ 'lhb-tasks.json': TASKS, 'src/a.js': 'a\n', 'src/a.test.js': 't\n', 'package.json': '{}', ...files })
-const g = (cwd: string, ...a: string[]) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { cwd, encoding: 'utf8', stdio: 'pipe' })
+const g = (cwd: string, ...a: string[]) => execFileSync('git', [...GIT_TEST, ...a], { cwd, encoding: 'utf8', stdio: 'pipe' })
 const task = (over = {}) => ({ name: 'a', prompt: 'p', check: 'true', checkTimeoutS: 30, ...over })
 
 /** What must not change in the user's repo: config, hooks, packed-refs, refs, status. */
@@ -193,7 +193,7 @@ test('prepareModules: setup runs in its own clone, never in the user repo', asyn
     expect(r.from).not.toBe(withSetup)
     expect(readFileSync(join(r.from, 'node_modules', 'x', 'index.js'), 'utf8')).toBe('1\n')
     expect(existsSync(join(withSetup, 'node_modules'))).toBe(false)
-  } finally { await removeClone(r.setupClone!) }
+  } finally { removeAllClonesSync() }
 })
 
 test('prepareModules: a failing setup throws and leaves no clone', async () => {
@@ -242,7 +242,7 @@ test('prepareModules: setup runs with the env it is given', async () => {
   const t = await loadRepoTasks(repo)
   await expect(prepareModules(t)).rejects.toThrow('setup failed (exit 1)')
   const r = await prepareModules(t, { ...childEnv(), LHB_T_FOO: '1' })
-  await removeClone(r.setupClone!)
+  removeAllClonesSync()
 })
 
 test('finishRun: a patch that cannot be kept is said, the clone goes anyway', async () => {

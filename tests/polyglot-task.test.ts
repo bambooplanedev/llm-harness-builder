@@ -1,10 +1,10 @@
 import { describe, test, expect, vi, afterEach } from 'vitest'
-import { cp, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { cp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { childEnv } from '../src/core/tools/env.js'
 import { loadPolyglot, polyglotTasks, POLYGLOT_MAX } from '../src/core/polyglot.js'
+import { tmp } from './helpers.js'
 
 vi.setConfig({ testTimeout: 120_000 })
 
@@ -69,7 +69,7 @@ describe('check', () => {
   })
 
   test('uses the bytes loaded at start', async () => {
-    const root = await mkdtemp(path.join(tmpdir(), 'lhb-polyglot-root-'))
+    const root = await tmp('lhb-polyglot-root-')
     made.push(root)
     await cp('examples-polyglot', root, { recursive: true })
     const q = loadPolyglot(root)

@@ -5,7 +5,7 @@ import { TASKS } from '../src/core/tasks.js'
 const names = Object.keys(COMMANDS) as CommandName[]
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
-test('seven commands, and nothing from Object.prototype counts as one', () => {
+test('eight commands, and nothing from Object.prototype counts as one', () => {
   expect(names).toEqual(['serve', 'run', 'demo', 'bench', 'evolve', 'replay', 'analyze', 'proxy'])
   for (const n of ['toString', 'constructor', '__proto__', 'help', '']) expect(isCommand(n)).toBe(false)
 })

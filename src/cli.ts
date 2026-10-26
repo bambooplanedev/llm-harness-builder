@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // src/cli.ts
 import { parseArgs } from 'node:util'
-import { readFile, cp, mkdir, writeFile } from 'node:fs/promises'
+import { readFile, cp, mkdir } from 'node:fs/promises'
 import { existsSync, readFileSync, writeFileSync, renameSync, appendFileSync, lstatSync, truncateSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -15,7 +15,7 @@ import { withNotes, type NotesStore } from './core/notes-run.js'
 import { notesKey, notesPath, readNotes, scrubText } from './core/notes.js'
 import { ALLOWED, CANDIDATES, splitSets, modeOf, referenceLabel, neededFlips, usable, decide, applyEdit, bindingTokens, checkEdit, failureGroups, signatureOf, proposerInput, proposerRequest, parseProposal, parseJournal, replay, type Edit, type JournalLine, type RunLite } from './core/evolve.js'
 import { evolveReport } from './core/evolve-report.js'
-import { loadRepoTasks, consentText, hasConsent, saveConsent, git, TASKS_FILE, type RepoTasks, type EvolveConsent } from './core/repo-tasks.js'
+import { loadRepoTasks, hostOf, consentText, hasConsent, saveConsent, git, TASKS_FILE, type RepoTasks, type EvolveConsent } from './core/repo-tasks.js'
 import { cloneAt, linkNodeModules, protectedChanged, runCheck, finishRun, removeAllClonesSync, prepareModules, modulesManifest, modulesTampered, type Clone } from './core/repo-clone.js'
 import { validateConfig, sendsAnswerSchema, KEY_ENV, FLAG_WORDS, keyNameMessage, keyErrors, keyProblem, keyNote, apiKey, NO_THINK_LINE, isHttpUrl, isLoopbackUrl, type HarnessConfig, type BackendKind } from './core/config.js'
 import { validateWorkdir } from './core/tools/sandbox.js'
@@ -352,14 +352,14 @@ function rollup(h: BenchHarness) {
 }
 
 /** One Task per task of a repo's lhb-tasks.json: each run in its own clone, its check after a look at the protected files. */
-type Work = { tasks: Task[]; live: Map<string, Clone>; setupClone?: Clone; modules?: string; ready(env: NodeJS.ProcessEnv): Promise<void> }
+type Work = { tasks: Task[]; live: Map<string, Clone>; modules?: string; ready(env: NodeJS.ProcessEnv): Promise<void> }
 
 /** The Tasks at once (preflight needs one), their node_modules only from ready(): setup runs after preflight, so a
  *  server that is down is said in seconds, not after `npm ci`. */
 function repoWork(repo: RepoTasks): Work {
   const w: Work = {
     tasks: [], live: new Map(),
-    async ready(env) { const { from, setupClone } = await prepareModules(repo, env); w.modules = from; w.setupClone = setupClone },
+    async ready(env) { w.modules = (await prepareModules(repo, env)).from },
   }
   const live = w.live
   w.tasks = repo.tasks.map(rt => ({
@@ -385,10 +385,9 @@ function repoWork(repo: RepoTasks): Work {
 
 /** Every clone a bench made, removed now: at the end, and from the SIGINT handler that exits right after. An exit
  *  before that handler exists (Ctrl-C during setup) is covered by repo-clone's own exit hook. */
-function dropWork(w: { live: Map<string, Clone>; setupClone?: Clone }): void {
+function dropWork(w: { live: Map<string, Clone> }): void {
   removeAllClonesSync()
   w.live.clear()
-  w.setupClone = undefined
 }
 
 /** The commands of a repo's tasks run without asking for the whole bench or evolve: accepted once, by hash, before anything runs. */
@@ -444,7 +443,6 @@ async function cmdBench(argv: string[]) {
     const key = keyNote(h.config.backend, process.env)
     if (key) console.error(`${h.name}: ${key}`)
   }
-  // The commands of a repo's tasks run without asking for the whole bench: they are accepted once, by hash, before anything runs.
   // Read once, before any run: the exercises of a later run are the bytes of now, whatever an earlier run did to the files.
   let work: Work = { tasks: poly ? polyglotTasks(loadPolyglot(), size!) : [builtin!], live: new Map(), async ready() {} }
   if (repo) {
@@ -480,7 +478,6 @@ async function cmdBench(argv: string[]) {
   try { save() } catch (e) { die(`cannot write ${out}:\n  ${(e as Error).message}`) }
   console.error(`bench: ${files.length} harnesses × ${benchTotal(result) / harnesses.length} runs, timeout ${timeoutS}s per run, writing ${out}`)
   files.forEach((f, i) => console.error(`  ${harnesses[i].name.padEnd(13)} ${f}`))
-  // bench never writes notes, and nothing else writes a task's file: an empty one means this bench measures notes off.
   // bench reads notes and never writes them: a repo's are those of its folder, a built-in task's are in task-<name>.
   const notes: NotesStore = { file: notesPath(repo ? await notesKey(repo.repo) : `task-${taskName}`), write: false }
   for (const h of harnesses) if (h.config.notes?.enabled) {
@@ -614,8 +611,7 @@ async function cmdEvolve(argv: string[]) {
   const append = (l: JournalLine) => { appendFileSync(jf, JSON.stringify(l) + '\n'); lines.push(l); state = rebuilt() }
   if (!resuming) {
     if (!existsSync(dir)) await mkdir(dir)
-    let host = proposer.backend.baseUrl
-    try { host = new URL(host).host || host } catch { /* kept as it is */ }
+    const host = hostOf(proposer.backend.baseUrl)
     // Every version reads this frozen copy: a note written during evolve would make one version's runs depend on another's.
     // Before the start line: a journal is never without its snapshot.
     const live = notesPath(await notesKey(repo.repo))

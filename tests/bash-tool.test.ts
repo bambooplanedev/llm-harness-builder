@@ -9,6 +9,9 @@ import { track, untrack, killTracked, trackedCount } from '../src/core/procs.js'
 
 const alive = (pid: number) => { try { process.kill(pid, 0); return true } catch { return false } }
 
+/** Polls `done` for up to 3 s: under load a killed process is a zombie until init reaps it, which a fixed sleep guesses at. */
+const until = async (done: () => boolean) => { for (let t = 0; t < 150 && !done(); t++) await new Promise(res => setTimeout(res, 20)) }
+
 const ctx = async () => ({ workdir: await tmp('lhb-sh-'), maxToolOutputChars: 4000 })
 
 test('runs in workdir, returns output and exit code', async () => {
@@ -25,9 +28,9 @@ test('timeout kills the whole process group', async () => {
   const sleepCmd = `sleep 100.${Date.now() % 1000}`
   const out = await bash({ command: `${sleepCmd} & ${sleepCmd}; echo ${marker}` }, c, { timeoutMs: 300 })
   expect(out).toMatch(/killed: timeout/)
-  await new Promise(r => setTimeout(r, 100))
-  const ps = execSync('ps -ax -o command').toString()
-  expect(ps.split('\n').filter(l => l.includes(sleepCmd)).length).toBe(0)
+  const left = () => execSync('ps -ax -o command').toString().split('\n').filter(l => l.includes(sleepCmd)).length
+  await until(() => left() === 0)
+  expect(left()).toBe(0)
 })
 
 test('maxBuffer caps output', async () => {
@@ -94,8 +97,8 @@ test('runShell: a timeout kills the whole group, background children too', async
   const r = await sh('sleep 5 & echo $!; wait', { timeoutMs: 300 })
   expect(r.killed).toBe(true)
   const pid = Number(r.out.trim().split('\n')[0])
-  await new Promise(res => setTimeout(res, 1000))
-  expect(() => process.kill(pid, 0)).toThrow()
+  await until(() => !alive(pid))
+  expect(alive(pid)).toBe(false)
 })
 
 test('runShell: keep tail keeps the end of a long output', async () => {
@@ -115,7 +118,7 @@ test('a group with a background child stays tracked until killTracked, which wai
   await killTracked()
   expect(trackedCount()).toBe(0)
   // Killed is not yet reaped: under load the orphan stays a zombie (which writes nothing) until init collects it.
-  for (let t = 0; t < 150 && alive(pid); t++) await new Promise(res => setTimeout(res, 20))
+  await until(() => !alive(pid))
   expect(alive(pid)).toBe(false)
 })
 
@@ -127,9 +130,9 @@ test('a command with no background child leaves nothing tracked', async () => {
 test('a kept group whose members die elsewhere is pruned', async () => {
   const r = await sh('sleep 30 >/dev/null 2>&1 & echo $!')
   process.kill(Number(r.out.trim()), 'SIGKILL')
-  await new Promise(res => setTimeout(res, 2000))
+  await until(() => trackedCount() === 0)
   expect(trackedCount()).toBe(0)
-}, 10_000)
+})
 
 test('untrack without keepIfAlive forgets a live group at once', async () => {
   const child = spawn('sh', ['-c', 'sleep 30'], { detached: true, stdio: 'ignore' })

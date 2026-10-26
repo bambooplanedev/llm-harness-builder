@@ -1,15 +1,15 @@
 import { describe, it, expect, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
-import { mkdtemp, realpath, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { realpath, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { runTests, score, type TestResult } from '../src/core/polyglot.js'
+import { tmp } from './helpers.js'
 
 const HEAD = "import { describe, test } from 'node:test'\n"
 const run = async (src: string, timeoutMs?: number) => {
-  const dir = await mkdtemp(path.join(tmpdir(), 'lhb-polyglot-test-'))
+  const dir = await tmp('lhb-polyglot-test-')
   await writeFile(path.join(dir, 'package.json'), '{"type":"module"}')
   await writeFile(path.join(dir, 'x.test.js'), HEAD + src)
   const out = await runTests(dir, 'x.test.js', { ...process.env }, timeoutMs)
@@ -55,7 +55,7 @@ describe('runTests', () => {
 
   // Nothing else keeps a plain script's event loop alive: the result must not wait on an unref'd timer.
   it('resolves in a script with nothing else to wait on', async () => {
-    const dir = await mkdtemp(path.join(tmpdir(), 'lhb-polyglot-test-'))
+    const dir = await tmp('lhb-polyglot-test-')
     await writeFile(path.join(dir, 'package.json'), '{"type":"module"}')
     await writeFile(path.join(dir, 'x.test.js'), HEAD + "test('a', () => {})")
     const src = `import { runTests } from ${JSON.stringify(path.resolve('src/core/polyglot.ts'))}; const r = await runTests(${JSON.stringify(dir)}, 'x.test.js', process.env); console.log(r.results.length)`
@@ -64,7 +64,7 @@ describe('runTests', () => {
   })
 
   it('names the file each test came from', async () => {
-    const dir = await mkdtemp(path.join(tmpdir(), 'lhb-polyglot-test-'))
+    const dir = await tmp('lhb-polyglot-test-')
     await writeFile(path.join(dir, 'package.json'), '{"type":"module"}')
     await writeFile(path.join(dir, 'sol.js'), "process.getBuiltinModule('node:test').test('fake', () => {})\n")
     await writeFile(path.join(dir, 'x.test.js'), HEAD + "import './sol.js'\ntest('real', () => {})")
@@ -75,7 +75,7 @@ describe('runTests', () => {
 
   // 'error' can follow or precede 'exit': the group is killed and forgotten once, never a second time on a reused pgid.
   it('ends once on error and exit', async () => {
-    const dir = await mkdtemp(path.join(tmpdir(), 'lhb-polyglot-test-'))
+    const dir = await tmp('lhb-polyglot-test-')
     const untrack = vi.fn()
     const kill = vi.spyOn(process, 'kill').mockImplementation(() => true)
     const child = Object.assign(new EventEmitter(), { pid: 99_999_999, stdout: new PassThrough() })

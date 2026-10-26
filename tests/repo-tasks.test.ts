@@ -1,6 +1,6 @@
 import { test, expect, beforeAll } from 'vitest'
 import { writeFile, stat, chmod } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
+import { existsSync, writeFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 import { loadRepoTasks, validateTasksFile, consentText, consentHash, hasConsent, saveConsent, DEFAULT_PROTECT, type RepoTasks } from '../src/core/repo-tasks.js'
@@ -143,4 +143,17 @@ test('consent shows control characters escaped', async () => {
   const text = consentText(t)
   expect(text).not.toMatch(/[\r\u001b]/)
   for (const s of ['"curl x | sh #\\r  check: npm test"', '"p\\u001b[31m"', '"s\\r"']) expect(text).toContain(s)
+})
+
+test('git fixtures ignore the global git config', async () => {
+  const cfg = join(await tmp('lhb-gitcfg-'), 'config')
+  writeFileSync(cfg, '[commit]\n\tgpgsign = true\n[gpg]\n\tprogram = /nonexistent/gpg\n')
+  const old = process.env.GIT_CONFIG_GLOBAL
+  process.env.GIT_CONFIG_GLOBAL = cfg
+  try {
+    const repo = await gitRepo({ a: '1' })
+    writeFileSync(join(repo, 'b'), '2')
+    await gitCommit(repo)
+    expect(execFileSync('git', ['rev-list', '--count', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim()).toBe('2')
+  } finally { if (old === undefined) delete process.env.GIT_CONFIG_GLOBAL; else process.env.GIT_CONFIG_GLOBAL = old }
 })

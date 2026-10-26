@@ -101,11 +101,13 @@ export async function loadRepoTasks(dir: string, at?: string): Promise<RepoTasks
 const SHA_LINE = (sha: string) => `commit: ${sha}`
 
 /** What `bench --tasks` will run and where, as the user is asked to accept it. `npm test` runs the package's scripts, so they are in it. */
+/** The host of a URL; what does not parse is kept as it is. */
+export const hostOf = (u: string): string => { try { return new URL(u).host || u } catch { return u } }
+
 export type EvolveConsent = { proposer: string; fields: string[] }
 
 /** `evolve` asks on top of the bench text, never in place of it: lines after it, so a bench hash stays what it was. */
 export function consentText(t: RepoTasks, ev?: EvolveConsent): string {
-  const host = (u: string) => { try { return new URL(u).host || u } catch { return u } }
   return [
     `repo: ${t.repo}`, SHA_LINE(t.sha), '',
     'setup — once, in a separate clone in the OS temp dir',
@@ -114,7 +116,7 @@ export function consentText(t: RepoTasks, ev?: EvolveConsent): string {
     `setup: ${t.setup === undefined ? '(none)' : JSON.stringify(t.setup)}`,
     ...t.tasks.flatMap(x => [`task ${x.name}`, `  prompt: ${JSON.stringify(x.prompt)}`, `  check: ${JSON.stringify(x.check)}`]),
     'package.json scripts:', ...Object.entries(t.scripts).map(([k, v]) => `  ${JSON.stringify(k)}: ${JSON.stringify(v)}`),
-    ...(ev ? ["mode: evolve — the model's own prompts run unreviewed while Evolve measures them", `proposer: ${host(ev.proposer)}`, `fields: ${ev.fields.join(', ')}`] : []),
+    ...(ev ? ["mode: evolve — the model's own prompts run unreviewed while Evolve measures them", `proposer: ${hostOf(ev.proposer)}`, `fields: ${ev.fields.join(', ')}`] : []),
   ].join('\n')
 }
 
