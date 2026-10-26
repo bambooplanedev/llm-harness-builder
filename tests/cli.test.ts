@@ -1921,7 +1921,7 @@ test('evolve --report on an unfinished evolve says it has not finished', async (
 }, 120_000)
 
 for (const [what, edit, says] of [
-  ['a journal of another base', (s: any) => ({ ...s, base: 'x' }), 'delete'],
+  ['a journal of another base', (s: any) => ({ ...s, base: 'x' }), 'written for another harness'],
   ['a stage-3 journal', ({ notes, ...s }: any) => s, 'delete it to start over'],
 ] as const) test(`evolve --report on ${what} is refused`, async () => {
   const { repo, env, cwd, h } = await evFirst()
