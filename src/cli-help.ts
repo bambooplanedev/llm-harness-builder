@@ -67,7 +67,7 @@ export const COMMANDS = {
     args: '<harness.json>',
     options: {
       tasks: { type: 'string' }, rounds: { type: 'string', default: String(ROUNDS) }, proposer: { type: 'string' },
-      timeout: { type: 'string', default: '1800' }, yes: { type: 'boolean', default: false }, ...backend, help,
+      timeout: { type: 'string', default: '1800' }, yes: { type: 'boolean', default: false }, report: { type: 'boolean', default: false }, ...backend, help,
     },
     docs: {
       tasks: ['<repo>', 'the tasks of <repo>/lhb-tasks.json (the last commit) to train, gate and test on (required)'],
@@ -75,6 +75,7 @@ export const COMMANDS = {
       proposer: ['<harness.json>', 'the harness whose backend proposes the edits (default: the one being improved)'],
       timeout: ['<s>', 'seconds per run (default 1800)'],
       yes: ['', 'accept the commands of --tasks without asking (needed without a terminal)'],
+      report: ['', 'print the report of a finished evolve from its journal, with no run (give the same options as the run)'],
       ...backendDocs,
     },
   }),

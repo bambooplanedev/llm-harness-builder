@@ -13,7 +13,8 @@ import { mayAsk, type RunOpts } from './core/run.js'
 import { killTracked } from './core/procs.js'
 import { withNotes, type NotesStore } from './core/notes-run.js'
 import { notesKey, notesPath, readNotes, selectNotes, scrubText } from './core/notes.js'
-import { ALLOWED, CANDIDATES, splitSets, modeOf, referenceLabel, neededFlips, numbersOf, usable, decide, applyEdit, bindingTokens, checkEdit, failureGroups, signatureOf, proposerInput, proposerRequest, parseProposal, parseJournal, replay, verdict, type Edit, type JournalLine, type RunLite } from './core/evolve.js'
+import { ALLOWED, CANDIDATES, splitSets, modeOf, referenceLabel, neededFlips, usable, decide, applyEdit, bindingTokens, checkEdit, failureGroups, signatureOf, proposerInput, proposerRequest, parseProposal, parseJournal, replay, type Edit, type JournalLine, type RunLite } from './core/evolve.js'
+import { evolveReport } from './core/evolve-report.js'
 import { loadRepoTasks, consentText, hasConsent, saveConsent, git, TASKS_FILE, type RepoTasks, type EvolveConsent } from './core/repo-tasks.js'
 import { cloneAt, linkNodeModules, protectedChanged, runCheck, finishRun, removeAllClonesSync, prepareModules, modulesManifest, modulesTampered, type Clone } from './core/repo-clone.js'
 import { validateConfig, sendsAnswerSchema, KEY_ENV, FLAG_WORDS, keyNameMessage, keyErrors, keyProblem, keyNote, apiKey, NO_THINK_LINE, isHttpUrl, isLoopbackUrl, type HarnessConfig, type BackendKind } from './core/config.js'
@@ -508,7 +509,6 @@ async function cmdBench(argv: string[]) {
 /** A path evolve writes to in ./harnesses: never through a link, which the model's bash could have put there. */
 const isLink = (p: string): boolean => { try { return lstatSync(p).isSymbolicLink() } catch { return false } }
 const TRACE_ID = /^[A-Za-z0-9_-]{1,64}$/
-const leafOf = (o: unknown, f: string): unknown => f.split('.').reduce((x: any, k) => x?.[k], o)
 type EvolveState = Exclude<ReturnType<typeof replay>, { error: string }>
 
 /** Proposes one edit at a time, runs it on train + gate, keeps it only past the gates, and measures the last kept
@@ -537,7 +537,6 @@ async function cmdEvolve(argv: string[]) {
   try { repo = await loadRepoTasks(values.tasks!) } catch (e) { argError('evolve', (e as Error).message) }
   const sets = splitSets(repo.tasks), mode = modeOf(sets)
   if (typeof mode === 'string') return die(mode)
-  console.error(autoApproves('evolve'))
   console.error(`tasks: ${repo.tasks.length} from ${repo.repo} at ${repo.sha.slice(0, 7)}: train ${sets.train.length}, gate ${sets.gate.length}, test ${sets.test.length}`)
   if (repo.uncommitted) console.error('uncommitted changes are not in the clones')
   console.error(mode.strict ? `strict: a candidate needs at least ${neededFlips()} tasks FAIL → PASS on train + gate (more if any go PASS → FAIL)` : referenceLabel(mode))
@@ -547,7 +546,7 @@ async function cmdEvolve(argv: string[]) {
   const vf = (n: number) => path.join(dir, `${base}.v${n}.json`)
   for (const p of [dir, jf, snap]) if (isLink(p)) die(`${p} is a symbolic link; evolve writes only to a plain file there`)
   const resuming = existsSync(jf)
-  await askConsent(repo, values.yes, { proposer: proposer.backend.baseUrl, fields: ALLOWED })
+  if (values.report && !resuming) die(`no evolve journal at ${jf}`)
   const paths = (await git(['ls-tree', '-r', '-z', '--name-only', repo.sha], repo.repo)).split('\0').filter(Boolean)
   const binding = bindingTokens({ names: repo.tasks.map(t => t.name), paths, prompts: repo.tasks.map(t => t.prompt) })
   let lines: JournalLine[] = []
@@ -558,8 +557,7 @@ async function cmdEvolve(argv: string[]) {
   // The model's bash can rewrite files in cwd: every version must have read the snapshot the start line hashed.
   // Called only after rebuilt() succeeded, so a bad first line gets the journal's own error.
   const snapOk = () => {
-    if (isLink(snap)) return false
-    try { return sha256(readFileSync(snap)) === (lines[0] as Extract<JournalLine, { type: 'start' }>).notes } catch { return false }
+    try { return lstatSync(snap).isFile() && sha256(readFileSync(snap)) === (lines[0] as Extract<JournalLine, { type: 'start' }>).notes } catch { return false }
   }
   const snapCheck = () => { if (!snapOk()) die(`the notes snapshot changed since this evolve started (${snap}); delete ${jf} to start over`) }
   if (resuming) {
@@ -569,37 +567,25 @@ async function cmdEvolve(argv: string[]) {
     lines = j.lines
     if (lines[0]?.type === 'start' && lines[0].sha !== repo.sha) die(`the repo has a new commit since this evolve started; delete ${jf} to start over`)
     if (lines[0]?.type === 'start' && lines[0].pin !== pin) die(`the harness or its options changed since this evolve started; delete ${jf} to start over`)
-    // A torn last line goes, or the next line would be appended onto it.
-    if (text && !text.endsWith('\n')) truncateSync(jf, Buffer.byteLength(text.slice(0, text.lastIndexOf('\n') + 1)))
+    if (lines[0]?.type === 'start' && lines[0].base !== base) die(`the journal was written for another harness; delete ${jf} to start over`)
+    // A torn last line goes, or the next line would be appended onto it; a report writes nothing.
+    if (!values.report && text && !text.endsWith('\n')) truncateSync(jf, Buffer.byteLength(text.slice(0, text.lastIndexOf('\n') + 1)))
   }
   // A new journal has no state until its start line.
   let state = resuming ? rebuilt() : undefined as unknown as EvolveState
   if (resuming) snapCheck()
   const all = Array.from({ length: rounds }, (_, i) => i + 1).every(round => lines.some(l => l.type === 'current' && l.round === round) &&
     Array.from({ length: CANDIDATES }, (_, i) => i + 1).every(index => lines.some(l => l.type === 'candidate' && l.round === round && l.index === index)))
-  if (resuming && all) console.error(`all rounds are in the journal${state.version && !state.final ? '; measuring the final test again' : ''}`)
-  // The report reads only the journal, so a finished evolve started again prints it as it was, without a clone or a request.
-  const report = (): string => {
-    const out: string[] = []
-    if (lines.some(l => l.type === 'candidate' && l.reason === 'the server gave no usage'))
-      out.push(state.version ? 'the server gave no usage (token counts) for some candidates\' runs, so those could not pass the gates' : 'the server gave no usage (token counts), so no candidate could pass the gates: evolve needs a server that reports them')
-    if (state.final && state.final !== 'none') {
-      const { orig, last } = state.final
-      out.push(`${vf(state.version)} against ${file} on the ${sets.test.length} test tasks:`)
-      for (const l of lines) if (l.type === 'candidate' && l.accepted && l.edit?.field === 'systemPrompt') out.push('systemPrompt, appended:', showableText(String(l.edit.value)).replace(/^/gm, '  '))
-      for (const f of ALLOWED.slice(1)) {
-        const a = leafOf(raw, f), b = leafOf(state.current, f)
-        if (a !== b) out.push(`${f}: ${a ?? '(unset)'} → ${b}`)
-      }
-      const nums = (label: string, rs: RunLite[]) => {
-        const n = numbersOf(rs)
-        return `${label}: PASS ${n.pass}/${rs.length}, tokens per success ${n.tokensPerSuccess === undefined ? '—' : Math.round(n.tokensPerSuccess)}, first requests ${n.weight ?? '—'} tok`
-      }
-      out.push(nums('original', orig), nums(`v${state.version}`, last), verdict(orig, last, mode))
-    } else out.push('no version beat the original')
-    return out.join('\n')
+  if (resuming && all && !values.report) console.error(`all rounds are in the journal${state.version && !state.final ? '; measuring the final test again' : ''}`)
+  // The report reads only the journal, after replay re-checked it: a finished evolve started again prints it as it was, without a clone or a request.
+  const report = (): string => evolveReport({ lines, state: { ...state, final: state.final! }, original: raw, mode, sets, harness: path.basename(file!), versionFile: state.version ? vf(state.version) : '' })
+  if (values.report || (resuming && all && state.final)) {
+    if (!state.final) die(`evolve has not finished: no final test in ${jf}; run evolve again to finish`)
+    console.log(report())
+    return
   }
-  if (resuming && all && state.final) { console.log(report()); return }
+  console.error(autoApproves('evolve'))
+  await askConsent(repo, values.yes, { proposer: proposer.backend.baseUrl, fields: ALLOWED })
   // The next version is checked now, not after a candidate's runs: a file the journal has no line for is not ours.
   const next = vf((resuming ? state.version : 0) + 1)
   if (isLink(next)) die(`${next} is a symbolic link; evolve writes only to a plain file there`)

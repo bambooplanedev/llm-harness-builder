@@ -1866,6 +1866,77 @@ test('evolve: started again after it finished, it measures nothing and prints th
   expect(readdirSync(join(cwd, 'runs'))).toHaveLength(runs)
 }, 120_000)
 
+
+// --- evolve --report: the journal's report again, with nothing run; or why there is none.
+test('evolve: --report prints exactly what the run printed, and runs nothing', async () => {
+  const repo = await tasksRepo(evTasks({ train: 12, gate: 4, test: 8 }))
+  const env = await tasksEnv(evFake())
+  const cwd = await tmp('lhb-cwd-')
+  const h = evHarness(cwd)
+  const first = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes', '--model', 'other'], env, cwd)
+  expect(first.status, first.stderr).toBe(0)
+  const before = evRaw(cwd), runs = readdirSync(join(cwd, 'runs'))
+  const r = cli(['evolve', h, '--tasks', repo, '--report', '--model', 'other'], env, cwd)
+  expect(r.status, r.stderr).toBe(0)
+  expect(r.stdout).toBe(first.stdout)
+  expect(evRaw(cwd)).toBe(before)
+  expect(readdirSync(join(cwd, 'runs'))).toEqual(runs)
+  expect(r.stderr).not.toContain('mode: evolve')
+  expect(clonesIn(env)).toEqual([])
+}, 120_000)
+
+test('evolve: the run\'s stdout is the report and nothing else', async () => {
+  const repo = await tasksRepo(evTasks(ONE_EACH))
+  const env = await tasksEnv(evFake())
+  const cwd = await tmp('lhb-cwd-')
+  const r = cli(['evolve', evHarness(cwd), '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
+  expect(r.status, r.stderr).toBe(0)
+  expect(r.stdout.startsWith('== Conclusion')).toBe(true)
+  expect(r.stdout).not.toContain('proposer:')
+  expect(r.stderr).toContain('proposer: ')
+  expect(clonesIn(env)).toEqual([])
+}, 120_000)
+
+test('evolve --report without a journal says so', async () => {
+  const repo = await tasksRepo(evTasks(ONE_EACH))
+  const env = await tasksEnv(evFake())
+  const cwd = await tmp('lhb-cwd-')
+  const r = cli(['evolve', evHarness(cwd), '--tasks', repo, '--report'], env, cwd)
+  expect(r.status).toBe(2)
+  expect(r.stderr).toContain(`no evolve journal at ${join('harnesses', 'h.evolve.jsonl')}`)
+  expect(existsSync(join(cwd, 'harnesses'))).toBe(false)
+  expect(clonesIn(env)).toEqual([])
+}, 120_000)
+
+test('evolve --report on an unfinished evolve says it has not finished', async () => {
+  const { repo, env, cwd, h } = await evFirst()
+  const lines = evRaw(cwd).trim().split('\n')
+  expect(JSON.parse(lines[lines.length - 1]!).type).toBe('final')
+  writeFileSync(join(cwd, 'harnesses', 'h.evolve.jsonl'), lines.slice(0, -1).join('\n') + '\n')
+  const r = cli(['evolve', h, '--tasks', repo, '--report'], env, cwd)
+  expect(r.status).toBe(2)
+  expect(r.stderr).toContain('has not finished')
+  expect(r.stdout).toBe('')
+  expect(clonesIn(env)).toEqual([])
+}, 120_000)
+
+for (const [what, edit, says] of [
+  ['a journal of another base', (s: any) => ({ ...s, base: 'x' }), 'delete'],
+  ['a stage-3 journal', ({ notes, ...s }: any) => s, 'delete it to start over'],
+] as const) test(`evolve --report on ${what} is refused`, async () => {
+  const { repo, env, cwd, h } = await evFirst()
+  const lines = evRaw(cwd).trim().split('\n')
+  writeFileSync(join(cwd, 'harnesses', 'h.evolve.jsonl'), [JSON.stringify(edit(JSON.parse(lines[0]!))), ...lines.slice(1)].join('\n') + '\n')
+  const r = cli(['evolve', h, '--tasks', repo, '--report'], env, cwd)
+  expect(r.status).toBe(2)
+  expect(r.stderr).toContain(says)
+  expect(r.stdout).toBe('')
+  // The same check on a plain resume.
+  const again = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
+  expect(again.status).toBe(2)
+  expect(again.stderr).toContain(says)
+  expect(clonesIn(env)).toEqual([])
+}, 120_000)
 for (const [what, tamper] of [
   ['a rewritten notes snapshot stops the next run', (f: string) => writeFileSync(f, readFileSync(f, 'utf8') + '{"note":"x"}\n')],
   ['a deleted notes snapshot stops the next run the same way', (f: string) => rmSync(f)],
