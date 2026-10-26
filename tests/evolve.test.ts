@@ -25,7 +25,7 @@ describe('evolve sets and tests', () => {
     expect(modeOf(sets(10, 6, 7))).toMatchObject({ strict: false })
     const m = modeOf(sets(1, 1, 1)) as Mode
     expect(m.strict).toBe(false)
-    expect(referenceLabel(m)).toBe('ОРІЄНТИР, НЕ ДОКАЗ — too few tasks (3 of 24) for a statistical conclusion; add 21 more tasks')
+    expect(referenceLabel(m)).toBe('\u041e\u0420\u0406\u0404\u041d\u0422\u0418\u0420, \u041d\u0415 \u0414\u041e\u041a\u0410\u0417 \u2014 too few tasks (3 of 24) for a statistical conclusion; add 21 more tasks')
     expect(modeOf(sets(0, 3, 3))).toBe('evolve needs at least one task in each of train, gate and test (have 0/3/3)')
   })
 

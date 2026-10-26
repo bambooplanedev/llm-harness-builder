@@ -40,7 +40,7 @@ export function modeOf(sets: Record<SetName, string[]>): Mode | string {
 
 /** The label a reference-mode result carries: too few tasks to tell a gain from luck. */
 export const referenceLabel = (m: Mode): string =>
-  `ОРІЄНТИР, НЕ ДОКАЗ — too few tasks (${m.trainGate + m.test} of ${MIN_TRAIN_GATE + MIN_TEST}) for a statistical conclusion; add ${Math.max(0, MIN_TRAIN_GATE - m.trainGate) + Math.max(0, MIN_TEST - m.test)} more tasks`
+  `\u041e\u0420\u0406\u0404\u041d\u0422\u0418\u0420, \u041d\u0415 \u0414\u041e\u041a\u0410\u0417 \u2014 too few tasks (${m.trainGate + m.test} of ${MIN_TRAIN_GATE + MIN_TEST}) for a statistical conclusion; add ${Math.max(0, MIN_TRAIN_GATE - m.trainGate) + Math.max(0, MIN_TEST - m.test)} more tasks`
 
 /** One-sided exact sign test: P(X >= b) for X ~ Binomial(b + c, 1/2). */
 export function signP(b: number, c: number): number {
