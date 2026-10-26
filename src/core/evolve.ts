@@ -267,9 +267,10 @@ const arr = (each: Check): Check => x => {
 }
 const shape = (req: Record<string, Check>, opt: Record<string, Check> = {}): Check => x => {
   if (!isObj(x)) return 'not an object'
-  for (const k of Object.keys(x)) if (!(k in req) && !(k in opt)) return `unknown key ${JSON.stringify(k).slice(0, 40)}`
-  for (const [k, c] of Object.entries(req)) { if (!(k in x)) return `missing ${k}`; const w = c(x[k]); if (w) return `${k}: ${w}` }
-  for (const [k, c] of Object.entries(opt)) if (k in x) { const w = c(x[k]); if (w) return `${k}: ${w}` }
+  // hasOwn, not `in`: `constructor` or `__proto__` is on every object and must not pass as a known key.
+  for (const k of Object.keys(x)) if (!Object.hasOwn(req, k) && !Object.hasOwn(opt, k)) return `unknown key ${JSON.stringify(k).slice(0, 40)}`
+  for (const [k, c] of Object.entries(req)) { if (!Object.hasOwn(x, k)) return `missing ${k}`; const w = c(x[k]); if (w) return `${k}: ${w}` }
+  for (const [k, c] of Object.entries(opt)) if (Object.hasOwn(x, k)) { const w = c(x[k]); if (w) return `${k}: ${w}` }
 }
 const RUN = shape({ task: name, verdict: x => x === 'PASS' || x === 'FAIL' ? undefined : 'not PASS or FAIL' },
   { tokens: num, firstPromptTokens: num, trace: str, reason: str, lastError: str })
@@ -290,13 +291,20 @@ export function parseJournal(text: string): { lines: JournalLine[] } | { error: 
   for (const [i, p] of parts.entries()) {
     let x: unknown
     try { x = JSON.parse(p) } catch { return { error: `line ${i + 1}: not JSON` } }
-    const c = isObj(x) && typeof x.type === 'string' ? LINE[x.type] : undefined
+    const c = isObj(x) && typeof x.type === 'string' && Object.hasOwn(LINE, x.type) ? LINE[x.type] : undefined
     const why = c ? c(x) : 'unknown type'
     if (why) return { error: `line ${i + 1}: ${why}` }
     lines.push(x as JournalLine)
   }
   return { lines }
 }
+
+// The reasons the edit checks and `decide` write. Rejected edits reach the proposer, maybe in the cloud, and the
+// journal is bash-writable: anything else is passed on as `other`.
+const REASON_RE = [
+  /^(?:field not allowed|bad value|looks like a command or an address|tied to a task|already tried|changes more than one field|the server gave no usage|0 PASS|fewer PASS than current|worse on gate|no edit in the reply)$/,
+  /^within noise \(p=\d\.\d\d\)$/, /^costs \d+% more tokens(?: per success)? than the original$/, /^first request \d+% heavier than the original$/, /^invalid config: /,
+]
 
 /** The current version rebuilt from the original and the journal, each accepted edit checked again as if new:
  *  a vN file or a hand-written line is never what the next round starts from. */
@@ -320,7 +328,13 @@ export function replay(lines: JournalLine[], original: object, ctx: { binding: s
       const why = l.edit ? checkEdit(l.edit, { current, original, tried, binding: ctx.binding }) : 'no edit'
       if (why) return { error: `cannot resume: accepted edit ${version}: ${why}` }
       current = applyEdit(current, l.edit!)
-    } else if (l.edit) rejected.push({ field: l.edit.field, ...(l.reason === 'tied to a task' ? {} : { value: l.edit.value }), reason: l.reason })
+    } else if (l.edit) {
+      const bound = (x: unknown) => typeof x === 'string' && ctx.binding.some(t => x.toLowerCase().includes(t))
+      const reason = REASON_RE.some(re => re.test(l.reason)) && !bound(l.reason) ? l.reason : 'other'
+      const v = l.edit.value, tied = reason === 'tied to a task' || bound(v)
+      // A field outside ALLOWED is free text too.
+      rejected.push({ field: ALLOWED.includes(l.edit.field) ? l.edit.field : 'other', ...(tied ? {} : { value: v }), reason })
+    }
     if (l.edit) tried.push(l.edit)
   }
   return { current, version, baseline, done, tried, rejected }

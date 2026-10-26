@@ -241,6 +241,25 @@ describe('evolve journal', () => {
     expect(parseJournal(jsonl({ ...start, sets: { ...sets, more: [] } }))).toEqual({ error: expect.stringMatching(/^line 1: /) })
   })
 
+  it('parseJournal: an inherited or prototype key is refused with its line number, never a throw', () => {
+    expect(parseJournal('{"v":1,"type":"__proto__"}\n')).toEqual({ error: expect.stringMatching(/^line 1: /) })
+    expect(parseJournal('{"v":1,"type":"hasOwnProperty"}\n')).toEqual({ error: expect.stringMatching(/^line 1: /) })
+    expect(parseJournal(jsonl({ ...cur, constructor: {} }))).toEqual({ error: expect.stringMatching(/^line 1: /) })
+    expect(parseJournal(JSON.stringify(cur).slice(0, -1) + ',"__proto__":{}}\n')).toEqual({ error: expect.stringMatching(/^line 1: /) })
+    expect(parseJournal(jsonl({ ...cur, runs: [{ ...run('t0', true), toString: 1 }] }))).toEqual({ error: expect.stringMatching(/^line 1: /) })
+    expect(parseJournal(jsonl({ ...a1, edit: { ...a1.edit, constructor: 'x' } }))).toEqual({ error: expect.stringMatching(/^line 1: /) })
+  })
+
+  it('replay: a reason the harness does not write reaches the proposer as other; a value holding a binding token goes without its value', () => {
+    const odd = cand(2, { field: 'loop.maxRepeats', value: 4 }, false, 'see src/secret-name.ts')
+    const leak = cand(1, { field: 'systemPrompt', value: 'mind t0_file' }, false, '0 PASS', 2)
+    const ok = cand(2, { field: 'loop.maxRepeats', value: 5 }, false, 'costs 12% more tokens per success than the original', 2)
+    const cfg = cand(3, { field: 'src/t0_file.ts', value: 1 }, false, 'invalid config: t0_file is bad', 2)
+    const r = replay([start, cur, a1, odd, leak, ok, cfg] as any, harness(), ctx) as any
+    expect(r.rejected).toEqual([{ field: 'loop.maxRepeats', value: 4, reason: 'other' }, { field: 'systemPrompt', reason: '0 PASS' },
+      { field: 'loop.maxRepeats', value: 5, reason: 'costs 12% more tokens per success than the original' }, { field: 'other', value: 1, reason: 'other' }])
+  })
+
   it('replay rebuilds the current from the original and the accepted edits', () => {
     const lines = (parseJournal(jsonl(start, cur, a1, r2, JSON.parse(JSON.stringify(r3)))) as any).lines
     const r = replay(lines, harness(), ctx) as any
