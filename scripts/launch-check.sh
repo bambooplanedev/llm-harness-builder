@@ -119,7 +119,7 @@ host() {
     set +e
     docker run --rm -e OPENROUTER_API_KEY -e ANTHROPIC_API_KEY -e OPENROUTER_MODEL \
       -v "$abs":/t/pkg.tgz:ro -v "$here/launch-check.sh":/t/launch-check.sh:ro \
-      node:22.12-slim bash /t/launch-check.sh --inside /t/pkg.tgz 2>&1 | tee "$tmp/inside"
+      node:22.12-slim bash /t/launch-check.sh --inside /t/pkg.tgz 2>&1 | grep -vE "^(NOT )?GREEN" | tee "$tmp/inside"
     rc=${PIPESTATUS[0]}
     set -e
     # the container ends with its own verdict line; its steps count into ours
