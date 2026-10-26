@@ -13,7 +13,7 @@ import { mayAsk, type RunOpts } from './core/run.js'
 import { killTracked } from './core/procs.js'
 import { withNotes, type NotesStore } from './core/notes-run.js'
 import { notesKey, notesPath, readNotes, selectNotes, scrubText } from './core/notes.js'
-import { ALLOWED, CANDIDATES, splitSets, modeOf, referenceLabel, neededFlips, numbersOf, usable, decide, applyEdit, bindingTokens, checkEdit, failureGroups, proposerInput, proposerRequest, parseProposal, parseJournal, replay, verdict, type Edit, type JournalLine, type RunLite } from './core/evolve.js'
+import { ALLOWED, CANDIDATES, splitSets, modeOf, referenceLabel, neededFlips, numbersOf, usable, decide, applyEdit, bindingTokens, checkEdit, failureGroups, signatureOf, proposerInput, proposerRequest, parseProposal, parseJournal, replay, verdict, type Edit, type JournalLine, type RunLite } from './core/evolve.js'
 import { loadRepoTasks, consentText, hasConsent, saveConsent, git, TASKS_FILE, type RepoTasks, type EvolveConsent } from './core/repo-tasks.js'
 import { cloneAt, linkNodeModules, protectedChanged, runCheck, finishRun, removeAllClonesSync, prepareModules, modulesManifest, modulesTampered, type Clone } from './core/repo-clone.js'
 import { validateConfig, sendsAnswerSchema, KEY_ENV, FLAG_WORDS, keyNameMessage, keyErrors, keyProblem, keyNote, apiKey, NO_THINK_LINE, isHttpUrl, isLoopbackUrl, type HarnessConfig, type BackendKind } from './core/config.js'
@@ -555,6 +555,13 @@ async function cmdEvolve(argv: string[]) {
     const r = replay(lines, raw, { binding, sets })
     return 'error' in r ? die(`${r.error} (${jf}); delete it to start over`) : r
   }
+  // The model's bash can rewrite files in cwd: every version must have read the snapshot the start line hashed.
+  // Called only after rebuilt() succeeded, so a bad first line gets the journal's own error.
+  const snapOk = () => {
+    if (isLink(snap)) return false
+    try { return sha256(readFileSync(snap)) === (lines[0] as Extract<JournalLine, { type: 'start' }>).notes } catch { return false }
+  }
+  const snapCheck = () => { if (!snapOk()) die(`the notes snapshot changed since this evolve started (${snap}); delete ${jf} to start over`) }
   if (resuming) {
     const text = readFileSync(jf, 'utf8')
     const j = parseJournal(text)
@@ -567,6 +574,32 @@ async function cmdEvolve(argv: string[]) {
   }
   // A new journal has no state until its start line.
   let state = resuming ? rebuilt() : undefined as unknown as EvolveState
+  if (resuming) snapCheck()
+  const all = Array.from({ length: rounds }, (_, i) => i + 1).every(round => lines.some(l => l.type === 'current' && l.round === round) &&
+    Array.from({ length: CANDIDATES }, (_, i) => i + 1).every(index => lines.some(l => l.type === 'candidate' && l.round === round && l.index === index)))
+  if (resuming && all) console.error(`all rounds are in the journal${state.version && !state.final ? '; measuring the final test again' : ''}`)
+  // The report reads only the journal, so a finished evolve started again prints it as it was, without a clone or a request.
+  const report = (): string => {
+    const out: string[] = []
+    if (lines.some(l => l.type === 'candidate' && l.reason === 'the server gave no usage'))
+      out.push(state.version ? 'the server gave no usage (token counts) for some candidates\' runs, so those could not pass the gates' : 'the server gave no usage (token counts), so no candidate could pass the gates: evolve needs a server that reports them')
+    if (state.final && state.final !== 'none') {
+      const { orig, last } = state.final
+      out.push(`${vf(state.version)} against ${file} on the ${sets.test.length} test tasks:`)
+      for (const l of lines) if (l.type === 'candidate' && l.accepted && l.edit?.field === 'systemPrompt') out.push('systemPrompt, appended:', showableText(String(l.edit.value)).replace(/^/gm, '  '))
+      for (const f of ALLOWED.slice(1)) {
+        const a = leafOf(raw, f), b = leafOf(state.current, f)
+        if (a !== b) out.push(`${f}: ${a ?? '(unset)'} → ${b}`)
+      }
+      const nums = (label: string, rs: RunLite[]) => {
+        const n = numbersOf(rs)
+        return `${label}: PASS ${n.pass}/${rs.length}, tokens per success ${n.tokensPerSuccess === undefined ? '—' : Math.round(n.tokensPerSuccess)}, first requests ${n.weight ?? '—'} tok`
+      }
+      out.push(nums('original', orig), nums(`v${state.version}`, last), verdict(orig, last, mode))
+    } else out.push('no version beat the original')
+    return out.join('\n')
+  }
+  if (resuming && all && state.final) { console.log(report()); return }
   // The next version is checked now, not after a candidate's runs: a file the journal has no line for is not ours.
   const next = vf((resuming ? state.version : 0) + 1)
   if (isLink(next)) die(`${next} is a symbolic link; evolve writes only to a plain file there`)
@@ -581,7 +614,7 @@ async function cmdEvolve(argv: string[]) {
     // Before the start line: a journal is never without its snapshot.
     const live = notesPath(await notesKey(repo.repo))
     writeFileSync(snap, existsSync(live) ? readFileSync(live) : '')
-    append({ v: 1, type: 'start', base, sha: repo.sha, pin, sets, strict: mode.strict, proposer: host })
+    append({ v: 1, type: 'start', base, sha: repo.sha, pin, sets, strict: mode.strict, proposer: host, notes: sha256(readFileSync(snap)) })
   }
   const work = repoWork(repo)
   const byName = new Map(work.tasks.map(t => [t.name!, t]))
@@ -600,7 +633,9 @@ async function cmdEvolve(argv: string[]) {
     const rs: RunLite[] = []
     for (const n of names) {
       const r = await benchOnce(c, round, timeoutS, out, byName.get(n)!, notes)
-      rs.push({ task: n, verdict: r.verdict, tokens: r.tokens, firstPromptTokens: r.firstPromptTokens, trace: r.trace, reason: r.reason, lastError: r.lastError })
+      const lite: RunLite = { task: n, verdict: r.verdict, tokens: r.tokens, firstPromptTokens: r.firstPromptTokens, trace: r.trace, reason: r.reason, lastError: r.lastError }
+      // Signed now, while the trace is here: the report groups failures by it without reading a trace again.
+      rs.push(lite.verdict === 'FAIL' ? { ...lite, sig: signatureOf(lite, await eventsOf(r.trace)) } : lite)
       // As in bench: a run that changed the linked node_modules changed every run after it.
       if (modulesDir && await modulesManifest(modulesDir) !== modules0) { stopped = true; break }
     }
@@ -640,10 +675,8 @@ async function cmdEvolve(argv: string[]) {
     try { writeFileSync(p, text, { flag: 'wx' }) } catch { die(`${p} already exists; move it away first — evolve never overwrites a version`) }
   }
   const trainGate = [...sets.train, ...sets.gate]
-  const all = Array.from({ length: rounds }, (_, i) => i + 1).every(round => lines.some(l => l.type === 'current' && l.round === round) &&
-    Array.from({ length: CANDIDATES }, (_, i) => i + 1).every(index => lines.some(l => l.type === 'candidate' && l.round === round && l.index === index)))
-  if (resuming && all) console.error(`all rounds are in the journal${state.version ? '; measuring the final test again' : ''}`)
   for (let round = 1; round <= rounds; round++) {
+    snapCheck()
     console.error(`--- round ${round}/${rounds}`)
     const cur = lines.find(l => l.type === 'current' && l.round === round) as Extract<JournalLine, { type: 'current' }> | undefined
     // What the next candidate is compared with: this round's run of the current version, or the candidate kept since.
@@ -677,29 +710,21 @@ async function cmdEvolve(argv: string[]) {
       console.error(`candidate ${round}.${index}: ${d.reason}${version ? ` — wrote ${vf(version)}` : ''}`)
     }
   }
-  const report: string[] = []
-  if (lines.some(l => l.type === 'candidate' && l.reason === 'the server gave no usage'))
-    report.push(state.version ? 'the server gave no usage (token counts) for some candidates\' runs, so those could not pass the gates' : 'the server gave no usage (token counts), so no candidate could pass the gates: evolve needs a server that reports them')
-  if (state.version) {
-    const orig = await runOn(raw, `${base}.orig`, sets.test, 1)
-    if (stopped) return stop()
-    const last = await runOn(state.current, `${base}.v${state.version}`, sets.test, 1)
-    if (stopped) return stop()
-    report.push(`${vf(state.version)} against ${file} on the ${sets.test.length} test tasks:`)
-    for (const l of lines) if (l.type === 'candidate' && l.accepted && l.edit?.field === 'systemPrompt') report.push('systemPrompt, appended:', showableText(String(l.edit.value)).replace(/^/gm, '  '))
-    for (const f of ALLOWED.slice(1)) {
-      const a = leafOf(raw, f), b = leafOf(state.current, f)
-      if (a !== b) report.push(`${f}: ${a ?? '(unset)'} → ${b}`)
-    }
-    const nums = (label: string, rs: RunLite[]) => {
-      const n = numbersOf(rs)
-      return `${label}: PASS ${n.pass}/${rs.length}, tokens per success ${n.tokensPerSuccess === undefined ? '—' : Math.round(n.tokensPerSuccess)}, first requests ${n.weight ?? '—'} tok`
-    }
-    report.push(nums('original', orig), nums(`v${state.version}`, last), verdict(orig, last, mode))
-  } else report.push('no version beat the original')
-  report.push(`proposer: ${proposerTokens} tokens in this session (not in the gates)`)
+  // Measured once: a final line in the journal is the test, and a restart reads it instead of running it again.
+  if (!state.final) {
+    snapCheck()
+    if (state.version) {
+      const orig = await runOn(raw, `${base}.orig`, sets.test, 1)
+      if (stopped) return stop()
+      const last = await runOn(state.current, `${base}.v${state.version}`, sets.test, 1)
+      if (stopped) return stop()
+      append({ v: 1, type: 'final', version: state.version, orig, last })
+    } else append({ v: 1, type: 'final', version: 0 })
+  }
+  // Per session, so not in the report: the same journal gives the same report.
+  console.error(`proposer: ${proposerTokens} tokens in this session (not in the gates)`)
   dropWork(work)
-  console.log(report.join('\n'))
+  console.log(report())
 }
 
 /** Sends the recorded request of one turn again, as it was sent, and counts the distinct replies. No tool runs: one reply says where the next call goes, not how the run ends. */
