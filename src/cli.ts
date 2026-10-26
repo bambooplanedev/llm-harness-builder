@@ -7,7 +7,9 @@ import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { runAgent, mayAsk, type RunOpts } from './core/run.js'
+import { mayAsk, type RunOpts } from './core/run.js'
+import { withNotes, type NotesStore } from './core/notes-run.js'
+import { notesKey, notesPath, readNotes, selectNotes } from './core/notes.js'
 import { validateConfig, sendsAnswerSchema, KEY_ENV, FLAG_WORDS, keyNameMessage, keyErrors, keyProblem, keyNote, apiKey, isHttpUrl, isLoopbackUrl, type HarnessConfig, type BackendKind } from './core/config.js'
 import { validateWorkdir } from './core/tools/sandbox.js'
 import type { Backend, Delta, NormalizedResponse } from './core/backends/types.js'
@@ -115,7 +117,7 @@ function describe(e: HarnessEvent, streamed = false, cost?: number): string {
   }
 }
 
-type ExecOpts = { yes: boolean; json: boolean; quiet?: boolean; signal?: AbortSignal; onEvent?: (e: HarnessEvent) => void; bench?: Meta['meta']['bench']; answerSchema?: Record<string, unknown> }
+type ExecOpts = { yes: boolean; json: boolean; quiet?: boolean; signal?: AbortSignal; onEvent?: (e: HarnessEvent) => void; bench?: Meta['meta']['bench']; answerSchema?: Record<string, unknown>; notes?: NotesStore }
 
 /** Runs one agent loop and keeps its trace in ./runs/<id>.jsonl, the file format serve reads. Written as .part and renamed when the loop ends, so a live or killed run is never listed. */
 async function execRun(config: HarnessConfig, task: string, workdir: string, o: ExecOpts): Promise<{ id: string; last: HarnessEvent }> {
@@ -154,7 +156,9 @@ async function execRun(config: HarnessConfig, task: string, workdir: string, o: 
   }
   let last: HarnessEvent | undefined, cost: number | undefined
   try {
-    for await (const e of runAgent({ config, task, workdir, answerSchema: o.answerSchema }, opts)) {
+    if (o.notes && config.notes?.enabled && !o.quiet)
+      console.error(`notes: ${selectNotes(await readNotes(o.notes.file), config.notes.maxTokens).length} loaded from ${path.relative(process.cwd(), o.notes.file)}`)
+    for await (const e of withNotes({ config, task, workdir, answerSchema: o.answerSchema }, opts, o.notes, trace.id)) {
       last = e
       if (e.type === 'llm_response' && e.costUsd !== undefined) cost = (cost ?? 0) + e.costUsd
       await trace.append(e)
@@ -199,7 +203,8 @@ async function cmdRun(argv: string[]) {
   if (note) console.error(note)
   const key = keyNote(config.backend, process.env)
   if (key) console.error(key)
-  const { last } = await execRun(config, taskParts.join(' '), workdir, { yes: values.yes, json: values.json, answerSchema })
+  const notes = { file: notesPath('runs', await notesKey(workdir)), write: true }
+  const { last } = await execRun(config, taskParts.join(' '), workdir, { yes: values.yes, json: values.json, answerSchema, notes })
   const final = last.type === 'done' && last.reason === 'final' ? last : undefined
   let ok = final !== undefined
   // The schema is the server's to enforce, and a server may ignore it; then the same JSON comes back inside a fence. Whether it fits the schema is the caller's to check.
@@ -264,7 +269,7 @@ async function cmdDemo(argv: string[]) {
 const INT = /^[1-9]\d*$/
 
 /** One bench run: fresh task workdir → execRun (timed) → the task's check. Never throws; an exception becomes a FAIL row with reason 'error'. */
-async function benchOnce(config: HarnessConfig, round: number, timeoutS: number, out: string, task: Task, size?: number): Promise<BenchRun> {
+async function benchOnce(config: HarnessConfig, round: number, timeoutS: number, out: string, task: Task, taskName: string, size?: number): Promise<BenchRun> {
   // An exception that escapes execRun is text nothing has cleaned yet, and it goes to the bench JSON and the terminal.
   const redact = redactor(apiKey(config.backend, process.env), config.backend.apiKeyEnv ?? '')
   let workdir = '', parseErrors = 0, toolChars = 0, costUsd: number | undefined, peakTokens: number | undefined, toolErrors = 0, guardBlocks = 0, editMiss = 0, lastError: string | undefined, t0 = Date.now(), run: BenchRun
@@ -275,6 +280,8 @@ async function benchOnce(config: HarnessConfig, round: number, timeoutS: number,
     t0 = Date.now()
     const { id, last } = await execRun(config, task.input ? `${task.prompt}\n\n${task.input(size)}` : task.prompt, workdir, {
       yes: true, json: false, quiet: true, answerSchema: task.answerSchema?.(size), signal: AbortSignal.timeout(timeoutS * 1000), bench: { file: path.basename(out), round },
+      // Read, never written: a note from run 1 would make run 2 depend on it, and the bench's runs must stay independent.
+      notes: { file: notesPath('runs', `task-${taskName}`), write: false },
       onEvent: e => {
         if (e.type === 'parse_error') parseErrors++
         if (e.type === 'llm_response' && e.costUsd !== undefined) costUsd = (costUsd ?? 0) + e.costUsd
@@ -365,7 +372,7 @@ async function cmdBench(argv: string[]) {
   for (let round = 1; round <= n; round++) {
     console.error(`--- round ${round}/${n}`)
     for (const h of harnesses) {
-      h.runs.push(await benchOnce(h.config, round, timeoutS, out, task, size))
+      h.runs.push(await benchOnce(h.config, round, timeoutS, out, task, values.task, size))
       rollup(h)
       save()
     }

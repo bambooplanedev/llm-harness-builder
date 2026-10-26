@@ -99,6 +99,8 @@ const liveTok = computed(() => Math.ceil(liveText.value.length / 4))
         <template v-if="e.kind === 'compaction'">compaction · {{ t('trace.compaction') }}</template>
         <template v-else>auxiliary · {{ e.model }}<template v-if="e.error !== undefined"> · failed: {{ e.error }}</template><template v-else><template v-if="e.usage"> · {{ e.usage.promptTokens }}+{{ e.usage.completionTokens }} tok</template> · {{ e.latencyMs }}ms</template></template>
       </div>
+      <div v-else-if="e.type === 'notes_loaded'" class="ev muted">notes: {{ e.ids.length }} loaded · {{ e.chars }} chars</div>
+      <div v-else-if="e.type === 'note_written'" class="ev muted"><template v-if="e.error !== undefined">note not written: {{ e.error }}</template><template v-else-if="e.notes.length"><template v-for="n in e.notes" :key="n.id">note: {{ n.text }}<br></template></template><template v-else>note: nothing new</template></div>
       <div v-else-if="e.type === 'mcp_server_start'" class="ev tool_call">
         mcp <code>{{ e.server }}</code>: {{ mcpCounts(e) }}
       </div>

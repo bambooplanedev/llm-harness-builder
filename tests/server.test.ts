@@ -8,6 +8,7 @@ import { startServer } from '../src/server/index.js'
 import viteConfig from '../web/vite.config.js'
 import type { HarnessConfig } from '../src/core/config.js'
 import { fakeBackend, harness, tmp, type FakeResponse } from './helpers.js'
+import { notesKey, notesPath, readNotes } from '../src/core/notes.js'
 
 const fake = fakeBackend
 // Every run here goes through bash with an approval; maxTurns 3 keeps a runaway test short.
@@ -778,4 +779,16 @@ test('examples are served read-only', async () => {
   } finally { await s2.close(); await chmod(cut, 0o755); await chmod(cutFile, 0o644) }
   // No examples folder given: the switch is a 404, never the runs dir.
   expect((await fetch(`${base}/api/runs?example=1`)).status).toBe(404)
+})
+
+test('a run with notes on: note_written comes over SSE before done, and the note is saved by folder', async () => {
+  const wd = await tmp('lhb-wd-')
+  queue = [{ content: 'done' }, { content: JSON.stringify({ notes: ['use npm test'] }) }]
+  const r = await fetch(`${base}/api/runs`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ config: config({ notes: { enabled: true, maxTokens: 400 } }), task: 't', workdir: wd }) })
+  expect(r.status).toBe(201)
+  const { runId } = await r.json()
+  const all = await collectSSE(`${base}/api/runs/${runId}/events`)
+  expect(all.map(e => e.type).slice(-2)).toEqual(['note_written', 'done'])
+  const saved = await readNotes(notesPath(runsDir, await notesKey(wd)))
+  expect(saved.map(n => [n.text, n.run])).toEqual([['use npm test', runId]])
 })

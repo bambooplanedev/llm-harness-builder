@@ -187,3 +187,15 @@ test('film mode: a live knobs_off before the first request hides the model the p
   expect(html).toContain('model takes no temperature')
   expect(html).not.toContain('qwen3')
 })
+
+test('notes_loaded and note_written render in the trace', async () => {
+  const b = { turn: 0, ts: 0 }
+  const html = await render({ events: [
+    { ...b, seq: 0, type: 'notes_loaded', ids: ['a', 'b'], chars: 90 },
+    { ...b, seq: 1, type: 'note_written', notes: [{ id: 'c', text: 'use npm test' }] },
+    { ...b, seq: 2, type: 'note_written', notes: [], error: 'reply is not JSON' },
+  ] })
+  expect(html).toContain('notes: 2 loaded')
+  expect(html).toContain('note: use npm test')
+  expect(html).toContain('note not written: reply is not JSON')
+})
