@@ -18,6 +18,12 @@ Limits of [llm-harness-builder](../README.md) and of what its [findings](finding
   on), before starting each MCP server and before `loop.untilBash`, unless `--yes`; other tools and
   MCP tool calls never ask; `demo` and `bench` approve everything, the harness files' `mcpServers`
   and `loop.untilBash` included.
+- A note (`notes.enabled`) is the model's own summary of a run, written from the names of its calls,
+  argument keys, paths and verdicts, never from file contents or tool output; it is scrubbed for the
+  backend key, common secret shapes and the home path by pattern, not by proof. A wrong note is sent
+  after the task of every later run on that folder until you delete its line in
+  `runs/notes/<key>.jsonl`. `bench` reads notes and never writes them, so its runs stay independent:
+  measure notes as off against a fixed file, not as a bench that keeps writing.
 - The environment of what the model runs — `bash`, `loop.untilBash`, and the task checks, which
   execute the model's code — is `PATH`, `HOME`, `LANG`, `LC_ALL`, `LC_CTYPE`, `LC_COLLATE`,
   `LC_MESSAGES`, `LC_MONETARY`, `LC_NUMERIC`, `LC_TIME`, `TERM`, `TMPDIR` and the names in
