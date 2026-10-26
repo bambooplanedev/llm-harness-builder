@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { tmp, gitRepo } from './helpers.js'
+import { tmp, gitRepo, gitCommit } from './helpers.js'
 import { fakeOpenAI, toolTurn, textTurn } from './fake-openai.js'
 import { fakeAnthropic, toolReply, textReply } from './fake-anthropic.js'
 import { RunStore } from '../src/server/runs'
@@ -1706,5 +1706,66 @@ test('evolve: without consent and without a terminal it shows the evolve consent
   for (const s of ['mode: evolve', 'fields: systemPrompt', 'pass --yes']) expect(r.stderr).toContain(s)
   expect(existsSync(join(cwd, 'harnesses', 'h.evolve.jsonl'))).toBe(false)
   expect(existsSync(join(cwd, 'runs'))).toBe(false)
+  expect(clonesIn(env)).toEqual([])
+}, 120_000)
+
+// --- evolve resume: stopped and started again, it goes on from the journal or says why not.
+const evRaw = (cwd: string) => readFileSync(join(cwd, 'harnesses', 'h.evolve.jsonl'), 'utf8')
+const evFirst = async () => {
+  const repo = await tasksRepo(evTasks(ONE_EACH))
+  const env = await tasksEnv(evFake())
+  const cwd = await tmp('lhb-cwd-')
+  const h = evHarness(cwd)
+  const r = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
+  expect(r.status, r.stderr).toBe(0)
+  return { repo, env, cwd, h }
+}
+
+test('evolve: --rounds 1 then --rounds 2 continues from the journal', async () => {
+  const { repo, env, cwd, h } = await evFirst()
+  const before = evRaw(cwd)
+  const r = cli(['evolve', h, '--tasks', repo, '--rounds', '2', '--yes'], env, cwd)
+  expect(r.status, r.stderr).toBe(0)
+  const after = evRaw(cwd)
+  expect(after.startsWith(before)).toBe(true)
+  const added = after.slice(before.length).trim().split('\n').map(l => JSON.parse(l))
+  expect(added.length).toBeGreaterThan(0)
+  expect(added.every(l => l.round === 2)).toBe(true)
+  expect(clonesIn(env)).toEqual([])
+}, 120_000)
+
+test('evolve: a journal cut after the first candidate continues at the second', async () => {
+  const { repo, env, cwd, h } = await evFirst()
+  const lines = evRaw(cwd).trim().split('\n')
+  const cut = lines.findIndex(l => JSON.parse(l).type === 'candidate')
+  writeFileSync(join(cwd, 'harnesses', 'h.evolve.jsonl'), lines.slice(0, cut + 1).join('\n') + '\n')
+  const r = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
+  expect(r.status, r.stderr).toBe(0)
+  const cands = journal(cwd).filter(l => l.type === 'candidate')
+  expect(cands.map(c => c.index)).toEqual([1, 2])
+  expect(evRaw(cwd).startsWith(lines.slice(0, cut + 1).join('\n') + '\n')).toBe(true)
+  expect(clonesIn(env)).toEqual([])
+}, 120_000)
+
+test('evolve: a tampered journal is refused', async () => {
+  const { repo, env, cwd, h } = await evFirst()
+  const lines = evRaw(cwd).trim().split('\n').map(l => JSON.parse(l))
+  const acc = lines.find(l => l.type === 'candidate' && l.accepted)
+  acc.edit = { field: 'tools.enabled', value: 'bash' }
+  writeFileSync(join(cwd, 'harnesses', 'h.evolve.jsonl'), lines.map(l => JSON.stringify(l)).join('\n') + '\n')
+  const r = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
+  expect(r.status).toBe(2)
+  expect(r.stderr).toContain('cannot resume')
+  expect(clonesIn(env)).toEqual([])
+}, 120_000)
+
+test('evolve: a new commit in the repo refuses to resume', async () => {
+  const { repo, env, cwd, h } = await evFirst()
+  await writeFile(join(repo, 'other.txt'), 'x'); await gitCommit(repo)
+  const before = evRaw(cwd)
+  const r = cli(['evolve', h, '--tasks', repo, '--rounds', '2', '--yes'], env, cwd)
+  expect(r.status).toBe(2)
+  expect(r.stderr).toContain('the repo has a new commit since this evolve started')
+  expect(evRaw(cwd)).toBe(before)
   expect(clonesIn(env)).toEqual([])
 }, 120_000)
