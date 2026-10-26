@@ -66,3 +66,24 @@ test.each(['node:assert', 'node:assert/strict'])('expect.js freezes %s', async m
   const out = spawnSync(process.execPath, ['x.js'], { cwd: dir, env: childEnv(), encoding: 'utf8' })
   expect(out.stdout.trim()).toBe('TypeError')
 })
+
+// A solution runs after the bridge loads; accessors it puts on Object.prototype must not reach the matchers.
+test('a solution cannot hand the tests its own matchers through Object.prototype', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'lhb-polyglot-proto-'))
+  for (const f of ['expect.js', 'package.json']) await copyFile(path.join(SET, f), path.join(dir, f))
+  await writeFile(path.join(dir, 'x.js'), `for (const k of ['toEqual', 'toBe', 'toThrow', 'not', 'resolves', 'rejects', 'message', 'depth'])
+  Object.defineProperty(Object.prototype, k, { configurable: true, set() {}, get() { return () => {} } })
+export const answer = () => 1
+`)
+  await writeFile(path.join(dir, 'x.test.js'), `import { expect } from './expect.js';
+import { test } from 'node:test';
+import { answer } from './x.js';
+test('equal', () => { expect(answer()).toEqual(2) });
+test('be', () => { expect(answer()).toBe(2) });
+test('throw', () => { expect(answer).toThrow() });
+test('not', () => { expect(answer()).not.toBe(1) });
+test('deep', () => { expect({ a: answer() }).toEqual({ a: 2 }) });
+`)
+  const { results, exit } = await runTests(dir, 'x.test.js', childEnv())
+  expect(score(results, ['equal', 'be', 'throw', 'not', 'deep'], exit)).toMatchObject({ pass: false, passed: 0, total: 5 })
+})

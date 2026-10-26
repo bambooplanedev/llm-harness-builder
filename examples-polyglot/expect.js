@@ -1,6 +1,7 @@
 // expect.js — the part of Jest's `expect` these exercises use, on node:assert, for `node --test`.
 // Freezes node:assert and takes every built-in it calls at load, before the solution is imported,
-// so a solution that patches them later does not change how its tests are checked.
+// so a solution that patches them later does not change how its tests are checked. Every object it makes has a null
+// prototype, so accessors a solution puts on Object.prototype cannot catch its writes or answer its reads.
 import assert from 'node:assert';
 import strict from 'node:assert/strict';
 import { inspect, isDeepStrictEqual } from 'node:util';
@@ -19,15 +20,16 @@ const exec = RegExp.prototype.exec;
 const hasInstance = Function.prototype[Symbol.hasInstance];
 const Str = String;
 
-const fail = (message) => { throw new AssertionError({ message }); };
+const fail = (message) => { throw new AssertionError({ __proto__: null, message }); };
 const tag = (x) => apply(toString, x, []);
-const show = (x) => inspect(x, { depth: 4 });
+const show = (x) => inspect(x, { __proto__: null, depth: 4 });
 
-/** Own enumerable keys whose value is not undefined: Jest's toEqual ignores the rest. */
+/** How many own enumerable keys hold a value other than undefined: Jest's toEqual ignores the rest. */
 const defined = (o) => {
-  const all = keys(o), out = [];
-  for (let i = 0; i < all.length; i++) if (o[all[i]] !== undefined) out[out.length] = all[i];
-  return out;
+  const all = keys(o);
+  let n = 0;
+  for (let i = 0; i < all.length; i++) if (o[all[i]] !== undefined) n++;
+  return n;
 };
 
 /** Jest's toEqual: no prototype check, undefined properties ignored, errors by message, dates by time. */
@@ -38,11 +40,15 @@ const equal = (a, b) => {
   if (t !== tag(b)) return false;
   if (t === '[object Error]') return is(a.message, b.message);
   if (t === '[object Date]') return is(apply(getTime, a, []), apply(getTime, b, []));
+  // Map, Set and the rest: stricter than Jest (prototypes count); no spec compares them.
   if (t !== '[object Object]' && t !== '[object Array]') return isDeepStrictEqual(a, b);
   if (t === '[object Array]' && a.length !== b.length) return false;
-  const ka = defined(a), kb = defined(b);
-  if (ka.length !== kb.length) return false;
-  for (let i = 0; i < ka.length; i++) if (!apply(hasOwn, b, [ka[i]]) || !equal(a[ka[i]], b[ka[i]])) return false;
+  if (defined(a) !== defined(b)) return false;
+  const ka = keys(a);
+  for (let i = 0; i < ka.length; i++) {
+    const k = ka[i];
+    if (a[k] !== undefined && (!apply(hasOwn, b, [k]) || !equal(a[k], b[k]))) return false;
+  }
   return true;
 };
 
@@ -90,7 +96,7 @@ const check = (name, received, args, not) => {
 
 /** mode: '' checks the value, 'resolves'/'rejects' wait for it and check what it settled with. */
 const matchers = (actual, not, mode) => {
-  const o = {};
+  const o = { __proto__: null };
   for (const name in MATCHERS) {
     o[name] = (...args) => {
       if (mode === '') return check(name, actual, args, not);
