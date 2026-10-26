@@ -21,7 +21,8 @@ const isNote = (x: any): x is Note =>
 /** A missing file is no notes; a line that is not a note (a killed write, a hand edit gone wrong) is skipped. */
 export async function readNotes(file: string): Promise<Note[]> {
   let text: string
-  try { text = await readFile(file, 'utf8') } catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') return []; throw e }
+  // Unreadable (missing, a folder, no permission) is no notes: a notes file must never fail the run it rides on.
+  try { text = await readFile(file, 'utf8') } catch { return [] }
   return text.split('\n').flatMap(l => { try { const x = JSON.parse(l); return isNote(x) ? [x] : [] } catch { return [] } })
 }
 
@@ -62,16 +63,20 @@ export function scrubNote(text: string, redact: Redactor, home: string): string 
   return s.replace(/\s+/g, ' ').trim().slice(0, NOTE_MAX_CHARS)
 }
 
+// The model picks names, keys and paths too, and a path can be text it read: anything but a plain short token is <odd>.
+const plain = (s: string): string => /^[\w.\/@:+-]{1,200}$/.test(s) ? s : '<odd>'
+
 /** What happened in a run, without its content: tool names, argument keys, the path argument, lengths, verdicts.
  *  Argument values are file text (edit, write) or commands taken from the repo (bash), and outputs are the repo's
- *  own text — neither is in here, so hostile text in a project cannot turn into a note or leave the machine. */
+ *  own text — neither is in here. Names, keys and paths are kept only when they are plain tokens, so text the model
+ *  copied from the project cannot ride in on them; a note can still be wrong, which is the honest notes' point. */
 export function traceSignals(events: HarnessEvent[]): string {
   const out: string[] = []
   for (const e of events) {
     if (e.type === 'tool_call') {
-      const p = typeof e.call.args.path === 'string' ? ` path=${e.call.args.path}` : ''
-      out.push(`call ${e.call.name} keys=${Object.keys(e.call.args).join(',')}${p} len=${JSON.stringify(e.call.args).length}`)
-    } else if (e.type === 'tool_result' && e.error) out.push(`result ${e.name} error`)
+      const p = typeof e.call.args.path === 'string' ? ` path=${plain(e.call.args.path)}` : ''
+      out.push(`call ${plain(e.call.name)} keys=${Object.keys(e.call.args).map(plain).join(',')}${p} len=${JSON.stringify(e.call.args).length}`)
+    } else if (e.type === 'tool_result' && e.error) out.push(`result ${plain(e.name)} error`)
     else if (e.type === 'parse_error') out.push('parse_error')
     else if (e.type === 'final_check') out.push(`final_check ${e.passed ? 'passed' : 'failed'}`)
     else if (e.type === 'done') out.push(`done ${e.reason} turns=${e.turns} calls=${e.toolCallCount}`)
