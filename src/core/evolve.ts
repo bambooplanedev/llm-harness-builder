@@ -245,3 +245,104 @@ export function parseProposal(content: string): Edit {
       return { field: x.field, value: x.value, ...(typeof x.why === 'string' ? { why: x.why.slice(0, 300) } : {}) }
   throw new Error('no edit in the reply')
 }
+
+export type JournalLine =
+  | { v: 1; type: 'start'; base: string; sha: string; sets: Record<SetName, string[]>; strict: boolean; proposer: string }
+  | { v: 1; type: 'current'; round: number; runs: RunLite[] }
+  | { v: 1; type: 'candidate'; round: number; index: number; input: string; edit?: Edit; accepted: boolean; reason: string; numbers?: Numbers; runs?: RunLite[]; version?: number }
+
+// A field's check: undefined = fine, else why not. The journal sits in the user's cwd, where the model's bash can
+// rewrite it, so every key is known and every value typed.
+type Check = (x: unknown) => string | undefined
+const isObj = (x: unknown): x is Record<string, unknown> => x !== null && typeof x === 'object' && !Array.isArray(x)
+const str: Check = x => typeof x === 'string' ? undefined : 'not a string'
+const bool: Check = x => typeof x === 'boolean' ? undefined : 'not a boolean'
+const num: Check = x => typeof x === 'number' && Number.isFinite(x) && x >= 0 ? undefined : 'not a number'
+const pos: Check = x => Number.isInteger(x) && (x as number) >= 1 ? undefined : 'not a positive integer'
+const NAME = /^[A-Za-z0-9._-]{1,64}$/
+const name: Check = x => typeof x === 'string' && NAME.test(x) ? undefined : 'not a task name'
+const arr = (each: Check): Check => x => {
+  if (!Array.isArray(x)) return 'not a list'
+  for (const [i, y] of x.entries()) { const w = each(y); if (w) return `[${i}] ${w}` }
+}
+const shape = (req: Record<string, Check>, opt: Record<string, Check> = {}): Check => x => {
+  if (!isObj(x)) return 'not an object'
+  for (const k of Object.keys(x)) if (!(k in req) && !(k in opt)) return `unknown key ${JSON.stringify(k).slice(0, 40)}`
+  for (const [k, c] of Object.entries(req)) { if (!(k in x)) return `missing ${k}`; const w = c(x[k]); if (w) return `${k}: ${w}` }
+  for (const [k, c] of Object.entries(opt)) if (k in x) { const w = c(x[k]); if (w) return `${k}: ${w}` }
+}
+const RUN = shape({ task: name, verdict: x => x === 'PASS' || x === 'FAIL' ? undefined : 'not PASS or FAIL' },
+  { tokens: num, firstPromptTokens: num, trace: str, reason: str, lastError: str })
+const EDIT = shape({ field: str, value: x => typeof x === 'string' || (typeof x === 'number' && Number.isFinite(x)) ? undefined : 'not a string or a number' }, { why: str })
+const v1: Check = x => x === 1 ? undefined : 'not 1'
+const LINE: Record<string, Check> = {
+  start: shape({ v: v1, type: str, base: str, sha: str, sets: shape({ train: arr(name), gate: arr(name), test: arr(name) }), strict: bool, proposer: str }),
+  current: shape({ v: v1, type: str, round: pos, runs: arr(RUN) }),
+  candidate: shape({ v: v1, type: str, round: pos, index: pos, input: str, accepted: bool, reason: str },
+    { edit: EDIT, numbers: shape({ pass: num }, { tokensPerSuccess: num, tokens: num, weight: num }), runs: arr(RUN), version: pos }),
+}
+
+/** The journal's lines, each checked. A last line without its newline is a torn write and dropped, even if it parses. */
+export function parseJournal(text: string): { lines: JournalLine[] } | { error: string } {
+  const parts = text.split('\n')
+  parts.pop() // '' after the last newline, or the torn line
+  const lines: JournalLine[] = []
+  for (const [i, p] of parts.entries()) {
+    let x: unknown
+    try { x = JSON.parse(p) } catch { return { error: `line ${i + 1}: not JSON` } }
+    const c = isObj(x) && typeof x.type === 'string' ? LINE[x.type] : undefined
+    const why = c ? c(x) : 'unknown type'
+    if (why) return { error: `line ${i + 1}: ${why}` }
+    lines.push(x as JournalLine)
+  }
+  return { lines }
+}
+
+/** The current version rebuilt from the original and the journal, each accepted edit checked again as if new:
+ *  a vN file or a hand-written line is never what the next round starts from. */
+export function replay(lines: JournalLine[], original: object, ctx: { binding: string[]; sets: Record<SetName, string[]> }):
+  { current: object; version: number; baseline?: RunLite[]; done: { round: number; index: number }[]; tried: Edit[]; rejected: Rejected[] } | { error: string } {
+  const [first, ...rest] = lines
+  if (first?.type !== 'start') return { error: 'cannot resume: the journal does not begin with a start line' }
+  if (JSON.stringify(first.sets) !== JSON.stringify(ctx.sets)) return { error: 'cannot resume: the sets differ from the tasks file' }
+  let current = original, version = 0, baseline: RunLite[] | undefined
+  const done: { round: number; index: number }[] = [], tried: Edit[] = [], rejected: Rejected[] = []
+  for (const l of rest) {
+    if (l.type === 'start') return { error: 'cannot resume: a second start line' }
+    if (l.type === 'current') {
+      done.push({ round: l.round, index: 0 })
+      if (l.round === 1) baseline ??= l.runs
+      continue
+    }
+    done.push({ round: l.round, index: l.index })
+    if (l.accepted) {
+      version++
+      const why = l.edit ? checkEdit(l.edit, { current, original, tried, binding: ctx.binding }) : 'no edit'
+      if (why) return { error: `cannot resume: accepted edit ${version}: ${why}` }
+      current = applyEdit(current, l.edit!)
+    } else if (l.edit) rejected.push({ field: l.edit.field, ...(l.reason === 'tied to a task' ? {} : { value: l.edit.value }), reason: l.reason })
+    if (l.edit) tried.push(l.edit)
+  }
+  return { current, version, baseline, done, tried, rejected }
+}
+
+const PRINCIPLE = 'how far this is a principle rather than a fit depends on how unlike the training tasks the test tasks are'
+
+/** The original against the last version on the test tasks, paired by name. Only ever about this repo's tasks. */
+export function verdict(orig: RunLite[], last: RunLite[], mode: Mode): string {
+  const was = new Map(orig.map(r => [r.task, r.verdict]))
+  let b = 0, c = 0, po = 0, pl = 0
+  for (const r of last) {
+    const v = was.get(r.task)
+    if (!v) continue
+    if (v === 'PASS') po++
+    if (r.verdict === 'PASS') pl++
+    if (v === 'FAIL' && r.verdict === 'PASS') b++
+    else if (v === 'PASS' && r.verdict === 'FAIL') c++
+  }
+  const SEEN = 'on the tasks of this repo Evolve did not see'
+  const lines = mode.strict
+    ? [signP(b, c) < ALPHA ? `better ${SEEN}` : signP(c, b) < ALPHA ? `worse ${SEEN}` : `not told apart from noise ${SEEN}`]
+    : [referenceLabel(mode), pl > po ? 'more PASS' : pl < po ? 'fewer PASS' : 'not told apart']
+  return [...lines, PRINCIPLE].join('\n')
+}

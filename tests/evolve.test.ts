@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ALPHA, applyEdit, bindingTokens, checkEdit, decide, failureGroups, modeOf, neededFlips, parseProposal, proposerInput, proposerRequest, referenceLabel, signP, splitSets, PROPOSAL_SCHEMA, type Edit, type Mode, type RunLite } from '../src/core/evolve.js'
+import { ALPHA, applyEdit, parseJournal, replay, verdict, bindingTokens, checkEdit, decide, failureGroups, modeOf, neededFlips, parseProposal, proposerInput, proposerRequest, referenceLabel, signP, splitSets, PROPOSAL_SCHEMA, type Edit, type Mode, type RunLite } from '../src/core/evolve.js'
 import type { HarnessEvent } from '../src/core/events.js'
 import { harness } from './helpers.js'
 import type { RepoTask } from '../src/core/repo-tasks.js'
@@ -209,5 +209,74 @@ describe('evolve signals', () => {
     expect(parseProposal('<think>{"field": 1}</think>{"field":"loop.maxRepeats","value":2}')).toEqual({ field: 'loop.maxRepeats', value: 2 })
     expect(() => parseProposal('no idea')).toThrow('no edit in the reply')
     expect(() => parseProposal('{"field":"loop.maxRepeats","value":true}')).toThrow('no edit in the reply')
+  })
+})
+
+describe('evolve journal', () => {
+  const sets = { train: ['t0', 't1'], gate: ['t2'], test: ['t3'] }
+  const start = { v: 1, type: 'start', base: 'h', sha: 'abc', sets, strict: false, proposer: 'http://p/v1' }
+  const cur = { v: 1, type: 'current', round: 1, runs: [run('t0', false), run('t1', true), run('t2', true)] }
+  const cand = (index: number, edit: Edit, accepted: boolean, reason: string, round = 1) =>
+    ({ v: 1, type: 'candidate', round, index, input: '{}', edit, accepted, reason, numbers: { pass: 3, tokens: 300, tokensPerSuccess: 100, weight: 30 }, runs: cur.runs, ...(accepted ? { version: 1 } : {}) })
+  const a1 = cand(1, { field: 'systemPrompt', value: 'plan first', why: 'w' }, true, 'accepted')
+  const r2 = cand(2, { field: 'systemPrompt', value: 'mind t0_file' }, false, 'tied to a task')
+  const r3 = { ...cand(1, { field: 'loop.maxRepeats', value: 3 }, false, 'within noise (p=0.50)', 2), numbers: undefined }
+  const jsonl = (...ls: object[]) => ls.map(l => JSON.stringify(l) + '\n').join('')
+  const ctx = { binding: ['t0_file'], sets }
+
+  it('parseJournal: a valid journal round-trips; a torn last line is dropped; an unknown key, a bad verdict or a bad line in the middle is refused with its line number', () => {
+    const r3clean = JSON.parse(JSON.stringify(r3))
+    const text = jsonl(start, cur, a1, r2, r3clean)
+    expect(parseJournal(text)).toEqual({ lines: [start, cur, a1, r2, r3clean] })
+    expect(parseJournal('')).toEqual({ lines: [] })
+    // Torn: no newline at the end, dropped even when it would parse.
+    expect(parseJournal(text + JSON.stringify(cur))).toEqual({ lines: [start, cur, a1, r2, r3clean] })
+    expect(parseJournal(text + '{"v":1,"ty')).toEqual({ lines: [start, cur, a1, r2, r3clean] })
+    expect(parseJournal(jsonl(start, { ...cur, extra: 1 }))).toEqual({ error: expect.stringMatching(/^line 2: /) })
+    expect(parseJournal(jsonl(start, { ...cur, runs: [{ ...run('t0', true), verdict: 'OK' }] }))).toEqual({ error: expect.stringMatching(/^line 2: /) })
+    expect(parseJournal(jsonl(start, { ...cur, runs: [run('../x', true)] }))).toEqual({ error: expect.stringMatching(/^line 2: /) })
+    expect(parseJournal(jsonl(start) + '{"v":1,"ty\n' + jsonl(cur))).toEqual({ error: expect.stringMatching(/^line 2: /) })
+    expect(parseJournal(jsonl(start, cur, { ...a1, edit: { ...a1.edit, extra: 1 } }))).toEqual({ error: expect.stringMatching(/^line 3: /) })
+    expect(parseJournal(jsonl({ ...start, v: 2 }))).toEqual({ error: expect.stringMatching(/^line 1: /) })
+    expect(parseJournal(jsonl({ ...start, sets: { ...sets, more: [] } }))).toEqual({ error: expect.stringMatching(/^line 1: /) })
+  })
+
+  it('replay rebuilds the current from the original and the accepted edits', () => {
+    const lines = (parseJournal(jsonl(start, cur, a1, r2, JSON.parse(JSON.stringify(r3)))) as any).lines
+    const r = replay(lines, harness(), ctx) as any
+    expect(r.error).toBeUndefined()
+    expect(r.current).toEqual(applyEdit(harness(), { field: 'systemPrompt', value: 'plan first' }))
+    expect(r.version).toBe(1)
+    expect(r.baseline).toEqual(cur.runs)
+    expect(r.done).toEqual([{ round: 1, index: 0 }, { round: 1, index: 1 }, { round: 1, index: 2 }, { round: 2, index: 1 }])
+    expect(r.tried).toEqual([a1.edit, r2.edit, r3.edit])
+    expect(r.rejected).toEqual([{ field: 'systemPrompt', reason: 'tied to a task' }, { field: 'loop.maxRepeats', value: 3, reason: 'within noise (p=0.50)' }])
+  })
+
+  it('refuses an accepted edit outside ALLOWED written into the journal', () => {
+    const bad = cand(2, { field: 'loop.untilBash', value: 'rm -rf x' }, true, 'accepted')
+    expect(replay([start, cur, a1, bad] as any, harness(), ctx)).toEqual({ error: 'cannot resume: accepted edit 2: field not allowed' })
+    const dup = cand(2, a1.edit, true, 'accepted')
+    expect(replay([start, cur, a1, dup] as any, harness(), ctx)).toEqual({ error: 'cannot resume: accepted edit 2: already tried' })
+    expect(replay([cur] as any, harness(), ctx)).toEqual({ error: expect.stringMatching(/^cannot resume: /) })
+  })
+
+  it('refuses sets that differ from the file\'s', () => {
+    expect(replay([start, cur] as any, harness(), { ...ctx, sets: { ...sets, test: ['t3', 't4'] } })).toEqual({ error: expect.stringMatching(/^cannot resume: .*sets/) })
+  })
+
+  it('verdict: strict better / noise / worse texts; reference label and "more PASS"; never "better in general"', () => {
+    const P = 'how far this is a principle rather than a fit depends on how unlike the training tasks the test tasks are'
+    const T = names(8)
+    const all = (ok: boolean) => T.map(t => run(t, ok))
+    expect(verdict(all(false), all(true), strict)).toBe(`better on the tasks of this repo Evolve did not see\n${P}`)
+    expect(verdict(all(true), all(false), strict)).toBe(`worse on the tasks of this repo Evolve did not see\n${P}`)
+    expect(verdict(all(true), all(true), strict)).toBe(`not told apart from noise on the tasks of this repo Evolve did not see\n${P}`)
+    // Paired by name: the same PASS count on swapped tasks is two flips each way, noise.
+    expect(verdict([run('a', true), run('b', false)], [run('b', true), run('a', false)], strict)).toMatch(/^not told apart from noise/)
+    expect(verdict([run('t0', false)], [run('t0', true)], ref)).toBe(`${referenceLabel(ref)}\nmore PASS\n${P}`)
+    expect(verdict([run('t0', true)], [run('t0', false)], ref)).toBe(`${referenceLabel(ref)}\nfewer PASS\n${P}`)
+    expect(verdict([run('t0', true)], [run('t0', true)], ref)).toBe(`${referenceLabel(ref)}\nnot told apart\n${P}`)
+    for (const m of [strict, ref]) for (const [o, l] of [[all(false), all(true)], [all(true), all(false)]]) expect(verdict(o, l, m)).not.toMatch(/in general/)
   })
 })

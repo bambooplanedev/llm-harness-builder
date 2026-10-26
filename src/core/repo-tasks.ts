@@ -93,7 +93,11 @@ export async function loadRepoTasks(dir: string): Promise<RepoTasks> {
 const SHA_LINE = (sha: string) => `commit: ${sha}`
 
 /** What `bench --tasks` will run and where, as the user is asked to accept it. `npm test` runs the package's scripts, so they are in it. */
-export function consentText(t: RepoTasks): string {
+export type EvolveConsent = { proposer: string; fields: string[] }
+
+/** `evolve` asks on top of the bench text, never in place of it: lines after it, so a bench hash stays what it was. */
+export function consentText(t: RepoTasks, ev?: EvolveConsent): string {
+  const host = (u: string) => { try { return new URL(u).host || u } catch { return u } }
   return [
     `repo: ${t.repo}`, SHA_LINE(t.sha), '',
     'setup — once, in a separate clone in the OS temp dir',
@@ -102,21 +106,23 @@ export function consentText(t: RepoTasks): string {
     `setup: ${t.setup ?? '(none)'}`,
     ...t.tasks.flatMap(x => [`task ${x.name}`, `  prompt: ${x.prompt}`, `  check: ${x.check}`]),
     'package.json scripts:', ...Object.entries(t.scripts).map(([k, v]) => `  ${JSON.stringify(k)}: ${JSON.stringify(v)}`),
+    ...(ev ? ["mode: evolve — the model's own prompts run unreviewed while Evolve measures them", `proposer: ${host(ev.proposer)}`, `fields: ${ev.fields.join(', ')}`] : []),
   ].join('\n')
 }
 
 /** The hash leaves the commit out: a commit that changes neither the tasks nor the scripts asks nothing again. */
-export const consentHash = (t: RepoTasks): string =>
-  createHash('sha256').update(consentText(t).split('\n').filter(l => l !== SHA_LINE(t.sha)).join('\n')).digest('hex')
+export const consentHash = (t: RepoTasks, ev?: EvolveConsent): string =>
+  createHash('sha256').update(consentText(t, ev).split('\n').filter(l => l !== SHA_LINE(t.sha)).join('\n')).digest('hex')
 
-const consentFile = async (t: RepoTasks) => path.join(stateDir(), 'consent', `${await notesKey(t.repo)}.json`)
+// A file of its own for evolve, so saying yes to one never takes back the yes to the other.
+const consentFile = async (t: RepoTasks, ev?: EvolveConsent) => path.join(stateDir(), 'consent', `${await notesKey(t.repo)}${ev ? '.evolve' : ''}.json`)
 
-export async function hasConsent(t: RepoTasks): Promise<boolean> {
-  try { return JSON.parse(await readFile(await consentFile(t), 'utf8')).hash === consentHash(t) } catch { return false }
+export async function hasConsent(t: RepoTasks, ev?: EvolveConsent): Promise<boolean> {
+  try { return JSON.parse(await readFile(await consentFile(t, ev), 'utf8')).hash === consentHash(t, ev) } catch { return false }
 }
 
-export async function saveConsent(t: RepoTasks): Promise<void> {
-  const f = await consentFile(t)
+export async function saveConsent(t: RepoTasks, ev?: EvolveConsent): Promise<void> {
+  const f = await consentFile(t, ev)
   await mkdir(path.dirname(f), { recursive: true })
-  await writeFile(f, JSON.stringify({ hash: consentHash(t) }) + '\n')
+  await writeFile(f, JSON.stringify({ hash: consentHash(t, ev) }) + '\n')
 }
