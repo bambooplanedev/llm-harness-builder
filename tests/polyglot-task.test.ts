@@ -96,6 +96,28 @@ describe('check', () => {
     expect(await run(`${await proof}\nawait import(\`node:assert\`)\n`)).toMatchObject({ pass: false, reason: 'the solution touches the test runner' })
   })
 
+  // The solution registers its own tests under the recorded names, then exits before the real ones report.
+  test('a solution that registers the recorded names itself fails', async () => {
+    const cheat = `const t = process['getBuiltin' + 'Module']('node:test')
+for (const n of ${JSON.stringify(first.tests)}) t.test(n, () => {})
+t.test('end', async () => { await new Promise(r => setTimeout(r, 200)); process['ex' + 'it'](0) })
+export const age = () => 0
+`
+    const r = await run(cheat)
+    expect(r.pass).toBe(false)
+    expect(r.reason).toMatch(/unexpected test/)
+    expect(r.tests).toEqual({ passed: 0, total })
+  })
+
+  test('tripwire: getBuiltinModule and createRequire', async () => {
+    for (const extra of ["process.getBuiltinModule('node:fs')\n", "import { createRequire } from 'node:module'\n"])
+      expect(await run(`${await proof}\n${extra}`)).toMatchObject({ pass: false, reason: 'the solution touches the test runner' })
+  })
+
+  test('code from strings does not run', async () => {
+    expect((await run(`${await proof}\nnew globalThis['Func' + 'tion']('return 1')()\n`)).pass).toBe(false)
+  })
+
   test('the bridge holds against patched built-ins', async () => {
     const r = await run(`${p.exercises[0].stub}\nObject.is = () => true; String.prototype.includes = () => true\n`)
     expect(r.pass).toBe(false)

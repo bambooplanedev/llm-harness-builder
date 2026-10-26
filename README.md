@@ -322,10 +322,11 @@ llm-harness-builder bench base.json yours.json --task polyglot --size 5 --n 1   
 llm-harness-builder bench base.json yours.json --task polyglot --size 47          # the full set, may take a night
 ```
 
-Limits: a crashed run does not resume; the model has network, and Exercism's solutions are public;
-with `--n` above 1 every run counts, so the interval is a little optimistic; the numbers do not
-compare with Aider's leaderboard (there: two attempts, the second with the test output; here: one
-agent run).
+Limits. A crashed run does not resume. With `--n` above 1 every run counts, so the interval is a
+little optimistic. Each exercise's check has its own fixed 60 s limit, separate from `--timeout`. The
+model has network, and Exercism's solutions are public. The shell is not isolated, so determined
+cheating (forging the test runner's messages, say) is not fully ruled out. The numbers do not compare
+with Aider's leaderboard (there: two attempts, the second with the test output; here: one agent run).
 
 **Your own tasks.** `bench --tasks <repo>` runs your tasks instead of a built-in one, from a
 `lhb-tasks.json` at the top of a git repo:

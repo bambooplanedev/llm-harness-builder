@@ -53,7 +53,7 @@ function convert(name, spec) {
   if (left) throw new Error(`${name}: ${left[0]} is not converted`)
   if (!s.includes(`from './${name}.js'`)) throw new Error(`${name}: the test does not import ./${name}.js`)
   const used = HOOKS.filter(h => new RegExp(`\\b${h}(\\.skip)?\\(`).test(s))
-  return `import { expect } from './expect.js';\nimport { ${used.join(', ')} } from 'node:test';\n${s}`
+  return `import { expect } from './expect.js';\n${used.length ? `import { ${used.join(', ')} } from 'node:test';\n` : ''}${s}`
 }
 
 const read = (...p) => readFile(path.join(...p), 'utf8')
@@ -83,10 +83,10 @@ for (const name of ORDER) {
   }
   const ran = await runWith(path.join(work, 'proofs', `${name}.js`))
   const tests = ran.results.filter(r => r.status !== 'skip').map(r => r.path)
-  const proofScore = score(ran.results, tests, ran.exit)
+  const proofScore = score(ran.results, tests, ran.exit, `${name}.test.js`)
   if (!tests.length || !proofScore.pass) problems.push(`${name}: the proof does not pass (${proofScore.reason ?? 'no tests'})`)
   const stub = await runWith(path.join(dir, `${name}.js`))
-  if (score(stub.results, tests, stub.exit).passed >= tests.length) problems.push(`${name}: the stub passes every test`)
+  if (score(stub.results, tests, stub.exit, `${name}.test.js`).passed >= tests.length) problems.push(`${name}: the stub passes every test`)
   const difficulty = config.exercises.practice.find(e => e.slug === name).difficulty
   exercises.push({ name, difficulty, tests })
   console.log(`${name}: difficulty ${difficulty}, ${tests.length} tests`)
