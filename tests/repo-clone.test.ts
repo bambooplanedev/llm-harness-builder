@@ -1,4 +1,4 @@
-import { test, expect } from 'vitest'
+import { test, expect, vi } from 'vitest'
 import { writeFile, readFile, mkdir, chmod, unlink, rename, rm } from 'node:fs/promises'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
@@ -9,6 +9,10 @@ import { loadRepoTasks } from '../src/core/repo-tasks.js'
 import { cloneAt, linkNodeModules, changedPaths, protectedChanged, runCheck, patchOf, removeClone, removeCloneSync, modulesManifest, prepareModules, modulesTampered, removeAllClonesSync, finishRun, type Clone } from '../src/core/repo-clone.js'
 import { childEnv } from '../src/core/tools/env.js'
 import { gitRepo, tmp } from './helpers.js'
+
+// Every test here runs several git commands; under a full parallel suite the default 5 s can run out, and a timed-out
+// worker is killed before its clones are removed.
+vi.setConfig({ testTimeout: 30_000 })
 
 const TASKS = JSON.stringify({ tasks: [{ name: 'a', prompt: 'p', check: 'node --test' }] })
 const repoWith = (files: Record<string, string> = {}) => gitRepo({ 'lhb-tasks.json': TASKS, 'src/a.js': 'a\n', 'src/a.test.js': 't\n', 'package.json': '{}', ...files })
