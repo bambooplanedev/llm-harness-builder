@@ -4,7 +4,9 @@ import { join } from 'node:path'
 import { readNotes, appendNotes, selectNotes, notesBlock, scrubNote, traceSignals, notesKey, notesPath, type Note } from '../src/core/notes.js'
 import { redactor } from '../src/core/redact.js'
 import type { HarnessEvent } from '../src/core/events.js'
-import { tmp } from './helpers.js'
+import { withNotes, NOTE_SCHEMA, type NotesStore } from '../src/core/notes-run.js'
+import type { RunOpts } from '../src/core/run.js'
+import { fakeBackend, harness, tmp, type FakeResponse } from './helpers.js'
 
 const note = (ts: number, text = 'x'.repeat(40)): Note => ({ id: String(ts), ts, author: 'model', text })
 
@@ -69,4 +71,80 @@ test('traceSignals keeps names, keys and paths, never values or output', () => {
   expect(s).toContain('done final turns=2 calls=1')
   expect(s).not.toContain('SECRET-TEXT')
   expect(s).not.toContain('OUTPUT-TEXT')
+})
+
+const cfg = harness({ notes: { enabled: true, maxTokens: 400 } })
+async function runN(queue: FakeResponse[], store: NotesStore | undefined, opts: RunOpts = {}, config = cfg) {
+  const backend = fakeBackend(queue)
+  const ev: HarnessEvent[] = []
+  for await (const e of withNotes({ config, task: 'do', workdir: await tmp('nw-') }, { backend, ...opts }, store, 'run1')) ev.push(e)
+  return { ev, backend }
+}
+const store = async (write = true): Promise<NotesStore> => ({ file: notesPath(await tmp('nr-'), 'k'), write })
+const writerReply = (notes: string[]): FakeResponse => ({ content: JSON.stringify({ notes }) })
+
+test('withNotes: the writer note comes before done, done stays last', async () => {
+  const s = await store()
+  const { ev, backend } = await runN([{ content: 'done', toolCalls: [] }, writerReply(['tests run with npm test'])], s)
+  const ts = ev.map(e => e.type)
+  expect(ts.slice(-2)).toEqual(['note_written', 'done'])
+  expect(ev.at(-1)!.seq).toBe(ev.at(-2)!.seq + 1)
+  const saved = await readNotes(s.file)
+  expect(saved).toHaveLength(1)
+  expect(saved[0]).toMatchObject({ author: 'model', run: 'run1', text: 'tests run with npm test' })
+  const w = backend.requests[1]
+  expect(w.responseSchema).toEqual(NOTE_SCHEMA)
+  expect(w.tools).toBeUndefined()
+  expect(w.messages.at(-1)!.content).toContain('done final')
+})
+
+test('withNotes: the next run gets the note after its task', async () => {
+  const s = await store()
+  await runN([{ content: 'done' }, writerReply(['use npm test'])], s)
+  const { backend } = await runN([{ content: 'done' }, writerReply([])], s)
+  expect(backend.requests[0].messages[1].content).toContain('- use npm test')
+})
+
+test('withNotes: a read-only store is read, never written', async () => {
+  const s = await store()
+  await appendNotes(s.file, [note(5, 'kept')])
+  const before = await readFile(s.file, 'utf8')
+  const { ev, backend } = await runN([{ content: 'done' }], { ...s, write: false })
+  expect(backend.requests).toHaveLength(1)
+  expect(backend.requests[0].messages[1].content).toContain('- kept')
+  expect(ev.map(e => e.type)).not.toContain('note_written')
+  expect(await readFile(s.file, 'utf8')).toBe(before)
+})
+
+test('withNotes: a writer reply that is not JSON is an error, and the run is untouched', async () => {
+  const s = await store()
+  const { ev } = await runN([{ content: 'done' }, { content: 'not json' }], s)
+  expect(ev.at(-2)).toMatchObject({ type: 'note_written', notes: [] })
+  expect((ev.at(-2) as any).error).toBeTruthy()
+  expect(ev.at(-1)).toMatchObject({ type: 'done', reason: 'final' })
+  expect(await readNotes(s.file)).toEqual([])
+})
+
+test('withNotes: nothing new appends nothing', async () => {
+  const s = await store()
+  const { ev } = await runN([{ content: 'done' }, writerReply([])], s)
+  expect(ev.at(-2)).toMatchObject({ type: 'note_written', notes: [] })
+  expect((ev.at(-2) as any).error).toBeUndefined()
+  expect(await readNotes(s.file)).toEqual([])
+})
+
+test('withNotes: an aborted run writes no note', async () => {
+  const s = await store()
+  const a = new AbortController(); a.abort()
+  const { ev, backend } = await runN([{ content: 'done' }, writerReply(['x'])], s, { signal: a.signal })
+  expect(ev.at(-1)).toMatchObject({ type: 'done', reason: 'aborted' })
+  expect(ev.map(e => e.type)).not.toContain('note_written')
+  expect(backend.requests.length).toBeLessThanOrEqual(1)
+})
+
+test('withNotes: notes off is a plain run', async () => {
+  const s = await store()
+  const { ev, backend } = await runN([{ content: 'done' }], s, {}, harness())
+  expect(ev.map(e => e.type)).toEqual(['context_stats', 'llm_request', 'llm_response', 'done'])
+  expect(backend.requests).toHaveLength(1)
 })

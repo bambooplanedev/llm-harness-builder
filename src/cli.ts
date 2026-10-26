@@ -109,6 +109,7 @@ function describe(e: HarnessEvent, streamed = false, cost?: number): string {
     case 'knobs_off': return e.off.map(o => `${o.knob} ${showable(JSON.stringify(o.value))} not sent: ${showable(o.reason)}`).join('\n')
     case 'proxy_note': return e.kind === 'compaction' ? `[t${e.turn}] compaction` : `[t${e.turn}] auxiliary ${showable(e.model ?? '')} ${e.error !== undefined ? `failed: ${showable(e.error)}` : `${e.latencyMs}ms${e.usage ? ` (${e.usage.promptTokens}+${e.usage.completionTokens} tok)` : ''}`}`
     case 'notes_loaded': return `notes: ${e.ids.length} loaded (${e.chars} chars)`
+    case 'note_written': return e.error !== undefined ? `note not written: ${showable(e.error)}` : e.notes.length ? e.notes.map(n => `note: ${showable(n.text)}`).join('\n') : 'note: nothing new'
     case 'error': return `error: ${showable(e.message)}${e.body ? `\n${showableText(e.body)}` : ''}`
     case 'done': return `done: ${e.reason} after ${e.turns} turns, ${e.toolCallCount} tool calls${cost === undefined ? '' : ` · $${Number(cost.toPrecision(4))} total`}${quitWithoutWork(e) ? '  ! final after 0 tool calls' : ''}${e.text ? `\n${showableText(e.text)}` : ''}`
   }
