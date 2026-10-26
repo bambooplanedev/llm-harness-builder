@@ -1540,3 +1540,13 @@ test('bench --tasks: a bad tasks file is refused before the consent text', async
   expect(r.stderr).toContain('lhb-tasks.json: protect:')
   expect(r.stderr).not.toContain('make done.txt')
 }, 60_000)
+
+test('bench --tasks: what setup leaves in the background is gone before the first run', async () => {
+  const pidFile = join(await tmp('lhb-pid-'), 'pid')
+  const repo = await gitRepo({ 'lhb-tasks.json': JSON.stringify({ tasks: [{ name: 'a', prompt: 'p', check: 'test ! -f alive.txt' }], setup: `sleep 30 >/dev/null 2>&1 & echo $! > "${pidFile}"` }) })
+  const env = await tasksEnv([bashCall(`kill -0 "$(cat "${pidFile}")" 2>/dev/null && echo alive > alive.txt; true`), { content: 'done' }])
+  const cwd = await tmp('lhb-cwd-')
+  const r = cli(['bench', '--tasks', repo, '--n', '1', '--yes', '--out', join(cwd, 'b.json'), harness('bare')], env, cwd)
+  expect(r.status, r.stderr).toBe(0)
+  expect(JSON.parse(await readFile(join(cwd, 'b.json'), 'utf8')).harnesses[0].runs[0].verdict).toBe('PASS')
+}, 60_000)

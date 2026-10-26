@@ -113,8 +113,10 @@ test('a group with a background child stays tracked until killTracked, which wai
   expect(alive(pid)).toBe(true)
   expect(trackedCount()).toBeGreaterThan(0)
   await killTracked()
-  expect(alive(pid)).toBe(false)
   expect(trackedCount()).toBe(0)
+  // Killed is not yet reaped: under load the orphan stays a zombie (which writes nothing) until init collects it.
+  for (let t = 0; t < 150 && alive(pid); t++) await new Promise(res => setTimeout(res, 20))
+  expect(alive(pid)).toBe(false)
 })
 
 test('a command with no background child leaves nothing tracked', async () => {

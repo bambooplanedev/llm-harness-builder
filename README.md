@@ -339,7 +339,8 @@ in a package are not watched. What each run changed is kept as `runs/<trace>.pat
 out, at most 1 MiB).
 
 A clone is a full checkout of the commit, which is slow on a big monorepo, and its submodules are
-not initialised. `setup` runs with the env names the harnesses pass in `tools.bashEnv`. A server
+not initialised. `setup` runs with the env names the harnesses pass in `tools.bashEnv`, and what it leaves in the
+background is killed when it ends, so start a service the tests need outside `bench`. A server
 that is down is reported after the consent question and before `setup`. Traces and patches go to
 `./runs` of the folder you run `bench` from: from the repo itself (`bench --tasks .`) that leaves
 the repo with uncommitted files, so run it from another folder or add `runs/` to `.gitignore`.

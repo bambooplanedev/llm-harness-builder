@@ -434,6 +434,8 @@ async function cmdBench(argv: string[]) {
   if (no) { dropWork(work); die(no) }
   // setup runs once for every harness: it gets the env names any of them passes to its commands.
   try { await work.ready(childEnv([...new Set(harnesses.flatMap(h => h.config.tools.bashEnv ?? []))])) } catch (e) { die((e as Error).message) }
+  // What setup left in the background would reach the first run only: every run starts without it.
+  await killTracked()
   await mkdir(path.dirname(out), { recursive: true })
   const result: BenchResult = { version: 1, date: started.toISOString(), task: repo ? `${TASKS_FILE} at ${repo.sha.slice(0, 7)} in ${repo.repo}` : builtin!.prompt, taskName, size, node: process.version, n, timeoutS, complete: false, harnesses,
     ...(repo ? { tasksRepo: repo.repo, tasksSha: repo.sha, taskCount: repo.tasks.length } : {}) }
