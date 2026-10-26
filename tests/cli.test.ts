@@ -1358,6 +1358,10 @@ test("bench: a run's tokens are the sum of its replies' usage, firstPromptTokens
   const without = await bench([{ toolCalls: [{ name: 'bash', args: { command: 'true' } }] }, { content: 'done' }])
   expect(without.tokens).toBeUndefined()
   expect(without.firstPromptTokens).toBeUndefined()
+  // a later reply's prompt must not stand in for a first reply that reported nothing
+  const late = await bench([{ toolCalls: [{ name: 'bash', args: { command: 'true' } }] }, { content: 'done', usage: { promptTokens: 150, completionTokens: 5 } }])
+  expect(late.tokens).toBe(155)
+  expect(late.firstPromptTokens).toBeUndefined()
 }, 60_000)
 
 test('fake backend: an entry with when answers only requests that contain it, keep leaves it in', async () => {

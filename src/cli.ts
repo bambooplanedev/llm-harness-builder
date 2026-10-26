@@ -282,7 +282,7 @@ const INT = /^[1-9]\d*$/
 async function benchOnce(config: HarnessConfig, round: number, timeoutS: number, out: string, task: Task, notes: NotesStore, size?: number): Promise<BenchRun> {
   // An exception that escapes execRun is text nothing has cleaned yet, and it goes to the bench JSON and the terminal.
   const redact = redactor(apiKey(config.backend, process.env), config.backend.apiKeyEnv ?? '')
-  let workdir = '', traceId: string | undefined, parseErrors = 0, toolChars = 0, costUsd: number | undefined, peakTokens: number | undefined, tokens: number | undefined, firstPromptTokens: number | undefined, toolErrors = 0, guardBlocks = 0, editMiss = 0, lastError: string | undefined, t0 = Date.now(), run: BenchRun
+  let workdir = '', traceId: string | undefined, parseErrors = 0, toolChars = 0, costUsd: number | undefined, peakTokens: number | undefined, tokens: number | undefined, firstPromptTokens: number | undefined, seenFirst = false, toolErrors = 0, guardBlocks = 0, editMiss = 0, lastError: string | undefined, t0 = Date.now(), run: BenchRun
   process.stderr.write(`${config.name} #${round} `)
   try {
     workdir = await task.prepare(size)
@@ -295,8 +295,10 @@ async function benchOnce(config: HarnessConfig, round: number, timeoutS: number,
       onEvent: e => {
         if (e.type === 'parse_error') parseErrors++
         if (e.type === 'llm_response' && e.costUsd !== undefined) costUsd = (costUsd ?? 0) + e.costUsd
-        if (e.type === 'llm_response' && e.usage) peakTokens = Math.max(peakTokens ?? 0, e.usage.promptTokens + e.usage.completionTokens)
-        if (e.type === 'llm_response' && e.usage) { tokens = (tokens ?? 0) + e.usage.promptTokens + e.usage.completionTokens; firstPromptTokens ??= e.usage.promptTokens }
+        if (e.type === 'llm_response') {
+          if (!seenFirst) { seenFirst = true; firstPromptTokens = e.usage?.promptTokens }
+          if (e.usage) { const t = e.usage.promptTokens + e.usage.completionTokens; peakTokens = Math.max(peakTokens ?? 0, t); tokens = (tokens ?? 0) + t }
+        }
         if (e.type === 'mcp_server_start') toolChars += e.descriptionChars + e.schemaChars
         if (e.type === 'tool_result' && e.error) {
           toolErrors++
