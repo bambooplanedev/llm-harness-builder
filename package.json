@@ -16,6 +16,8 @@
     "dist",
     "web/dist",
     "harnesses",
+    "!harnesses/*.evolve*.jsonl",
+    "!harnesses/*.v[0-9]*.json",
     "examples",
     "examples-pool",
     "examples-polyglot",

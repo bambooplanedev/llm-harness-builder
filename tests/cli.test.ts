@@ -1860,7 +1860,7 @@ test('evolve: an edited harness or another --model refuses to resume', async () 
   const before = evRaw(cwd)
   const m = cli(['evolve', h, '--tasks', repo, '--rounds', '2', '--yes', '--model', 'other'], env, cwd)
   expect(m.status).toBe(2)
-  expect(m.stderr).toContain(`the harness or its options changed since this evolve started; delete ${join('harnesses', 'h.evolve.jsonl')} to start over`)
+  expect(m.stderr).toContain(`the harness or its options changed since this evolve started; delete ${join('harnesses', 'h.evolve.jsonl')} and move away ${join('harnesses', 'h.v*.json')} to start over`)
   writeFileSync(h, readFileSync(h, 'utf8') + '\n')
   const e = cli(['evolve', h, '--tasks', repo, '--rounds', '2', '--yes'], env, cwd)
   expect(e.status).toBe(2)
@@ -1937,6 +1937,74 @@ test('evolve: --report prints exactly what the run printed, and runs nothing', a
   expect(evRaw(cwd)).toBe(before)
   expect(readdirSync(join(cwd, 'runs'))).toEqual(runs)
   expect(r.stderr).not.toContain('mode: evolve')
+  expect(clonesIn(env)).toEqual([])
+}, 120_000)
+
+test('evolve: the report says when vN on disk is not the version measured', async () => {
+  const { repo, env, cwd, h } = await evFirst()
+  const v1 = join(cwd, 'harnesses', 'h.v1.json')
+  const same = cli(['evolve', h, '--tasks', repo, '--report'], env, cwd)
+  expect(same.status, same.stderr).toBe(0)
+  expect(same.stdout).toContain(`Try ${join('harnesses', 'h.v1.json')} in place of h.json`)
+  writeFileSync(v1, readFileSync(v1, 'utf8').replace('"name"', '"description": "x",\n  "name"'))
+  const r = cli(['evolve', h, '--tasks', repo, '--report'], env, cwd)
+  expect(r.status, r.stderr).toBe(0)
+  expect(r.stdout).toContain(`${join('harnesses', 'h.v1.json')} on disk is not the version measured`)
+  expect(r.stdout).not.toContain(`Try ${join('harnesses', 'h.v1.json')}`)
+  expect(r.stdout).not.toContain(`Use ${join('harnesses', 'h.v1.json')}`)
+}, 120_000)
+
+// After the run the report reads only the journal: what moved in the repo or the snapshot since does not hide it.
+for (const [what, change] of [
+  ['a new commit', async (repo: string) => { await writeFile(join(repo, 'other.txt'), 'x'); await gitCommit(repo) }],
+  ['a new commit that edits lhb-tasks.json', async (repo: string) => { await writeFile(join(repo, 'lhb-tasks.json'), JSON.stringify({ tasks: evTasks({ train: 2, gate: 2, test: 2 }, 'new') })); await gitCommit(repo) }],
+  ['the notes snapshot is gone', async (_: string, cwd: string) => rmSync(join(cwd, 'harnesses', 'h.evolve.notes.jsonl'))],
+] as const) test(`evolve: --report prints after ${what}`, async () => {
+  const { repo, env, cwd, h } = await evFirst()
+  const first = cli(['evolve', h, '--tasks', repo, '--report'], env, cwd)
+  expect(first.status, first.stderr).toBe(0)
+  await change(repo, cwd)
+  const r = cli(['evolve', h, '--tasks', repo, '--report'], env, cwd)
+  expect(r.status, r.stderr).toBe(0)
+  expect(r.stdout).toBe(first.stdout)
+  // A resume still refuses: its runs would mix two commits or two snapshots.
+  expect(cli(['evolve', h, '--tasks', repo, '--rounds', '2', '--yes'], env, cwd).status).toBe(2)
+  expect(clonesIn(env)).toEqual([])
+}, 120_000)
+
+test('evolve: --report when the start commit is no longer in the repo says so', async () => {
+  const { repo, env, cwd, h } = await evFirst()
+  const lines = journal(cwd)
+  lines[0].sha = 'f'.repeat(40)
+  writeFileSync(join(cwd, 'harnesses', 'h.evolve.jsonl'), lines.map(l => JSON.stringify(l)).join('\n') + '\n')
+  const r = cli(['evolve', h, '--tasks', repo, '--report'], env, cwd)
+  expect(r.status).toBe(2)
+  expect(r.stderr).toContain(`the commit this evolve started at (fffffff) is no longer in the repo; the report cannot be shown from ${join('harnesses', 'h.evolve.jsonl')}`)
+  expect(r.stdout).toBe('')
+}, 120_000)
+
+test('evolve: the start-over hint names the version files', async () => {
+  const { repo, env, cwd, h } = await evFirst()
+  const m = cli(['evolve', h, '--tasks', repo, '--rounds', '2', '--yes', '--model', 'other'], env, cwd)
+  expect(m.status).toBe(2)
+  expect(m.stderr).toContain(`; delete ${join('harnesses', 'h.evolve.jsonl')} and move away ${join('harnesses', 'h.v*.json')} to start over`)
+}, 120_000)
+
+test('evolve: a journal with a flipped decision is refused on resume and on --report', async () => {
+  const { repo, env, cwd, h } = await evFirst()
+  const lines = journal(cwd)
+  const refused = lines.find(l => l.type === 'candidate' && !l.accepted)
+  // The second candidate is refused before any run (already tried): give it the first one's losing numbers and flip it.
+  const cur = lines.find(l => l.type === 'current')
+  Object.assign(refused, { accepted: true, reason: 'accepted', version: 2, runs: cur.runs, edit: { field: 'loop.maxRepeats', value: 3 } })
+  writeFileSync(join(cwd, 'harnesses', 'h.evolve.jsonl'), lines.map(l => JSON.stringify(l)).join('\n') + '\n')
+  const r = cli(['evolve', h, '--tasks', repo, '--report'], env, cwd)
+  expect(r.status).toBe(2)
+  expect(r.stderr).toContain(`cannot resume: round 1 candidate 2: `)
+  expect(r.stderr).toContain(`; the report cannot be shown from ${join('harnesses', 'h.evolve.jsonl')}`)
+  const again = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
+  expect(again.status).toBe(2)
+  expect(again.stderr).toContain(`cannot resume: round 1 candidate 2: `)
   expect(clonesIn(env)).toEqual([])
 }, 120_000)
 

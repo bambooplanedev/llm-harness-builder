@@ -2,3 +2,5 @@ node_modules/
 dist/
 web/dist/
 runs/
+harnesses/*.evolve*.jsonl
+harnesses/*.v[0-9]*.json

@@ -516,6 +516,8 @@ async function cmdBench(argv: string[]) {
 /** A path evolve writes to in ./harnesses: never through a link, which the model's bash could have put there. */
 const isLink = (p: string): boolean => { try { return lstatSync(p).isSymbolicLink() } catch { return false } }
 const TRACE_ID = /^[A-Za-z0-9_-]{1,64}$/
+/** The text of version n as evolve writes it; the report compares the file on disk with it byte for byte. */
+const versionText = (base: string, n: number, cfg: object): string => JSON.stringify({ ...cfg, name: `${base}.v${n}` }, null, 2) + '\n'
 type EvolveState = Exclude<ReturnType<typeof replay>, { error: string }>
 
 /** Proposes one edit at a time, runs it on train + gate, keeps it only past the gates, and measures the last kept
@@ -540,13 +542,6 @@ async function cmdEvolve(argv: string[]) {
   // What the runs depend on besides the tasks: a resume with another harness or other flags would mix two evolves.
   const sha256 = (b: Buffer | string) => createHash('sha256').update(b).digest('hex')
   const pin = sha256(JSON.stringify({ harness: sha256(bytes), over, timeoutS, proposer: values.proposer === undefined ? null : sha256(readFileSync(values.proposer)) }))
-  let repo!: RepoTasks
-  try { repo = await loadRepoTasks(values.tasks!) } catch (e) { argError('evolve', (e as Error).message) }
-  const sets = splitSets(repo.tasks), mode = modeOf(sets)
-  if (typeof mode === 'string') return die(mode)
-  console.error(`tasks: ${repo.tasks.length} from ${repo.repo} at ${repo.sha.slice(0, 7)}: train ${sets.train.length}, gate ${sets.gate.length}, test ${sets.test.length}`)
-  if (repo.uncommitted) console.error('uncommitted changes are not in the clones')
-  console.error(mode.strict ? `strict: a candidate needs at least ${neededFlips()} tasks FAIL → PASS on train + gate (more if any go PASS → FAIL)` : referenceLabel(mode))
   // Named from the file, never config.name: that is text inside the file, and it becomes a path.
   const base = path.basename(file!).replace(/\.json$/, '')
   const dir = 'harnesses', jf = path.join(dir, `${base}.evolve.jsonl`), snap = path.join(dir, `${base}.evolve.notes.jsonl`)
@@ -554,12 +549,29 @@ async function cmdEvolve(argv: string[]) {
   for (const p of [dir, jf, snap]) if (isLink(p)) die(`${p} is a symbolic link; evolve writes only to a plain file there`)
   const resuming = existsSync(jf)
   if (values.report && !resuming) die(`no evolve journal at ${jf}`)
-  const paths = (await git(['ls-tree', '-r', '-z', '--name-only', repo.sha], repo.repo)).split('\0').filter(Boolean)
-  const binding = bindingTokens({ names: repo.tasks.map(t => t.name), paths, prompts: repo.tasks.map(t => t.prompt) })
   let lines: JournalLine[] = [], torn = ''
   // The journal is the report's only source: under --report the refusals never advise deleting it.
-  const then = values.report ? `the report cannot be shown from ${jf}` : `delete ${jf} to start over`
+  // Its version files stay behind a deleted journal, and the next start refuses to overwrite v1.
+  const then = values.report ? `the report cannot be shown from ${jf}` : `delete ${jf} and move away ${path.join(dir, `${base}.v*.json`)} to start over`
   const start = (what: string) => `${what}; ${then}`
+  if (resuming) {
+    const text = readFileSync(jf, 'utf8')
+    const j = parseJournal(text)
+    if ('error' in j) return die(start(`cannot resume: ${jf} ${j.error}`))
+    lines = j.lines
+    torn = text
+  }
+  // The report reads the tasks where its journal started: a commit since changes none of its numbers.
+  const at = values.report && lines[0]?.type === 'start' ? lines[0].sha : undefined
+  let repo!: RepoTasks
+  try { repo = await loadRepoTasks(values.tasks!, at) } catch (e) { if (at !== undefined) die(start((e as Error).message)); argError('evolve', (e as Error).message) }
+  const sets = splitSets(repo.tasks), mode = modeOf(sets)
+  if (typeof mode === 'string') return die(mode)
+  console.error(`tasks: ${repo.tasks.length} from ${repo.repo} at ${repo.sha.slice(0, 7)}: train ${sets.train.length}, gate ${sets.gate.length}, test ${sets.test.length}`)
+  if (repo.uncommitted) console.error('uncommitted changes are not in the clones')
+  console.error(mode.strict ? `strict: a candidate needs at least ${neededFlips()} tasks FAIL → PASS on train + gate (more if any go PASS → FAIL)` : referenceLabel(mode))
+  const paths = (await git(['ls-tree', '-r', '-z', '--name-only', repo.sha], repo.repo)).split('\0').filter(Boolean)
+  const binding = bindingTokens({ names: repo.tasks.map(t => t.name), paths, prompts: repo.tasks.map(t => t.prompt) })
   const rebuilt = (): EvolveState => {
     const r = replay(lines, raw, { binding, sets })
     return 'error' in r ? die(start(r.error)) : r
@@ -571,23 +583,22 @@ async function cmdEvolve(argv: string[]) {
   }
   const snapCheck = () => { if (!snapOk()) die(start(`the notes snapshot changed since this evolve started (${snap})`)) }
   if (resuming) {
-    const text = readFileSync(jf, 'utf8')
-    const j = parseJournal(text)
-    if ('error' in j) return die(start(`cannot resume: ${jf} ${j.error}`))
-    lines = j.lines
-    torn = text
+    // Under --report the tasks were read at this very commit.
     if (lines[0]?.type === 'start' && lines[0].sha !== repo.sha) die(start('the repo has a new commit since this evolve started'))
     if (lines[0]?.type === 'start' && lines[0].pin !== pin) die(start('the harness or its options changed since this evolve started'))
     if (lines[0]?.type === 'start' && lines[0].base !== base) die(start('the journal was written for another harness'))
   }
   // A new journal has no state until its start line.
   let state = resuming ? rebuilt() : undefined as unknown as EvolveState
-  if (resuming) snapCheck()
+  // The snapshot is what the next runs read; the report runs nothing.
+  if (resuming && !values.report) snapCheck()
   const all = Array.from({ length: rounds }, (_, i) => i + 1).every(round => lines.some(l => l.type === 'current' && l.round === round) &&
     Array.from({ length: CANDIDATES }, (_, i) => i + 1).every(index => lines.some(l => l.type === 'candidate' && l.round === round && l.index === index)))
   if (resuming && all && !values.report) console.error(`all rounds are in the journal${state.version ? '; measuring the final test' : ''}`)
   // The report reads only the journal, after replay re-checked it: a finished evolve started again prints it as it was, without a clone or a request.
-  const report = (): string => evolveReport({ lines, state: { ...state, final: state.final! }, original: raw, mode, sets, harness: path.basename(file!), versionFile: state.version ? vf(state.version) : '' })
+  // vN is what the user is told to use: it has to be the text evolve wrote for the version the numbers are about.
+  const changed = (): boolean => { const p = vf(state.version); try { return isLink(p) || readFileSync(p, 'utf8') !== versionText(base, state.version, state.current) } catch { return true } }
+  const report = (): string => evolveReport({ lines, state: { ...state, final: state.final! }, original: raw, mode, sets, harness: path.basename(file!), versionFile: state.version ? vf(state.version) : '', changed: !!state.version && changed() })
   if (values.report || (resuming && all && state.final)) {
     if (!state.final) die(`evolve has not finished: no final test in ${jf}; run evolve again to finish`)
     console.log(report())
@@ -666,7 +677,7 @@ async function cmdEvolve(argv: string[]) {
     try { return { edit: parseProposal(content) } } catch { return { reason: 'no edit in the reply' } }
   }
   const writeVersion = (n: number, cfg: object) => {
-    const p = vf(n), text = JSON.stringify({ ...cfg, name: `${base}.v${n}` }, null, 2) + '\n'
+    const p = vf(n), text = versionText(base, n, cfg)
     if (isLink(p)) die(`${p} is a symbolic link; evolve writes only to a plain file there`)
     // Checked free before the runs; one that appeared since is not ours to replace.
     try { writeFileSync(p, text, { flag: 'wx' }) } catch { die(`${p} already exists; move it away first — evolve never overwrites a version`) }

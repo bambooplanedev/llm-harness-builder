@@ -57,14 +57,22 @@ export function validateTasksFile(x: unknown): string[] {
   return e
 }
 
-export async function loadRepoTasks(dir: string): Promise<RepoTasks> {
+/** `at`: a commit to read the tasks at instead of HEAD (an evolve report reads them where its journal started). */
+export async function loadRepoTasks(dir: string, at?: string): Promise<RepoTasks> {
   let repo: string
   try {
     repo = await realpath(dir)
     if ((await git(['rev-parse', '--show-toplevel'], repo)).trim() !== repo) throw new Error()
   } catch { throw new Error(`${dir} is not a git repository`) }
   let sha: string
-  try { sha = (await git(['rev-parse', '--verify', 'HEAD^{commit}'], repo)).trim() } catch { throw new Error(`${repo} has no commits`) }
+  if (at === undefined) {
+    try { sha = (await git(['rev-parse', '--verify', 'HEAD^{commit}'], repo)).trim() } catch { throw new Error(`${repo} has no commits`) }
+  } else {
+    // Only a full hex id goes to git, or into a message: `at` comes from a file, and `-x` would be an option.
+    if (!/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(at)) throw new Error('the commit this evolve started at is not a commit id')
+    const gone = new Error(`the commit this evolve started at (${at.slice(0, 7)}) is no longer in the repo`)
+    try { sha = (await git(['rev-parse', '--verify', '--quiet', `${at}^{commit}`], repo)).trim() } catch { throw gone }
+  }
   let text: string
   try { text = await git(['show', `${sha}:${TASKS_FILE}`], repo) } catch { throw new Error(`${TASKS_FILE} is not in the last commit ${sha.slice(0, 7)} (uncommitted files are not read)`) }
   let x: any
