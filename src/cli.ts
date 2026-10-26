@@ -654,7 +654,7 @@ async function cmdEvolve(argv: string[]) {
       append({ v: 1, type: 'current', round, runs: cmp })
     }
     // Every gate divides by the original's tokens: without them each candidate's runs would be spent for a sure refusal.
-    if (!usable(state.baseline!)) { dropWork(work); die('the server gave no usage for the original\'s runs; evolve needs a server that reports token usage') }
+    if (!usable(state.baseline!)) { dropWork(work); die(`the server gave no usage for the original's runs; evolve needs a server that reports token usage; delete ${jf} to start over`) }
     for (let index = 1; index <= CANDIDATES; index++) {
       const done = lines.find(l => l.type === 'candidate' && l.round === round && l.index === index) as Extract<JournalLine, { type: 'candidate' }> | undefined
       if (done) { if (done.accepted && done.runs) cmp = done.runs; continue }

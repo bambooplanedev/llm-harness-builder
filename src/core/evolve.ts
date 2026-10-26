@@ -108,7 +108,14 @@ export function decide(cur: RunLite[], cand: RunLite[], orig: RunLite[], gateNam
     const r = numbers.tokens! / o.tokens!
     if (r > 1 + TOLERANCE) return no(`costs ${pct(r)}% more tokens than the original`)
   }
-  const wr = numbers.weight! / o.weight!
+  // Paired by task: a prompt too heavy for the window gets no reply, so no first request, and must not leave the sum lighter.
+  const ofp = new Map(orig.map(r => [r.task, r.firstPromptTokens]))
+  const unmeasured = cand.filter(r => r.firstPromptTokens === undefined && ofp.get(r.task) !== undefined).length
+  if (unmeasured) return no(`first request not measured on ${unmeasured} tasks`)
+  const both = cand.filter(r => r.firstPromptTokens !== undefined && ofp.get(r.task) !== undefined)
+  const ow = both.reduce((a, r) => a + ofp.get(r.task)!, 0)
+  if (!ow) return no('the server gave no usage')
+  const wr = both.reduce((a, r) => a + r.firstPromptTokens!, 0) / ow
   if (wr > 1 + CEILING) return no(`first request ${pct(wr)}% heavier than the original`)
   return { accepted: true, reason: 'accepted', numbers }
 }
@@ -304,7 +311,7 @@ export function parseJournal(text: string): { lines: JournalLine[] } | { error: 
 // journal is bash-writable: anything else is passed on as `other`.
 const REASON_RE = [
   /^(?:field not allowed|bad value|looks like a command or an address|tied to a task|already tried|changes more than one field|the server gave no usage|0 PASS|no more PASS than current|worse on gate|no edit in the reply)$/,
-  /^within noise \(p=\d\.\d\d\)$/, /^costs \d+% more tokens(?: per success)? than the original$/, /^first request \d+% heavier than the original$/, /^invalid config: /,
+  /^within noise \(p=\d\.\d\d\)$/, /^costs \d+% more tokens(?: per success)? than the original$/, /^first request \d+% heavier than the original$/, /^first request not measured on \d+ tasks$/, /^invalid config: /,
 ]
 
 /** The current version rebuilt from the original and the journal, each accepted edit checked again as if new:

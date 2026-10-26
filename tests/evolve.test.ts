@@ -89,6 +89,18 @@ describe('evolve decide', () => {
     expect(decide(o, at(75), o, [], ref).accepted).toBe(true) // 125/100
     expect(decide(o, at(76), o, [], ref)).toMatchObject({ accepted: false, reason: 'first request 26% heavier than the original' })
   })
+
+  it('weight: a candidate run with no first request where the original has one is refused; a task neither measured is left out of both sums', () => {
+    const T = names(10)
+    const orig = T.map((t, i) => run(t, i < 3, 100, 100))
+    // A bloated prompt overflows the window on 4 tasks: no reply, so no first request, while 4 others PASS.
+    const cand = T.map((t, i): RunLite => i < 4 ? { task: t, verdict: 'FAIL', tokens: 0 } : run(t, i < 8, 100, 200))
+    expect(decide(orig, cand, orig, [], ref)).toMatchObject({ accepted: false, reason: 'first request not measured on 4 tasks' })
+    // t0 got no reply on the original: its 1000 on the candidate is in neither sum, so 9 x 120 against 9 x 100.
+    const o2 = T.map((t, i): RunLite => i === 0 ? { task: t, verdict: 'FAIL', tokens: 0 } : run(t, i < 3, 100, 100))
+    const c2 = T.map((t, i) => run(t, i < 4, 100, i === 0 ? 1000 : 120))
+    expect(decide(o2, c2, o2, [], ref)).toMatchObject({ accepted: true })
+  })
 })
 
 describe('evolve edits', () => {

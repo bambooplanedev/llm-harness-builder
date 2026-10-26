@@ -1779,7 +1779,7 @@ test('evolve: a server that gives no usage stops after the original\'s runs, bef
   const cwd = await tmp('lhb-cwd-')
   const r = cli(['evolve', evHarness(cwd), '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
   expect(r.status).toBe(2)
-  expect(r.stderr).toContain('the server gave no usage for the original\'s runs; evolve needs a server that reports token usage')
+  expect(r.stderr).toContain(`the server gave no usage for the original's runs; evolve needs a server that reports token usage; delete ${join('harnesses', 'h.evolve.jsonl')} to start over`)
   expect(types(cwd)).toEqual(['start', 'current'])
   expect(clonesIn(env)).toEqual([])
 }, 120_000)
