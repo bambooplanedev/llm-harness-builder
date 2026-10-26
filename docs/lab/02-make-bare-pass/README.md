@@ -7,11 +7,17 @@ first. About 20–40 minutes.
 
 Start from `bare` under its own name, `lab-start`, and change it until `bench` passes with it.
 
+The exercise is about a small local model. On the cloud model below, the starter already passed
+as it is (3 of 3, see the [solution](solution.md#on-the-cloud)), so there the cloud path checks your
+setup, not a fix, and the hints do not apply: they follow the local story of exercise 1.
+
 ## The starter
 
 In a folder where `serve` already ran, `harnesses/bare.json` is there:
 
     cp harnesses/bare.json start.json
+
+With the package from npm, the same file is `node_modules/llm-harness-builder/harnesses/bare.json`.
 
 (this copy keeps `"name": "bare"`, so `bench` labels it `bare`, not `lab-start`)
 
