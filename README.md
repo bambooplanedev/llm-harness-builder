@@ -926,6 +926,16 @@ The CLI and the server are TypeScript in `src/`, the page is Vue 3 in `web/src/`
 `tests/` run against fake backends. Issues and pull requests are welcome; a change to a knob should
 come with a test, and a claim about what a knob does with the bench and traces behind it.
 
+Before a release, `scripts/launch-check.sh <tgz>` runs the checklist in its header on the packed
+tarball, in a `node:22.12-slim` container (Docker needed). Keys go in by name only; a step whose key
+is not set is `SKIP`, and a run with a skip is not green. The release:
+
+    npm ci && npm pack               # in a fresh clone of the tagged commit
+    scripts/launch-check.sh llm-harness-builder-X.Y.Z.tgz
+    git tag -a vX.Y.Z && gh release create vX.Y.Z llm-harness-builder-X.Y.Z.tgz
+    npm publish llm-harness-builder-X.Y.Z.tgz    # 2FA
+    npm view llm-harness-builder@X.Y.Z dist.shasum    # equals the sha1 the check printed
+
 ## License
 
 [MIT](LICENSE)
