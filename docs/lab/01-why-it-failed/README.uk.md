@@ -17,18 +17,31 @@
 бенча й натисніть `⇄`, щоб порівняти прогін `bare` з прогоном `tuned-nothink`: ручки, що
 відрізняються, ідуть першими.
 
-**Термінал.** Завантажте обидва трейси в поточну теку (або в `./runs`, тоді досить самого id):
+**Термінал.** Цей шлях не потребує браузера, тож працює й усередині контейнера з розділу
+[Безпека](../README.uk.md#SAFETY). Пакет уже містить обидва трейси: скопіюйте їх у `./runs` (спершу
+створіть теку; тоді досить самого id):
 
-    curl -fLO https://raw.githubusercontent.com/bambooplanedev/llm-harness-builder/main/example-runs/d63e9548.jsonl
-    curl -fLO https://raw.githubusercontent.com/bambooplanedev/llm-harness-builder/main/example-runs/059867d3.jsonl
-    npx llm-harness-builder analyze ./d63e9548.jsonl ./059867d3.jsonl
+    mkdir -p runs && cp node_modules/llm-harness-builder/example-runs/*.jsonl runs/
+    npx llm-harness-builder analyze d63e9548 059867d3
+
+`node_modules/llm-harness-builder/` — це місце, куди `npm i` поклав пакет; запускайте `npx` з теки,
+де лежить `node_modules`. Без встановленого пакета ті самі файли дає `curl -fLO`, наприклад
+`curl -fLO https://raw.githubusercontent.com/bambooplanedev/llm-harness-builder/main/example-runs/d63e9548.jsonl`
+(в образі `node:22.12-slim` `curl` немає), а `analyze ./d63e9548.jsonl ./059867d3.jsonl` приймає шляхи.
 
 `analyze` друкує один рядок на прогін: чим закінчився, ходи, останнє очікування. Ні загального
 часу, ні того, що робив кожен хід, там нема, тож для питань 1–3 відкрийте трейси в інтерфейсі
-або читайте сам `.jsonl`: одна JSON-подія на рядок, у кожної є `ts`.
+або читайте сам `.jsonl`: одна JSON-подія на рядок, у кожної є `ts` (перший рядок — `meta` із часом
+початку). Ця команда друкує по рядку на подію (хід, тип, секунди від початку, назва інструмента або причина кінця):
+
+    node -e 'let t0;for(const l of require("fs").readFileSync(process.argv[1],"utf8").trim().split("\n")){const e=JSON.parse(l);if(e.meta)t0=e.meta.started;else if(e.type!="context_stats")console.log(e.turn,e.type,((e.ts-t0)/1e3).toFixed(1)+"s",e.name||e.reason||"")}' runs/d63e9548.jsonl
+
+Загальний час прогону — це `ts` події `done` мінус `meta.started`. Хід, що має `llm_request`, але не
+має `llm_response`, — той, що так і не отримав відповіді.
 
 Файли обох харнесів — [`bare.json`](../../../harnesses/bare.json) і
-[`tuned-nothink.json`](../../../harnesses/tuned-nothink.json).
+[`tuned-nothink.json`](../../../harnesses/tuned-nothink.json). З пакетом із npm ті самі файли лежать у
+`node_modules/llm-harness-builder/harnesses/`, а після запуску `serve` у теці — і в `./harnesses`.
 
 ## Питання
 

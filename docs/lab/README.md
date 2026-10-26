@@ -26,7 +26,8 @@ Three short exercises on one small task, `slug`: fix a one-line bug in `src/slug
        mkdir lab && cd lab
        npx llm-harness-builder serve
 
-Exercise 1 needs only step 1 and step 3.
+Exercise 1 needs only step 1 and step 3 on a host with a browser, or just a terminal: it can be done
+fully inside the container from Safety below (see its **terminal** path).
 
 ### Cloud
 
@@ -55,7 +56,9 @@ environment. So:
   An Ollama on the host is then `--base-url http://host.docker.internal:11434` (on Linux add
   `--add-host=host.docker.internal:host-gateway` to `docker run`, and start Ollama with
   `OLLAMA_HOST=0.0.0.0` so the container can reach it). The UI is not reachable from a
-  container, so open traces with `serve` on the host: that needs no model.
+  container, so inside it do Exercise 1 fully in the terminal (`npm init -y && npm i
+  llm-harness-builder`, then its **terminal** path) and keep the UI path for the host: `serve` needs
+  no model there.
 - Use a key with a spend limit, made for this.
 - Keep no other secrets in that environment.
 - Never put a key in `tools.bashEnv`: that hands it to every command the model runs.
