@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest'
-import { median, formatTable, mmss, wilson, type BenchHarness, type BenchRun } from '../src/core/bench'
+import { median, formatTable, mmss, wilson, benchTotal, runTitle, type BenchHarness, type BenchRun } from '../src/core/bench'
 
 test('median: lower-middle of a numerically sorted copy, [] → 0', () => {
   expect(median([])).toBe(0)
@@ -102,4 +102,12 @@ test('formatTable: med $ column only when a run carries a cost', () => {
   expect(lines[0]).toMatch(/\s+med \$$/)
   expect(lines[1]).toMatch(/\s+0\.0123$/)
   expect(lines[2]).toMatch(/\s+-$/)
+})
+
+test('benchTotal counts the tasks of a tasks bench; runTitle names the task', () => {
+  const r = { n: 3, harnesses: [{}, {}], taskCount: 4 } as any
+  expect(benchTotal(r)).toBe(24)
+  expect(benchTotal({ ...r, taskCount: undefined })).toBe(6)
+  expect(runTitle({ round: 2, task: 'limit' } as any)).toBe('#2 limit')
+  expect(runTitle({ round: 2 } as any)).toBe('#2')
 })

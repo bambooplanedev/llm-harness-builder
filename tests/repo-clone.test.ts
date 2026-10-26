@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join, basename } from 'node:path'
 import { loadRepoTasks } from '../src/core/repo-tasks.js'
-import { cloneAt, linkNodeModules, changedPaths, protectedChanged, runCheck, patchOf, removeClone, removeCloneSync, modulesManifest, prepareModules, type Clone } from '../src/core/repo-clone.js'
+import { cloneAt, linkNodeModules, changedPaths, protectedChanged, runCheck, patchOf, removeClone, removeCloneSync, modulesManifest, prepareModules, modulesTampered, removeAllClonesSync, type Clone } from '../src/core/repo-clone.js'
 import { childEnv } from '../src/core/tools/env.js'
 import { gitRepo, tmp } from './helpers.js'
 
@@ -197,4 +197,38 @@ test('prepareModules: a failing setup throws and leaves no clone', async () => {
   const before = readdirSync(tmpdir()).filter(f => f.startsWith('lhb-2')).length
   await expect(prepareModules(await loadRepoTasks(repo))).rejects.toThrow('setup failed (exit 2): nope')
   expect(readdirSync(tmpdir()).filter(f => f.startsWith('lhb-2')).length).toBe(before)
+})
+
+test('protectedChanged: hiding a new protected file behind a .gitignore line is itself a protected change', async () => {
+  await withClone({ '.gitignore': 'dist\n' }, async (c, _repo, t) => {
+    // a build output under a dir the commit already ignores is not a change: tsc writes dist/**/*.test.js
+    await mkdir(join(c.dir, 'dist', 'tests'), { recursive: true }); await writeFile(join(c.dir, 'dist', 'tests', 'x.test.js'), 'x')
+    expect(await protectedChanged(c, t)).toEqual([])
+    await writeFile(join(c.dir, '.gitignore'), 'dist\nvitest.config.mjs\n')
+    await writeFile(join(c.dir, 'vitest.config.mjs'), 'export default { test: { include: [] } }\n')
+    expect(await protectedChanged(c, t)).toEqual(['.gitignore'])
+  })
+})
+
+test('modulesTampered: the link swapped for a folder, or a node_modules that was not there, is a change', async () => {
+  const mods = await tmp('lhb-mods-')
+  await mkdir(join(mods, 'node_modules', 'x'), { recursive: true })
+  await withClone({}, async c => {
+    expect(await modulesTampered(c)).toBe(false)
+    await mkdir(join(c.dir, 'node_modules')); expect(await modulesTampered(c)).toBe(true)
+  })
+  await withClone({}, async c => {
+    await linkNodeModules(c, mods)
+    expect(await modulesTampered(c)).toBe(false)
+    await unlink(join(c.dir, 'node_modules')); await mkdir(join(c.dir, 'node_modules', '.bin'), { recursive: true })
+    expect(await modulesTampered(c)).toBe(true)
+  })
+})
+
+test('removeAllClonesSync removes every clone still alive', async () => {
+  const repo = await repoWith()
+  const t = await loadRepoTasks(repo)
+  const a = await cloneAt(t), b = await cloneAt(t)
+  removeAllClonesSync()
+  for (const c of [a, b]) { expect(existsSync(c.dir)).toBe(false); expect(existsSync(c.probe)).toBe(false) }
 })

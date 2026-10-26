@@ -12,7 +12,7 @@ import { mayAsk, type RunOpts } from './core/run.js'
 import { withNotes, type NotesStore } from './core/notes-run.js'
 import { notesKey, notesPath, readNotes, selectNotes } from './core/notes.js'
 import { loadRepoTasks, consentText, hasConsent, saveConsent, TASKS_FILE, type RepoTasks } from './core/repo-tasks.js'
-import { cloneAt, linkNodeModules, protectedChanged, runCheck, patchOf, removeClone, removeCloneSync, prepareModules, modulesManifest, type Clone } from './core/repo-clone.js'
+import { cloneAt, linkNodeModules, protectedChanged, runCheck, patchOf, removeClone, removeAllClonesSync, prepareModules, modulesManifest, modulesTampered, type Clone } from './core/repo-clone.js'
 import { validateConfig, sendsAnswerSchema, KEY_ENV, FLAG_WORDS, keyNameMessage, keyErrors, keyProblem, keyNote, apiKey, isHttpUrl, isLoopbackUrl, type HarnessConfig, type BackendKind } from './core/config.js'
 import { validateWorkdir } from './core/tools/sandbox.js'
 import type { Backend, Delta, NormalizedResponse } from './core/backends/types.js'
@@ -338,6 +338,8 @@ async function repoWork(repo: RepoTasks): Promise<{ tasks: Task[]; live: Map<str
       const c = live.get(dir)!
       const changed = await protectedChanged(c, repo)
       if (changed.length) return { pass: false, reason: `changed a protected file: ${changed[0]}` }
+      // The test runner's own files: a node_modules of the model's would let its .bin/vitest decide the verdict.
+      if (await modulesTampered(c)) return { pass: false, reason: 'changed a protected file: node_modules' }
       return runCheck(c, rt, env ?? childEnv())
     },
     async dispose(dir, traceId) {
@@ -352,11 +354,12 @@ async function repoWork(repo: RepoTasks): Promise<{ tasks: Task[]; live: Map<str
   return { tasks, live, setupClone, modules: from }
 }
 
-/** Every clone a bench made, removed now: at the end, and from the SIGINT handler that exits right after. */
+/** Every clone a bench made, removed now: at the end, and from the SIGINT handler that exits right after. An exit
+ *  before that handler exists (Ctrl-C during setup) is covered by repo-clone's own exit hook. */
 function dropWork(w: { live: Map<string, Clone>; setupClone?: Clone }): void {
-  for (const c of w.live.values()) removeCloneSync(c)
+  removeAllClonesSync()
   w.live.clear()
-  if (w.setupClone) { removeCloneSync(w.setupClone); w.setupClone = undefined }
+  w.setupClone = undefined
 }
 
 async function cmdBench(argv: string[]) {
@@ -413,7 +416,7 @@ async function cmdBench(argv: string[]) {
         await saveConsent(repo)
       } else die(`${text}\n\npass --yes to accept these commands, or run in a terminal`)
     }
-    work = await repoWork(repo)
+    try { work = await repoWork(repo) } catch (e) { die((e as Error).message) }
   }
   const tasks = work.tasks
   // Before any JSON exists: a server that is down, or lacks the model, is a typo to report, not 90 minutes of 'error' rows.
@@ -421,7 +424,7 @@ async function cmdBench(argv: string[]) {
   if (no) { dropWork(work); die(no) }
   await mkdir(path.dirname(out), { recursive: true })
   const result: BenchResult = { version: 1, date: started.toISOString(), task: repo ? `${TASKS_FILE} at ${repo.sha.slice(0, 7)} in ${repo.repo}` : builtin!.prompt, taskName, size, node: process.version, n, timeoutS, complete: false, harnesses,
-    ...(repo ? { tasksRepo: repo.repo, tasksSha: repo.sha } : {}) }
+    ...(repo ? { tasksRepo: repo.repo, tasksSha: repo.sha, taskCount: repo.tasks.length } : {}) }
   // tmp + rename in the same directory: the SIGINT handler exits immediately, and a half-written
   // JSON would be the only thing left of a 90-minute run. `.tmp`, not `.json`, so /api/bench skips it.
   const tmpOut = `${out}.${process.pid}.tmp`

@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { api, type ActiveTrace, type AnalysisCells, type BenchFile, type BenchHarness, type BenchResult, type BenchRun, type HarnessConfig, type HarnessEvent } from './api'
 import { cellsLine } from '../../src/core/analyze'
-import { formatTable, mmss, wilson, BENCH_TASKS } from '../../src/core/bench'
+import { formatTable, mmss, wilson, benchTotal, runTitle, BENCH_TASKS } from '../../src/core/bench'
 import Trace from './Trace.vue'
 import { t, tn, T, lang } from './i18n'
 import Diff from './Diff.vue'
@@ -61,7 +61,7 @@ const sideA = computed<DiffSide | null>(() => {
   return null
 })
 const sideB = computed<DiffSide | null>(() => diff.value && { ...diff.value, events: diffEvents.value })
-const total = computed(() => result.value ? result.value.n * result.value.harnesses.length : 0)
+const total = computed(() => result.value ? benchTotal(result.value) : 0)
 const msDone = computed(() => runs.value.reduce((a, r) => a + r.ms, 0))
 const backend = computed(() => result.value?.harnesses[0].config.backend)
 /** Film mode hides every model and server the page names. */
@@ -241,9 +241,9 @@ onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer); unsub?.(); d
         <div class="runs">
           <template v-for="h in result.harnesses" :key="h.name">
             <h5 class="group">{{ h.name }} · runs</h5>
-            <div v-for="r in h.runs" :key="h.name + '#' + r.round" :class="{ notrace: !r.trace, on: !!r.trace && sideA?.run.trace === r.trace, b: !!r.trace && diff?.run.trace === r.trace }"
+            <div v-for="(r, i) in h.runs" :key="h.name + '#' + i" :class="{ notrace: !r.trace, on: !!r.trace && sideA?.run.trace === r.trace, b: !!r.trace && diff?.run.trace === r.trace }"
                  @click="r.trace && (sel = { id: r.trace })">
-              <div class="line"><span><b>#{{ r.round }}</b> <span :class="['chip', 'solid', r.verdict === 'PASS' ? 'ok' : 'err']">{{ r.verdict }}</span> {{ r.reason }}</span><span>{{ r.turns }} turns · {{ r.toolCalls }} tool calls · {{ mmss(r.ms) }}</span></div>
+              <div class="line"><span><b>{{ runTitle(r) }}</b> <span :class="['chip', 'solid', r.verdict === 'PASS' ? 'ok' : 'err']">{{ r.verdict }}</span> {{ r.reason }}</span><span>{{ r.turns }} turns · {{ r.toolCalls }} tool calls · {{ mmss(r.ms) }}</span></div>
               <div v-if="r.verdict === 'FAIL' && r.reason === 'final'">{{ t('bench.redTests') }}</div>
               <div v-if="r.lastError" class="clip" :title="shown(r.lastError, names)">{{ shown(r.lastError, names) }}</div>
               <div v-if="r.trace && analysis[r.trace]" class="analysis">{{ cellsLine(analysis[r.trace]) }}</div>

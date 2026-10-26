@@ -25,7 +25,7 @@ export const DEFAULT_PROTECT = [
   ':(glob)**/*.test.*', ':(glob)**/*.spec.*', ':(glob)**/test/**', ':(glob)**/tests/**', ':(glob)**/__tests__/**',
   ':(glob)**/package.json', ':(glob)**/package-lock.json', ':(glob)**/pnpm-lock.yaml', ':(glob)**/yarn.lock',
   ':(glob)**/vitest.config.*', ':(glob)**/vitest.workspace.*', ':(glob)**/jest.config.*', ':(glob)**/.mocharc*',
-  ':(glob)**/tsconfig*.json', TASKS_FILE,
+  ':(glob)**/tsconfig*.json', ':(glob)**/.gitignore', TASKS_FILE,
 ]
 
 const isObj = (v: unknown): v is Record<string, any> => typeof v === 'object' && v !== null && !Array.isArray(v)

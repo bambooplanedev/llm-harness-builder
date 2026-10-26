@@ -2,7 +2,7 @@
 // The model can rewrite the clone's .git (a gitfile to the user's repo, core.worktree, a clean filter, replace refs, an
 // index entry marked unchanged); the probe has none of that, so what the harness sees of a run is the work tree itself.
 import { createHash, randomBytes } from 'node:crypto'
-import { appendFile, lstat, readdir, rm, stat, unlink, writeFile } from 'node:fs/promises'
+import { appendFile, lstat, readdir, readlink, rm, stat, unlink, writeFile } from 'node:fs/promises'
 import { lstatSync, rmSync, unlinkSync, existsSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -10,7 +10,19 @@ import { git, type RepoTask, type RepoTasks } from './repo-tasks.js'
 import { runShell } from './tools/bash.js'
 import { childEnv } from './tools/env.js'
 
-export type Clone = { dir: string; probe: string; sha: string }
+export type Clone = { dir: string; probe: string; sha: string
+  /** Where the clone's node_modules link points; absent when none was made. */
+  link?: string }
+
+// Every clone not yet removed: an exit for any reason (Ctrl-C during setup, a die(), the process registry's own exit)
+// takes them with it.
+const LIVE = new Set<Clone>()
+let hooked = false
+
+/** Each clone that is still there, removed now; one that cannot be removed is said, not thrown. */
+export function removeAllClonesSync(): void {
+  for (const c of [...LIVE]) try { removeCloneSync(c) } catch (e) { console.error(`cannot remove ${c.dir}: ${(e as Error).message}`) }
+}
 
 const stamp = (d = new Date()) => {
   const p = (n: number) => String(n).padStart(2, '0')
@@ -21,6 +33,8 @@ const stamp = (d = new Date()) => {
 export async function cloneAt(t: RepoTasks): Promise<Clone> {
   const dir = path.join(tmpdir(), `lhb-${stamp()}-${randomBytes(4).toString('hex')}`)
   const c: Clone = { dir, probe: `${dir}-probe`, sha: t.sha }
+  if (!hooked) { hooked = true; process.on('exit', removeAllClonesSync) }
+  LIVE.add(c)
   try {
     await git(['clone', '--shared', '--no-checkout', '-q', t.repo, dir], tmpdir())
     await git(['checkout', '-q', '--detach', t.sha], dir)
@@ -29,13 +43,25 @@ export async function cloneAt(t: RepoTasks): Promise<Clone> {
     await git(['init', '-q', '--bare', c.probe], tmpdir())
     const objects = path.resolve(t.repo, (await git(['rev-parse', '--git-path', 'objects'], t.repo)).trim())
     await writeFile(path.join(c.probe, 'objects', 'info', 'alternates'), objects + '\n')
+    // node_modules never goes into the probe's index: a link or the model's own folder is judged by modulesTampered.
+    // An exclude here, not a ':(exclude)' pathspec: git add refuses that one when a .gitignore ignores the folder too.
+    await writeFile(path.join(c.probe, 'info', 'exclude'), '/node_modules\n')
     return c
   } catch (e) { removeCloneSync(c); throw e }
 }
 
 export async function linkNodeModules(c: Clone, from: string): Promise<void> {
   const src = path.join(from, 'node_modules')
-  if (existsSync(src)) symlinkSync(src, path.join(c.dir, 'node_modules'))
+  if (existsSync(src)) { symlinkSync(src, path.join(c.dir, 'node_modules')); c.link = src }
+}
+
+/** Whether the clone's node_modules is no longer what the harness made: the link swapped for a folder of the model's
+ *  own (whose .bin/vitest could just exit 0), pointed elsewhere, or a node_modules where there was none. */
+export async function modulesTampered(c: Clone): Promise<boolean> {
+  const p = path.join(c.dir, 'node_modules')
+  const s = await lstat(p).catch(() => null)
+  if (!c.link) return s !== null
+  return !s?.isSymbolicLink() || await readlink(p) !== c.link
 }
 
 /** git through the probe, on the clone's work tree, with a throwaway index that holds the work tree as it is now. */
@@ -44,12 +70,14 @@ async function probe<T>(c: Clone, fn: (g: (args: string[]) => Promise<string>) =
   const g = (args: string[]) => git([`--git-dir=${c.probe}`, `--work-tree=${c.dir}`, ...args], c.dir, { GIT_INDEX_FILE: index })
   try {
     await g(['read-tree', c.sha])
-    await g(['add', '-A', '--', '.', ':(exclude)node_modules'])
+    await g(['add', '-A', '--', '.'])
     return await fn(g)
   } finally { await rm(index, { force: true }) }
 }
 
-/** Paths under `pathspecs` that differ from the commit: changed, added or deleted — read from the work tree, never the clone's index. */
+/** Paths under `pathspecs` that differ from the commit: changed, added or deleted — read from the work tree, never the
+ *  clone's index. Ignored files are left out by the committed rules; a rule of the model's own is a change to a
+ *  .gitignore, which is protected. */
 export const changedPaths = (c: Clone, pathspecs: string[]): Promise<string[]> =>
   probe(c, async g => (await g(['diff', '--cached', '--name-only', '--no-renames', '--no-ext-diff', '--no-textconv', c.sha, '--', ...pathspecs])).split('\n').filter(Boolean))
 
@@ -67,7 +95,7 @@ export async function runCheck(c: Clone, task: RepoTask, env: NodeJS.ProcessEnv)
 }
 
 const PATCH_MAX = 1 << 20
-const PATCH_EXCLUDE = [':(exclude,glob)**/.env*', ':(exclude,glob)**/*.pem', ':(exclude,glob)**/*.key', ':(exclude)node_modules']
+const PATCH_EXCLUDE = [':(exclude,glob)**/.env*', ':(exclude,glob)**/*.pem', ':(exclude,glob)**/*.key']
 
 /** What the run changed, as a patch, without files that look like secrets; binary files as "Binary files differ"; at most 1 MiB. */
 export const patchOf = (c: Clone): Promise<string> => probe(c, async g => {
@@ -80,6 +108,7 @@ export async function removeClone(c: Clone): Promise<void> {
   try { if ((await lstat(path.join(c.dir, 'node_modules'))).isSymbolicLink()) await unlink(path.join(c.dir, 'node_modules')) } catch { /* none */ }
   await rm(c.dir, { recursive: true, force: true })
   await rm(c.probe, { recursive: true, force: true })
+  LIVE.delete(c)
 }
 
 /** For a SIGINT handler that exits right after it. */
@@ -87,6 +116,7 @@ export function removeCloneSync(c: Clone): void {
   try { if (lstatSync(path.join(c.dir, 'node_modules')).isSymbolicLink()) unlinkSync(path.join(c.dir, 'node_modules')) } catch { /* none */ }
   rmSync(c.dir, { recursive: true, force: true })
   rmSync(c.probe, { recursive: true, force: true })
+  LIVE.delete(c)
 }
 
 // Tool caches the test runners write on every run: a change there is no change to the installed packages.

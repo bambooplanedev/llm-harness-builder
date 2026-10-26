@@ -327,13 +327,15 @@ Only the last commit is read: uncommitted changes, `lhb-tasks.json` included, ar
 and `bench` says so. Each run is a `git clone --shared` in the OS temp dir, at that commit, with no
 remote, deleted after its check; the harness reads what a run changed through a git dir of its own,
 so whatever the model writes into the clone's `.git` does not reach your repo or the verdict. Tests,
-manifests, lock files and test-runner configs are protected (add your own paths with `protect`): a
-run that adds, changes or deletes one is a FAIL, and its check does not run. A check that finds 0
+manifests, lock files, test-runner configs and `.gitignore` files are protected (add your own paths
+with `protect`), and so is the `node_modules` the run was given: a run that adds, changes or deletes
+one is a FAIL, and its check does not run. A check that finds 0
 tests is a FAIL too. Before the first run `bench` shows every command it will run and where, and
 asks once; `--yes` accepts without a terminal, and a change to a command or to the scripts of
 `package.json` asks again. `setup` runs once in a clone of its own, and the runs link its
-`node_modules` (without `setup`, your repo's): a run that changes it stops the bench after the JSON
-is written. What each run changed is kept as `runs/<trace>.patch` (files that look like secrets left
+`node_modules` (without `setup`, your repo's): a run that changes its `.bin`, a package's
+`package.json` or a package's top-level code stops the bench after the JSON is written; files deeper
+in a package are not watched. What each run changed is kept as `runs/<trace>.patch` (files that look like secrets left
 out, at most 1 MiB).
 
 #### replay

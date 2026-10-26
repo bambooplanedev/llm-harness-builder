@@ -1463,3 +1463,40 @@ test('bench --tasks: Ctrl-C leaves no clone behind, the setup clone included', a
   await new Promise(r => child.on('exit', r))
   expect(clonesIn(env)).toEqual([])
 }, 60_000)
+
+test('bench --tasks: Ctrl-C during setup leaves no clone behind', async () => {
+  const repo = await gitRepo({ 'lhb-tasks.json': JSON.stringify({ tasks: TWO, setup: 'sleep 20' }) })
+  const env = await tasksEnv([])
+  const cwd = await tmp('lhb-cwd-')
+  const child = spawn(join(ROOT, 'node_modules', '.bin', 'tsx'), [join(ROOT, 'src', 'cli.ts'), 'bench', '--tasks', repo, '--n', '1', '--yes', '--out', join(cwd, 'b.json'), harness('bare')],
+    { cwd, env: { ...process.env, ...env }, stdio: ['ignore', 'ignore', 'pipe'] })
+  let err = ''
+  await new Promise<void>(res => child.stderr!.on('data', d => { err += d; if (err.includes('tasks: 2 from')) res() }))
+  await new Promise(r => setTimeout(r, 1500))
+  expect(clonesIn(env).length).toBeGreaterThan(0)
+  child.kill('SIGINT')
+  await new Promise(r => child.on('exit', r))
+  expect(clonesIn(env)).toEqual([])
+}, 60_000)
+
+test('bench --tasks: a failing setup is one line, not a stack trace', async () => {
+  const repo = await gitRepo({ 'lhb-tasks.json': JSON.stringify({ tasks: TWO, setup: 'echo nope; exit 2' }) })
+  const env = await tasksEnv([])
+  const r = cli(['bench', '--tasks', repo, '--n', '1', '--yes', harness('bare')], env)
+  expect(r.status).not.toBe(0)
+  expect(r.stderr).toContain('setup failed (exit 2): nope')
+  expect(r.stderr).not.toMatch(/^\s+at /m)
+  expect(clonesIn(env)).toEqual([])
+}, 60_000)
+
+test('bench --tasks: swapping the node_modules link for a folder of the model\'s own is a FAIL', async () => {
+  const repo = await tasksRepo([{ name: 'a', prompt: 'p', check: 'true' }], { '.gitignore': 'node_modules\n' })
+  mkdirSync(join(repo, 'node_modules', 'x'), { recursive: true }); writeFileSync(join(repo, 'node_modules', 'x', 'index.js'), '1')
+  const env = await tasksEnv([bashCall('rm node_modules && mkdir -p node_modules/.bin'), { content: 'done' }])
+  const cwd = await tmp('lhb-cwd-')
+  const r = cli(['bench', '--tasks', repo, '--n', '1', '--yes', '--out', join(cwd, 'b.json'), harness('bare')], env, cwd)
+  expect(r.status, r.stderr).toBe(0)
+  const run = JSON.parse(await readFile(join(cwd, 'b.json'), 'utf8')).harnesses[0].runs[0]
+  expect([run.verdict, run.lastError]).toEqual(['FAIL', 'changed a protected file: node_modules'])
+  expect(readFileSync(join(repo, 'node_modules', 'x', 'index.js'), 'utf8')).toBe('1')
+}, 60_000)
