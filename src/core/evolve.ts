@@ -6,7 +6,7 @@ import type { RepoTask } from './repo-tasks.js'
 import { TOOL_NAMES, validateConfig } from './config.js'
 import { analyzeTrace } from './analyze.js'
 import { jsonCandidates } from './parse.js'
-import type { HarnessEvent } from './events.js'
+import type { DoneReason, HarnessEvent } from './events.js'
 import type { ChatRequest } from './backends/types.js'
 
 export const ROUNDS = 3
@@ -120,6 +120,8 @@ export type Edit = { field: string; value: string | number; why?: string }
 
 /** A new config with the edit at its leaf: a paragraph is appended, a number set; `loop`/`context` made only when missing. */
 export function applyEdit(cfg: object, e: Edit): object {
+  // Its own guard, not only checkEdit's: a replayed journal reaches here too, and `__proto__.x` would pollute.
+  if (!ALLOWED.includes(e.field)) throw new Error('field not allowed')
   const c = structuredClone(cfg) as any
   if (e.field === 'systemPrompt') { c.systemPrompt = String(c.systemPrompt ?? '').trimEnd() + '\n\n' + e.value; return c }
   const [sec, key] = e.field.split('.')
@@ -154,6 +156,8 @@ export function checkEdit(e: Edit, ctx: { current: object; original: object; tri
   const v = e.value
   if (e.field === 'systemPrompt') {
     if (typeof v !== 'string' || !v.trim() || v.length > PARA_MAX) return 'bad value'
+    // Refused, not stripped: a zero-width char inside `curl` or a file name would hide it from both checks below.
+    if (/[\p{Cf}]|[^\P{Cc}\n\t]/u.test(v)) return 'bad value'
     if (DANGER.some(re => re.test(v))) return 'looks like a command or an address'
     const low = v.toLowerCase()
     if (ctx.binding.some(t => low.includes(t))) return 'tied to a task'
@@ -170,6 +174,8 @@ export function checkEdit(e: Edit, ctx: { current: object; original: object; tri
 export type Group = { signature: string; count: number; calls: Record<string, number>; exts: Record<string, number> }
 
 const CHECK_CLASS: [string, string][] = [['check exited', 'check_failed'], ['check timed out', 'check_timeout'], ['the check found 0 tests', 'no_tests'], ['changed a protected file', 'protected']]
+/** The reasons a run ends with (DoneReason, and the bench's 'error'); anything else in a journal is `other`. */
+const REASONS: (DoneReason | 'error')[] = ['final', 'max_turns', 'parse_failed', 'aborted', 'backend_error', 'mcp_error', 'repeat_loop', 'proxy_stopped', 'error']
 const bump = (r: Record<string, number>, k: string) => { r[k] = (r[k] ?? 0) + 1 }
 
 /** FAIL runs grouped by how they failed, biggest first. Only fixed words and counts: no path, name, argument or output
@@ -179,8 +185,8 @@ export function failureGroups(items: { run: RunLite; events: HarnessEvent[] }[])
   for (const { run, events } of items) {
     if (run.verdict !== 'FAIL') continue
     const a = analyzeTrace(events)
-    // The reason comes from a journal on resume: one that is not a plain word is not trusted as one.
-    const reason = run.reason === undefined ? '-' : /^[a-z_]{1,32}$/.test(run.reason) ? run.reason : 'other'
+    // The reason comes from a journal on resume, which bash can rewrite: only a known one is passed on.
+    const reason = run.reason === undefined ? '-' : (REASONS as string[]).includes(run.reason) ? run.reason : 'other'
     const check = run.lastError === undefined ? '-' : CHECK_CLASS.find(([p]) => run.lastError!.startsWith(p))?.[1] ?? 'other'
     const kinds: Record<string, number> = {}
     for (const pe of Object.values(a.edits)) for (const [k, n] of Object.entries(pe.byKind)) kinds[k] = (kinds[k] ?? 0) + n!

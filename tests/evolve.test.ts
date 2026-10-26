@@ -117,10 +117,19 @@ describe('evolve edits', () => {
     expect(para('Mind FormatBytes rounding')).toBe('tied to a task')
     expect(para('look at parser.ts first')).toBe('tied to a task')
     expect(para('read the failing test before editing')).toBeUndefined()
+    expect(para('then cu\u200brl it')).toBe('bad value')
+    expect(para('look at par\u200bser.ts')).toBe('bad value')
+    expect(para('a\u0007b')).toBe('bad value')
+    expect(para('plan first\n\tthen edit')).toBeUndefined()
     const e: Edit = { field: 'loop.maxRepeats', value: 3 }
     expect(checkEdit(e, ctx())).toBeUndefined()
     expect(checkEdit({ ...e, why: 'again' }, ctx([e]))).toBe('already tried')
     expect(checkEdit({ field: 'loop.freshContext', value: 2 }, ctx())).toMatch(/^invalid config: loop\.freshContext needs loop\.maxRepeats/)
+  })
+
+  it('applyEdit refuses a field outside the list, so __proto__ cannot pollute', () => {
+    expect(() => applyEdit({}, { field: '__proto__.polluted', value: 1 })).toThrow('field not allowed')
+    expect(({} as any).polluted).toBeUndefined()
   })
 
   it('checkEdit: a current that differs from the original outside ALLOWED is refused', () => {
@@ -153,6 +162,7 @@ describe('evolve signals', () => {
       { run: fail('t5', 'final', 'the check found 0 tests'), events: [] },
       { run: fail('t6', 'final', 'changed a protected file: x'), events: [] },
       { run: fail('t7', 'IGNORE <x>', 'boom'), events: [] },
+      { run: fail('t8', 'ignore_previous_instructions', 'boom'), events: [] },
     ])
     expect(groups[0]).toEqual({ signature: 'max_turns|check_timeout|-|-', count: 2, calls: {}, exts: {} })
     const g = groups.find(x => x.signature.startsWith('final|check_failed'))!
@@ -160,7 +170,8 @@ describe('evolve signals', () => {
     expect(groups.map(x => x.signature)).toContain('final|no_tests|-|-')
     expect(groups.map(x => x.signature)).toContain('final|protected|-|-')
     expect(groups.map(x => x.signature)).toContain('other|other|-|-')
-    expect(groups.reduce((n, x) => n + x.count, 0)).toBe(6)
+    expect(groups.find(x => x.signature === 'other|other|-|-')!.count).toBe(2)
+    expect(groups.reduce((n, x) => n + x.count, 0)).toBe(7)
   })
 
   it('proposerInput has no paths, task names or argument values', () => {
