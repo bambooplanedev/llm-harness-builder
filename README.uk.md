@@ -940,10 +940,11 @@ CLI і сервер написані на TypeScript у `src/`, сторінка
 tarball у контейнері `node:22.12-slim` (потрібен Docker). Ключі передаються лише за іменем; крок, чий
 ключ не задано, — `SKIP`, а прогін зі skip не зелений. Реліз:
 
-    npm ci && npm pack               # in a fresh clone of the tagged commit
-    scripts/launch-check.sh llm-harness-builder-X.Y.Z.tgz
-    git tag -a vX.Y.Z && gh release create vX.Y.Z llm-harness-builder-X.Y.Z.tgz
-    npm publish llm-harness-builder-X.Y.Z.tgz    # 2FA
+    npm ci && npm pack --pack-destination ..    # in a fresh clone of the release commit
+    scripts/launch-check.sh ../llm-harness-builder-X.Y.Z.tgz
+    git tag -a vX.Y.Z && git push origin vX.Y.Z
+    gh release create vX.Y.Z ../llm-harness-builder-X.Y.Z.tgz
+    npm publish ../llm-harness-builder-X.Y.Z.tgz    # 2FA
     npm view llm-harness-builder@X.Y.Z dist.shasum    # equals the sha1 the check printed
 
 ## Ліцензія

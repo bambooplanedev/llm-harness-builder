@@ -30,7 +30,6 @@
 #   google/gemma-4-26b-a4b-it:free
 set -euo pipefail
 
-MODEL=${OPENROUTER_MODEL:-nvidia/nemotron-3.5-super-vl:free}
 fails=0 skips=0
 
 # step NAME FUNCTION...: a function prints why on failure and returns 1, or returns 77 to skip.

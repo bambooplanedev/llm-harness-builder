@@ -930,10 +930,11 @@ Before a release, `scripts/launch-check.sh <tgz>` runs the checklist in its head
 tarball, in a `node:22.12-slim` container (Docker needed). Keys go in by name only; a step whose key
 is not set is `SKIP`, and a run with a skip is not green. The release:
 
-    npm ci && npm pack               # in a fresh clone of the tagged commit
-    scripts/launch-check.sh llm-harness-builder-X.Y.Z.tgz
-    git tag -a vX.Y.Z && gh release create vX.Y.Z llm-harness-builder-X.Y.Z.tgz
-    npm publish llm-harness-builder-X.Y.Z.tgz    # 2FA
+    npm ci && npm pack --pack-destination ..    # in a fresh clone of the release commit
+    scripts/launch-check.sh ../llm-harness-builder-X.Y.Z.tgz
+    git tag -a vX.Y.Z && git push origin vX.Y.Z
+    gh release create vX.Y.Z ../llm-harness-builder-X.Y.Z.tgz
+    npm publish ../llm-harness-builder-X.Y.Z.tgz    # 2FA
     npm view llm-harness-builder@X.Y.Z dist.shasum    # equals the sha1 the check printed
 
 ## License
