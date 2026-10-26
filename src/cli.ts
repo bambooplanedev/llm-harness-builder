@@ -13,7 +13,7 @@ import { killTracked } from './core/procs.js'
 import { withNotes, type NotesStore } from './core/notes-run.js'
 import { notesKey, notesPath, readNotes, selectNotes } from './core/notes.js'
 import { loadRepoTasks, consentText, hasConsent, saveConsent, TASKS_FILE, type RepoTasks } from './core/repo-tasks.js'
-import { cloneAt, linkNodeModules, protectedChanged, runCheck, patchOf, removeClone, removeAllClonesSync, prepareModules, modulesManifest, modulesTampered, type Clone } from './core/repo-clone.js'
+import { cloneAt, linkNodeModules, protectedChanged, runCheck, finishRun, removeAllClonesSync, prepareModules, modulesManifest, modulesTampered, type Clone } from './core/repo-clone.js'
 import { validateConfig, sendsAnswerSchema, KEY_ENV, FLAG_WORDS, keyNameMessage, keyErrors, keyProblem, keyNote, apiKey, isHttpUrl, isLoopbackUrl, type HarnessConfig, type BackendKind } from './core/config.js'
 import { validateWorkdir } from './core/tools/sandbox.js'
 import type { Backend, Delta, NormalizedResponse } from './core/backends/types.js'
@@ -357,10 +357,8 @@ function repoWork(repo: RepoTasks): Work {
     async dispose(dir, traceId) {
       const c = live.get(dir)
       if (!c) return
-      try {
-        const patch = traceId ? await patchOf(c) : ''
-        if (patch.trim()) await writeFile(path.join('runs', `${traceId}.patch`), patch)
-      } finally { live.delete(dir); await removeClone(c) }
+      live.delete(dir)
+      for (const w of await finishRun(c, traceId && path.join('runs', `${traceId}.patch`))) console.error(w)
     },
   }))
   return w

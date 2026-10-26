@@ -103,12 +103,26 @@ export const patchOf = (c: Clone): Promise<string> => probe(c, async g => {
   return Buffer.byteLength(p) <= PATCH_MAX ? p : Buffer.from(p).subarray(0, PATCH_MAX).toString('utf8') + '\n[patch truncated at 1 MiB]\n'
 })
 
-/** The node_modules link first, so removing the clone can never reach what it points at. */
+/** The node_modules link first, so removing the clone can never reach what it points at. The probe and the registry
+ *  entry go even when the clone cannot, so the exit hook does not try (and say so) a second time. */
 export async function removeClone(c: Clone): Promise<void> {
   try { if ((await lstat(path.join(c.dir, 'node_modules'))).isSymbolicLink()) await unlink(path.join(c.dir, 'node_modules')) } catch { /* none */ }
-  await rm(c.dir, { recursive: true, force: true })
-  await rm(c.probe, { recursive: true, force: true })
-  LIVE.delete(c)
+  try { await rm(c.dir, { recursive: true, force: true }) } finally {
+    await rm(c.probe, { recursive: true, force: true }).catch(() => {})
+    LIVE.delete(c)
+  }
+}
+
+/** The end of a run: its patch kept in `patchFile` (when given and not empty), the clone removed whatever happened.
+ *  Never throws; says what failed, the patch or the removal. */
+export async function finishRun(c: Clone, patchFile: string | undefined): Promise<string[]> {
+  const warnings: string[] = []
+  if (patchFile) try {
+    const patch = await patchOf(c)
+    if (patch.trim()) await writeFile(patchFile, patch)
+  } catch (e) { warnings.push(`cannot keep the patch of run ${path.basename(patchFile, '.patch')}: ${(e as Error).message}`) }
+  try { await removeClone(c) } catch (e) { warnings.push(`cannot remove the clone ${c.dir}: ${(e as Error).message}`) }
+  return warnings
 }
 
 /** For a SIGINT handler that exits right after it. */

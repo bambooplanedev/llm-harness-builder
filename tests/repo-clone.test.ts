@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join, basename } from 'node:path'
 import { loadRepoTasks } from '../src/core/repo-tasks.js'
-import { cloneAt, linkNodeModules, changedPaths, protectedChanged, runCheck, patchOf, removeClone, removeCloneSync, modulesManifest, prepareModules, modulesTampered, removeAllClonesSync, type Clone } from '../src/core/repo-clone.js'
+import { cloneAt, linkNodeModules, changedPaths, protectedChanged, runCheck, patchOf, removeClone, removeCloneSync, modulesManifest, prepareModules, modulesTampered, removeAllClonesSync, finishRun, type Clone } from '../src/core/repo-clone.js'
 import { childEnv } from '../src/core/tools/env.js'
 import { gitRepo, tmp } from './helpers.js'
 
@@ -239,4 +239,33 @@ test('prepareModules: setup runs with the env it is given', async () => {
   await expect(prepareModules(t)).rejects.toThrow('setup failed (exit 1)')
   const r = await prepareModules(t, { ...childEnv(), LHB_T_FOO: '1' })
   await removeClone(r.setupClone!)
+})
+
+test('finishRun: a patch that cannot be kept is said, the clone goes anyway', async () => {
+  const repo = await repoWith()
+  const c = await cloneAt(await loadRepoTasks(repo))
+  await writeFile(join(c.dir, 'src/a.js'), 'changed\n')
+  const w = await finishRun(c, join(await tmp('lhb-x-'), 'no', 'such', 'abc.patch'))
+  expect(w).toHaveLength(1)
+  expect(w[0]).toMatch(/^cannot keep the patch of run abc: /)
+  expect(existsSync(c.dir)).toBe(false); expect(existsSync(c.probe)).toBe(false)
+})
+
+test('finishRun: no patch file, no warning', async () => {
+  const repo = await repoWith()
+  const c = await cloneAt(await loadRepoTasks(repo))
+  expect(await finishRun(c, undefined)).toEqual([])
+  expect(existsSync(c.dir)).toBe(false)
+})
+
+test.skipIf(process.getuid?.() === 0)('finishRun: a clone that cannot be removed is said, never thrown; the probe goes', async () => {
+  const repo = await repoWith()
+  const c = await cloneAt(await loadRepoTasks(repo))
+  const locked = join(c.dir, 'locked')
+  await mkdir(locked); await writeFile(join(locked, 'f'), 'x'); await chmod(locked, 0o500)
+  try {
+    const w = await finishRun(c, undefined)
+    expect(w.some(x => x.startsWith(`cannot remove the clone ${c.dir}: `))).toBe(true)
+    expect(existsSync(c.probe)).toBe(false)
+  } finally { await chmod(locked, 0o700); await removeClone(c) }
 })
