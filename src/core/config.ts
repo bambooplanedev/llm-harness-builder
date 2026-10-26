@@ -215,7 +215,7 @@ export function validateConfig(c: unknown): string[] {
   if (n !== undefined && (!isObj(n) || Array.isArray(n))) e.push('notes must be an object')
   else if (n) {
     if (typeof n.enabled !== 'boolean') e.push('notes.enabled must be boolean')
-    if (!(Number.isInteger(n.maxTokens) && n.maxTokens > 0)) e.push('notes.maxTokens must be a positive integer')
+    if (n.enabled && !(Number.isInteger(n.maxTokens) && n.maxTokens > 0)) e.push('notes.maxTokens must be a positive integer')
   }
   if (!isObj(c.loop) || !(Number.isInteger(c.loop.maxTurns) && c.loop.maxTurns > 0)) e.push('loop.maxTurns must be a positive integer')
   else {

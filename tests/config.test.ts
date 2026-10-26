@@ -432,6 +432,11 @@ test('accepts a notes section', () => {
   expect(validateConfig({ ...harness(), notes: { enabled: true, maxTokens: 400 } })).toEqual([])
 })
 
+test('notes: {enabled: false} without maxTokens loads', () => {
+  expect(validateConfig({ ...harness(), notes: { enabled: false } })).toEqual([])
+  expect(validateConfig({ ...harness(), notes: { enabled: true } })).toContain('notes.maxTokens must be a positive integer')
+})
+
 test('rejects a bad notes section', () => {
   expect(validateConfig({ ...harness(), notes: { enabled: 'yes', maxTokens: 0 } })).toEqual([
     'notes.enabled must be boolean', 'notes.maxTokens must be a positive integer'])

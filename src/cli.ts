@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url'
 import { mayAsk, type RunOpts } from './core/run.js'
 import { killTracked } from './core/procs.js'
 import { withNotes, type NotesStore } from './core/notes-run.js'
-import { notesKey, notesPath, readNotes, selectNotes, scrubText } from './core/notes.js'
+import { notesKey, notesPath, readNotes, scrubText } from './core/notes.js'
 import { ALLOWED, CANDIDATES, splitSets, modeOf, referenceLabel, neededFlips, usable, decide, applyEdit, bindingTokens, checkEdit, failureGroups, signatureOf, proposerInput, proposerRequest, parseProposal, parseJournal, replay, type Edit, type JournalLine, type RunLite } from './core/evolve.js'
 import { evolveReport } from './core/evolve-report.js'
 import { loadRepoTasks, consentText, hasConsent, saveConsent, git, TASKS_FILE, type RepoTasks, type EvolveConsent } from './core/repo-tasks.js'
@@ -175,8 +175,6 @@ async function execRun(config: HarnessConfig, task: string, workdir: string, o: 
   }
   let last: HarnessEvent | undefined, cost: number | undefined
   try {
-    if (o.notes && config.notes?.enabled && !o.quiet)
-      console.error(`notes: ${selectNotes(await readNotes(o.notes.file), config.notes.maxTokens).length} loaded from ${shortHome(o.notes.file)}`)
     for await (const e of withNotes({ config, task, workdir, answerSchema: o.answerSchema }, opts, o.notes, trace.id)) {
       last = e
       if ((e.type === 'llm_response' || e.type === 'note_written') && e.costUsd !== undefined) cost = (cost ?? 0) + e.costUsd

@@ -1387,7 +1387,6 @@ test('run with notes on: writes the note to the notes dir, outside the project, 
   const r = cli(['run', await withNotesOn(cwd), '--workdir', wd, '--yes', 'x'], { LHB_FAKE_BACKEND: fake, LHB_NOTES_DIR: nd }, cwd)
   expect(r.status).toBe(0)
   const file = join(nd, `${await notesKey(wd)}.jsonl`)
-  expect(r.stderr).toContain(`notes: 0 loaded from ${file}`)
   expect(r.stderr).toContain('note: tests run with npm test')
   expect((await readNotes(file)).map(n => n.text)).toEqual(['tests run with npm test'])
   expect(existsSync(join(cwd, 'runs', 'notes'))).toBe(false)
@@ -1400,7 +1399,18 @@ test('run with notes on from the project root: a notes dir inside the workdir is
   const r = cli(['run', await withNotesOn(wd), '--workdir', wd, '--yes', 'x'], { LHB_FAKE_BACKEND: fake, LHB_NOTES_DIR: join(wd, 'runs', 'notes') }, wd)
   expect(r.status).toBe(0)
   expect(r.stderr).toContain('is inside the workdir')
+  expect(r.stderr).toContain('LHB_NOTES_DIR outside the workdir')
+  expect(r.stderr).not.toMatch(/notes: \d+ loaded/)
   expect(existsSync(join(wd, 'runs', 'notes'))).toBe(false)
+}, 30_000)
+
+test('run prints the notes count once', async () => {
+  const wd = await tmp('lhb-cli-'), cwd = await tmp('lhb-cwd-'), nd = await tmp('lhb-notes-')
+  const fake = join(wd, 'fake.json')
+  await writeFile(fake, JSON.stringify([{ content: 'done' }, { content: JSON.stringify({ notes: [] }) }]))
+  await writeFile(join(nd, `${await notesKey(wd)}.jsonl`), JSON.stringify({ id: 'a', ts: 1, author: 'model', text: 'old fact' }) + '\n')
+  const r = cli(['run', await withNotesOn(cwd), '--workdir', wd, '--yes', 'x'], { LHB_FAKE_BACKEND: fake, LHB_NOTES_DIR: nd }, cwd)
+  expect(r.stderr.match(/notes: \d+ loaded/g)).toEqual(['notes: 1 loaded'])
 }, 30_000)
 
 test("bench: a run's tokens are the sum of its replies' usage, firstPromptTokens the first prompt", async () => {
