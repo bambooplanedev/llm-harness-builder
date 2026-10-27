@@ -399,6 +399,19 @@ names it called, which file types it edited (from a fixed list of extensions). N
 paths or task names. `--proposer` picks another harness
 for the proposing backend.
 
+No repo of your own? `--task polyglot --size N` (3 to 47, required, not with `--tasks`) practises evolve on
+the Exercism set: exercise `i` goes to train, gate or test by `i % 3`. `--size 6 --rounds 1` is a quick
+estimate, "orientation, not proof"; verdicts are strict from `--size 24`, `--size 47` is the full set.
+The proposer never gets exercise names, test names or paths. The journal is bound to the loaded set and
+the size: a changed set refuses a resume, `--report` still prints. The proposer is asked about only when
+its host differs from the harness's (`--yes` accepts); the same host gets a notice line.
+
+A 429 is retried up to 3 times (the `Retry-After` wait, else 60 s). A 401, a 402, a 403 without
+moderation reasons and a 429 that lasts stop evolve with exit 1 and none of the cut step's runs in the
+journal; the same command resumes. A stop in the middle of a set re-measures that set, in the middle of
+the final test up to 30 runs. The proposal is journaled before its runs, so a resume measures the same
+edit. `bench` records `stop` in its JSON and skips that run's check.
+
 The journal is checked, not trusted. Every start and every resume replays it and re-checks each
 decision against its own numbers; a journal edited by hand, a changed harness or option, a new commit
 in the repo or a changed notes snapshot is refused, and the message says how to start over: delete
@@ -410,7 +423,7 @@ even after new commits or a deleted notes snapshot, and it says when `vN.json` o
 the version that was measured. To use `vN`, point at it; copying it over the original file changes
 the harness the journal was pinned to, and a later `--report` refuses.
 
-Exit codes: 0 with a report; 1 when the model changed the linked `node_modules`; 2 for a refusal or a
+Exit codes: 0 with a report; 1 when the model changed the linked `node_modules` or a stop above ended it; 2 for a refusal or a
 bad argument; 130 for Ctrl-C, after which the journal holds every finished step.
 
 #### replay
