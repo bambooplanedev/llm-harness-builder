@@ -116,7 +116,7 @@ export type HarnessConfig = {
   description?: string
   backend: { kind: BackendKind; baseUrl: string; model: string; numCtx?: number; maxTokens?: number; think?: boolean; reasoningEffort?: ReasoningEffort; temperature: number; apiKeyEnv?: string; pricePerMTok?: Price }
   systemPrompt: string
-  tools: { enabled: ToolName[]; approveBash: boolean; requireReadBeforeEdit?: boolean; explainEditMiss?: boolean; editMissEscalation?: number; bashEnv?: string[]; readMaxBytes?: number; bashMaxBytes?: number; bashTimeoutS?: number }
+  tools: { enabled: ToolName[]; approveBash: boolean; requireReadBeforeEdit?: boolean; readRanges?: boolean; explainEditMiss?: boolean; editMissEscalation?: number; bashEnv?: string[]; readMaxBytes?: number; bashMaxBytes?: number; bashTimeoutS?: number }
   toolCalls: { mode: 'native' | 'prompted'; format?: ToolCallFormat; enforceSchema: boolean; promptedTemplate: string; parseErrorHint: string }
   /** Both limits are off when absent; budgetTokens 0 is off too. */
   context?: { maxToolOutputChars?: number; budgetTokens?: number }
@@ -138,7 +138,7 @@ export const sendsAnswerSchema = (c: HarnessConfig): boolean =>
 const KEYS: Record<string, string[]> = {
   '': ['name', 'description', 'backend', 'systemPrompt', 'tools', 'toolCalls', 'context', 'loop', 'mcpServers', 'notes'],
   backend: ['kind', 'baseUrl', 'model', 'numCtx', 'maxTokens', 'think', 'reasoningEffort', 'temperature', 'apiKeyEnv', 'pricePerMTok'],
-  tools: ['enabled', 'approveBash', 'requireReadBeforeEdit', 'explainEditMiss', 'editMissEscalation', 'bashEnv', 'readMaxBytes', 'bashMaxBytes', 'bashTimeoutS'],
+  tools: ['enabled', 'approveBash', 'requireReadBeforeEdit', 'readRanges', 'explainEditMiss', 'editMissEscalation', 'bashEnv', 'readMaxBytes', 'bashMaxBytes', 'bashTimeoutS'],
   toolCalls: ['mode', 'format', 'enforceSchema', 'promptedTemplate', 'parseErrorHint'],
   context: ['maxToolOutputChars', 'budgetTokens'],
   loop: ['maxTurns', 'maxRepeats', 'repeatTemperature', 'repeatThinkTokens', 'freshContext', 'untilBash'],
@@ -193,7 +193,7 @@ export function validateConfig(c: unknown): string[] {
   else {
     for (const n of t.enabled) if (!TOOL_NAMES.includes(n)) e.push(`unknown tool: ${n}`)
     if (typeof t.approveBash !== 'boolean') e.push('tools.approveBash must be boolean')
-    for (const k of ['requireReadBeforeEdit', 'explainEditMiss'] as const)
+    for (const k of ['requireReadBeforeEdit', 'readRanges', 'explainEditMiss'] as const)
       if (t[k] !== undefined && typeof t[k] !== 'boolean') e.push(`tools.${k} must be boolean`)
     if (t.editMissEscalation !== undefined && !(Number.isInteger(t.editMissEscalation) && t.editMissEscalation >= 1)) e.push('tools.editMissEscalation must be a positive integer')
     for (const k of ['readMaxBytes', 'bashMaxBytes', 'bashTimeoutS'] as const)

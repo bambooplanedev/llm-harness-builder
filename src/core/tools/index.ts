@@ -16,6 +16,9 @@ export const TOOL_SCHEMAS: Record<ToolName, ToolSchema> = {
   bash: { name: 'bash', description: 'Run a shell command in the project root. Returns stdout+stderr and the exit code. 30s timeout.', parameters: p({ command: { type: 'string', description: 'Shell command' } }, ['command']) },
 }
 
+/** tools.readRanges: read_file with start/end. A harness without the knob keeps TOOL_SCHEMAS.read_file as it was. */
+export const READ_FILE_RANGES: ToolSchema = { name: 'read_file', description: 'Read a text file, or only lines start to end (1-based, inclusive). Large files are truncated; the note says which lines were shown.', parameters: p({ path: { type: 'string', description: 'File path relative to the project root' }, start: { type: 'integer', description: 'First line to read, from 1' }, end: { type: 'integer', description: 'Last line to read, inclusive' } }, ['path']) }
+
 const IMPL: Record<ToolName, (a: Record<string, unknown>, c: ToolCtx) => Promise<string>> = {
   list_dir: listDir, read_file: readFile, write_file: writeFile, edit_file: editFile, bash,
 }

@@ -2,7 +2,7 @@ import { test, expect, beforeEach, afterEach } from 'vitest'
 import { rm, writeFile, readFile as rf, mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmp } from './helpers.js'
-import { listDir, readFile, writeFile as wf, editFile, GUARD_BLOCKED, EDIT_MISS, type ToolCtx } from '../src/core/tools/fs.js'
+import { listDir, readFile, writeFile as wf, editFile, cutLines, GUARD_BLOCKED, EDIT_MISS, type ToolCtx } from '../src/core/tools/fs.js'
 
 let ctx: ToolCtx
 beforeEach(async () => {
@@ -142,4 +142,67 @@ test('read_file: readMaxBytes cuts the read and says so; a file within it, or no
   expect(await readFile({ path: 'big.txt' }, { ...ctx, readMaxBytes: 4 })).toBe('0123\n[truncated at 4 bytes]')
   expect(await readFile({ path: 'big.txt' }, { ...ctx, readMaxBytes: 10 })).toBe('0123456789')
   expect(await readFile({ path: 'big.txt' }, ctx)).toBe('0123456789')
+})
+
+// ---- tools.readRanges ----------------------------------------------------------
+const row = (n: number) => 'row ' + String(n).padStart(2, '0') + ' ' + 'x'.repeat(13)
+const rows = (a: number, b: number) => Array.from({ length: b - a + 1 }, (_, i) => row(a + i)).join('\n')
+const TEN = rows(1, 10)
+const ranged = async (over: Partial<ToolCtx> = {}) => {
+  await writeFile(join(ctx.workdir, 'ten-nl.txt'), TEN + '\n'); await writeFile(join(ctx.workdir, 'ten.txt'), TEN)
+  return { ...ctx, readRanges: true, ...over }
+}
+
+test('readRanges off: start and end are ignored, and a cut read is today\'s output', async () => {
+  await ranged()
+  expect(await readFile({ path: 'ten.txt', start: 3, end: 5 }, ctx)).toBe(await readFile({ path: 'ten.txt' }, ctx))
+  expect(await readFile({ path: 'ten.txt' }, { ...ctx, readMaxBytes: 10 })).toBe('row 01 xxxxxxxxxxxxx'.slice(0, 10) + '\n[truncated at 10 bytes]')
+  expect(ctx.lastRead).toBeUndefined()
+})
+
+test.each(['ten.txt', 'ten-nl.txt'])('readRanges on, %s: line ranges, 1-based and inclusive', async f => {
+  const c = await ranged()
+  expect(await readFile({ path: f, start: 3, end: 5 }, c)).toBe(rows(3, 5))
+  expect(c.lastRead).toEqual({ first: 3, total: 10, capped: undefined })
+  expect(await readFile({ path: f, start: '3', end: '5' }, c)).toBe(rows(3, 5))
+  expect(await readFile({ path: f, start: 8, end: 50 }, c)).toBe(rows(8, 10))
+  expect(await readFile({ path: f, start: 11 }, c)).toBe('[no lines: the file has 10]')
+  expect(await readFile({ path: f }, c)).toBe(TEN)
+})
+
+test('readRanges on: an empty file, CRLF lines, and bad numbers', async () => {
+  const c = await ranged()
+  await writeFile(join(c.workdir, 'empty.txt'), '')
+  expect(await readFile({ path: 'empty.txt' }, c)).toBe('[no lines: the file is empty]')
+  expect(await readFile({ path: 'crlf.txt', start: 3 }, c)).toBe('three\r')
+  for (const a of [{ start: 0 }, { start: -1 }, { start: 'abc' }, { start: 2.5 }, { start: 5, end: 3 }])
+    await expect(readFile({ path: 'ten.txt', ...a }, c)).rejects.toThrow('start and end must be line numbers from 1, with end not before start')
+})
+
+test('readRanges on, readMaxBytes: the cut part is counted, a partly cut line is a line', async () => {
+  const c = await ranged({ readMaxBytes: 50 })
+  // bytes 0-49: rows 1-2 whole (41 bytes with the newline) + 8 chars of row 3 = 3 lines
+  expect(await readFile({ path: 'ten.txt', start: 5 }, c)).toBe('[no lines: the first 50 bytes hold 3 lines; read the rest with bash]')
+  expect(await readFile({ path: 'ten.txt', start: 2, end: 2 }, c)).toBe(row(2))
+  expect(await readFile({ path: 'ten.txt', start: 2 }, c)).toBe(row(2) + '\n' + row(3).slice(0, 8) + '\n[truncated at 50 bytes]')
+  expect(c.lastRead).toEqual({ first: 2, total: 3, capped: 50 })
+})
+
+test('cutLines keeps whole lines and names the rest', () => {
+  expect(cutLines(TEN, 400, { first: 1, total: 10 })).toBe(TEN)
+  const out = cutLines(TEN, 120, { first: 1, total: 10 })!
+  expect(out).toBe(rows(1, 3) + '\n[lines 1-3 of 10 shown; read on with start: 4]')
+  expect(out.length).toBe(109)
+  expect(cutLines('y'.repeat(200), 60, { first: 1, total: 1 })).toBeUndefined()
+  expect(cutLines(rows(1, 10), 120, { first: 4, total: 20, capped: 99 })).toBe(rows(1, 3) + '\n[lines 4-6 of 20+ shown; read on with start: 7]')
+})
+
+test('readRanges with the guard: a part read does not allow write_file, but allows edit_file', async () => {
+  const c = await ranged({ reads: new Set<string>(), partReads: new Set<string>() })
+  await readFile({ path: 'ten.txt', start: 2, end: 3 }, c)
+  await expect(wf({ path: 'ten.txt', content: 'z' }, c)).rejects.toThrow('ten.txt was read only in part; read it whole with read_file before overwriting it')
+  await editFile({ path: 'ten.txt', old: row(2), new: 'two' }, c)
+  await readFile({ path: 'ten.txt', start: 2, end: 3 }, c)
+  await readFile({ path: 'ten.txt' }, c)
+  await wf({ path: 'ten.txt', content: 'z' }, c)
 })
