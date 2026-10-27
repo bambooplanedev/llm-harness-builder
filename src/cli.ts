@@ -5,9 +5,12 @@ import { readFile, cp, mkdir } from 'node:fs/promises'
 import { existsSync, readFileSync, writeFileSync, renameSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline/promises'
+import { homedir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { runAgent, mayAsk, type RunOpts } from './core/run.js'
+import { mayAsk, type RunOpts } from './core/run.js'
+import { withNotes, type NotesStore } from './core/notes-run.js'
+import { notesKey, notesPath, readNotes, selectNotes } from './core/notes.js'
 import { validateConfig, sendsAnswerSchema, KEY_ENV, FLAG_WORDS, keyNameMessage, keyErrors, keyProblem, keyNote, apiKey, isHttpUrl, isLoopbackUrl, type HarnessConfig, type BackendKind } from './core/config.js'
 import { validateWorkdir } from './core/tools/sandbox.js'
 import type { Backend, Delta, NormalizedResponse } from './core/backends/types.js'
@@ -108,12 +111,14 @@ function describe(e: HarnessEvent, streamed = false, cost?: number): string {
     case 'tool_result': return `[t${e.turn}] tool_result ${showable(e.name)}${e.error ? ' (error)' : ''}${e.truncated ? ' (truncated)' : ''}: ${excerpt(e.output)}`
     case 'knobs_off': return e.off.map(o => `${o.knob} ${showable(JSON.stringify(o.value))} not sent: ${showable(o.reason)}`).join('\n')
     case 'proxy_note': return e.kind === 'compaction' ? `[t${e.turn}] compaction` : `[t${e.turn}] auxiliary ${showable(e.model ?? '')} ${e.error !== undefined ? `failed: ${showable(e.error)}` : `${e.latencyMs}ms${e.usage ? ` (${e.usage.promptTokens}+${e.usage.completionTokens} tok)` : ''}`}`
+    case 'notes_loaded': return `notes: ${e.ids.length} loaded (${e.chars} chars)`
+    case 'note_written': return e.error !== undefined ? `note not written: ${showable(e.error)}` : e.notes.length ? e.notes.map(n => `note: ${showable(n.text)}`).join('\n') : 'note: nothing new'
     case 'error': return `error: ${showable(e.message)}${e.body ? `\n${showableText(e.body)}` : ''}`
     case 'done': return `done: ${e.reason} after ${e.turns} turns, ${e.toolCallCount} tool calls${cost === undefined ? '' : ` · $${Number(cost.toPrecision(4))} total`}${quitWithoutWork(e) ? '  ! final after 0 tool calls' : ''}${e.text ? `\n${showableText(e.text)}` : ''}`
   }
 }
 
-type ExecOpts = { yes: boolean; json: boolean; quiet?: boolean; signal?: AbortSignal; onEvent?: (e: HarnessEvent) => void; bench?: Meta['meta']['bench']; answerSchema?: Record<string, unknown> }
+type ExecOpts = { yes: boolean; json: boolean; quiet?: boolean; signal?: AbortSignal; onEvent?: (e: HarnessEvent) => void; bench?: Meta['meta']['bench']; answerSchema?: Record<string, unknown>; notes?: NotesStore }
 
 /** Runs one agent loop and keeps its trace in ./runs/<id>.jsonl, the file format serve reads. Written as .part and renamed when the loop ends, so a live or killed run is never listed. */
 async function execRun(config: HarnessConfig, task: string, workdir: string, o: ExecOpts): Promise<{ id: string; last: HarnessEvent }> {
@@ -152,9 +157,11 @@ async function execRun(config: HarnessConfig, task: string, workdir: string, o: 
   }
   let last: HarnessEvent | undefined, cost: number | undefined
   try {
-    for await (const e of runAgent({ config, task, workdir, answerSchema: o.answerSchema }, opts)) {
+    if (o.notes && config.notes?.enabled && !o.quiet)
+      console.error(`notes: ${selectNotes(await readNotes(o.notes.file), config.notes.maxTokens).length} loaded from ${shortHome(o.notes.file)}`)
+    for await (const e of withNotes({ config, task, workdir, answerSchema: o.answerSchema }, opts, o.notes, trace.id)) {
       last = e
-      if (e.type === 'llm_response' && e.costUsd !== undefined) cost = (cost ?? 0) + e.costUsd
+      if ((e.type === 'llm_response' || e.type === 'note_written') && e.costUsd !== undefined) cost = (cost ?? 0) + e.costUsd
       await trace.append(e)
       if (o.json) process.stdout.write(JSON.stringify(e) + '\n')
       if (streamed) process.stderr.write('\n')
@@ -170,6 +177,9 @@ async function execRun(config: HarnessConfig, task: string, workdir: string, o: 
   if (!o.quiet) console.error(`trace ${trace.file}`)
   return { id: trace.id, last: last! }
 }
+
+/** A path under the home dir as ~/…, for the terminal. */
+const shortHome = (p: string): string => { const h = homedir(); return p.startsWith(h + path.sep) ? '~' + p.slice(h.length) : p }
 
 const NO_TTY = 'stdin is not a terminal, so nothing can answer an approval prompt: pass --yes to approve every command, or run in a terminal'
 
@@ -197,7 +207,8 @@ async function cmdRun(argv: string[]) {
   if (note) console.error(note)
   const key = keyNote(config.backend, process.env)
   if (key) console.error(key)
-  const { last } = await execRun(config, taskParts.join(' '), workdir, { yes: values.yes, json: values.json, answerSchema })
+  const notes = { file: notesPath(await notesKey(workdir)), write: true }
+  const { last } = await execRun(config, taskParts.join(' '), workdir, { yes: values.yes, json: values.json, answerSchema, notes })
   const final = last.type === 'done' && last.reason === 'final' ? last : undefined
   let ok = final !== undefined
   // The schema is the server's to enforce, and a server may ignore it; then the same JSON comes back inside a fence. Whether it fits the schema is the caller's to check.
@@ -262,7 +273,7 @@ async function cmdDemo(argv: string[]) {
 const INT = /^[1-9]\d*$/
 
 /** One bench run: fresh task workdir → execRun (timed) → the task's check. Never throws; an exception becomes a FAIL row with reason 'error'. */
-async function benchOnce(config: HarnessConfig, round: number, timeoutS: number, out: string, task: Task, size?: number): Promise<BenchRun> {
+async function benchOnce(config: HarnessConfig, round: number, timeoutS: number, out: string, task: Task, taskName: string, size?: number): Promise<BenchRun> {
   // An exception that escapes execRun is text nothing has cleaned yet, and it goes to the bench JSON and the terminal.
   const redact = redactor(apiKey(config.backend, process.env), config.backend.apiKeyEnv ?? '')
   let workdir = '', parseErrors = 0, toolChars = 0, costUsd: number | undefined, peakTokens: number | undefined, toolErrors = 0, guardBlocks = 0, editMiss = 0, lastError: string | undefined, t0 = Date.now(), run: BenchRun
@@ -273,6 +284,8 @@ async function benchOnce(config: HarnessConfig, round: number, timeoutS: number,
     t0 = Date.now()
     const { id, last } = await execRun(config, task.input ? `${task.prompt}\n\n${task.input(size)}` : task.prompt, workdir, {
       yes: true, json: false, quiet: true, answerSchema: task.answerSchema?.(size), signal: AbortSignal.timeout(timeoutS * 1000), bench: { file: path.basename(out), round },
+      // Read, never written: a note from run 1 would make run 2 depend on it, and the bench's runs must stay independent.
+      notes: { file: notesPath(`task-${taskName}`), write: false },
       onEvent: e => {
         if (e.type === 'parse_error') parseErrors++
         if (e.type === 'llm_response' && e.costUsd !== undefined) costUsd = (costUsd ?? 0) + e.costUsd
@@ -358,12 +371,17 @@ async function cmdBench(argv: string[]) {
   try { save() } catch (e) { die(`cannot write ${out}:\n  ${(e as Error).message}`) }
   console.error(`bench: ${files.length} harnesses × ${n} runs, timeout ${timeoutS}s per run, writing ${out}`)
   files.forEach((f, i) => console.error(`  ${harnesses[i].name.padEnd(13)} ${f}`))
+  // bench never writes notes, and nothing else writes a task's file: an empty one means this bench measures notes off.
+  for (const h of harnesses) if (h.config.notes?.enabled) {
+    const file = notesPath(`task-${values.task}`), n = (await readNotes(file)).length
+    console.error(`  ${h.name}: notes on, ${n ? `${n} in` : 'none in'} ${shortHome(file)}${n ? '' : ' — this bench runs as with notes off'}`)
+  }
   // A failed write still prints the table: the terminal then holds what the JSON could not.
   process.once('SIGINT', () => { result.stopped = true; try { save() } catch (e) { console.error(`cannot write ${out}: ${(e as Error).message}`) } finish(130) })
   for (let round = 1; round <= n; round++) {
     console.error(`--- round ${round}/${n}`)
     for (const h of harnesses) {
-      h.runs.push(await benchOnce(h.config, round, timeoutS, out, task, size))
+      h.runs.push(await benchOnce(h.config, round, timeoutS, out, task, values.task, size))
       rollup(h)
       save()
     }

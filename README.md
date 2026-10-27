@@ -527,11 +527,19 @@ silently off.
 | `loop.freshContext`, `repeatTemperature`, `repeatThinkTokens` | ways out of a loop — see [the findings](docs/findings.md#three-ways-out-of-a-loop) |
 | `loop.untilBash` | a final answer ends the run only once this command exits 0 |
 | `mcpServers` | tools from MCP servers — see [MCP](#mcp) |
+| `notes.enabled`, `notes.maxTokens` | notes from earlier runs on the same folder, up to this many tokens, sent after the task; written after each run by a separate call; `bench` reads them and never writes |
 
 **Context.** `context.maxToolOutputChars` and `context.budgetTokens` are optional, and so is
 `context`. Absent, the harness does not limit that thing: tool output is not truncated, and no
 budget stubs old results (`budgetTokens: 0` still means no budget, so older files keep working).
 Present, they must be a positive integer and a non-negative integer.
+
+**Notes.** A harness with `notes: { "enabled": true, "maxTokens": 400 }` keeps notes per folder in
+`~/.local/state/llm-harness-builder/notes/<key>.jsonl` (`$XDG_STATE_HOME` if set, `LHB_NOTES_DIR`
+to choose) — outside the project, so its file tools cannot write a note and nothing gets committed;
+a notes dir inside the workdir is refused. `run` prints how many were sent and from which file;
+delete a line, or the file, to drop a note. `bench` only reads `task-<name>.jsonl` there and says so
+when it is empty. See the [honest notes](docs/honest-notes.md) for what a note can get wrong.
 
 **Thinking.** `backend.think` sets `chat_template_kwargs.enable_thinking` on an OpenAI-compatible
 server (llama-server reads it) and `think` on Ollama. Absent, nothing is sent and the model's own

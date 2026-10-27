@@ -427,3 +427,14 @@ test('tools.bashTimeoutS has a maximum: a larger delay would make setTimeout fir
   c.tools.bashTimeoutS = 2147484
   expect(validateConfig(c)).toContain('tools.bashTimeoutS must be at most 2147483')
 })
+
+test('accepts a notes section', () => {
+  expect(validateConfig({ ...harness(), notes: { enabled: true, maxTokens: 400 } })).toEqual([])
+})
+
+test('rejects a bad notes section', () => {
+  expect(validateConfig({ ...harness(), notes: { enabled: 'yes', maxTokens: 0 } })).toEqual([
+    'notes.enabled must be boolean', 'notes.maxTokens must be a positive integer'])
+  expect(validateConfig({ ...harness(), notes: { enabled: true, maxTokens: 1, file: 'x' } })).toContain('notes.file is not a known key')
+  expect(validateConfig({ ...harness(), notes: 1 })).toContain('notes must be an object')
+})

@@ -5,6 +5,7 @@ import { runAgent, mayAsk } from '../src/core/run.js'
 import type { HarnessConfig, RunParams } from '../src/core/config.js'
 import type { HarnessEvent } from '../src/core/events.js'
 import { BackendError } from '../src/core/backends/types.js'
+import { notesBlock } from '../src/core/notes.js'
 import { fakeBackend, harness, tmp, type FakeResponse } from './helpers.js'
 
 // The truncation assertions below depend on the 50-char cap; everything else is the shared default.
@@ -995,4 +996,32 @@ test('bash timeout knob: the description the model reads names the real limit, n
   const pr = Fake([{ content: '{"calls":[],"final":"done"}' }])
   await collect({ config: { ...cfg, toolCalls: { mode: 'prompted', enforceSchema: true, promptedTemplate: '{{tools}}', parseErrorHint: 'H' } }, task: 'do', workdir: await wd() }, { backend: pr })
   expect(pr.requests[0].messages[0].content).toMatch(/ 5s timeout/)
+})
+
+const nt = (id: string, text: string) => ({ id, ts: 1, author: 'model' as const, text })
+
+test('notes: the block goes after the task, and notes_loaded says which, before the first request', async () => {
+  const be = Fake([{ content: 'done' }])
+  const notes = [nt('a', 'one'), nt('b', 'two')]
+  const ev = await collect({ config: base(), task: 'do', workdir: await wd(), notes }, { backend: be })
+  expect(be.requests[0].messages[1].content).toBe('do\n\n' + notesBlock(notes))
+  const i = ev.findIndex(e => e.type === 'notes_loaded')
+  expect(ev[i]).toMatchObject({ ids: ['a', 'b'], chars: notesBlock(notes).length })
+  expect(i).toBeLessThan(ev.findIndex(e => e.type === 'llm_request'))
+})
+
+test('notes: none or empty leaves the task as it is', async () => {
+  for (const notes of [undefined, []]) {
+    const be = Fake([{ content: 'done' }])
+    const ev = await collect({ config: base(), task: 'do', workdir: await wd(), notes }, { backend: be })
+    expect(be.requests[0].messages[1].content).toBe('do')
+    expect(types(ev)).not.toContain('notes_loaded')
+  }
+})
+
+test('notes: a freshContext reset sends the task with its notes again', async () => {
+  const be = Fake([readA, readA, readA, readA, readA, { content: 'never reached' }])
+  const notes = [nt('a', 'one')]
+  await collect({ config: base({ loop: { maxTurns: 10, maxRepeats: 1, freshContext: 1 } }), task: 'do', workdir: await wd(), notes }, { backend: be })
+  expect(be.requests[2].messages[1].content.startsWith('do\n\n' + notesBlock(notes) + '\n\nNote: an earlier attempt')).toBe(true)
 })

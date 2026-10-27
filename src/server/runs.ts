@@ -2,7 +2,8 @@ import { appendFile, readFile, readdir, writeFile, mkdir, realpath, open, rename
 import { renameSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
-import { runAgent } from '../core/run.js'
+import { withNotes } from '../core/notes-run.js'
+import { notesKey, notesPath } from '../core/notes.js'
 import { apiKey, type RunParams } from '../core/config.js'
 import { redactor } from '../core/redact.js'
 import type { HarnessEvent, ToolCall } from '../core/events.js'
@@ -134,7 +135,8 @@ export class RunStore {
       let seq = 0
       try {
         const onDelta = (d: Delta) => { for (const fn of a.listeners) fn({ type: 'delta', ...d }) }
-        for await (const e of runAgent(params, { signal: a.abort.signal, approve, backend, onDelta })) {
+        const notes = { file: notesPath(await notesKey(workdir)), write: true }
+        for await (const e of withNotes(params, { signal: a.abort.signal, approve, backend, onDelta }, notes, id)) {
           seq = e.seq + 1
           await trace.append(e)
           for (const fn of a.listeners) fn(e)

@@ -21,6 +21,10 @@ export type HarnessEvent = Base & (
       offered: number; tools: string[]; descriptionChars: number; schemaChars: number }
   | { type: 'knobs_off'; off: KnobOff[] }
   | { type: 'error'; message: string; body?: string }
+  /** Notes sent after the task (notes.ts): which ones, and the length of their block. */
+  | { type: 'notes_loaded'; ids: string[]; chars: number }
+  /** The call after the run that writes notes (notes-run.ts): what it added, or why nothing. Not a turn. */
+  | { type: 'note_written'; notes: { id: string; text: string }[]; usage?: Usage; costUsd?: number; error?: string }
   /** A proxy run only: a side call of the agent (a title, a summary) recorded beside the turn, or a compaction turn. */
   | { type: 'proxy_note'; kind: 'auxiliary' | 'compaction'; model?: string; usage?: Usage; latencyMs?: number; error?: string }
   | { type: 'done'; reason: DoneReason; text?: string; turns: number; toolCallCount: number }

@@ -1,4 +1,5 @@
 import { isShowable } from './events.js'
+import type { Note } from './notes.js'
 
 export type ToolName = 'list_dir' | 'read_file' | 'write_file' | 'edit_file' | 'bash'
 export const TOOL_NAMES: ToolName[] = ['list_dir', 'read_file', 'write_file', 'edit_file', 'bash']
@@ -117,10 +118,13 @@ export type HarnessConfig = {
   context?: { maxToolOutputChars?: number; budgetTokens?: number }
   loop: { maxTurns: number; maxRepeats?: number; repeatTemperature?: number; repeatThinkTokens?: number; freshContext?: number; untilBash?: string }
   mcpServers?: Record<string, McpServerConfig>
+  /** Notes from earlier runs; see src/core/notes.ts. Absent = off. No path or command in it, on purpose. */
+  notes?: { enabled: boolean; maxTokens: number }
 }
 
-/** `answerSchema`: the JSON form of the final answer, when the task has one. It is enforced only by a harness with no tools at all and `toolCalls.enforceSchema` on. */
-export type RunParams = { config: HarnessConfig; task: string; workdir: string; answerSchema?: Record<string, unknown> }
+/** `answerSchema`: the JSON form of the final answer, when the task has one. It is enforced only by a harness with no tools at all and `toolCalls.enforceSchema` on.
+ *  `notes`: already selected (notes.ts selectNotes), sent after the task. */
+export type RunParams = { config: HarnessConfig; task: string; workdir: string; answerSchema?: Record<string, unknown>; notes?: Note[] }
 
 /** Whether a run of this harness sends `answerSchema` at all — what `run --answer-schema` asks before any model time. The run itself looks at the tools it ended up with. */
 export const sendsAnswerSchema = (c: HarnessConfig): boolean =>
@@ -128,12 +132,13 @@ export const sendsAnswerSchema = (c: HarnessConfig): boolean =>
 
 // A misspelt key would be silently off, and every optional knob is off when absent. '' is the top level.
 const KEYS: Record<string, string[]> = {
-  '': ['name', 'description', 'backend', 'systemPrompt', 'tools', 'toolCalls', 'context', 'loop', 'mcpServers'],
+  '': ['name', 'description', 'backend', 'systemPrompt', 'tools', 'toolCalls', 'context', 'loop', 'mcpServers', 'notes'],
   backend: ['kind', 'baseUrl', 'model', 'numCtx', 'maxTokens', 'think', 'temperature', 'apiKeyEnv', 'pricePerMTok'],
   tools: ['enabled', 'approveBash', 'requireReadBeforeEdit', 'explainEditMiss', 'editMissEscalation', 'bashEnv', 'readMaxBytes', 'bashMaxBytes', 'bashTimeoutS'],
   toolCalls: ['mode', 'format', 'enforceSchema', 'promptedTemplate', 'parseErrorHint'],
   context: ['maxToolOutputChars', 'budgetTokens'],
   loop: ['maxTurns', 'maxRepeats', 'repeatTemperature', 'repeatThinkTokens', 'freshContext', 'untilBash'],
+  notes: ['enabled', 'maxTokens'],
 }
 const MCP_SERVER_KEYS = ['command', 'args', 'tools']
 const PRICE_KEYS = ['input', 'output', 'cacheRead', 'cacheWrite']
@@ -205,6 +210,12 @@ export function validateConfig(c: unknown): string[] {
   else if (cx) {
     if (cx.maxToolOutputChars !== undefined && !(Number.isInteger(cx.maxToolOutputChars) && cx.maxToolOutputChars > 0)) e.push('context.maxToolOutputChars must be a positive integer')
     if (cx.budgetTokens !== undefined && !(Number.isInteger(cx.budgetTokens) && cx.budgetTokens >= 0)) e.push('context.budgetTokens must be a non-negative integer')
+  }
+  const n = c.notes
+  if (n !== undefined && (!isObj(n) || Array.isArray(n))) e.push('notes must be an object')
+  else if (n) {
+    if (typeof n.enabled !== 'boolean') e.push('notes.enabled must be boolean')
+    if (!(Number.isInteger(n.maxTokens) && n.maxTokens > 0)) e.push('notes.maxTokens must be a positive integer')
   }
   if (!isObj(c.loop) || !(Number.isInteger(c.loop.maxTurns) && c.loop.maxTurns > 0)) e.push('loop.maxTurns must be a positive integer')
   else {
