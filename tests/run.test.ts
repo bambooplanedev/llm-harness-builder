@@ -1,10 +1,10 @@
-import { test, expect } from 'vitest'
+import { test, expect, vi } from 'vitest'
 import { writeFile, access } from 'node:fs/promises'
 import { join } from 'node:path'
 import { runAgent, mayAsk } from '../src/core/run.js'
 import type { HarnessConfig, RunParams } from '../src/core/config.js'
 import type { HarnessEvent } from '../src/core/events.js'
-import { BackendError } from '../src/core/backends/types.js'
+import { BackendError, sendRetrying } from '../src/core/backends/types.js'
 import { notesBlock } from '../src/core/notes.js'
 import { fakeBackend, harness, tmp, type FakeResponse } from './helpers.js'
 
@@ -1093,4 +1093,17 @@ test('retryAfter is the wait when no override is given', async () => {
   const be = scripted([r429({ retryAfter: 0.01 }), { content: 'fin' }])
   const ev = await collect({ config: base(), task: 'do', workdir: await wd() }, { backend: be as any })
   expect(last(ev)).toMatchObject({ reason: 'final', text: 'fin' })
+})
+
+test('a Retry-After over 300 s waits 300 s', async () => {
+  vi.useFakeTimers()
+  try {
+    const be = scripted([r429({ retryAfter: 10_000 }), { content: 'fin' }])
+    const p = sendRetrying(be as any, {})
+    await vi.advanceTimersByTimeAsync(299_999)
+    expect(be.calls).toBe(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(be.calls).toBe(2)
+    expect((await p).content).toBe('fin')
+  } finally { vi.useRealTimers() }
 })
