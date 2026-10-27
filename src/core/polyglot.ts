@@ -136,12 +136,12 @@ export function polyglotTasks(p: Polyglot, size: number, timeoutMs = 60_000): Ta
   }))
 }
 
-/** What ties a paragraph to these exercises, for bindingTokens: each name, its recorded test names whole (the prompt
- *  tokenizer would drop them), its files and prompt. A name the set no longer has is still a word; it has nothing else. */
-export function polyglotBinding(p: Polyglot, names: string[]): { names: string[]; paths: string[]; prompts: string[] } {
+/** What ties a paragraph to these exercises, for bindingTokens: each name and its recorded test names as words kept at
+ *  any length (the prompt tokenizer would drop them), its files and prompt. A name the set no longer has is still a word. */
+export function polyglotBinding(p: Polyglot, names: string[]): { names: string[]; words: string[]; paths: string[]; prompts: string[] } {
   const known = names.flatMap(n => p.exercises.filter(e => e.name === n))
   return {
-    names: [...names, ...known.flatMap(e => e.tests)],
+    names: [], words: [...names, ...known.flatMap(e => e.tests)],
     paths: [...known.flatMap(e => [`${e.name}/${e.name}.js`, `${e.name}/${e.name}.test.js`, `${e.name}/INSTRUCTIONS.md`]), ...(known.length ? ['expect.js'] : [])],
     prompts: known.map(e => promptOf(e.name)),
   }

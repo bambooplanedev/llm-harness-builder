@@ -2281,6 +2281,20 @@ test('evolve: a moderated 403 on the proposer stays a die, not a stop', async ()
   expect(types(cwd)).toEqual(['start', 'current'])
 }, 120_000)
 
+test('evolve: short repo task names do not bind the words of an accepted paragraph; --report prints it', async () => {
+  // ALWAYS holds "make" and "you": as task names under 6 chars they are no binding words in a repo.
+  const repo = await tasksRepo([['make', 'train'], ['you', 'gate'], ['zq', 'test']].map(([name, set]) => ({ name, prompt: 'make the file', check: 'test -f done.txt', set })))
+  const env = await tasksEnv(evFake())
+  const cwd = await tmp('lhb-cwd-')
+  const h = evHarness(cwd)
+  const r = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
+  expect(r.status, r.stderr).toBe(0)
+  expect(journal(cwd).find(l => l.type === 'candidate')).toMatchObject({ accepted: true })
+  const rep = cli(['evolve', h, '--tasks', repo, '--report'], env, cwd)
+  expect(rep.status, rep.stderr).toBe(0)
+  expect(rep.stdout).toBe(r.stdout)
+}, 120_000)
+
 // --- evolve --task polyglot: the Exercism set as practice ground. One real evolve (6 checks); the rest stops before any run.
 const PROOF_PARA = 'ALWAYS finish the solution before you answer.'
 const polyFake = () => [
@@ -2349,7 +2363,8 @@ test('evolve --task polyglot: a proposer on another host is asked; --yes accepts
   const args = [...polyArgs(h), '--proposer', p, '--base-url', 'http://127.0.0.1:1']
   const no = cli(args, env, cwd)
   expect(no.status).toBe(2)
-  for (const s of ['proposer: 127.0.0.1:2', 'fields: systemPrompt', 'pass --yes']) expect(no.stderr).toContain(s)
+  for (const s of ['proposer: 127.0.0.1:2', 'fields: systemPrompt', 'how the runs failed', 'pass --yes to send these to this proposer']) expect(no.stderr).toContain(s)
+  expect(no.stderr).not.toContain('accept these commands')
   expect(existsSync(join(cwd, 'harnesses', 'h.evolve.jsonl'))).toBe(false)
   const yes = cli([...args, '--yes'], env, cwd)
   expect(yes.stderr).toContain('proposer: 127.0.0.1:2')

@@ -399,7 +399,7 @@ function dropWork(w: { live: Map<string, Clone> }): void {
 /** Where evolve's tasks come from: everything the loop reads about them, and nothing it has to know about a repo.
  *  `moved`: why the journal's start line no longer fits these tasks, in the source's own words. */
 type EvolveSource = {
-  work: Work; id: string; names: string[]; paths: string[]; prompts: string[]; notesFile: string
+  work: Work; id: string; names: string[]; words?: string[]; paths: string[]; prompts: string[]; notesFile: string
   sets: Record<SetName, string[]>; describe: string; moved?: string; consent(yes: boolean, proposer: string): Promise<void>
 }
 type StartLine = Extract<JournalLine, { type: 'start' }>
@@ -441,11 +441,13 @@ function polyglotSource(size: number, first: StartLine | undefined, report: bool
       const host = hostOf(proposer)
       // The harness's own server already gets everything the runs send; the proposer gets less.
       if (host === hostOf(harnessUrl)) return void console.error(`proposer: ${host}, the harness's own server`)
-      const text = ["mode: evolve on polyglot — the model's own prompts run unreviewed while Evolve measures them", `proposer: ${host}`, `fields: ${ALLOWED.join(', ')}`].join('\n')
+      const text = ["mode: evolve on polyglot — the model's own prompts run unreviewed while Evolve measures them", `proposer: ${host}`,
+        'it receives how the runs failed (fixed-word signatures) and the current values of these fields, and proposes an edit to one of them', `fields: ${ALLOWED.join(', ')}`].join('\n')
       const file = path.join(stateDir(), 'consent', 'task-polyglot.evolve.json'), hash = createHash('sha256').update(text).digest('hex')
       let has = false
       try { has = JSON.parse(readFileSync(file, 'utf8')).hash === hash } catch {}
-      await ask(text, has, yes, async () => { await mkdir(path.dirname(file), { recursive: true }); await writeFile(file, JSON.stringify({ hash }) + '\n') })
+      await ask(text, has, yes, async () => { await mkdir(path.dirname(file), { recursive: true }); await writeFile(file, JSON.stringify({ hash }) + '\n') },
+        { accept: 'send these to this proposer', question: 'Send them to this proposer?' })
     },
   }
 }
@@ -455,12 +457,12 @@ async function askConsent(repo: RepoTasks, yes: boolean, ev?: EvolveConsent): Pr
   await ask(consentText(repo, ev), await hasConsent(repo, ev), yes, () => saveConsent(repo, ev))
 }
 
-async function ask(text: string, has: boolean, yes: boolean, save: () => Promise<void>): Promise<void> {
+async function ask(text: string, has: boolean, yes: boolean, save: () => Promise<void>, q = { accept: 'accept these commands', question: 'Run these commands?' }): Promise<void> {
   if (has) return
   if (yes) { console.error(text); return save() }
-  if (!process.stdin.isTTY) die(`${text}\n\npass --yes to accept these commands, or run in a terminal`)
+  if (!process.stdin.isTTY) die(`${text}\n\npass --yes to ${q.accept}, or run in a terminal`)
   const rl = createInterface({ input: process.stdin, output: process.stderr })
-  const answer = await rl.question(`${text}\n\nRun these commands? [y/N] `)
+  const answer = await rl.question(`${text}\n\n${q.question} [y/N] `)
   rl.close()
   if (!/^y(es)?$/i.test(answer.trim())) die('not accepted; nothing ran')
   await save()
@@ -637,7 +639,7 @@ async function cmdEvolve(argv: string[]) {
   if (typeof mode === 'string') return die(mode)
   console.error(src.describe)
   console.error(mode.strict ? `strict: a candidate needs at least ${neededFlips()} tasks FAIL → PASS on train + gate (more if any go PASS → FAIL)` : referenceLabel(mode))
-  const binding = bindingTokens({ names: src.names, paths: src.paths, prompts: src.prompts })
+  const binding = bindingTokens({ names: src.names, words: src.words, paths: src.paths, prompts: src.prompts })
   const rebuilt = (): EvolveState => {
     const r = replay(lines, raw, { binding, sets })
     return 'error' in r ? die(start(r.error)) : r

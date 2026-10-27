@@ -143,12 +143,13 @@ export function applyEdit(cfg: object, e: Edit): object {
   return c
 }
 
-/** Words that would tie a paragraph to this repo's tasks rather than to how to work: names, files, identifiers.
- *  A name is kept at any length (`poker`); boundBy matches the short ones as whole words. */
-export function bindingTokens(t: { names: string[]; paths: string[]; prompts: string[] }): string[] {
+/** Words that would tie a paragraph to this repo's tasks rather than to how to work: names, files, identifiers, 6+ chars.
+ *  `words` are kept at any length (polyglot's exercise and test names: `poker`); boundBy matches the short ones as whole words.
+ *  A repo's short task names stay out: `test` or `fix` would refuse every paragraph, and old journals with it. */
+export function bindingTokens(t: { names: string[]; paths: string[]; prompts: string[]; words?: string[] }): string[] {
   const ids = t.prompts.flatMap(p => p.match(/[A-Za-z_][A-Za-z0-9_]*/g) ?? []).filter(w => /_|\d|[a-z][A-Z]/.test(w))
-  const rest = [...t.paths, ...t.paths.map(p => p.slice(p.lastIndexOf('/') + 1)), ...ids].map(w => w.toLowerCase()).filter(w => w.length >= 6)
-  return [...new Set([...t.names.map(n => n.toLowerCase()).filter(Boolean), ...rest])]
+  const rest = [...t.names, ...t.paths, ...t.paths.map(p => p.slice(p.lastIndexOf('/') + 1)), ...ids].map(w => w.toLowerCase()).filter(w => w.length >= 6)
+  return [...new Set([...(t.words ?? []).map(w => w.toLowerCase()).filter(Boolean), ...rest])]
 }
 
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')

@@ -494,6 +494,17 @@ describe('evolve on polyglot', () => {
     expect(bindingTokens(polyglotBinding(p, ['gone']))).toEqual(['gone'])
   })
 
+  it('a short repo task name binds nothing: an accepted paragraph using it still replays', () => {
+    const binding = bindingTokens({ names: ['test', 'fix'], paths: [], prompts: [] })
+    expect(binding).toEqual([])
+    const start = { v: 1, type: 'start', base: 'h', sha: 'abc', pin: 'a'.repeat(64), notes: 'b'.repeat(64), sets: { train: ['test'], gate: ['fix'], test: ['c'] }, strict: false, proposer: 'p' }
+    const cur = { v: 1, type: 'current', round: 1, runs: [run('test', false), run('fix', false)] }
+    const won = [run('test', true), run('fix', true)]
+    const a = { v: 1, type: 'candidate', round: 1, index: 1, input: '{}', edit: { field: 'systemPrompt', value: 'run the test first, then fix it' }, accepted: true, reason: 'accepted', numbers: { pass: 2, tokens: 200, tokensPerSuccess: 100, weight: 20 }, runs: won, version: 1 }
+    const r = replay([start, cur, a] as any, harness(), { binding, sets: start.sets })
+    expect('error' in r ? r.error : r.version).toBe(1)
+  })
+
   it('replay drops a refused value bound by a short name, by word boundary', () => {
     const start = { v: 1, type: 'start', base: 'h', sha: 'polyglot:x:3', pin: 'a'.repeat(64), notes: 'b'.repeat(64), sets, strict: false, proposer: 'p' }
     const cur = { v: 1, type: 'current', round: 1, runs: [run('a', false), run('b', false)] }
