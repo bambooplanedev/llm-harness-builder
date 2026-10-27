@@ -289,3 +289,18 @@ test('withNotes: a ..notes dir inside the workdir counts as inside', async () =>
   for await (const e of withNotes({ config: cfg, task: 'do', workdir: wd }, { backend }, { file: join(wd, '..notes', 'k.jsonl'), write: true }, 'r')) ev.push(e)
   expect((ev.at(-2) as any).error).toContain('LHB_NOTES_DIR outside the workdir')
 })
+
+test('withNotes: the writer carries backend.reasoningEffort, unless the run said the model does not take it', async () => {
+  const c = harness({ backend: { kind: 'openai', baseUrl: 'http://x/v1', model: 'm', temperature: 0, reasoningEffort: 'medium' }, notes: { enabled: true, maxTokens: 400 } })
+  const { backend } = await runN([{ content: 'done' }, writerReply([])], await store(), {}, c)
+  expect(backend.requests[1].reasoningEffort).toBe('medium')
+  // Keyless harness() never asks the server, so the off set comes from a knobs_off event the run emitted: feed one through a keyed run.
+  const keyedC = { ...c, backend: { ...c.backend, baseUrl: 'https://or.example/v1', apiKeyEnv: 'LHB_NOTES_TEST_API_KEY' } }
+  process.env.LHB_NOTES_TEST_API_KEY = 'sk-or-v1-' + 'f3'.repeat(16)
+  try {
+    const be = Object.assign(fakeBackend([{ content: 'done' }, writerReply([])]), { async serverInfo() { return { takes: { reasoningEffort: false as const }, takesFrom: 't' } } })
+    for await (const _ of withNotes({ config: keyedC, task: 'do', workdir: await tmp('nw-') }, { backend: be }, await store(), 'run2')) void _
+    expect(be.requests).toHaveLength(2)
+    expect(be.requests[1]).not.toHaveProperty('reasoningEffort')
+  } finally { delete process.env.LHB_NOTES_TEST_API_KEY }
+})

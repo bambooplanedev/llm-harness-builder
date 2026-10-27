@@ -104,13 +104,17 @@ export function keyNote(b: { apiKeyEnv?: unknown; baseUrl?: unknown }, env?: Rec
 /** Dollars per million tokens; cache prices default to input's. */
 export type Price = { input: number; output: number; cacheRead?: number; cacheWrite?: number }
 
+/** A hosted reasoning model's effort setting; OpenRouter and OpenAI define exactly these three. */
+export type ReasoningEffort = 'low' | 'medium' | 'high'
+export const REASONING_EFFORTS: ReasoningEffort[] = ['low', 'medium', 'high']
+
 export type McpServerConfig = { command: string; args?: string[]; tools?: string[] }
 
 export type HarnessConfig = {
   name: string
   /** One line on what the harness is for; a label, so a diff ignores it. */
   description?: string
-  backend: { kind: BackendKind; baseUrl: string; model: string; numCtx?: number; maxTokens?: number; think?: boolean; temperature: number; apiKeyEnv?: string; pricePerMTok?: Price }
+  backend: { kind: BackendKind; baseUrl: string; model: string; numCtx?: number; maxTokens?: number; think?: boolean; reasoningEffort?: ReasoningEffort; temperature: number; apiKeyEnv?: string; pricePerMTok?: Price }
   systemPrompt: string
   tools: { enabled: ToolName[]; approveBash: boolean; requireReadBeforeEdit?: boolean; explainEditMiss?: boolean; editMissEscalation?: number; bashEnv?: string[]; readMaxBytes?: number; bashMaxBytes?: number; bashTimeoutS?: number }
   toolCalls: { mode: 'native' | 'prompted'; format?: ToolCallFormat; enforceSchema: boolean; promptedTemplate: string; parseErrorHint: string }
@@ -133,7 +137,7 @@ export const sendsAnswerSchema = (c: HarnessConfig): boolean =>
 // A misspelt key would be silently off, and every optional knob is off when absent. '' is the top level.
 const KEYS: Record<string, string[]> = {
   '': ['name', 'description', 'backend', 'systemPrompt', 'tools', 'toolCalls', 'context', 'loop', 'mcpServers', 'notes'],
-  backend: ['kind', 'baseUrl', 'model', 'numCtx', 'maxTokens', 'think', 'temperature', 'apiKeyEnv', 'pricePerMTok'],
+  backend: ['kind', 'baseUrl', 'model', 'numCtx', 'maxTokens', 'think', 'reasoningEffort', 'temperature', 'apiKeyEnv', 'pricePerMTok'],
   tools: ['enabled', 'approveBash', 'requireReadBeforeEdit', 'explainEditMiss', 'editMissEscalation', 'bashEnv', 'readMaxBytes', 'bashMaxBytes', 'bashTimeoutS'],
   toolCalls: ['mode', 'format', 'enforceSchema', 'promptedTemplate', 'parseErrorHint'],
   context: ['maxToolOutputChars', 'budgetTokens'],
@@ -167,6 +171,10 @@ export function validateConfig(c: unknown): string[] {
     if (b.numCtx !== undefined && !(Number.isInteger(b.numCtx) && b.numCtx > 0)) e.push('backend.numCtx must be a positive integer')
     if (b.maxTokens !== undefined && !(Number.isInteger(b.maxTokens) && b.maxTokens > 0)) e.push('backend.maxTokens must be a positive integer')
     if (b.think !== undefined && typeof b.think !== 'boolean') e.push('backend.think must be true or false')
+    if (b.reasoningEffort !== undefined) {
+      if (!REASONING_EFFORTS.includes(b.reasoningEffort)) e.push('backend.reasoningEffort must be low|medium|high')
+      if (b.kind !== 'openai') e.push('backend.reasoningEffort goes only with kind openai')
+    }
     const pr = b.pricePerMTok
     if (pr !== undefined) {
       if (!isObj(pr) || Array.isArray(pr)) e.push('backend.pricePerMTok must be an object')

@@ -100,6 +100,7 @@ async function writeNotes(params: RunParams, opts: RunOpts, file: string, existi
     ...(off.has('temperature') ? {} : { temperature: b.temperature }),
     ...(off.has('maxTokens') ? {} : { maxTokens: b.maxTokens ?? 1024 }),
     ...(off.has('think') || b.think === undefined ? {} : { think: b.think }),
+    ...(off.has('reasoningEffort') || b.reasoningEffort === undefined ? {} : { reasoningEffort: b.reasoningEffort }),
     ...(b.numCtx === undefined ? {} : { numCtx: b.numCtx }),
   }
   let usage: Usage | undefined

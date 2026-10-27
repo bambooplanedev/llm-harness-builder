@@ -18,6 +18,7 @@ export function knobsOff(c: HarnessConfig, info: ServerInfo | undefined, answerS
   }
   if (takes.maxTokens === false && c.backend.maxTokens !== undefined) off.push({ knob: 'maxTokens', value: c.backend.maxTokens, reason: why('max_tokens') })
   if (takes.think === false && c.backend.think !== undefined) off.push({ knob: 'think', value: c.backend.think, reason: why('thinking switch') })
+  if (takes.reasoningEffort === false && c.backend.reasoningEffort !== undefined) off.push({ knob: 'reasoningEffort', value: c.backend.reasoningEffort, reason: why('reasoning effort') })
   // repeatThinkTokens is a thinking turn with its own max_tokens: without either it does nothing.
   const tt = c.loop.repeatThinkTokens
   if (tt !== undefined && (takes.think === false || takes.maxTokens === false))

@@ -2395,3 +2395,13 @@ test('evolve --task polyglot: a proposer on another host is asked; --yes accepts
   const later = cli(args, env, cwd)
   expect(later.stderr).not.toContain('pass --yes')
 }, 60_000)
+
+test('bench records backend.reasoningEffort in the JSON config', async () => {
+  const wd = await tmp('lhb-cli-')
+  const f = join(wd, 'eff.json'), fake = join(wd, 'fake.json'), out = join(wd, 'e.json')
+  const h = JSON.parse(readFileSync(harness('tuned'), 'utf8')); h.backend = { ...h.backend, kind: 'openai', reasoningEffort: 'high' }
+  await writeFile(f, JSON.stringify(h)); await writeFile(fake, JSON.stringify([{ content: '{"calls":[],"final":"x"}' }]))
+  const r = cli(['bench', '--n', '1', '--out', out, f], { LHB_FAKE_BACKEND: fake })
+  expect(r.status).toBe(0)
+  expect(JSON.parse(await readFile(out, 'utf8')).harnesses[0].config.backend.reasoningEffort).toBe('high')
+}, 60_000)

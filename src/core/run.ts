@@ -164,6 +164,7 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
         numCtx: config.backend.numCtx, maxTokens: takes.maxTokens === false ? undefined : think ? thinkTokens : maxTokens,
         // A thinking turn needs the template's switch on as well: with it off, the /think line would be overruled.
         think: config.backend.think === undefined || takes.think === false ? undefined : think || config.backend.think,
+        ...(config.backend.reasoningEffort === undefined || takes.reasoningEffort === false ? {} : { reasoningEffort: config.backend.reasoningEffort }),
         tools: prompted || !schemas.length ? undefined : schemas,
         // The schema is the form of the final answer, not of the turns before it, so it goes out only where no call can be made.
         // Such a run is one request: nothing in it can loop, run a script or write a file.

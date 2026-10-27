@@ -1107,3 +1107,19 @@ test('a Retry-After over 300 s waits 300 s', async () => {
     expect((await p).content).toBe('fin')
   } finally { vi.useRealTimers() }
 })
+
+test('backend.reasoningEffort goes on every request; off when the model does not take it; absent when the harness has none', () => withKey(async () => {
+  const eff = (over: Partial<HarnessConfig['backend']> = {}) => keyed({ backend: { ...keyed().backend, reasoningEffort: 'low', ...over } })
+  const be = Fake([{ toolCalls: [{ name: 'bash', args: { command: 'true' } }] }, { content: 'fin' }])
+  await collect({ config: eff({ reasoningEffort: 'low' }), task: 'do', workdir: await wd() }, { backend: Object.assign(be, { async serverInfo() { return {} } }), approve: async () => true })
+  expect(be.requests.map(r => r.reasoningEffort)).toEqual(['low', 'low'])
+
+  const off = Object.assign(Fake([{ content: 'fin' }]), { async serverInfo() { return { takes: { reasoningEffort: false as const }, takesFrom: 'test' } } })
+  const ev = await collect({ config: eff(), task: 'do', workdir: await wd() }, { backend: off })
+  expect(ev[0]).toMatchObject({ type: 'knobs_off', off: [{ knob: 'reasoningEffort', value: 'low' }] })
+  expect(off.requests[0]).not.toHaveProperty('reasoningEffort')
+
+  const none = Fake([{ content: 'fin' }])
+  await collect({ config: keyed(), task: 'do', workdir: await wd() }, { backend: none })
+  expect(none.requests[0]).not.toHaveProperty('reasoningEffort')
+}))

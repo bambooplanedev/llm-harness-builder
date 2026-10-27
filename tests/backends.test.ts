@@ -443,11 +443,11 @@ test('createBackend: kind anthropic never falls through to OpenAIBackend', () =>
 test('serverInfo with a key: what a model lacks in supported_parameters it does not take; no list, nothing known', async () => {
   const listed = { data: [
     { id: 'plain/model', supported_parameters: ['max_tokens', 'seed'] },
-    { id: 'one/schema', supported_parameters: ['temperature', 'max_tokens', 'tools', 'structured_outputs'] },
+    { id: 'one/schema', supported_parameters: ['temperature', 'max_tokens', 'tools', 'structured_outputs', 'reasoning'] },
     { id: 'no/list' },
   ] }
   const be = new OpenAIBackend('https://or.example/api/v1', recorder(() => jsonRes(listed)).f, KEY)
-  expect(await be.serverInfo('plain/model')).toEqual({ takes: { temperature: false, tools: false, responseSchema: false }, takesFrom: 'OpenRouter supported_parameters', router: false })
+  expect(await be.serverInfo('plain/model')).toEqual({ takes: { temperature: false, reasoningEffort: false, tools: false, responseSchema: false }, takesFrom: 'OpenRouter supported_parameters', router: false })
   expect(await be.serverInfo('one/schema')).toEqual({ takes: {}, takesFrom: 'OpenRouter supported_parameters', router: false })
   expect(await be.serverInfo('no/list')).toEqual({ router: false })
 })
@@ -488,4 +488,21 @@ test('a failed stream takes its status from a numeric error.code, never from tex
   const text = { error: { code: 'rate_limited', message: 'HTTP 429 slow down' }, choices: [{ index: 0, delta: {}, finish_reason: 'error' }] }
   await expect(openai([text]).send({})).rejects.toSatisfy((e: any) => e.status === undefined)
   await expect(openai([{ error: { code: 402, message: 'credits' } }]).send({})).rejects.toMatchObject({ status: 402 })
+})
+
+test('reasoningEffort: reasoning.effort on OpenRouter, reasoning_effort elsewhere, nothing without it', () => {
+  const req = { model: 'm', messages: [{ role: 'user' as const, content: 'hi' }], temperature: 0 }
+  const base = { model: 'm', messages: [{ role: 'user', content: 'hi' }], temperature: 0, stream: true, stream_options: { include_usage: true } }
+  const on = (url: string) => new OpenAIBackend(url).buildPayload({ ...req, reasoningEffort: 'high' })
+  expect(on('https://openrouter.ai/api/v1')).toEqual({ ...base, reasoning: { effort: 'high' } })
+  expect(on('https://api.openai.com/v1')).toEqual({ ...base, reasoning_effort: 'high' })
+  expect(on('http://localhost:8080/v1')).toEqual({ ...base, reasoning_effort: 'high' })
+  for (const url of ['https://openrouter.ai/api/v1', 'http://localhost:8080/v1']) expect(new OpenAIBackend(url).buildPayload(req)).toEqual(base)
+})
+
+test('serverInfo: an OpenRouter model without "reasoning" in supported_parameters takes no reasoning effort', async () => {
+  const listed = { data: [{ id: 'no/r', supported_parameters: ['temperature'] }, { id: 'has/r', supported_parameters: ['temperature', 'reasoning'] }] }
+  const be = new OpenAIBackend('https://or.example/api/v1', recorder(() => jsonRes(listed)).f, KEY)
+  expect((await be.serverInfo('no/r'))!.takes!.reasoningEffort).toBe(false)
+  expect(await be.serverInfo('has/r')).not.toHaveProperty('takes.reasoningEffort')
 })
