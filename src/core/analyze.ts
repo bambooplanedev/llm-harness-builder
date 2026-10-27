@@ -7,7 +7,8 @@ import { EDIT_MISS, GUARD_BLOCKED, EDIT_IDENTICAL } from './tools/errors.js'
  * was sent each turn, not what a stub removed. Pure and browser-safe — the CLI, the server and the
  * trace view call it alike. Knows nothing about any task.
  */
-export type EditKind = 'identical' | 'zero' | 'many' | 'notRead' | 'other'
+export const EDIT_KINDS = ['identical', 'zero', 'many', 'notRead', 'other'] as const
+export type EditKind = typeof EDIT_KINDS[number]
 export type PathEdits = { calls: number; failed: number; byKind: Partial<Record<EditKind, number>> }
 export type StubItem = { callId?: string; what: string }
 export type Stub = { turn: number; chars: number; status: 'matched' | 'unmatched'; items: StubItem[] }

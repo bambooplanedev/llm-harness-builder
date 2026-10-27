@@ -4,7 +4,7 @@
 import { createHash } from 'node:crypto'
 import type { RepoTask } from './repo-tasks.js'
 import { TOOL_NAMES, validateConfig } from './config.js'
-import { analyzeTrace } from './analyze.js'
+import { analyzeTrace, EDIT_KINDS } from './analyze.js'
 import { jsonCandidates } from './parse.js'
 import type { DoneReason, HarnessEvent } from './events.js'
 import type { ChatRequest } from './backends/types.js'
@@ -60,7 +60,7 @@ export function neededFlips(): number {
   return b
 }
 
-export type RunLite = { task: string; verdict: 'PASS' | 'FAIL'; tokens?: number; firstPromptTokens?: number; trace?: string; reason?: string; lastError?: string }
+export type RunLite = { task: string; verdict: 'PASS' | 'FAIL'; tokens?: number; firstPromptTokens?: number; trace?: string; reason?: string; lastError?: string; sig?: string }
 export type Numbers = { pass: number; tokensPerSuccess?: number; tokens?: number; weight?: number }
 
 export function numbersOf(runs: RunLite[]): Numbers {
@@ -186,6 +186,21 @@ const CHECK_CLASS: [string, string][] = [['check exited', 'check_failed'], ['che
 const REASONS: (DoneReason | 'error')[] = ['final', 'max_turns', 'parse_failed', 'aborted', 'backend_error', 'mcp_error', 'repeat_loop', 'proxy_stopped', 'error']
 const bump = (r: Record<string, number>, k: string) => { r[k] = (r[k] ?? 0) + 1 }
 
+/** How a FAIL run failed, in fixed words. `events` is [] when the trace could not be read. */
+export function signatureOf(run: RunLite, events: HarnessEvent[]): string {
+  const a = analyzeTrace(events)
+  // The reason comes from a journal on resume, which bash can rewrite: only a known one is passed on.
+  const reason = run.reason === undefined ? '-' : (REASONS as string[]).includes(run.reason) ? run.reason : 'other'
+  const check = run.lastError === undefined ? '-' : CHECK_CLASS.find(([p]) => run.lastError!.startsWith(p))?.[1] ?? 'other'
+  const kinds: Record<string, number> = {}
+  for (const pe of Object.values(a.edits)) for (const [k, n] of Object.entries(pe.byKind)) kinds[k] = (kinds[k] ?? 0) + n!
+  const top = Object.entries(kinds).sort((x, y) => y[1] - x[1])[0]?.[0] ?? '-'
+  const truncated = events.some(e => e.type === 'tool_result' && e.truncated) ? 'truncated' : '-'
+  return `${reason}|${check}|${top}|${truncated}`
+}
+/** Only what signatureOf can make; built from its vocabularies, so a journal's `sig` is never free text. */
+export const SIG = new RegExp(`^(?:${[...REASONS, 'other', '-'].join('|')})\\|(?:${[...CHECK_CLASS.map(c => c[1]), 'other', '-'].join('|')})\\|(?:${[...EDIT_KINDS, '-'].join('|')})\\|(?:truncated|-)$`)
+
 /** FAIL runs grouped by how they failed, biggest first. Only fixed words and counts: no path, name, argument or output
  *  of the repo reaches the proposer — a tool name or extension that is not one of ours is `unknown` / `other`. */
 export function failureGroups(items: { run: RunLite; events: HarnessEvent[] }[]): Group[] {
@@ -193,14 +208,7 @@ export function failureGroups(items: { run: RunLite; events: HarnessEvent[] }[])
   for (const { run, events } of items) {
     if (run.verdict !== 'FAIL') continue
     const a = analyzeTrace(events)
-    // The reason comes from a journal on resume, which bash can rewrite: only a known one is passed on.
-    const reason = run.reason === undefined ? '-' : (REASONS as string[]).includes(run.reason) ? run.reason : 'other'
-    const check = run.lastError === undefined ? '-' : CHECK_CLASS.find(([p]) => run.lastError!.startsWith(p))?.[1] ?? 'other'
-    const kinds: Record<string, number> = {}
-    for (const pe of Object.values(a.edits)) for (const [k, n] of Object.entries(pe.byKind)) kinds[k] = (kinds[k] ?? 0) + n!
-    const top = Object.entries(kinds).sort((x, y) => y[1] - x[1])[0]?.[0] ?? '-'
-    const truncated = events.some(e => e.type === 'tool_result' && e.truncated) ? 'truncated' : '-'
-    const signature = `${reason}|${check}|${top}|${truncated}`
+    const signature = signatureOf(run, events)
     const g = groups.get(signature) ?? { signature, count: 0, calls: {}, exts: {} }
     g.count++
     for (const e of events) if (e.type === 'tool_call') bump(g.calls, (TOOL_NAMES as string[]).includes(e.call.name) ? e.call.name : 'unknown')
@@ -255,9 +263,10 @@ export function parseProposal(content: string): Edit {
 }
 
 export type JournalLine =
-  | { v: 1; type: 'start'; base: string; sha: string; pin: string; sets: Record<SetName, string[]>; strict: boolean; proposer: string }
+  | { v: 1; type: 'start'; base: string; sha: string; pin: string; notes: string; sets: Record<SetName, string[]>; strict: boolean; proposer: string }
   | { v: 1; type: 'current'; round: number; runs: RunLite[] }
   | { v: 1; type: 'candidate'; round: number; index: number; input: string; edit?: Edit; accepted: boolean; reason: string; numbers?: Numbers; runs?: RunLite[]; version?: number }
+  | { v: 1; type: 'final'; version: number; orig?: RunLite[]; last?: RunLite[] }
 
 // A field's check: undefined = fine, else why not. The journal sits in the user's cwd, where the model's bash can
 // rewrite it, so every key is known and every value typed.
@@ -281,14 +290,16 @@ const shape = (req: Record<string, Check>, opt: Record<string, Check> = {}): Che
   for (const [k, c] of Object.entries(opt)) if (Object.hasOwn(x, k)) { const w = c(x[k]); if (w) return `${k}: ${w}` }
 }
 const RUN = shape({ task: name, verdict: x => x === 'PASS' || x === 'FAIL' ? undefined : 'not PASS or FAIL' },
-  { tokens: num, firstPromptTokens: num, trace: str, reason: str, lastError: str })
+  { tokens: num, firstPromptTokens: num, trace: str, reason: str, lastError: str, sig: x => typeof x === 'string' && SIG.test(x) ? undefined : 'not a signature' })
 const EDIT = shape({ field: str, value: x => typeof x === 'string' || (typeof x === 'number' && Number.isFinite(x)) ? undefined : 'not a string or a number' }, { why: str })
+const sha256: Check = x => typeof x === 'string' && /^[0-9a-f]{64}$/.test(x) ? undefined : 'not a sha256'
 const v1: Check = x => x === 1 ? undefined : 'not 1'
 const LINE: Record<string, Check> = {
-  start: shape({ v: v1, type: str, base: str, sha: str, pin: x => typeof x === 'string' && /^[0-9a-f]{64}$/.test(x) ? undefined : 'not a sha256', sets: shape({ train: arr(name), gate: arr(name), test: arr(name) }), strict: bool, proposer: str }),
+  start: shape({ v: v1, type: str, base: str, sha: str, pin: sha256, notes: sha256, sets: shape({ train: arr(name), gate: arr(name), test: arr(name) }), strict: bool, proposer: str }),
   current: shape({ v: v1, type: str, round: pos, runs: arr(RUN) }),
   candidate: shape({ v: v1, type: str, round: pos, index: pos, input: str, accepted: bool, reason: str },
     { edit: EDIT, numbers: shape({ pass: num }, { tokensPerSuccess: num, tokens: num, weight: num }), runs: arr(RUN), version: pos }),
+  final: shape({ v: v1, type: str, version: x => Number.isInteger(x) && (x as number) >= 0 ? undefined : 'not a non-negative integer' }, { orig: arr(RUN), last: arr(RUN) }),
 }
 
 /** The journal's lines, each checked. A last line without its newline is a torn write and dropped, even if it parses. */
@@ -309,15 +320,19 @@ export function parseJournal(text: string): { lines: JournalLine[] } | { error: 
 
 // The reasons the edit checks and `decide` write. Rejected edits reach the proposer, maybe in the cloud, and the
 // journal is bash-writable: anything else is passed on as `other`.
-const REASON_RE = [
-  /^(?:field not allowed|bad value|looks like a command or an address|tied to a task|already tried|changes more than one field|the server gave no usage|0 PASS|no more PASS than current|worse on gate|no edit in the reply)$/,
-  /^within noise \(p=\d\.\d\d\)$/, /^costs \d+% more tokens(?: per success)? than the original$/, /^first request \d+% heavier than the original$/, /^first request not measured on \d+ tasks$/, /^invalid config: /,
+const FIXED = /^(?:field not allowed|bad value|looks like a command or an address|tied to a task|already tried|changes more than one field|the server gave no usage|0 PASS|no more PASS than current|worse on gate|no edit in the reply)$/
+const PATTERNED: [RegExp, string][] = [
+  [/^within noise \(p=\d\.\d\d\)$/, 'within noise'], [/^costs \d+% more tokens(?: per success)? than the original$/, 'costs more tokens'],
+  [/^first request \d+% heavier than the original$/, 'first request heavier'], [/^first request not measured on \d+ tasks$/, 'first request not measured'], [/^invalid config: /, 'invalid config'],
 ]
+const REASON_RE = [FIXED, ...PATTERNED.map(p => p[0])]
+/** The fixed kind of a refusal reason (the numbers and config text dropped); `other` for what the harness does not write. */
+export const reasonKind = (reason: string): string => FIXED.test(reason) ? reason : PATTERNED.find(([re]) => re.test(reason))?.[1] ?? 'other'
 
 /** The current version rebuilt from the original and the journal, each accepted edit checked again as if new:
  *  a vN file or a hand-written line is never what the next round starts from. */
 export function replay(lines: JournalLine[], original: object, ctx: { binding: string[]; sets: Record<SetName, string[]> }):
-  { current: object; version: number; baseline?: RunLite[]; done: { round: number; index: number }[]; tried: Edit[]; rejected: Rejected[] } | { error: string } {
+  { current: object; version: number; baseline?: RunLite[]; done: { round: number; index: number }[]; tried: Edit[]; rejected: Rejected[]; final?: { orig: RunLite[]; last: RunLite[] } | 'none' } | { error: string } {
   const [first, ...rest] = lines
   if (first?.type !== 'start') return { error: 'cannot resume: the journal does not begin with a start line' }
   if (JSON.stringify(first.sets) !== JSON.stringify(ctx.sets)) return { error: 'cannot resume: the sets differ from the tasks file' }
@@ -327,6 +342,7 @@ export function replay(lines: JournalLine[], original: object, ctx: { binding: s
   if (rest.length && !(rest[0]!.type === 'current' && rest[0]!.round === 1)) return { error: 'cannot resume: the line after the start line is not round 1\'s current runs' }
   for (const l of rest) {
     if (l.type === 'start') return { error: 'cannot resume: a second start line' }
+    if (l.type === 'final') continue // not the last line: a later round makes it stale
     if (l.type === 'current') {
       done.push({ round: l.round, index: 0 })
       if (l.round === 1) baseline ??= l.runs
@@ -347,7 +363,17 @@ export function replay(lines: JournalLine[], original: object, ctx: { binding: s
     }
     if (l.edit) tried.push(l.edit)
   }
-  return { current, version, baseline, done, tried, rejected }
+  const end = lines[lines.length - 1]
+  let final: { orig: RunLite[]; last: RunLite[] } | 'none' | undefined
+  if (end?.type === 'final') {
+    const names = (rs: RunLite[]) => rs.map(r => r.task).sort().join('\n'), test = [...ctx.sets.test].sort().join('\n')
+    const ok = end.version === version && (version === 0
+      ? !end.orig && !end.last
+      : !!end.orig && !!end.last && names(end.orig) === test && names(end.last) === test)
+    if (!ok) return { error: 'cannot resume: the final line does not match the journal' }
+    final = version ? { orig: end.orig!, last: end.last! } : 'none'
+  }
+  return { current, version, baseline, done, tried, rejected, final }
 }
 
 const PRINCIPLE = 'how far this is a principle rather than a fit depends on how unlike the training tasks the test tasks are'

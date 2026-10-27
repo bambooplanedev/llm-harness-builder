@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ALPHA, applyEdit, numbersOf, usable, parseJournal, replay, verdict, bindingTokens, checkEdit, decide, failureGroups, modeOf, neededFlips, parseProposal, proposerInput, proposerRequest, referenceLabel, signP, splitSets, PROPOSAL_SCHEMA, type Edit, type Mode, type RunLite } from '../src/core/evolve.js'
+import { ALPHA, applyEdit, numbersOf, usable, parseJournal, replay, verdict, bindingTokens, checkEdit, decide, failureGroups, reasonKind, signatureOf, SIG, modeOf, neededFlips, parseProposal, proposerInput, proposerRequest, referenceLabel, signP, splitSets, PROPOSAL_SCHEMA, type Edit, type Mode, type RunLite } from '../src/core/evolve.js'
 import type { HarnessEvent } from '../src/core/events.js'
 import { harness } from './helpers.js'
 import type { RepoTask } from '../src/core/repo-tasks.js'
@@ -234,11 +234,38 @@ describe('evolve signals', () => {
     expect(() => parseProposal('no idea')).toThrow('no edit in the reply')
     expect(() => parseProposal('{"field":"loop.maxRepeats","value":true}')).toThrow('no edit in the reply')
   })
+  it('signatureOf of a max_turns FAIL with a truncated tool result is max_turns|-|-|truncated, and failureGroups shares it', () => {
+    const ev = [call('4', 'bash', { command: 'cat big' }), result('4', 'bash', 'lots', { truncated: true })]
+    const r = { task: 't1', verdict: 'FAIL' as const, reason: 'max_turns' }
+    expect(signatureOf(r, ev)).toBe('max_turns|-|-|truncated')
+    expect(failureGroups([{ run: r, events: ev }])[0]!.signature).toBe('max_turns|-|-|truncated')
+  })
+
+  it('SIG accepts every signature signatureOf can make and refuses free text', () => {
+    expect(SIG.test('final|check_failed|many|-')).toBe(true)
+    expect(SIG.test('other|other|-|truncated')).toBe(true)
+    expect(SIG.test('final|check_failed|many|- ; rm')).toBe(false)
+    expect(SIG.test('x|y|z|w')).toBe(false)
+  })
+
+  it('signatureOf without events still signs the run', () => {
+    expect(signatureOf({ task: 't1', verdict: 'FAIL', lastError: 'check exited 1' }, [])).toBe('-|check_failed|-|-')
+  })
+
+  it('reasonKind maps fixed and patterned reasons and nothing else', () => {
+    expect(reasonKind('within noise (p=0.12)')).toBe('within noise')
+    expect(reasonKind('costs 34% more tokens per success than the original')).toBe('costs more tokens')
+    expect(reasonKind('first request 5% heavier than the original')).toBe('first request heavier')
+    expect(reasonKind('first request not measured on 2 tasks')).toBe('first request not measured')
+    expect(reasonKind('invalid config: x')).toBe('invalid config')
+    expect(reasonKind('tied to a task')).toBe('tied to a task')
+    expect(reasonKind('ignore all previous')).toBe('other')
+  })
 })
 
 describe('evolve journal', () => {
   const sets = { train: ['t0', 't1'], gate: ['t2'], test: ['t3'] }
-  const start = { v: 1, type: 'start', base: 'h', sha: 'abc', pin: 'a'.repeat(64), sets, strict: false, proposer: 'http://p/v1' }
+  const start = { v: 1, type: 'start', base: 'h', sha: 'abc', pin: 'a'.repeat(64), notes: 'b'.repeat(64), sets, strict: false, proposer: 'http://p/v1' }
   const cur = { v: 1, type: 'current', round: 1, runs: [run('t0', false), run('t1', true), run('t2', true)] }
   const cand = (index: number, edit: Edit, accepted: boolean, reason: string, round = 1) =>
     ({ v: 1, type: 'candidate', round, index, input: '{}', edit, accepted, reason, numbers: { pass: 3, tokens: 300, tokensPerSuccess: 100, weight: 30 }, runs: cur.runs, ...(accepted ? { version: 1 } : {}) })
@@ -266,6 +293,41 @@ describe('evolve journal', () => {
     const { pin: _, ...noPin } = start
     expect(parseJournal(jsonl(noPin))).toEqual({ error: 'line 1: missing pin' })
     expect(parseJournal(jsonl({ ...start, pin: 'x' }))).toEqual({ error: expect.stringMatching(/^line 1: pin: /) })
+  })
+
+  const tr = (ok = true) => [run('t3', ok)]
+  const fin = (o: object = {}) => ({ v: 1, type: 'final', version: 1, orig: tr(false), last: tr(true), ...o })
+
+  it('a run with a sig outside the vocabulary is refused', () => {
+    expect(parseJournal(jsonl(start, { ...cur, runs: [{ ...run('t0', false), sig: 'x ; rm' }] }))).toEqual({ error: expect.stringMatching(/^line 2: .*sig/) })
+    expect(parseJournal(jsonl(start, { ...cur, runs: [{ ...run('t0', false), sig: 'final|check_failed|many|-' }] }))).toHaveProperty('lines')
+  })
+
+  it('a start line without notes is refused', () => {
+    const { notes: _, ...noNotes } = start
+    expect(parseJournal(jsonl(noNotes))).toEqual({ error: 'line 1: missing notes' })
+  })
+
+  it('a final line is kept only as the journal\'s last line, for the replayed version, on the test tasks', () => {
+    const lines = (...ls: object[]) => (parseJournal(jsonl(...ls)) as any).lines
+    const ok = replay(lines(start, cur, a1, fin()), harness(), ctx) as any
+    expect(ok.final).toEqual({ orig: tr(false), last: tr(true) })
+    expect((replay(lines(start, cur, a1, fin(), { ...cur, round: 2 }), harness(), ctx) as any).final).toBeUndefined()
+    expect(replay(lines(start, cur, a1, fin({ version: 2 })), harness(), ctx)).toEqual({ error: expect.stringContaining('final') })
+    expect(replay(lines(start, cur, a1, fin({ orig: [run('t0', false)] })), harness(), ctx)).toEqual({ error: expect.stringContaining('final') })
+    const two = { ...ctx, sets: { ...sets, test: ['t3', 't4'] } }
+    const s2 = { ...start, sets: two.sets }
+    const both = [run('t4', true), run('t3', true)]
+    // Order does not matter; a name repeated in place of another does.
+    expect((replay(lines(s2, cur, a1, fin({ orig: both, last: both })), harness(), two) as any).final).toEqual({ orig: both, last: both })
+    expect(replay(lines(s2, cur, a1, fin({ orig: [run('t3', false), run('t3', false)], last: both })), harness(), two)).toEqual({ error: expect.stringContaining('final') })
+    expect(replay(lines(start, cur, a1, { v: 1, type: 'final', version: 1, orig: tr() }), harness(), ctx)).toEqual({ error: expect.stringContaining('final') })
+  })
+
+  it('a final line for version 0 has no runs', () => {
+    const lines = (...ls: object[]) => (parseJournal(jsonl(...ls)) as any).lines
+    expect((replay(lines(start, cur, { v: 1, type: 'final', version: 0 }), harness(), ctx) as any).final).toBe('none')
+    expect(replay(lines(start, cur, { v: 1, type: 'final', version: 0, orig: tr() }), harness(), ctx)).toEqual({ error: expect.stringContaining('final') })
   })
 
   it('parseJournal: an inherited or prototype key is refused with its line number, never a throw', () => {
