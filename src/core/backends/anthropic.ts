@@ -1,4 +1,4 @@
-import { BackendError, jsonChunks, readJson, usageFrom, text, tokenCount, type Backend, type ChatRequest, type Delta, type FetchLike, type NormalizedResponse, type NormalizedToolCall, type ServerInfo } from './types.js'
+import { BackendError, httpFields, jsonChunks, readJson, usageFrom, text, tokenCount, type Backend, type ChatRequest, type Delta, type FetchLike, type NormalizedResponse, type NormalizedToolCall, type ServerInfo } from './types.js'
 import { parseCalls } from './openai.js'
 
 /** A count for the prompt sum: absent is 0, anything but a non-negative number makes the sum NaN, which usageFrom refuses. */
@@ -90,14 +90,14 @@ export class AnthropicBackend implements Backend {
   }
 
   /** A non-2xx in words a person can act on, with the API's own error type and message when the body is its error shape. */
-  private async failed(what: string, r: { status: number; text(): Promise<string> }): Promise<BackendError> {
+  private async failed(what: string, r: { status: number; text(): Promise<string>; headers?: { get(name: string): string | null } }): Promise<BackendError> {
     const body = await r.text().catch(() => '')
-    if (r.status === 401) return new BackendError(`${what}: 401 (the key in ${this.keyName} was refused)`, body)
-    if (r.status >= 300 && r.status < 400) return new BackendError(`${what}: ${r.status} (redirect not followed: with a key, requests go only to baseUrl)`, body)
+    if (r.status === 401) return new BackendError(`${what}: 401 (the key in ${this.keyName} was refused)`, body, httpFields(r, body))
+    if (r.status >= 300 && r.status < 400) return new BackendError(`${what}: ${r.status} (redirect not followed: with a key, requests go only to baseUrl)`, body, httpFields(r, body))
     let e: any
     try { e = JSON.parse(body) } catch { /* not the API's error shape */ }
     const type = e?.type === 'error' ? text(e.error?.type) : undefined, message = type && text(e.error?.message)
-    return new BackendError(`${what}: ${r.status}${type ? ` ${type}` : ''}${message ? `: ${message}` : ''}`, body)
+    return new BackendError(`${what}: ${r.status}${type ? ` ${type}` : ''}${message ? `: ${message}` : ''}`, body, httpFields(r, body))
   }
 
   /** One page of 1000: a longer list sets partialList, and preflight then gives no verdict. */

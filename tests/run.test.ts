@@ -1025,3 +1025,16 @@ test('notes: a freshContext reset sends the task with its notes again', async ()
   await collect({ config: base({ loop: { maxTurns: 10, maxRepeats: 1, freshContext: 1 } }), task: 'do', workdir: await wd(), notes }, { backend: be })
   expect(be.requests[2].messages[1].content.startsWith('do\n\n' + notesBlock(notes) + '\n\nNote: an earlier attempt')).toBe(true)
 })
+
+test('the error event carries the BackendError status and moderated flag, and only those', async () => {
+  const failing = (e: Error) => ({ ...Fake([]), send: async () => { throw e } })
+  const run = async (e: Error) => (await collect({ config: base(), task: 'do', workdir: await wd() }, { backend: failing(e) as any }))
+  const withStatus = await run(Object.assign(new BackendError('POST /x: nope'), { status: 402 }))
+  expect(withStatus.find(e => e.type === 'error')).toMatchObject({ status: 402 })
+  expect(last(withStatus).reason).toBe('backend_error')
+  const mod = await run(Object.assign(new BackendError('flagged'), { status: 403, moderated: true }))
+  expect(mod.find(e => e.type === 'error')).toMatchObject({ status: 403, moderated: true })
+  const textOnly = (await run(new BackendError('POST /x: 429 too many'))).find(e => e.type === 'error') as any
+  expect(textOnly).not.toHaveProperty('status')
+  expect(textOnly).not.toHaveProperty('moderated')
+})

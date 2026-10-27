@@ -37,7 +37,7 @@ export const text = (x: unknown): string | undefined => typeof x === 'string' &&
 /** A 2xx body or chunk carrying only `error` is a failure, not an empty reply. */
 export function errorOnly(what: string, c: any, raw: string): BackendError | undefined {
   if (c?.error !== undefined && c?.choices === undefined && c?.message === undefined)
-    return new BackendError(`${what}: ${typeof c.error === 'string' ? c.error : c.error?.message ?? 'stream error'}`, raw)
+    return new BackendError(`${what}: ${typeof c.error === 'string' ? c.error : c.error?.message ?? 'stream error'}`, raw, errorFields(c.error))
 }
 
 /** One streamed piece of the assistant turn; either field may be absent. */
@@ -112,7 +112,38 @@ export interface Backend {
 }
 
 export class BackendError extends Error {
-  constructor(message: string, public body?: string) { super(message) }
+  /** The HTTP status, or the numeric `error.code` of an in-stream / 2xx-body error; never read from message text. */
+  status?: number
+  /** The error carried `metadata.reasons` (OpenRouter moderation). */
+  moderated?: boolean
+  /** Seconds the server asked to wait (Retry-After). */
+  retryAfter?: number
+  constructor(message: string, public body?: string, extra: { status?: number; moderated?: boolean; retryAfter?: number } = {}) {
+    super(message)
+    if (extra.status !== undefined) this.status = extra.status
+    if (extra.moderated) this.moderated = true
+    if (extra.retryAfter !== undefined) this.retryAfter = extra.retryAfter
+  }
+}
+
+/** What an `error` object (a body's or a chunk's) says in structure: a numeric `code` is a status, `metadata.reasons` is moderation. */
+export function errorFields(e: any): { status?: number; moderated?: boolean } {
+  return {
+    ...Number.isInteger(e?.code) ? { status: e.code } : {},
+    ...e?.metadata?.reasons !== undefined ? { moderated: true } : {},
+  }
+}
+
+/** The structured part of a non-2xx: its HTTP status, the moderation flag from the JSON body, and Retry-After in seconds. */
+export function httpFields(r: { status: number; headers?: { get(name: string): string | null } }, body: string): { status: number; moderated?: boolean; retryAfter?: number } {
+  let parsed: any
+  try { parsed = JSON.parse(body) } catch { /* not JSON */ }
+  const ra = Number(r.headers?.get('retry-after'))
+  return {
+    status: r.status,
+    ...errorFields(parsed?.error).moderated ? { moderated: true } : {},
+    ...r.headers?.get('retry-after') && Number.isFinite(ra) && ra >= 0 ? { retryAfter: ra } : {},
+  }
 }
 
 /** Reads a JSON body; a non-JSON body becomes a BackendError carrying the raw text. */

@@ -1,4 +1,4 @@
-import { BackendError, defaultFetch, readJson, jsonChunks, errorOnly, text, toolsField, usageFrom, type Backend, type ChatRequest, type Delta, type FetchLike, type NormalizedResponse, type NormalizedToolCall, type ServerInfo } from './types.js'
+import { BackendError, errorFields, httpFields, defaultFetch, readJson, jsonChunks, errorOnly, text, toolsField, usageFrom, type Backend, type ChatRequest, type Delta, type FetchLike, type NormalizedResponse, type NormalizedToolCall, type ServerInfo } from './types.js'
 
 export type AccCall = { id?: string; name?: string; args: string }
 
@@ -20,7 +20,7 @@ const usageOf = (u: any) => u && typeof u === 'object' ? usageFrom(u.prompt_toke
 function streamFailed(c: any): BackendError {
   const e = c?.error
   const said = typeof e === 'string' && e ? e : typeof e?.message === 'string' && e.message ? e.message : 'stream ended with finish_reason "error"'
-  return new BackendError(`POST /chat/completions: ${said}`, JSON.stringify(c))
+  return new BackendError(`POST /chat/completions: ${said}`, JSON.stringify(c), errorFields(e))
 }
 
 /** Folds the chunks of one streamed reply into a NormalizedResponse; `raw` is the reply as one non-streamed message would carry it. The proxy reads replies with this too, so the two cannot read a stream differently. */
@@ -102,7 +102,7 @@ export class OpenAIBackend implements Backend {
   private modelList(): Promise<any[]> {
     return (this.models ??= (async () => {
       const r = await (this.key ? this.fetchFn(`${this.baseUrl}/models`, this.keyed()) : this.fetchFn(`${this.baseUrl}/models`))
-      if (!r.ok) throw new BackendError(this.failed('GET /models', r.status), await r.text())
+      if (!r.ok) { const b = await r.text(); throw new BackendError(this.failed('GET /models', r.status), b, httpFields(r, b)) }
       const j = (await readJson(r, 'GET /models')) as { data: any[]; total_count?: unknown }
       this.partialList = typeof j.total_count === 'number' && j.total_count > j.data.length
       return j.data
@@ -137,7 +137,7 @@ export class OpenAIBackend implements Backend {
     const root = this.baseUrl.replace(/\/v1$/, '')
     const post = async (path: string, body: unknown) => {
       const r = await this.fetchFn(`${root}${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal })
-      if (!r.ok) throw new BackendError(`POST ${path}: ${r.status}`, await r.text())
+      if (!r.ok) { const b = await r.text(); throw new BackendError(`POST ${path}: ${r.status}`, b, httpFields(r, b)) }
       return readJson(r, `POST ${path}`)
     }
     try {
@@ -193,7 +193,7 @@ export class OpenAIBackend implements Backend {
 
   async send(payload: unknown, signal?: AbortSignal, onDelta?: (d: Delta) => void): Promise<NormalizedResponse> {
     const r = await this.fetchFn(`${this.baseUrl}/chat/completions`, this.keyed({ method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload), signal }))
-    if (!r.ok) throw new BackendError(this.failed('POST /chat/completions', r.status), await r.text())
+    if (!r.ok) { const b = await r.text(); throw new BackendError(this.failed('POST /chat/completions', r.status), b, httpFields(r, b)) }
     // A recorded `stream: false` turn (a proxy trace) comes back as one JSON body; everything else is read as a stream.
     if (/^application\/json/i.test(r.headers?.get('content-type') ?? '')) return fromJson(await readJson(r, 'POST /chat/completions'))
     return collect(jsonChunks(r, 'POST /chat/completions', 'data:'), onDelta)
