@@ -206,3 +206,9 @@ test('readRanges with the guard: a part read does not allow write_file, but allo
   await readFile({ path: 'ten.txt' }, c)
   await wf({ path: 'ten.txt', content: 'z' }, c)
 })
+
+test('readRanges with the guard: a range that covers the whole file is a whole read', async () => {
+  const c = await ranged({ reads: new Set<string>(), partReads: new Set<string>() })
+  await readFile({ path: 'ten.txt', start: 1 }, c)
+  await wf({ path: 'ten.txt', content: 'z' }, c)
+})

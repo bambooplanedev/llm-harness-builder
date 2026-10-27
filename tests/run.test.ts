@@ -5,6 +5,8 @@ import { runAgent, mayAsk } from '../src/core/run.js'
 import type { HarnessConfig, RunParams } from '../src/core/config.js'
 import type { HarnessEvent } from '../src/core/events.js'
 import { BackendError, sendRetrying } from '../src/core/backends/types.js'
+import { READ_FILE_RANGES } from '../src/core/tools/index.js'
+import { renderTools } from '../src/core/prompts.js'
 import { notesBlock } from '../src/core/notes.js'
 import { fakeBackend, harness, tmp, type FakeResponse } from './helpers.js'
 
@@ -1136,13 +1138,14 @@ test('readRanges: off sends today\'s read_file schema natively and prompted; on 
   expect((await sent(rr())).tools).toEqual([OLD_READ])
   expect((await sent(rr(false))).tools).toEqual([OLD_READ])
   const on = (await sent(rr(true))).tools![0]
+  expect(on).toEqual(READ_FILE_RANGES)
   expect(on.description).toBe('Read a text file, or only lines start to end (1-based, inclusive). Large files are truncated; the note says which lines were shown.')
   expect(Object.keys(on.parameters.properties as object)).toEqual(['path', 'start', 'end'])
   expect(on.parameters.required).toEqual(['path'])
   const prompted = { toolCalls: { mode: 'prompted' as const, enforceSchema: false, promptedTemplate: 'T:{{tools}}', parseErrorHint: 'HINT' } }
   const sys = async (cfg: HarnessConfig) => (await sent(cfg)).messages[0].content
   expect(await sys(rr(undefined, prompted))).toBe(`sys\n\nT:- read_file: Read a text file. Large files are truncated.\n  parameters: ${JSON.stringify(OLD_READ.parameters)}`)
-  expect(await sys(rr(true, prompted))).toContain('lines start to end')
+  expect(await sys(rr(true, prompted))).toBe(`sys\n\nT:${renderTools([READ_FILE_RANGES])}`)
 })
 
 test('readRanges: a cut read is cut at a line, says so, and counts as truncated; a note-like last line does not', async () => {
@@ -1163,11 +1166,11 @@ test('readRanges: a redacted key stays out and the line note still ends the outp
   expect(tr.output).toMatch(/\n\[lines 1-\d of 5 shown; read on with start: \d\]$/); expect(tr.truncated).toBe(true)
 }))
 
-test('readRanges off: reads that differ only in start are the same call for maxRepeats', async () => {
+test('readRanges off: reads that differ only in start are different calls for maxRepeats, as today', async () => {
   const rd = (start: number) => ({ toolCalls: [{ name: 'read_file', args: { path: 'a.txt', start } }] })
-  const be = Fake([rd(1), rd(2), rd(3), { content: 'never reached' }])
+  const be = Fake([rd(1), rd(2), rd(3), { content: 'fin' }])
   const ev = await collect({ config: rr(undefined, { loop: { maxTurns: 10, maxRepeats: 1 } }), task: 'do', workdir: await wd() }, { backend: be })
-  expect(last(ev)).toMatchObject({ reason: 'repeat_loop', turns: 3 })
+  expect(last(ev).reason).toBe('final')
 })
 
 test('readRanges on: reads of different ranges are different calls', async () => {

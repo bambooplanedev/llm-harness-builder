@@ -299,8 +299,8 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
         ctx.lastRead = undefined
         let repeats = 0
         if (config.loop.maxRepeats !== undefined) {
-          // read_file ignores start/end unless tools.readRanges: then they tell reads apart (as numbers or digit strings).
-          const key = c.name + (c.name === 'read_file' ? JSON.stringify(config.tools.readRanges ? { path: c.args.path, start: Number(c.args.start) || undefined, end: Number(c.args.end) || undefined } : { path: c.args.path }) : JSON.stringify(c.args))
+          // tools.readRanges: start/end tell reads apart, as numbers or digit strings; off, the key is what it always was.
+          const key = c.name + JSON.stringify(c.name === 'read_file' && config.tools.readRanges ? { path: c.args.path, start: Number(c.args.start) || undefined, end: Number(c.args.end) || undefined } : c.args)
           const n = (seen.get(key) ?? 0) + 1
           repeats = n - 1
           if (!result.error && (c.name === 'edit_file' || c.name === 'write_file')) {

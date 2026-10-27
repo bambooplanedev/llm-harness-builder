@@ -39,12 +39,8 @@ const MAX_READ_BYTES = 4 << 20
 /** A non-negative-integer number or digit string, else undefined. */
 const lineNo = (v: unknown): number | undefined => typeof v === 'number' && Number.isInteger(v) && v >= 0 ? v : typeof v === 'string' && /^\d+$/.test(v) ? Number(v) : undefined
 
-/** Lines of the text as wc -l and editors count them: a final "\n" does not start one; "\r" stays in its line. */
-const lineCount = (t: string): number => t === '' ? 0 : t.split('\n').length - (t.endsWith('\n') ? 1 : 0)
-
 async function readRange(args: Args, ctx: ToolCtx): Promise<string> {
   const file = await resolveInside(ctx.workdir, str(args, 'path'))
-  const whole = args.start === undefined && args.end === undefined
   const fh = await open(file, 'r')
   try {
     const limit = ctx.readMaxBytes ?? MAX_READ_BYTES
@@ -61,7 +57,8 @@ async function readRange(args: Args, ctx: ToolCtx): Promise<string> {
     if (start === undefined || end === undefined || start < 1 || end < start) throw new Error('start and end must be line numbers from 1, with end not before start')
     if (ctx.reads) {
       ctx.reads.add(file)
-      if (whole) ctx.partReads?.delete(file); else ctx.partReads?.add(file)
+      // Part only when the selection leaves lines out: {start: 1} on a whole file is a whole read.
+      if (start > 1 || end < total || capped) ctx.partReads?.add(file); else ctx.partReads?.delete(file)
     }
     if (total === 0) return '[no lines: the file is empty]'
     if (start > total) return capped ? `[no lines: the first ${capped} bytes hold ${total} lines; read the rest with bash]` : `[no lines: the file has ${total}]`
