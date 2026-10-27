@@ -480,18 +480,20 @@ describe('evolve on polyglot', () => {
     expect(boundBy(3, ['poker'])).toBe(false)
   })
 
-  it('the binding of polyglot exercises: short names kept, recorded test names whole and lowercased; checkEdit refuses both', () => {
+  it('the binding of polyglot exercises: poker is not bound; a hyphenated exercise name and a recorded test name are', () => {
     const poker = p.exercises.find(e => e.name === 'poker')!
     const binding = bindingTokens(polyglotBinding(p, ['space-age', 'poker']))
-    expect(binding).toContain('poker')
+    expect(binding).not.toContain('poker')
+    expect(binding).toContain('space-age')
     expect(binding).toContain(poker.tests[0]!.toLowerCase())
     expect(binding).toContain('space-age.test.js')
     const para = (value: string) => checkEdit({ field: 'systemPrompt', value }, { current: harness(), original: harness(), tried: [], binding })
-    expect(para('When a task is like poker, rank the cases first.')).toBe('tied to a task')
+    expect(para('When a task is like poker, rank the cases first.')).toBeUndefined()
+    expect(para('On space-age, convert the units first.')).toBe('tied to a task')
     expect(para(`Mind ${poker.tests[0]} first.`)).toBe('tied to a task')
     expect(para('Read the failing test before editing.')).toBeUndefined()
-    // A name no longer in the set is still a binding word; it has no files or tests to add.
-    expect(bindingTokens(polyglotBinding(p, ['gone']))).toEqual(['gone'])
+    // A hyphenated name no longer in the set is still a binding word; a single word is not.
+    expect(bindingTokens(polyglotBinding(p, ['gone-away', 'gone']))).toEqual(['gone-away'])
   })
 
   it('a short repo task name binds nothing: an accepted paragraph using it still replays', () => {

@@ -136,12 +136,13 @@ export function polyglotTasks(p: Polyglot, size: number, timeoutMs = 60_000): Ta
   }))
 }
 
-/** What ties a paragraph to these exercises, for bindingTokens: each name and its recorded test names as words kept at
- *  any length (the prompt tokenizer would drop them), its files and prompt. A name the set no longer has is still a word. */
+/** What ties a paragraph to these exercises, for bindingTokens: its recorded test names and a hyphenated name
+ *  (`affine-cipher`) as words kept at any length, its files and prompt. A one-word name (`say`, `poker`) is an ordinary
+ *  word: refusing it would burn a round's candidates. A hyphenated name the set no longer has is still a word. */
 export function polyglotBinding(p: Polyglot, names: string[]): { names: string[]; words: string[]; paths: string[]; prompts: string[] } {
   const known = names.flatMap(n => p.exercises.filter(e => e.name === n))
   return {
-    names: [], words: [...names, ...known.flatMap(e => e.tests)],
+    names: [], words: [...names.filter(n => n.includes('-')), ...known.flatMap(e => e.tests)],
     paths: [...known.flatMap(e => [`${e.name}/${e.name}.js`, `${e.name}/${e.name}.test.js`, `${e.name}/INSTRUCTIONS.md`]), ...(known.length ? ['expect.js'] : [])],
     prompts: known.map(e => promptOf(e.name)),
   }
