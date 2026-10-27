@@ -13,7 +13,7 @@ import { mayAsk, type RunOpts } from './core/run.js'
 import { killTracked } from './core/procs.js'
 import { withNotes, type NotesStore } from './core/notes-run.js'
 import { notesKey, notesPath, readNotes, scrubText } from './core/notes.js'
-import { ALLOWED, CANDIDATES, splitSets, modeOf, referenceLabel, neededFlips, usable, decide, applyEdit, bindingTokens, checkEdit, failureGroups, signatureOf, proposerInput, proposerRequest, parseProposal, parseJournal, replay, type Edit, type JournalLine, type RunLite } from './core/evolve.js'
+import { ALLOWED, CANDIDATES, splitSets, modeOf, referenceLabel, neededFlips, usable, decide, applyEdit, bindingTokens, checkEdit, failureGroups, signatureOf, proposerInput, proposerRequest, parseProposal, parseJournal, replay, type Edit, type JournalLine, type RunLite, type SetName } from './core/evolve.js'
 import { evolveReport } from './core/evolve-report.js'
 import { loadRepoTasks, hostOf, consentText, hasConsent, saveConsent, git, TASKS_FILE, type RepoTasks, type EvolveConsent } from './core/repo-tasks.js'
 import { cloneAt, linkNodeModules, protectedChanged, runCheck, finishRun, removeAllClonesSync, prepareModules, modulesManifest, modulesTampered, type Clone } from './core/repo-clone.js'
@@ -396,6 +396,25 @@ function dropWork(w: { live: Map<string, Clone> }): void {
   w.live.clear()
 }
 
+/** Where evolve's tasks come from: everything the loop reads about them, and nothing it has to know about a repo. */
+type EvolveSource = {
+  work: Work; id: string; names: string[]; paths: string[]; prompts: string[]; notesFile: string
+  sets: Record<SetName, string[]>; describe: string; consent(yes: boolean, proposer: string): Promise<void>
+}
+
+async function repoSource(repo: RepoTasks): Promise<EvolveSource> {
+  const sets = splitSets(repo.tasks)
+  return {
+    work: repoWork(repo), id: repo.sha, sets,
+    names: repo.tasks.map(t => t.name), prompts: repo.tasks.map(t => t.prompt),
+    paths: (await git(['ls-tree', '-r', '-z', '--name-only', repo.sha], repo.repo)).split('\0').filter(Boolean),
+    notesFile: notesPath(await notesKey(repo.repo)),
+    describe: `tasks: ${repo.tasks.length} from ${repo.repo} at ${repo.sha.slice(0, 7)}: train ${sets.train.length}, gate ${sets.gate.length}, test ${sets.test.length}` +
+      (repo.uncommitted ? '\nuncommitted changes are not in the clones' : ''),
+    consent: (yes, proposer) => askConsent(repo, yes, { proposer, fields: ALLOWED }),
+  }
+}
+
 /** The commands of a repo's tasks run without asking for the whole bench or evolve: accepted once, by hash, before anything runs. */
 async function askConsent(repo: RepoTasks, yes: boolean, ev?: EvolveConsent): Promise<void> {
   if (await hasConsent(repo, ev)) return
@@ -571,13 +590,13 @@ async function cmdEvolve(argv: string[]) {
   const at = values.report && lines[0]?.type === 'start' ? lines[0].sha : undefined
   let repo!: RepoTasks
   try { repo = await loadRepoTasks(values.tasks!, at) } catch (e) { if (at !== undefined) die(start((e as Error).message)); argError('evolve', (e as Error).message) }
-  const sets = splitSets(repo.tasks), mode = modeOf(sets)
+  // Everything below reads only the source: what the tasks are, where they come from, how they run.
+  const src = await repoSource(repo)
+  const { sets, work } = src, mode = modeOf(sets)
   if (typeof mode === 'string') return die(mode)
-  console.error(`tasks: ${repo.tasks.length} from ${repo.repo} at ${repo.sha.slice(0, 7)}: train ${sets.train.length}, gate ${sets.gate.length}, test ${sets.test.length}`)
-  if (repo.uncommitted) console.error('uncommitted changes are not in the clones')
+  console.error(src.describe)
   console.error(mode.strict ? `strict: a candidate needs at least ${neededFlips()} tasks FAIL → PASS on train + gate (more if any go PASS → FAIL)` : referenceLabel(mode))
-  const paths = (await git(['ls-tree', '-r', '-z', '--name-only', repo.sha], repo.repo)).split('\0').filter(Boolean)
-  const binding = bindingTokens({ names: repo.tasks.map(t => t.name), paths, prompts: repo.tasks.map(t => t.prompt) })
+  const binding = bindingTokens({ names: src.names, paths: src.paths, prompts: src.prompts })
   const rebuilt = (): EvolveState => {
     const r = replay(lines, raw, { binding, sets })
     return 'error' in r ? die(start(r.error)) : r
@@ -590,7 +609,7 @@ async function cmdEvolve(argv: string[]) {
   const snapCheck = () => { if (!snapOk()) die(moved(`the notes snapshot changed since this evolve started (${snap})`)) }
   if (resuming) {
     // Under --report the tasks were read at this very commit.
-    if (lines[0]?.type === 'start' && lines[0].sha !== repo.sha) die(moved('the repo has a new commit since this evolve started'))
+    if (lines[0]?.type === 'start' && lines[0].sha !== src.id) die(moved('the repo has a new commit since this evolve started'))
     if (lines[0]?.type === 'start' && lines[0].pin !== pin) die(moved('the harness or its options changed since this evolve started'))
     if (lines[0]?.type === 'start' && lines[0].base !== base) die(start('the journal was written for another harness'))
   }
@@ -614,7 +633,7 @@ async function cmdEvolve(argv: string[]) {
     return
   }
   console.error(autoApproves('evolve'))
-  await askConsent(repo, values.yes, { proposer: proposer.backend.baseUrl, fields: ALLOWED })
+  await src.consent(values.yes, proposer.backend.baseUrl)
   // A torn last line goes, or the next line would be appended onto it; only after consent, and only on the run path.
   if (torn && !torn.endsWith('\n')) truncateSync(jf, Buffer.byteLength(torn.slice(0, torn.lastIndexOf('\n') + 1)))
   // The next version is checked now, not after a candidate's runs: a file the journal has no line for is not ours.
@@ -628,11 +647,9 @@ async function cmdEvolve(argv: string[]) {
     const host = hostOf(proposer.backend.baseUrl)
     // Every version reads this frozen copy: a note written during evolve would make one version's runs depend on another's.
     // Before the start line: a journal is never without its snapshot.
-    const live = notesPath(await notesKey(repo.repo))
-    writeFileSync(snap, existsSync(live) ? readFileSync(live) : '')
-    append({ v: 1, type: 'start', base, sha: repo.sha, pin, sets, strict: mode.strict, proposer: host, notes: sha256(readFileSync(snap)) })
+    writeFileSync(snap, existsSync(src.notesFile) ? readFileSync(src.notesFile) : '')
+    append({ v: 1, type: 'start', base, sha: src.id, pin, sets, strict: mode.strict, proposer: host, notes: sha256(readFileSync(snap)) })
   }
-  const work = repoWork(repo)
   const byName = new Map(work.tasks.map(t => [t.name!, t]))
   const no = await preflightAll([{ name: config.name, config }, { name: 'proposer', config: proposer }], work.tasks[0])
   if (no) { dropWork(work); die(no) }
