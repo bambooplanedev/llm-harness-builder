@@ -1,5 +1,6 @@
-import { test, expect } from 'vitest'
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import { test, expect, afterAll } from 'vitest'
+import { cpSync, existsSync, mkdtempSync, rmSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execSync, spawnSync } from 'node:child_process'
 
@@ -80,4 +81,20 @@ test('the package ships the polyglot set without its proofs', () => {
   const paths: string[] = JSON.parse(out)[0].files.map((f: { path: string }) => f.path)
   for (const p of ['set.json', 'expect.js', 'NOTICE.md', 'LICENSE-exercism-javascript', 'LICENSE-problem-specifications']) expect(paths).toContain(`examples-polyglot/${p}`)
   expect(paths.filter(p => /proof/.test(p))).toEqual([])
+})
+
+const packDirs: string[] = []
+afterAll(() => { for (const d of packDirs) rmSync(d, { recursive: true, force: true }) })
+
+// evolve writes its journal, notes snapshot and versions into ./harnesses of the cwd: run from this repo, none may ship.
+test('what evolve leaves in harnesses/ is not packed', () => {
+  const d = mkdtempSync(join(tmpdir(), 'lhb-pack-'))
+  packDirs.push(d)
+  cpSync('package.json', join(d, 'package.json'))
+  cpSync('harnesses', join(d, 'harnesses'), { recursive: true })
+  for (const f of ['h.evolve.jsonl', 'h.evolve.notes.jsonl', 'h.v1.json']) writeFileSync(join(d, 'harnesses', f), '{}\n')
+  const out = execSync('npm pack --dry-run --json --ignore-scripts', { cwd: d, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+  const paths: string[] = JSON.parse(out)[0].files.map((f: { path: string }) => f.path)
+  expect(paths.filter(p => p.startsWith('harnesses/h.'))).toEqual([])
+  for (const f of readdirSync('harnesses').filter(f => !/\.evolve|\.v\d/.test(f))) expect(paths).toContain(`harnesses/${f}`)
 })

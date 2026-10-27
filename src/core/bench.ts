@@ -56,13 +56,16 @@ export const BENCH_TASKS: Record<string, number> = { slug: 0, pool: 10, pool2: 1
 /** What the Bench page starts a task's size at: polyglot is slow, so 5 of its 47; the rest start at their largest. */
 export const defaultSize = (task: string): number => task === 'polyglot' ? 5 : BENCH_TASKS[task]
 
-/** Lower-middle element of the numerically sorted copy; [] → 0. Never mutates xs. */
-/** The default name of a bench JSON, from local time: bench-YYYYMMDD-HHMMSS.json. */
-export const benchFileName = (d: Date): string => {
+/** Local time as YYYYMMDD-HHMMSS. */
+export const stamp = (d = new Date()): string => {
   const p = (n: number) => String(n).padStart(2, '0')
-  return `bench-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.json`
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`
 }
 
+/** The default name of a bench JSON, from local time: bench-YYYYMMDD-HHMMSS.json. */
+export const benchFileName = (d: Date): string => `bench-${stamp(d)}.json`
+
+/** Lower-middle element of the numerically sorted copy; [] → 0. Never mutates xs. */
 export const median = (xs: number[]): number => xs.length ? [...xs].sort((a, b) => a - b)[(xs.length - 1) >> 1] : 0
 
 /** Four of five `bare` runs are over 900 s: 1800s reads worse than 30:00. */

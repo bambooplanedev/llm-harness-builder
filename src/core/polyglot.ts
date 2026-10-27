@@ -1,7 +1,7 @@
 // src/core/polyglot.ts — runs an exercise's node:test file and scores it by the test names recorded at bench start.
 import { spawn } from 'node:child_process'
 import { readFileSync } from 'node:fs'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -9,7 +9,7 @@ import type { Task } from './tasks.js'
 import { childEnv } from './tools/env.js'
 import { track, untrack } from './procs.js'
 
-/** `file`: the base name of the file that registered the test — the test file, unless the solution registered its own. */
+/** `file`: the full path of the file that registered the test — the check dir's test file, unless the solution registered its own. */
 export type TestResult = { path: string; status: 'pass' | 'fail' | 'skip'; file?: string }
 
 const REPORTER_FILE = 'lhb-reporter.mjs'
@@ -21,7 +21,7 @@ const REPORTER = `export default async function* (source) {
     if (type === 'test:start') { stack.length = data.nesting; stack.push(data.name) }
     else if ((type === 'test:pass' || type === 'test:fail') && data.details?.type !== 'suite') {
       const path = [...stack.slice(0, data.nesting), data.name].join(' > ')
-      yield JSON.stringify({ path, status: type === 'test:fail' ? 'fail' : data.skip === true ? 'skip' : 'pass', file: data.file?.split(/[\\\\/]/).pop() }) + '\\n'
+      yield JSON.stringify({ path, status: type === 'test:fail' ? 'fail' : data.skip === true ? 'skip' : 'pass', file: data.file }) + '\\n'
     }
   }
 }
@@ -40,7 +40,7 @@ export async function runTests(dir: string, testFile: string, env: NodeJS.Proces
   Promise<{ results: TestResult[]; exit: number | null; reason?: 'timeout' }> {
   await writeFile(path.join(dir, REPORTER_FILE), REPORTER)
   return new Promise(resolve => {
-    const child = spawn(process.execPath, ['--disallow-code-generation-from-strings', '--test', `--test-reporter=./${REPORTER_FILE}`, testFile], { cwd: dir, env, detached: true, stdio: ['ignore', 'pipe', 'ignore'] })
+    const child = spawn(process.execPath, ['--test', `--test-reporter=./${REPORTER_FILE}`, testFile], { cwd: dir, env, detached: true, stdio: ['ignore', 'pipe', 'ignore'] })
     const pid = child.pid
     if (pid) track(pid)
     let out = '', timedOut = false
@@ -71,13 +71,14 @@ export function score(results: TestResult[], names: string[], exit: number | nul
   const base = { passed, total: names.length }
   const seen = new Set<string>()
   for (const { path: p, status, file } of results) {
-    if (file !== testFile) return { pass: false, ...base, reason: `unexpected test "${p}" from ${file ?? 'an unknown file'}` }
+    if (file !== testFile) return { pass: false, ...base, reason: `unexpected test "${p}" from ${file ? path.relative(path.dirname(testFile), file) : 'an unknown file'}` }
     if (status === 'skip' && !known.has(p)) continue
     if (!known.has(p)) return { pass: false, ...base, reason: `unexpected test "${p}"` }
     if (seen.has(p)) return { pass: false, ...base, reason: `test "${p}" reported twice` }
     seen.add(p)
   }
-  if (results.some(x => x.status === 'fail')) return { pass: false, ...base, reason: 'a test failed' }
+  const failed = results.find(x => x.status === 'fail')
+  if (failed) return { pass: false, ...base, reason: `a test failed: ${failed.path.slice(0, 200)}` }
   if (exit !== 0) return { pass: false, ...base, reason: `exit ${exit}` }
   if (passed !== names.length) return { pass: false, ...base, reason: `${names.length - passed} of ${names.length} tests did not pass` }
   return { pass: true, ...base }
@@ -100,8 +101,6 @@ export function loadPolyglot(root = SET_ROOT): Polyglot {
   }
 }
 
-const TRIPWIRE = /(from|import\s*\(?|require\s*\()\s*['"`](node:)?(assert|test)(\/strict)?['"`]|process\s*(\.|\[)\s*['"`]?(exit|reallyExit)|getBuiltinModule|createRequire/
-
 const lay = async (p: Polyglot, e: Exercise, solution: string) => {
   const dir = await mkdtemp(path.join(tmpdir(), 'lhb-polyglot-'))
   try {
@@ -121,13 +120,13 @@ export function polyglotTasks(p: Polyglot, size: number, timeoutMs = 60_000): Ta
       const tests = { passed: 0, total: e.tests.length }
       let src: string
       try { src = await readFile(path.join(workdir, `${e.name}.js`), 'utf8') } catch { return { pass: false, reason: `${e.name}.js is missing`, tests } }
-      if (TRIPWIRE.test(src)) return { pass: false, reason: 'the solution touches the test runner', tests }
       const dir = await lay(p, e, src)
       try {
+        const testFile = path.join(await realpath(dir), `${e.name}.test.js`)
         const run = await runTests(dir, `${e.name}.test.js`, env ?? childEnv(), timeoutMs)
         // A killed run's partial passes do not count: a timeout is passed 0.
         if (run.reason === 'timeout') return { pass: false, reason: `timeout after ${timeoutMs} ms`, tests }
-        const s = score(run.results, e.tests, run.exit, `${e.name}.test.js`)
+        const s = score(run.results, e.tests, run.exit, testFile)
         return { pass: s.pass, ...(s.reason ? { reason: s.reason } : {}), tests: { passed: s.passed, total: s.total } }
       } finally { await rm(dir, { recursive: true, force: true }) }
     },

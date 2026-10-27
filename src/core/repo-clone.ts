@@ -7,6 +7,7 @@ import { lstatSync, rmSync, unlinkSync, existsSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { git, type RepoTask, type RepoTasks } from './repo-tasks.js'
+import { stamp } from './bench.js'
 import { runShell } from './tools/bash.js'
 import { childEnv } from './tools/env.js'
 
@@ -22,11 +23,6 @@ let hooked = false
 /** Each clone that is still there, removed now; one that cannot be removed is said, not thrown. */
 export function removeAllClonesSync(): void {
   for (const c of [...LIVE]) try { removeCloneSync(c) } catch (e) { console.error(`cannot remove ${c.dir}: ${(e as Error).message}`) }
-}
-
-const stamp = (d = new Date()) => {
-  const p = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`
 }
 
 /** A detached clone at the pinned commit with no remote (a model's `git push origin` has nowhere to go), and its probe. */
@@ -64,6 +60,8 @@ export async function modulesTampered(c: Clone): Promise<boolean> {
   return !s?.isSymbolicLink() || await readlink(p) !== c.link
 }
 
+const CACHES = new Set(['.pytest_cache', '.mypy_cache', '.ruff_cache'])
+
 /** git through the probe, on the clone's work tree, with a throwaway index that holds the work tree as it is now. */
 async function probe<T>(c: Clone, fn: (g: (args: string[]) => Promise<string>) => Promise<T>): Promise<T> {
   const index = path.join(tmpdir(), `lhb-index-${randomBytes(4).toString('hex')}`)
@@ -71,6 +69,16 @@ async function probe<T>(c: Clone, fn: (g: (args: string[]) => Promise<string>) =
   try {
     await g(['read-tree', c.sha])
     await g(['add', '-A', '--', '.'])
+    // A .gitignore that ignores itself (or a folder's own) would hide everything the model added beside it (a shadow
+    // `pytest/`, a `node_modules/chai`); an ignored .npmrc (a committed rule, the user's global excludes) would still be
+    // read by npm. All go in, save a tool's cache that marks itself so in a folder the commit does not have: pytest,
+    // mypy, ruff, and a venv (`python -m venv`) under a dot name, which no import or require can reach.
+    const hidden = (await g(['ls-files', '-z', '-o', '-i', '--exclude-standard', '--', ':(glob)**/.gitignore', ':(glob)**/.npmrc'])).split('\0').filter(Boolean)
+    const cache = (d: string) => CACHES.has(path.posix.basename(d)) || (path.posix.basename(d).startsWith('.') && existsSync(path.join(c.dir, d, 'pyvenv.cfg')))
+    const dirs = [...new Set(hidden.filter(f => path.posix.basename(f) === '.gitignore').map(f => path.posix.dirname(f)).filter(cache))]
+    const known = new Set(dirs.length ? (await g(['ls-tree', '-r', '-d', '-z', '--name-only', c.sha, '--', ...dirs.map(d => `:(literal)${d}`)])).split('\0') : [])
+    const add = hidden.filter(f => path.posix.basename(f) === '.npmrc' || !dirs.includes(path.posix.dirname(f)) || known.has(path.posix.dirname(f)))
+    if (add.length) await g(['add', '-f', '--', ...add.map(f => `:(literal)${f}`)])
     return await fn(g)
   } finally { await rm(index, { force: true }) }
 }
@@ -155,13 +163,14 @@ export async function modulesManifest(nodeModules: string): Promise<string> {
     if (SKIP.has(name)) continue
     if (name.startsWith('@')) for (const sub of await readdir(path.join(nodeModules, name)).catch(() => [] as string[])) await pkg(path.join(name, sub))
     else if ((await stat(path.join(nodeModules, name)).catch(() => null))?.isDirectory()) await pkg(name)
+    else await add(name)
   }
   return createHash('sha256').update(lines.sort().join('\n')).digest('hex')
 }
 
 /** Where the runs' node_modules link points: the user's repo, or — with a setup — a clone that ran it, so `npm ci`
  *  never touches the user's own tree. */
-export async function prepareModules(t: RepoTasks, env: NodeJS.ProcessEnv = childEnv()): Promise<{ from: string; setupClone?: Clone }> {
+export async function prepareModules(t: RepoTasks, env: NodeJS.ProcessEnv = childEnv()): Promise<{ from: string }> {
   if (!t.setup) return { from: t.repo }
   const c = await cloneAt(t)
   const r = await runShell(t.setup, { cwd: c.dir, env, timeoutMs: 1_800_000, maxBuffer: 1 << 20, keep: 'tail' })
@@ -170,5 +179,5 @@ export async function prepareModules(t: RepoTasks, env: NodeJS.ProcessEnv = chil
     const last = r.out.trim().split('\n').at(-1) ?? ''
     throw new Error(`setup failed (${r.killed ? 'timed out' : r.spawnError ?? `exit ${r.code}`}): ${last}`)
   }
-  return { from: c.dir, setupClone: c }
+  return { from: c.dir }
 }

@@ -1,9 +1,10 @@
 import { describe, test, expect, vi, afterEach } from 'vitest'
-import { cp, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { cp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
+import { spawnSync } from 'node:child_process'
 import { childEnv } from '../src/core/tools/env.js'
 import { loadPolyglot, polyglotTasks, POLYGLOT_MAX } from '../src/core/polyglot.js'
+import { tmp } from './helpers.js'
 
 vi.setConfig({ testTimeout: 120_000 })
 
@@ -29,7 +30,7 @@ test('the set loads', () => {
   expect(POLYGLOT_MAX).toBe(47)
   expect(p.exercises).toHaveLength(POLYGLOT_MAX)
   expect(p.expect).toContain('assert')
-  expect(JSON.parse(p.pkg)).toEqual({ type: 'module' })
+  expect(JSON.parse(p.pkg)).toEqual({ type: 'module', scripts: { test: 'node --test' } })
 })
 
 test('prepare writes the five files; polyglotTasks takes the first size exercises', async () => {
@@ -39,6 +40,15 @@ test('prepare writes the five files; polyglotTasks takes the first size exercise
   const dir = await tasks[0].prepare()
   made.push(dir)
   expect((await readdir(dir)).sort()).toEqual(['INSTRUCTIONS.md', 'expect.js', `${first.name}.js`, `${first.name}.test.js`, 'package.json'].sort())
+})
+
+test('npm test in a prepared workdir runs node --test', async () => {
+  const dir = await polyglotTasks(p, 1)[0].prepare()
+  made.push(dir)
+  await writeFile(path.join(dir, `${first.name}.js`), await proof)
+  const r = spawnSync('npm', ['test'], { cwd: dir, encoding: 'utf8', env })
+  expect(r.status).toBe(0)
+  expect(r.stdout).toMatch(/pass \d+/)
 })
 
 describe('check', () => {
@@ -59,7 +69,7 @@ describe('check', () => {
   })
 
   test('uses the bytes loaded at start', async () => {
-    const root = await mkdtemp(path.join(tmpdir(), 'lhb-polyglot-root-'))
+    const root = await tmp('lhb-polyglot-root-')
     made.push(root)
     await cp('examples-polyglot', root, { recursive: true })
     const q = loadPolyglot(root)
@@ -81,19 +91,27 @@ describe('check', () => {
     expect(r.reason).toMatch(/timeout/)
   })
 
-  test('tripwire: touching assert or exiting', async () => {
-    const reason = 'the solution touches the test runner'
+  // The old tripwire's cheats still fail: by the file check, the unknown-test check or the frozen assert, with no rule of its own.
+  test('patching assert or exiting at the top does not pass', async () => {
+    // Each dies before its tests report: the only result left is the file's own, under a name not in the set.
+    const reason = `unexpected test "${first.name}.test.js"`
     for (const extra of ["import assert from 'assert'; assert.equal = () => {}\n", 'process.exit(0)\n'])
-      expect(await run(`${await proof}\n${extra}`)).toMatchObject({ pass: false, reason, tests: { passed: 0, total } })
+      expect(await run(`${await proof}\n${extra}`)).toMatchObject({ pass: false, tests: { total }, reason })
     expect(await run(`process.exit(0)\n${await proof}`)).toMatchObject({ pass: false, reason })
   })
 
-  test('a word list holding "test" and "assert" is no tripwire', async () => {
-    expect((await run(`${await proof}\nexport const words = ['test', 'assert']\n`)).pass).toBe(true)
+  test('a correct solution that imports node:assert passes', async () => {
+    expect((await run(`import assert from 'node:assert'\nassert.ok(true)\n${await proof}`)).pass).toBe(true)
+    expect((await run(`${await proof}\nawait import(\`node:assert\`)\n`)).pass).toBe(true)
   })
 
-  test('tripwire: dynamic import with backticks', async () => {
-    expect(await run(`${await proof}\nawait import(\`node:assert\`)\n`)).toMatchObject({ pass: false, reason: 'the solution touches the test runner' })
+  test('a correct solution using new Function passes', async () => {
+    expect((await run(`${await proof}\nexport const one = new Function('return 1')()\nexport const two = eval('1 + 1')\n`)).pass).toBe(true)
+  })
+
+  test('process.exitCode = 0 and a comment about process.exit do not fail a correct solution; a non-zero exitCode does', async () => {
+    expect((await run(`${await proof}\n// never process.exit here\nprocess.exitCode = 0\n`)).pass).toBe(true)
+    expect((await run(`${await proof}\nprocess.exitCode = 1\n`)).pass).toBe(false)
   })
 
   // The solution registers its own tests under the recorded names, then exits before the real ones report.
@@ -109,13 +127,33 @@ export const age = () => 0
     expect(r.tests).toEqual({ passed: 0, total })
   })
 
-  test('tripwire: getBuiltinModule and createRequire', async () => {
-    for (const extra of ["process.getBuiltinModule('node:fs')\n", "import { createRequire } from 'node:module'\n"])
-      expect(await run(`${await proof}\n${extra}`)).toMatchObject({ pass: false, reason: 'the solution touches the test runner' })
+  test('fake top-level tests through getBuiltinModule fail', async () => {
+    const r = await run(`${await proof}\nconst t = process.getBuiltinModule('node:test')\nfor (const n of ${JSON.stringify(first.tests)}) t.test(n, () => {})\n`)
+    expect(r.pass).toBe(false)
+    expect(r.reason).toMatch(/unexpected test .* from /)
   })
 
-  test('code from strings does not run', async () => {
-    expect((await run(`${await proof}\nnew globalThis['Func' + 'tion']('return 1')()\n`)).pass).toBe(false)
+  // The check lays the solution alone in a fresh dir, so the cheat writes its fake test file at import time.
+  test('a fake test file in a subdirectory does not count', async () => {
+    const fake = `const { test } = await import('node:' + 'test')\nfor (const n of ${JSON.stringify(first.tests)}) test(n, () => {})\n`
+    const cheat = `import { mkdirSync, writeFileSync } from 'node:fs'
+mkdirSync('sub', { recursive: true })
+writeFileSync('sub/${first.name}.test.js', ${JSON.stringify(fake)})
+await import('./sub/${first.name}.test.js')
+export const age = () => 0
+`
+    const r = await run(cheat)
+    expect(r.pass).toBe(false)
+    expect(r.reason).toMatch(/sub/)
+  })
+
+  test('the fail reason names the first failed test', async () => {
+    const r = await run(first.stub)
+    expect(r.reason).toBe(`a test failed: ${first.tests[0]}`)
+  })
+
+  test('a word list holding "test" and "assert" is no tripwire', async () => {
+    expect((await run(`${await proof}\nexport const words = ['test', 'assert']\n`)).pass).toBe(true)
   })
 
   test('the bridge holds against patched built-ins', async () => {

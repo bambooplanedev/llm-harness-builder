@@ -24,7 +24,7 @@ export const TASKS_FILE = 'lhb-tasks.json'
 export const DEFAULT_PROTECT = [
   ':(glob)**/*.test.*', ':(glob)**/*.spec.*', ':(glob)**/test/**', ':(glob)**/tests/**', ':(glob)**/__tests__/**',
   ':(glob)**/package.json', ':(glob)**/package-lock.json', ':(glob)**/pnpm-lock.yaml', ':(glob)**/yarn.lock',
-  ':(glob)**/vitest.config.*', ':(glob)**/vitest.workspace.*', ':(glob)**/jest.config.*', ':(glob)**/.mocharc*',
+  ':(glob)**/vitest.config.*', ':(glob)**/vitest.workspace.*', ':(glob)**/jest.config.*', ':(glob)**/.mocharc*', ':(glob)**/vite.config.*', ':(glob)**/.npmrc',
   ':(glob)**/tsconfig*.json', ':(glob)**/.gitignore', TASKS_FILE,
 ]
 
@@ -57,14 +57,22 @@ export function validateTasksFile(x: unknown): string[] {
   return e
 }
 
-export async function loadRepoTasks(dir: string): Promise<RepoTasks> {
+/** `at`: a commit to read the tasks at instead of HEAD (an evolve report reads them where its journal started). */
+export async function loadRepoTasks(dir: string, at?: string): Promise<RepoTasks> {
   let repo: string
   try {
     repo = await realpath(dir)
     if ((await git(['rev-parse', '--show-toplevel'], repo)).trim() !== repo) throw new Error()
   } catch { throw new Error(`${dir} is not a git repository`) }
   let sha: string
-  try { sha = (await git(['rev-parse', '--verify', 'HEAD^{commit}'], repo)).trim() } catch { throw new Error(`${repo} has no commits`) }
+  if (at === undefined) {
+    try { sha = (await git(['rev-parse', '--verify', 'HEAD^{commit}'], repo)).trim() } catch { throw new Error(`${repo} has no commits`) }
+  } else {
+    // Only a full hex id goes to git, or into a message: `at` comes from a file, and `-x` would be an option.
+    if (!/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(at)) throw new Error('the commit this evolve started at is not a commit id')
+    const gone = new Error(`the commit this evolve started at (${at.slice(0, 7)}) is no longer in the repo`)
+    try { sha = (await git(['rev-parse', '--verify', '--quiet', `${at}^{commit}`], repo)).trim() } catch { throw gone }
+  }
   let text: string
   try { text = await git(['show', `${sha}:${TASKS_FILE}`], repo) } catch { throw new Error(`${TASKS_FILE} is not in the last commit ${sha.slice(0, 7)} (uncommitted files are not read)`) }
   let x: any
@@ -92,21 +100,23 @@ export async function loadRepoTasks(dir: string): Promise<RepoTasks> {
 
 const SHA_LINE = (sha: string) => `commit: ${sha}`
 
-/** What `bench --tasks` will run and where, as the user is asked to accept it. `npm test` runs the package's scripts, so they are in it. */
+/** The host of a URL; what does not parse is kept as it is. */
+export const hostOf = (u: string): string => { try { return new URL(u).host || u } catch { return u } }
+
 export type EvolveConsent = { proposer: string; fields: string[] }
 
+/** What `bench --tasks` will run and where, as the user is asked to accept it. `npm test` runs the package's scripts, so they are in it. */
 /** `evolve` asks on top of the bench text, never in place of it: lines after it, so a bench hash stays what it was. */
 export function consentText(t: RepoTasks, ev?: EvolveConsent): string {
-  const host = (u: string) => { try { return new URL(u).host || u } catch { return u } }
   return [
     `repo: ${t.repo}`, SHA_LINE(t.sha), '',
     'setup — once, in a separate clone in the OS temp dir',
     "check — in each run's clone, after the run",
     'prompt — given to the model, whose bash runs as you, without asking, anywhere you can write', '',
-    `setup: ${t.setup ?? '(none)'}`,
-    ...t.tasks.flatMap(x => [`task ${x.name}`, `  prompt: ${x.prompt}`, `  check: ${x.check}`]),
+    `setup: ${t.setup === undefined ? '(none)' : JSON.stringify(t.setup)}`,
+    ...t.tasks.flatMap(x => [`task ${x.name}`, `  prompt: ${JSON.stringify(x.prompt)}`, `  check: ${JSON.stringify(x.check)}`]),
     'package.json scripts:', ...Object.entries(t.scripts).map(([k, v]) => `  ${JSON.stringify(k)}: ${JSON.stringify(v)}`),
-    ...(ev ? ["mode: evolve — the model's own prompts run unreviewed while Evolve measures them", `proposer: ${host(ev.proposer)}`, `fields: ${ev.fields.join(', ')}`] : []),
+    ...(ev ? ["mode: evolve — the model's own prompts run unreviewed while Evolve measures them", `proposer: ${hostOf(ev.proposer)}`, `fields: ${ev.fields.join(', ')}`] : []),
   ].join('\n')
 }
 

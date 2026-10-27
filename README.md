@@ -224,13 +224,14 @@ directory to browse them, and reload the list after a CLI run. On every start `s
 ### CLI
 
     llm-harness-builder --help | --version | help <command>
-    llm-harness-builder serve [--port 7331] [--no-open]
-    llm-harness-builder run <harness.json> --workdir <dir> "task" [--yes] [--json] [--answer-schema file.json] [--model m] [--base-url u] [--kind k] [--api-key-env NAME]
-    llm-harness-builder demo [--model m] [--base-url u] [--kind k] [--api-key-env NAME]
-    llm-harness-builder bench [harness.json ...] [--n 3] [--timeout 1800] [--out runs/bench-<ts>.json] [--task slug|pool|pool2|pool3|sift|triage|judge] [--size N] [--max-turns N] [--model m] [--base-url u] [--kind k] [--api-key-env NAME]
-    llm-harness-builder replay <run-id | trace.jsonl> --turn N --base-url u --kind k [--api-key-env NAME] [--n 5] [--temperature t] [--max-tokens m] [--json]
+    llm-harness-builder serve [--port <n>] [--no-open]
+    llm-harness-builder run <harness.json> "task" [--workdir <dir>] [--yes] [--json] [--answer-schema <file.json>] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
+    llm-harness-builder demo [--json] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
+    llm-harness-builder bench [harness.json ...] [--n <n>] [--timeout <s>] [--out <file>] [--task <name>] [--size <N>] [--tasks <repo>] [--yes] [--max-turns <N>] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
+    llm-harness-builder evolve <harness.json> [--tasks <repo>] [--rounds <N>] [--proposer <harness.json>] [--timeout <s>] [--yes] [--report] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
+    llm-harness-builder replay <run-id | trace.jsonl> [--turn <N>] [--n <n>] [--temperature <t>] [--max-tokens <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>] [--json]
     llm-harness-builder analyze <bench.json | run-id | trace.jsonl> ... [--json]
-    llm-harness-builder proxy [--upstream http://127.0.0.1:8080] [--port 8090] [--name label]
+    llm-harness-builder proxy [--upstream <url>] [--port <n>] [--name <label>]
 
 | command | what it does |
 |---|---|
@@ -238,6 +239,7 @@ directory to browse them, and reload the list after a CLI run. On every start `s
 | `run` | one harness, one task, one folder |
 | `demo` | the demo task once per shipped harness |
 | `bench` | a task `--n` times per harness, with a PASS-rate table and a JSON |
+| `evolve` | improves a harness on your own tasks, one edit at a time, keeping only what wins on tasks it never saw |
 | `replay` | one recorded request sent again `--n` times |
 | `analyze` | what the context budget removed, and what the model did after |
 | `proxy` | records another agent's conversations as traces |
@@ -247,17 +249,19 @@ directory to browse them, and reload the list after a CLI run. On every start `s
 
 **Exit codes.** 0 for help. `run` exits 0 when the model ended with a final answer (with
 `--answer-schema`, one that parses as JSON) and 1 when it did not; `demo` and `bench` exit 0
-whatever the verdicts; `demo` exits 1 when the server is not up or lacks the model, or when a harness needs something the model lacks (a knob it refuses), with a hint.
+whatever the verdicts, except that `bench` exits 1 when the model changed the `node_modules` its runs were linked to (see Your own tasks); `demo` exits 1 when the server is not up or lacks the model, or when a harness needs something the model lacks (a knob it refuses), with a hint.
 2 for an argument a command cannot take (the message names it and the usage follows), for a file it cannot read, for a key variable that is not set, is empty or holds what a
 key cannot (see [Cloud](#cloud)), and for the refusal below. 130 for Ctrl-C in `run`, `demo` and
-`bench`, which keeps the trace. `proxy` exits 0 when stopped.
+`bench` and `evolve`, which keeps the trace. `proxy` exits 0 when stopped. `evolve` exits 0 with a report, 1 for the `node_modules` change above, 2 for the refusals under [evolve](#evolve) and 130 for Ctrl-C.
 
 **Approvals.** `run` without `--yes` asks before each command it may run. When stdin is not a
 terminal — a pipe, `/dev/null`, CI — nobody can answer, so a harness that may ask (`approveBash`
 with `bash` on, `loop.untilBash`, any `mcpServers`) is refused before the first request, and
 `yes | run …` does not answer for you: pass `--yes`. `demo` and `bench` never ask: they approve the
 model's commands and the harness files' `mcpServers` and `loop.untilBash` alike, and say so on
-stderr.
+stderr. `bench --tasks` and `evolve` ask once, before the first run, to accept the commands of your
+`lhb-tasks.json` (`--yes` accepts without a terminal and prints the commands first, then saves the
+consent); after that they approve everything, like `demo`.
 
 #### run
 
@@ -325,7 +329,10 @@ llm-harness-builder bench base.json yours.json --task polyglot --size 47        
 Limits. A crashed run does not resume. With `--n` above 1 every run counts, so the interval is a
 little optimistic. Each exercise's check has its own fixed 60 s limit, separate from `--timeout`. The
 model has network, and Exercism's solutions are public. The shell is not isolated, so determined
-cheating (forging the test runner's messages, say) is not fully ruled out. The numbers do not compare
+cheating is not ruled out: a solution can rewrite the test file while it runs, or otherwise forge the
+test runner, and a model that does so on purpose can PASS. There are no hidden rules; the check runs
+what the model ran, and the workdir has `npm test`. The bench header counts the real runs per harness
+(size × `--n`). The numbers do not compare
 with Aider's leaderboard (there: two attempts, the second with the test output; here: one agent run).
 
 **Your own tasks.** `bench --tasks <repo>` runs your tasks instead of a built-in one, from a
@@ -339,18 +346,22 @@ with Aider's leaderboard (there: two attempts, the second with the test output; 
 ```
 
 ```bash
-llm-harness-builder bench --tasks . --n 3 harnesses/tuned-nothink.json
+llm-harness-builder bench --tasks ../myrepo --n 3
 ```
 
 Only the last commit is read: uncommitted changes, `lhb-tasks.json` included, are not in the runs,
 and `bench` says so. Each run is a `git clone --shared` in the OS temp dir, at that commit, with no
 remote, deleted after its check; the harness reads what a run changed through a git dir of its own,
 so whatever the model writes into the clone's `.git` does not reach your repo or the verdict. Tests,
-manifests, lock files, test-runner configs and `.gitignore` files are protected (add your own paths
-with `protect`), and so is the `node_modules` the run was given: a run that adds, changes or deletes
-one is a FAIL, and its check does not run. A check that finds 0
-tests is a FAIL too. Before the first run `bench` shows every command it will run and where, and
-asks once; `--yes` accepts without a terminal, and a change to a command or to the scripts of
+manifests, lock files, test-runner configs (`vite.config.*` too), `.npmrc` and `.gitignore` files are
+protected (add your own paths with `protect`), and so is the `node_modules` the run was given: a run
+that adds, changes or deletes one is a FAIL, and its check does not run. A `.gitignore` or `.npmrc` the run
+adds counts even when a rule ignores it, save the `.gitignore` a tool cache writes into a new folder of its
+own: `.pytest_cache`, `.mypy_cache`, `.ruff_cache`, or a venv under a dot name (`.venv` with its
+`pyvenv.cfg`). A `node --test` check
+that finds 0 tests is a FAIL too. Before the first run `bench` shows every command it will run and
+where, and the prompt and check JSON-escaped, so a control character shows up as text, and asks
+once; `--yes` accepts without a terminal and prints the same commands before it saves the consent, and a change to a command or to the scripts of
 `package.json` asks again. `setup` runs once in a clone of its own, and the runs link its
 `node_modules` (without `setup`, your repo's): a run that changes its `.bin`, a package's
 `package.json` or a package's top-level code stops the bench after the JSON is written; files deeper
@@ -361,8 +372,46 @@ A clone is a full checkout of the commit, which is slow on a big monorepo, and i
 not initialised. `setup` runs with the env names the harnesses pass in `tools.bashEnv`, and what it leaves in the
 background is killed when it ends, so start a service the tests need outside `bench`. A server
 that is down is reported after the consent question and before `setup`. Traces and patches go to
-`./runs` of the folder you run `bench` from: from the repo itself (`bench --tasks .`) that leaves
-the repo with uncommitted files, so run it from another folder or add `runs/` to `.gitignore`.
+`./runs` of the folder you run `bench` from: run it from outside the repo, as above (with no harness
+files it takes the default ones), since from the repo itself (`bench --tasks .`) that leaves it with
+uncommitted files; or add `runs/` to `.gitignore`.
+
+#### evolve
+
+`evolve` improves a harness on your own tasks. It reads the same `lhb-tasks.json` as `bench --tasks`
+(the last commit; a task's optional `"set": "train" | "gate" | "test"` picks its set, the rest are
+split by a hash of the name), asks a proposer model for one edit at a time to one allowed field
+(`systemPrompt`, `loop.*`, `context.*`), runs it on train and gate, and keeps it only if it wins on
+tasks the proposer never saw; the last kept version is then measured against the original on test.
+The harness file you give is never written.
+
+```bash
+llm-harness-builder evolve harnesses/tuned-nothink.json --tasks ../myrepo
+```
+
+It writes to `./harnesses`: `<name>.evolve.jsonl` (the journal), `<name>.evolve.notes.jsonl` (a frozen
+copy of the repo's notes, so every version reads the same) and `<name>.v1.json`, `v2.json`… for each
+kept version. All three are private to the run: add them to your `.gitignore` (this package's own
+already does, and does not pack them). Runs and traces go to `./runs` as in `bench` (`runs/evolve-<name>.json`). The proposer is told the
+harness's own current values (the system prompt, scrubbed, and the numbers), the edits already refused
+(values cut to 200 characters) and, for failed runs, fixed words and counts: how each ended, which tool
+names it called, which file types it edited (from a fixed list of extensions). Never repo files,
+paths or task names. `--proposer` picks another harness
+for the proposing backend.
+
+The journal is checked, not trusted. Every start and every resume replays it and re-checks each
+decision against its own numbers; a journal edited by hand, a changed harness or option, a new commit
+in the repo or a changed notes snapshot is refused, and the message says how to start over: delete
+the journal and move away `harnesses/<name>.v*.json`; for a finished evolve whose journal is intact it
+points at `--report` and says to move the journal away, not to delete it. A resumed evolve continues at the step it
+stopped on. `--report` prints the report of a finished evolve from the journal alone, with no run
+(give it the same options): it reads the tasks at the commit the journal started at, so it prints
+even after new commits or a deleted notes snapshot, and it says when `vN.json` on disk differs from
+the version that was measured. To use `vN`, point at it; copying it over the original file changes
+the harness the journal was pinned to, and a later `--report` refuses.
+
+Exit codes: 0 with a report; 1 when the model changed the linked `node_modules`; 2 for a refusal or a
+bad argument; 130 for Ctrl-C, after which the journal holds every finished step.
 
 #### replay
 
@@ -593,8 +642,12 @@ Present, they must be a positive integer and a non-negative integer.
 `~/.local/state/llm-harness-builder/notes/<key>.jsonl` (`$XDG_STATE_HOME` if set, `LHB_NOTES_DIR`
 to choose) — outside the project, so its file tools cannot write a note and nothing gets committed;
 a notes dir inside the workdir is refused. `run` prints how many were sent and from which file;
-delete a line, or the file, to drop a note. `bench` only reads `task-<name>.jsonl` there and says so
-when it is empty. See the [honest notes](docs/honest-notes.md) for what a note can get wrong.
+delete a line, or the file, to drop a note. `$LHB_STATE_DIR` moves everything the harness keeps
+(notes and consent). `bench` only reads: `task-<name>.jsonl` there, or with `--tasks` the notes of the
+repo's folder; it says so when the file is empty. A note is a line of JSON, e.g.
+`{"id":"n1","ts":1761000000000,"author":"user","text":"run npm test before finishing"}`;
+it is read back as one line cut at 300 characters, hand-written `author: "user"` notes too, and the
+secret scrub catches `key=`/`token:` style secrets in any case and `Bearer` tokens. `notes: { "enabled": false }` needs no `maxTokens`. See the [honest notes](docs/honest-notes.md) for what a note can get wrong.
 
 **Thinking.** `backend.think` sets `chat_template_kwargs.enable_thinking` on an OpenAI-compatible
 server (llama-server reads it) and `think` on Ollama. Absent, nothing is sent and the model's own

@@ -184,6 +184,8 @@ export type Group = { signature: string; count: number; calls: Record<string, nu
 const CHECK_CLASS: [string, string][] = [['check exited', 'check_failed'], ['check timed out', 'check_timeout'], ['the check found 0 tests', 'no_tests'], ['changed a protected file', 'protected']]
 /** The reasons a run ends with (DoneReason, and the bench's 'error'); anything else in a journal is `other`. */
 const REASONS: (DoneReason | 'error')[] = ['final', 'max_turns', 'parse_failed', 'aborted', 'backend_error', 'mcp_error', 'repeat_loop', 'proxy_stopped', 'error']
+/** The file types the proposer may hear of: a path's tail is the model's own argument, not a type. */
+const EXTS = ['ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'py', 'rb', 'go', 'rs', 'java', 'kt', 'c', 'h', 'cc', 'cpp', 'hpp', 'cs', 'php', 'swift', 'sh', 'json', 'md', 'txt', 'yml', 'yaml', 'toml', 'css', 'html', 'vue', 'sql', 'xml']
 const bump = (r: Record<string, number>, k: string) => { r[k] = (r[k] ?? 0) + 1 }
 
 /** How a FAIL run failed, in fixed words. `events` is [] when the trace could not be read. */
@@ -212,7 +214,7 @@ export function failureGroups(items: { run: RunLite; events: HarnessEvent[] }[])
     const g = groups.get(signature) ?? { signature, count: 0, calls: {}, exts: {} }
     g.count++
     for (const e of events) if (e.type === 'tool_call') bump(g.calls, (TOOL_NAMES as string[]).includes(e.call.name) ? e.call.name : 'unknown')
-    for (const p of Object.keys(a.edits)) bump(g.exts, /\.([a-z0-9]{1,8})$/.exec(p)?.[1] ?? 'other')
+    for (const p of Object.keys(a.edits)) { const x = /\.([a-z0-9]{1,8})$/.exec(p)?.[1]; bump(g.exts, x && EXTS.includes(x) ? x : 'other') }
     groups.set(signature, g)
   }
   return [...groups.values()].sort((x, y) => y.count - x.count)
@@ -338,22 +340,39 @@ export function replay(lines: JournalLine[], original: object, ctx: { binding: s
   if (JSON.stringify(first.sets) !== JSON.stringify(ctx.sets)) return { error: 'cannot resume: the sets differ from the tasks file' }
   let current = original, version = 0, baseline: RunLite[] | undefined
   const done: { round: number; index: number }[] = [], tried: Edit[] = [], rejected: Rejected[] = []
+  // What each round's next candidate was compared with, as the run loop has it: the round's current runs, then each kept candidate's.
+  const cmp = new Map<number, RunLite[]>()
+  const mode = modeOf(ctx.sets)
   // Every candidate is weighed against round 1's current runs: a journal that does not go on with them has no baseline.
   if (rest.length && !(rest[0]!.type === 'current' && rest[0]!.round === 1)) return { error: 'cannot resume: the line after the start line is not round 1\'s current runs' }
   for (const l of rest) {
     if (l.type === 'start') return { error: 'cannot resume: a second start line' }
     if (l.type === 'final') continue // not the last line: a later round makes it stale
+    const index = l.type === 'current' ? 0 : l.index
+    const slot = `round ${l.round} ${index ? `candidate ${index}` : 'current runs'}`
+    if (done.some(d => d.round === l.round && d.index === index)) return { error: `cannot resume: ${slot}: a second line for it` }
+    done.push({ round: l.round, index })
     if (l.type === 'current') {
-      done.push({ round: l.round, index: 0 })
       if (l.round === 1) baseline ??= l.runs
+      cmp.set(l.round, l.runs)
       continue
     }
-    done.push({ round: l.round, index: l.index })
     if (l.accepted) {
       version++
       const why = l.edit ? checkEdit(l.edit, { current, original, tried, binding: ctx.binding }) : 'no edit'
-      if (why) return { error: `cannot resume: accepted edit ${version}: ${why}` }
+      if (why) return { error: `cannot resume: ${slot}: accepted edit ${version}: ${why}` }
+      if (l.reason !== 'accepted' || l.version !== version || !l.runs) return { error: `cannot resume: ${slot}: accepted, but not written as version ${version} with its runs` }
+    }
+    // decide is pure and every input is in the journal: the line's verdict must be what its own numbers give.
+    if (l.runs) {
+      const was = cmp.get(l.round)
+      if (typeof mode === 'string') return { error: `cannot resume: ${mode}` }
+      if (!was) return { error: `cannot resume: ${slot}: no current runs of its round to compare with` }
+      if (decide(was, l.runs, baseline!, ctx.sets.gate, mode).accepted !== l.accepted) return { error: `cannot resume: ${slot}: its runs do not give ${l.accepted ? 'an acceptance' : 'a refusal'}` }
+    }
+    if (l.accepted) {
       current = applyEdit(current, l.edit!)
+      cmp.set(l.round, l.runs!)
     } else if (l.edit) {
       const bound = (x: unknown) => typeof x === 'string' && ctx.binding.some(t => x.toLowerCase().includes(t))
       const reason = REASON_RE.some(re => re.test(l.reason)) && !bound(l.reason) ? l.reason : 'other'

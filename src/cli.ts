@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // src/cli.ts
 import { parseArgs } from 'node:util'
-import { readFile, cp, mkdir, writeFile } from 'node:fs/promises'
+import { readFile, cp, mkdir } from 'node:fs/promises'
 import { existsSync, readFileSync, writeFileSync, renameSync, appendFileSync, lstatSync, truncateSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -12,10 +12,10 @@ import { fileURLToPath } from 'node:url'
 import { mayAsk, type RunOpts } from './core/run.js'
 import { killTracked } from './core/procs.js'
 import { withNotes, type NotesStore } from './core/notes-run.js'
-import { notesKey, notesPath, readNotes, selectNotes, scrubText } from './core/notes.js'
+import { notesKey, notesPath, readNotes, scrubText } from './core/notes.js'
 import { ALLOWED, CANDIDATES, splitSets, modeOf, referenceLabel, neededFlips, usable, decide, applyEdit, bindingTokens, checkEdit, failureGroups, signatureOf, proposerInput, proposerRequest, parseProposal, parseJournal, replay, type Edit, type JournalLine, type RunLite } from './core/evolve.js'
 import { evolveReport } from './core/evolve-report.js'
-import { loadRepoTasks, consentText, hasConsent, saveConsent, git, TASKS_FILE, type RepoTasks, type EvolveConsent } from './core/repo-tasks.js'
+import { loadRepoTasks, hostOf, consentText, hasConsent, saveConsent, git, TASKS_FILE, type RepoTasks, type EvolveConsent } from './core/repo-tasks.js'
 import { cloneAt, linkNodeModules, protectedChanged, runCheck, finishRun, removeAllClonesSync, prepareModules, modulesManifest, modulesTampered, type Clone } from './core/repo-clone.js'
 import { validateConfig, sendsAnswerSchema, KEY_ENV, FLAG_WORDS, keyNameMessage, keyErrors, keyProblem, keyNote, apiKey, NO_THINK_LINE, isHttpUrl, isLoopbackUrl, type HarnessConfig, type BackendKind } from './core/config.js'
 import { validateWorkdir } from './core/tools/sandbox.js'
@@ -26,7 +26,7 @@ import { TraceWriter, type Meta } from './server/runs.js'
 import { TASKS, type Task } from './core/tasks.js'
 import { loadPolyglot, polyglotTasks, POLYGLOT_MAX } from './core/polyglot.js'
 import { childEnv, bashEnvNote } from './core/tools/env.js'
-import { median, formatTable, BENCH_TASKS, benchFileName, autoApproves, type BenchRun, type BenchHarness, type BenchResult } from './core/bench.js'
+import { median, formatTable, BENCH_TASKS, benchTotal, runTitle, benchFileName, autoApproves, type BenchRun, type BenchHarness, type BenchResult } from './core/bench.js'
 import { GUARD_BLOCKED, EDIT_MISS } from './core/tools/fs.js'
 import { createBackend } from './core/backends/index.js'
 import { redactor } from './core/redact.js'
@@ -175,8 +175,6 @@ async function execRun(config: HarnessConfig, task: string, workdir: string, o: 
   }
   let last: HarnessEvent | undefined, cost: number | undefined
   try {
-    if (o.notes && config.notes?.enabled && !o.quiet)
-      console.error(`notes: ${selectNotes(await readNotes(o.notes.file), config.notes.maxTokens).length} loaded from ${shortHome(o.notes.file)}`)
     for await (const e of withNotes({ config, task, workdir, answerSchema: o.answerSchema }, opts, o.notes, trace.id)) {
       last = e
       if ((e.type === 'llm_response' || e.type === 'note_written') && e.costUsd !== undefined) cost = (cost ?? 0) + e.costUsd
@@ -295,7 +293,7 @@ async function benchOnce(config: HarnessConfig, round: number, timeoutS: number,
   // An exception that escapes execRun is text nothing has cleaned yet, and it goes to the bench JSON and the terminal.
   const redact = redactor(apiKey(config.backend, process.env), config.backend.apiKeyEnv ?? '')
   let workdir = '', traceId: string | undefined, parseErrors = 0, toolChars = 0, costUsd: number | undefined, peakTokens: number | undefined, tokens: number | undefined, firstPromptTokens: number | undefined, seenFirst = false, toolErrors = 0, guardBlocks = 0, editMiss = 0, lastError: string | undefined, t0 = Date.now(), run: BenchRun
-  process.stderr.write(`${config.name} #${round} `)
+  process.stderr.write(`${config.name} ${runTitle({ round, task: task.name })} `)
   try {
     workdir = await task.prepare(size)
     process.stderr.write(`${workdir} ... `)
@@ -354,14 +352,14 @@ function rollup(h: BenchHarness) {
 }
 
 /** One Task per task of a repo's lhb-tasks.json: each run in its own clone, its check after a look at the protected files. */
-type Work = { tasks: Task[]; live: Map<string, Clone>; setupClone?: Clone; modules?: string; ready(env: NodeJS.ProcessEnv): Promise<void> }
+type Work = { tasks: Task[]; live: Map<string, Clone>; modules?: string; ready(env: NodeJS.ProcessEnv): Promise<void> }
 
 /** The Tasks at once (preflight needs one), their node_modules only from ready(): setup runs after preflight, so a
  *  server that is down is said in seconds, not after `npm ci`. */
 function repoWork(repo: RepoTasks): Work {
   const w: Work = {
     tasks: [], live: new Map(),
-    async ready(env) { const { from, setupClone } = await prepareModules(repo, env); w.modules = from; w.setupClone = setupClone },
+    async ready(env) { w.modules = (await prepareModules(repo, env)).from },
   }
   const live = w.live
   w.tasks = repo.tasks.map(rt => ({
@@ -387,17 +385,16 @@ function repoWork(repo: RepoTasks): Work {
 
 /** Every clone a bench made, removed now: at the end, and from the SIGINT handler that exits right after. An exit
  *  before that handler exists (Ctrl-C during setup) is covered by repo-clone's own exit hook. */
-function dropWork(w: { live: Map<string, Clone>; setupClone?: Clone }): void {
+function dropWork(w: { live: Map<string, Clone> }): void {
   removeAllClonesSync()
   w.live.clear()
-  w.setupClone = undefined
 }
 
 /** The commands of a repo's tasks run without asking for the whole bench or evolve: accepted once, by hash, before anything runs. */
 async function askConsent(repo: RepoTasks, yes: boolean, ev?: EvolveConsent): Promise<void> {
   if (await hasConsent(repo, ev)) return
   const text = consentText(repo, ev)
-  if (yes) return saveConsent(repo, ev)
+  if (yes) { console.error(text); return saveConsent(repo, ev) }
   if (!process.stdin.isTTY) die(`${text}\n\npass --yes to accept these commands, or run in a terminal`)
   const rl = createInterface({ input: process.stdin, output: process.stderr })
   const answer = await rl.question(`${text}\n\nRun these commands? [y/N] `)
@@ -446,7 +443,6 @@ async function cmdBench(argv: string[]) {
     const key = keyNote(h.config.backend, process.env)
     if (key) console.error(`${h.name}: ${key}`)
   }
-  // The commands of a repo's tasks run without asking for the whole bench: they are accepted once, by hash, before anything runs.
   // Read once, before any run: the exercises of a later run are the bytes of now, whatever an earlier run did to the files.
   let work: Work = { tasks: poly ? polyglotTasks(loadPolyglot(), size!) : [builtin!], live: new Map(), async ready() {} }
   if (repo) {
@@ -480,9 +476,8 @@ async function cmdBench(argv: string[]) {
   // The first save happens before any run, so an unwritable --out (a directory, a bad path) is a
   // typo to report, not a crash after 90 minutes.
   try { save() } catch (e) { die(`cannot write ${out}:\n  ${(e as Error).message}`) }
-  console.error(`bench: ${files.length} harnesses × ${n} runs, timeout ${timeoutS}s per run, writing ${out}`)
+  console.error(`bench: ${files.length} harnesses × ${benchTotal(result) / harnesses.length} runs, timeout ${timeoutS}s per run, writing ${out}`)
   files.forEach((f, i) => console.error(`  ${harnesses[i].name.padEnd(13)} ${f}`))
-  // bench never writes notes, and nothing else writes a task's file: an empty one means this bench measures notes off.
   // bench reads notes and never writes them: a repo's are those of its folder, a built-in task's are in task-<name>.
   const notes: NotesStore = { file: notesPath(repo ? await notesKey(repo.repo) : `task-${taskName}`), write: false }
   for (const h of harnesses) if (h.config.notes?.enabled) {
@@ -516,6 +511,8 @@ async function cmdBench(argv: string[]) {
 /** A path evolve writes to in ./harnesses: never through a link, which the model's bash could have put there. */
 const isLink = (p: string): boolean => { try { return lstatSync(p).isSymbolicLink() } catch { return false } }
 const TRACE_ID = /^[A-Za-z0-9_-]{1,64}$/
+/** The text of version n as evolve writes it; the report compares the file on disk with it byte for byte. */
+const versionText = (base: string, n: number, cfg: object): string => JSON.stringify({ ...cfg, name: `${base}.v${n}` }, null, 2) + '\n'
 type EvolveState = Exclude<ReturnType<typeof replay>, { error: string }>
 
 /** Proposes one edit at a time, runs it on train + gate, keeps it only past the gates, and measures the last kept
@@ -540,13 +537,6 @@ async function cmdEvolve(argv: string[]) {
   // What the runs depend on besides the tasks: a resume with another harness or other flags would mix two evolves.
   const sha256 = (b: Buffer | string) => createHash('sha256').update(b).digest('hex')
   const pin = sha256(JSON.stringify({ harness: sha256(bytes), over, timeoutS, proposer: values.proposer === undefined ? null : sha256(readFileSync(values.proposer)) }))
-  let repo!: RepoTasks
-  try { repo = await loadRepoTasks(values.tasks!) } catch (e) { argError('evolve', (e as Error).message) }
-  const sets = splitSets(repo.tasks), mode = modeOf(sets)
-  if (typeof mode === 'string') return die(mode)
-  console.error(`tasks: ${repo.tasks.length} from ${repo.repo} at ${repo.sha.slice(0, 7)}: train ${sets.train.length}, gate ${sets.gate.length}, test ${sets.test.length}`)
-  if (repo.uncommitted) console.error('uncommitted changes are not in the clones')
-  console.error(mode.strict ? `strict: a candidate needs at least ${neededFlips()} tasks FAIL → PASS on train + gate (more if any go PASS → FAIL)` : referenceLabel(mode))
   // Named from the file, never config.name: that is text inside the file, and it becomes a path.
   const base = path.basename(file!).replace(/\.json$/, '')
   const dir = 'harnesses', jf = path.join(dir, `${base}.evolve.jsonl`), snap = path.join(dir, `${base}.evolve.notes.jsonl`)
@@ -554,12 +544,34 @@ async function cmdEvolve(argv: string[]) {
   for (const p of [dir, jf, snap]) if (isLink(p)) die(`${p} is a symbolic link; evolve writes only to a plain file there`)
   const resuming = existsSync(jf)
   if (values.report && !resuming) die(`no evolve journal at ${jf}`)
-  const paths = (await git(['ls-tree', '-r', '-z', '--name-only', repo.sha], repo.repo)).split('\0').filter(Boolean)
-  const binding = bindingTokens({ names: repo.tasks.map(t => t.name), paths, prompts: repo.tasks.map(t => t.prompt) })
   let lines: JournalLine[] = [], torn = ''
   // The journal is the report's only source: under --report the refusals never advise deleting it.
-  const then = values.report ? `the report cannot be shown from ${jf}` : `delete ${jf} to start over`
+  // Its version files stay behind a deleted journal, and the next start refuses to overwrite v1.
+  const versions = path.join(dir, `${base}.v*.json`)
+  const then = values.report ? `the report cannot be shown from ${jf}` : `delete ${jf} and move away ${versions} to start over`
   const start = (what: string) => `${what}; ${then}`
+  // A sound journal that moved out of step with the repo, the harness or the snapshot: when it is finished it holds the
+  // only results, and a refused restart points at them, never at deleting them.
+  const moved = (what: string) => values.report || !lines.some(l => l.type === 'final') ? start(what)
+    : `${what}; this evolve has finished: see its results with --report and the harness and options it ran with, or move away ${jf} and ${versions} to start over`
+  if (resuming) {
+    const text = readFileSync(jf, 'utf8')
+    const j = parseJournal(text)
+    if ('error' in j) return die(start(`cannot resume: ${jf} ${j.error}`))
+    lines = j.lines
+    torn = text
+  }
+  // The report reads the tasks where its journal started: a commit since changes none of its numbers.
+  const at = values.report && lines[0]?.type === 'start' ? lines[0].sha : undefined
+  let repo!: RepoTasks
+  try { repo = await loadRepoTasks(values.tasks!, at) } catch (e) { if (at !== undefined) die(start((e as Error).message)); argError('evolve', (e as Error).message) }
+  const sets = splitSets(repo.tasks), mode = modeOf(sets)
+  if (typeof mode === 'string') return die(mode)
+  console.error(`tasks: ${repo.tasks.length} from ${repo.repo} at ${repo.sha.slice(0, 7)}: train ${sets.train.length}, gate ${sets.gate.length}, test ${sets.test.length}`)
+  if (repo.uncommitted) console.error('uncommitted changes are not in the clones')
+  console.error(mode.strict ? `strict: a candidate needs at least ${neededFlips()} tasks FAIL → PASS on train + gate (more if any go PASS → FAIL)` : referenceLabel(mode))
+  const paths = (await git(['ls-tree', '-r', '-z', '--name-only', repo.sha], repo.repo)).split('\0').filter(Boolean)
+  const binding = bindingTokens({ names: repo.tasks.map(t => t.name), paths, prompts: repo.tasks.map(t => t.prompt) })
   const rebuilt = (): EvolveState => {
     const r = replay(lines, raw, { binding, sets })
     return 'error' in r ? die(start(r.error)) : r
@@ -569,25 +581,24 @@ async function cmdEvolve(argv: string[]) {
   const snapOk = () => {
     try { return lstatSync(snap).isFile() && sha256(readFileSync(snap)) === (lines[0] as Extract<JournalLine, { type: 'start' }>).notes } catch { return false }
   }
-  const snapCheck = () => { if (!snapOk()) die(start(`the notes snapshot changed since this evolve started (${snap})`)) }
+  const snapCheck = () => { if (!snapOk()) die(moved(`the notes snapshot changed since this evolve started (${snap})`)) }
   if (resuming) {
-    const text = readFileSync(jf, 'utf8')
-    const j = parseJournal(text)
-    if ('error' in j) return die(start(`cannot resume: ${jf} ${j.error}`))
-    lines = j.lines
-    torn = text
-    if (lines[0]?.type === 'start' && lines[0].sha !== repo.sha) die(start('the repo has a new commit since this evolve started'))
-    if (lines[0]?.type === 'start' && lines[0].pin !== pin) die(start('the harness or its options changed since this evolve started'))
+    // Under --report the tasks were read at this very commit.
+    if (lines[0]?.type === 'start' && lines[0].sha !== repo.sha) die(moved('the repo has a new commit since this evolve started'))
+    if (lines[0]?.type === 'start' && lines[0].pin !== pin) die(moved('the harness or its options changed since this evolve started'))
     if (lines[0]?.type === 'start' && lines[0].base !== base) die(start('the journal was written for another harness'))
   }
   // A new journal has no state until its start line.
   let state = resuming ? rebuilt() : undefined as unknown as EvolveState
-  if (resuming) snapCheck()
+  // The snapshot is what the next runs read; the report runs nothing.
+  if (resuming && !values.report) snapCheck()
   const all = Array.from({ length: rounds }, (_, i) => i + 1).every(round => lines.some(l => l.type === 'current' && l.round === round) &&
     Array.from({ length: CANDIDATES }, (_, i) => i + 1).every(index => lines.some(l => l.type === 'candidate' && l.round === round && l.index === index)))
   if (resuming && all && !values.report) console.error(`all rounds are in the journal${state.version ? '; measuring the final test' : ''}`)
   // The report reads only the journal, after replay re-checked it: a finished evolve started again prints it as it was, without a clone or a request.
-  const report = (): string => evolveReport({ lines, state: { ...state, final: state.final! }, original: raw, mode, sets, harness: path.basename(file!), versionFile: state.version ? vf(state.version) : '' })
+  // vN is what the user is told to use: it has to be the text evolve wrote for the version the numbers are about.
+  const changed = (): boolean => { const p = vf(state.version); try { return isLink(p) || readFileSync(p, 'utf8') !== versionText(base, state.version, state.current) } catch { return true } }
+  const report = (): string => evolveReport({ lines, state: { ...state, final: state.final! }, original: raw, mode, sets, harness: path.basename(file!), versionFile: state.version ? vf(state.version) : '', changed: !!state.version && changed() })
   if (values.report || (resuming && all && state.final)) {
     if (!state.final) die(`evolve has not finished: no final test in ${jf}; run evolve again to finish`)
     console.log(report())
@@ -605,8 +616,7 @@ async function cmdEvolve(argv: string[]) {
   const append = (l: JournalLine) => { appendFileSync(jf, JSON.stringify(l) + '\n'); lines.push(l); state = rebuilt() }
   if (!resuming) {
     if (!existsSync(dir)) await mkdir(dir)
-    let host = proposer.backend.baseUrl
-    try { host = new URL(host).host || host } catch { /* kept as it is */ }
+    const host = hostOf(proposer.backend.baseUrl)
     // Every version reads this frozen copy: a note written during evolve would make one version's runs depend on another's.
     // Before the start line: a journal is never without its snapshot.
     const live = notesPath(await notesKey(repo.repo))
@@ -666,7 +676,7 @@ async function cmdEvolve(argv: string[]) {
     try { return { edit: parseProposal(content) } } catch { return { reason: 'no edit in the reply' } }
   }
   const writeVersion = (n: number, cfg: object) => {
-    const p = vf(n), text = JSON.stringify({ ...cfg, name: `${base}.v${n}` }, null, 2) + '\n'
+    const p = vf(n), text = versionText(base, n, cfg)
     if (isLink(p)) die(`${p} is a symbolic link; evolve writes only to a plain file there`)
     // Checked free before the runs; one that appeared since is not ours to replace.
     try { writeFileSync(p, text, { flag: 'wx' }) } catch { die(`${p} already exists; move it away first — evolve never overwrites a version`) }

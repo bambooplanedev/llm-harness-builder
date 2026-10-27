@@ -14,6 +14,8 @@ export type ReportInput = {
   sets: Record<SetName, string[]>
   harness: string
   versionFile: string
+  /** The vN file on disk is not the text evolve wrote for the version measured (edited, replaced or gone). */
+  changed?: boolean
 }
 
 const leafOf = (o: unknown, f: string): unknown => f.split('.').reduce((x: any, k) => x?.[k], o)
@@ -97,6 +99,7 @@ export function evolveReport(r: ReportInput): string {
   const apply: string[] = []
   const said = told.split('\n')
   if (!version) apply.push(`Keep ${harness}.`)
+  else if (r.changed) apply.push(`Keep ${harness}: ${versionFile} on disk is not the version measured; it changed after evolve wrote it.`)
   else {
     if (mode.strict && said[0]!.startsWith('better ')) apply.push(`Use ${versionFile} in place of ${harness}.`)
     else if (!mode.strict && said.includes('more PASS')) apply.push(`Try ${versionFile} in place of ${harness}: a pointer, not proof (too few tasks).`)

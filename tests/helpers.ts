@@ -1,13 +1,19 @@
 // Shared test fixtures. Not a *.test.ts, so vitest does not collect it: importing one test file
 // from another re-registers its tests, which is why these used to be copied per file instead.
-import { mkdtemp } from 'node:fs/promises'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { afterAll } from 'vitest'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { HarnessConfig } from '../src/core/config.js'
 import type { Backend, ChatRequest, Delta, NormalizedResponse } from '../src/core/backends/types.js'
 
-/** A fresh empty directory under the OS temp dir. */
-export const tmp = (prefix: string) => mkdtemp(join(tmpdir(), prefix))
+const made: string[] = []
+/** A fresh empty directory under the OS temp dir; removed when the importing test file is done. */
+export const tmp = async (prefix: string) => { const d = await mkdtemp(join(tmpdir(), prefix)); made.push(d); return d }
+afterAll(async () => { await Promise.all(made.splice(0).map(d => rm(d, { recursive: true, force: true }))) })
+
+/** The git arguments every fixture commit uses: a test user, and no signing whatever the developer's global config says. */
+export const GIT_TEST = ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false']
 
 /** A valid HarnessConfig; `over` replaces whole top-level sections. One definition, so a new required field breaks one place. */
 export const harness = (over: Partial<HarnessConfig> = {}): HarnessConfig => ({
@@ -56,7 +62,7 @@ export async function gitRepo(files: Record<string, string>, o: { commit?: boole
   const { dirname } = await import('node:path')
   const dir = join(await tmp('lhb-repo-'), 'my repo')
   await mkdir(dir)
-  const git = (...a: string[]) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { cwd: dir, stdio: 'pipe' })
+  const git = (...a: string[]) => execFileSync('git', [...GIT_TEST, ...a], { cwd: dir, stdio: 'pipe' })
   git('init', '-q')
   for (const [f, text] of Object.entries(files)) { await mkdir(dirname(join(dir, f)), { recursive: true }); await writeFile(join(dir, f), text) }
   if (o.commit !== false && Object.keys(files).length) { git('add', '-A'); git('commit', '-qm', 'init') }
@@ -66,6 +72,6 @@ export async function gitRepo(files: Record<string, string>, o: { commit?: boole
 /** Commits everything in `dir` as the test user. */
 export async function gitCommit(dir: string, msg = 'next'): Promise<void> {
   const { execFileSync } = await import('node:child_process')
-  execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', 'add', '-A'], { cwd: dir, stdio: 'pipe' })
-  execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', msg], { cwd: dir, stdio: 'pipe' })
+  execFileSync('git', [...GIT_TEST, 'add', '-A'], { cwd: dir, stdio: 'pipe' })
+  execFileSync('git', [...GIT_TEST, 'commit', '-qm', msg], { cwd: dir, stdio: 'pipe' })
 }

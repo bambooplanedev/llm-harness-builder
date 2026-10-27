@@ -1,10 +1,10 @@
 import { describe, test, expect, vi } from 'vitest'
-import { cp, copyFile, mkdtemp, writeFile } from 'node:fs/promises'
+import { cp, copyFile, realpath, writeFile } from 'node:fs/promises'
 import { existsSync, readFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { runTests, score } from '../src/core/polyglot.js'
+import { tmp } from './helpers.js'
 import { childEnv } from '../src/core/tools/env.js'
 
 vi.setConfig({ testTimeout: 120_000 })
@@ -16,12 +16,12 @@ const { exercises } = set
 
 /** The exercise as the bench lays it out: flat, with the bridge and the module marker, and `solution` as `<slug>.js`. */
 const check = async (name: string, solution: string) => {
-  const dir = await mkdtemp(path.join(tmpdir(), 'lhb-polyglot-set-'))
+  const dir = await tmp('lhb-polyglot-set-')
   await cp(path.join(SET, name), dir, { recursive: true })
   for (const f of ['expect.js', 'package.json']) await copyFile(path.join(SET, f), path.join(dir, f))
   await copyFile(solution, path.join(dir, `${name}.js`))
   const { results, exit } = await runTests(dir, `${name}.test.js`, childEnv())
-  return score(results, exercises.find(e => e.name === name)!.tests, exit, `${name}.test.js`)
+  return score(results, exercises.find(e => e.name === name)!.tests, exit, path.join(await realpath(dir), `${name}.test.js`))
 }
 
 test('the set', () => {
@@ -60,7 +60,7 @@ describe.concurrent('each exercise', () => {
 })
 
 test.each(['node:assert', 'node:assert/strict'])('expect.js freezes %s', async mod => {
-  const dir = await mkdtemp(path.join(tmpdir(), 'lhb-polyglot-freeze-'))
+  const dir = await tmp('lhb-polyglot-freeze-')
   for (const f of ['expect.js', 'package.json']) await copyFile(path.join(SET, f), path.join(dir, f))
   await writeFile(path.join(dir, 'x.js'), `import './expect.js'\ntry { (await import('${mod}')).default.equal = () => {}; console.log('patched') } catch (e) { console.log(e.constructor.name) }\n`)
   const out = spawnSync(process.execPath, ['x.js'], { cwd: dir, env: childEnv(), encoding: 'utf8' })
@@ -69,7 +69,7 @@ test.each(['node:assert', 'node:assert/strict'])('expect.js freezes %s', async m
 
 // A solution runs after the bridge loads; accessors it puts on Object.prototype must not reach the matchers.
 test('a solution cannot hand the tests its own matchers through Object.prototype', async () => {
-  const dir = await mkdtemp(path.join(tmpdir(), 'lhb-polyglot-proto-'))
+  const dir = await tmp('lhb-polyglot-proto-')
   for (const f of ['expect.js', 'package.json']) await copyFile(path.join(SET, f), path.join(dir, f))
   await writeFile(path.join(dir, 'x.js'), `for (const k of ['toEqual', 'toBe', 'toThrow', 'not', 'resolves', 'rejects', 'message', 'depth'])
   Object.defineProperty(Object.prototype, k, { configurable: true, set() {}, get() { return () => {} } })
@@ -85,5 +85,5 @@ test('not', () => { expect(answer()).not.toBe(1) });
 test('deep', () => { expect({ a: answer() }).toEqual({ a: 2 }) });
 `)
   const { results, exit } = await runTests(dir, 'x.test.js', childEnv())
-  expect(score(results, ['equal', 'be', 'throw', 'not', 'deep'], exit, 'x.test.js')).toMatchObject({ pass: false, passed: 0, total: 5 })
+  expect(score(results, ['equal', 'be', 'throw', 'not', 'deep'], exit, path.join(await realpath(dir), 'x.test.js'))).toMatchObject({ pass: false, passed: 0, total: 5 })
 })

@@ -241,6 +241,14 @@ describe('evolve signals', () => {
     expect(failureGroups([{ run: r, events: ev }])[0]!.signature).toBe('max_turns|-|-|truncated')
   })
 
+  it('exts sends only known extensions', () => {
+    const ev = [call('1', 'write_file', { path: 'config.acmecorp' }), result('1', 'write_file', 'ok'),
+      call('2', 'write_file', { path: 'notes.payroll2' }), result('2', 'write_file', 'ok'),
+      call('3', 'write_file', { path: 'a/b.py' }), result('3', 'write_file', 'ok')]
+    const [g] = failureGroups([{ run: fail('t1', 'final', 'check exited 1'), events: ev }])
+    expect(g!.exts).toEqual({ other: 2, py: 1 })
+  })
+
   it('SIG accepts every signature signatureOf can make and refuses free text', () => {
     expect(SIG.test('final|check_failed|many|-')).toBe(true)
     expect(SIG.test('other|other|-|truncated')).toBe(true)
@@ -267,11 +275,14 @@ describe('evolve journal', () => {
   const sets = { train: ['t0', 't1'], gate: ['t2'], test: ['t3'] }
   const start = { v: 1, type: 'start', base: 'h', sha: 'abc', pin: 'a'.repeat(64), notes: 'b'.repeat(64), sets, strict: false, proposer: 'http://p/v1' }
   const cur = { v: 1, type: 'current', round: 1, runs: [run('t0', false), run('t1', true), run('t2', true)] }
+  // An accepted candidate's runs beat the current's, as decide would have it; a refused one's do not.
+  const win = [run('t0', true), run('t1', true), run('t2', true)]
   const cand = (index: number, edit: Edit, accepted: boolean, reason: string, round = 1) =>
-    ({ v: 1, type: 'candidate', round, index, input: '{}', edit, accepted, reason, numbers: { pass: 3, tokens: 300, tokensPerSuccess: 100, weight: 30 }, runs: cur.runs, ...(accepted ? { version: 1 } : {}) })
+    ({ v: 1, type: 'candidate', round, index, input: '{}', edit, accepted, reason, numbers: { pass: 3, tokens: 300, tokensPerSuccess: 100, weight: 30 }, runs: accepted ? win : cur.runs, ...(accepted ? { version: 1 } : {}) })
   const a1 = cand(1, { field: 'systemPrompt', value: 'plan first', why: 'w' }, true, 'accepted')
   const r2 = cand(2, { field: 'systemPrompt', value: 'mind t0_file' }, false, 'tied to a task')
   const r3 = { ...cand(1, { field: 'loop.maxRepeats', value: 3 }, false, 'within noise (p=0.50)', 2), numbers: undefined }
+  const cur2 = { ...cur, round: 2 }
   const jsonl = (...ls: object[]) => ls.map(l => JSON.stringify(l) + '\n').join('')
   const ctx = { binding: ['t0_file'], sets }
 
@@ -344,33 +355,63 @@ describe('evolve journal', () => {
     const leak = cand(1, { field: 'systemPrompt', value: 'mind t0_file' }, false, '0 PASS', 2)
     const ok = cand(2, { field: 'loop.maxRepeats', value: 5 }, false, 'costs 12% more tokens per success than the original', 2)
     const cfg = cand(3, { field: 'src/t0_file.ts', value: 1 }, false, 'invalid config: t0_file is bad', 2)
-    const r = replay([start, cur, a1, odd, leak, ok, cfg] as any, harness(), ctx) as any
+    const r = replay([start, cur, a1, odd, cur2, leak, ok, cfg] as any, harness(), ctx) as any
     expect(r.rejected).toEqual([{ field: 'loop.maxRepeats', value: 4, reason: 'other' }, { field: 'systemPrompt', reason: '0 PASS' },
       { field: 'loop.maxRepeats', value: 5, reason: 'costs 12% more tokens per success than the original' }, { field: 'other', value: 1, reason: 'other' }])
   })
 
   it('replay rebuilds the current from the original and the accepted edits', () => {
-    const lines = (parseJournal(jsonl(start, cur, a1, r2, JSON.parse(JSON.stringify(r3)))) as any).lines
+    const lines = (parseJournal(jsonl(start, cur, a1, r2, cur2, JSON.parse(JSON.stringify(r3)))) as any).lines
     const r = replay(lines, harness(), ctx) as any
     expect(r.error).toBeUndefined()
     expect(r.current).toEqual(applyEdit(harness(), { field: 'systemPrompt', value: 'plan first' }))
     expect(r.version).toBe(1)
     expect(r.baseline).toEqual(cur.runs)
-    expect(r.done).toEqual([{ round: 1, index: 0 }, { round: 1, index: 1 }, { round: 1, index: 2 }, { round: 2, index: 1 }])
+    expect(r.done).toEqual([{ round: 1, index: 0 }, { round: 1, index: 1 }, { round: 1, index: 2 }, { round: 2, index: 0 }, { round: 2, index: 1 }])
     expect(r.tried).toEqual([a1.edit, r2.edit, r3.edit])
     expect(r.rejected).toEqual([{ field: 'systemPrompt', reason: 'tied to a task' }, { field: 'loop.maxRepeats', value: 3, reason: 'within noise (p=0.50)' }])
   })
 
   it('refuses an accepted edit outside ALLOWED written into the journal', () => {
     const bad = cand(2, { field: 'loop.untilBash', value: 'rm -rf x' }, true, 'accepted')
-    expect(replay([start, cur, a1, bad] as any, harness(), ctx)).toEqual({ error: 'cannot resume: accepted edit 2: field not allowed' })
+    expect(replay([start, cur, a1, bad] as any, harness(), ctx)).toEqual({ error: 'cannot resume: round 1 candidate 2: accepted edit 2: field not allowed' })
     const dup = cand(2, a1.edit, true, 'accepted')
-    expect(replay([start, cur, a1, dup] as any, harness(), ctx)).toEqual({ error: 'cannot resume: accepted edit 2: already tried' })
+    expect(replay([start, cur, a1, dup] as any, harness(), ctx)).toEqual({ error: 'cannot resume: round 1 candidate 2: accepted edit 2: already tried' })
     expect(replay([cur] as any, harness(), ctx)).toEqual({ error: expect.stringMatching(/^cannot resume: /) })
     // No round 1 current first: there is no baseline to compare with.
     expect(replay([start, a1] as any, harness(), ctx)).toEqual({ error: expect.stringMatching(/^cannot resume: .*round 1/) })
     expect(replay([start, { ...cur, round: 2 }] as any, harness(), ctx)).toEqual({ error: expect.stringMatching(/^cannot resume: .*round 1/) })
     expect(replay([start] as any, harness(), ctx)).toMatchObject({ version: 0, baseline: undefined })
+  })
+
+  // The journal is checked, not trusted: a decision its own numbers do not support is refused, naming its slot.
+  it('replay refuses an accepted line the journal\'s numbers do not support', () => {
+    const lost = cand(1, { field: 'loop.maxRepeats', value: 3 }, false, '0 PASS')
+    lost.runs = [run('t0', false), run('t1', false), run('t2', false)]
+    expect((replay([start, cur, lost] as any, harness(), ctx) as any).error).toBeUndefined()
+    // The flip alone, and the flip with a forged reason: decide on the line's own runs says no.
+    for (const forged of [{ ...lost, accepted: true, version: 1 }, { ...lost, accepted: true, version: 1, reason: 'accepted' }])
+      expect(replay([start, cur, forged] as any, harness(), ctx)).toEqual({ error: expect.stringMatching(/^cannot resume: round 1 candidate 1: /) })
+    // The other way: a win written as a refusal.
+    expect(replay([start, cur, { ...a1, accepted: false, reason: 'worse on gate', version: undefined }] as any, harness(), ctx)).toEqual({ error: expect.stringMatching(/^cannot resume: round 1 candidate 1: /) })
+    // An accepted line without runs has nothing to check against.
+    expect(replay([start, cur, { ...a1, runs: undefined }] as any, harness(), ctx)).toEqual({ error: expect.stringMatching(/^cannot resume: round 1 candidate 1: /) })
+    // A candidate is compared with the candidate kept before it in its round, as the run loop does: a1's runs, not cur's.
+    const same = { ...cand(2, { field: 'loop.maxRepeats', value: 3 }, true, 'accepted'), version: 2 }
+    expect(replay([start, cur, a1, same] as any, harness(), ctx)).toEqual({ error: expect.stringMatching(/^cannot resume: round 1 candidate 2: /) })
+    // A round's candidate with runs before that round's current runs has nothing to be compared with.
+    expect(replay([start, cur, { ...a1, round: 2 }] as any, harness(), ctx)).toEqual({ error: expect.stringMatching(/^cannot resume: round 2 candidate 1: /) })
+  })
+
+  it('replay refuses a second line for the same slot', () => {
+    const again = cand(1, { field: 'loop.freshContext', value: 2 }, false, '0 PASS')
+    expect(replay([start, cur, a1, again] as any, harness(), ctx)).toEqual({ error: expect.stringMatching(/^cannot resume: round 1 candidate 1: /) })
+    expect(replay([start, cur, cur] as any, harness(), ctx)).toEqual({ error: expect.stringMatching(/^cannot resume: round 1 current runs: /) })
+  })
+
+  it('replay refuses an accepted line whose version is not the next one', () => {
+    for (const version of [7, 2, undefined])
+      expect(replay([start, cur, { ...a1, version }] as any, harness(), ctx)).toEqual({ error: expect.stringMatching(/^cannot resume: round 1 candidate 1: /) })
   })
 
   it('refuses sets that differ from the file\'s', () => {

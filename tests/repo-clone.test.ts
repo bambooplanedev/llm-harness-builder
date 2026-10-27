@@ -8,7 +8,7 @@ import { join, basename } from 'node:path'
 import { loadRepoTasks } from '../src/core/repo-tasks.js'
 import { cloneAt, linkNodeModules, changedPaths, protectedChanged, runCheck, patchOf, removeClone, removeCloneSync, modulesManifest, prepareModules, modulesTampered, removeAllClonesSync, finishRun, type Clone } from '../src/core/repo-clone.js'
 import { childEnv } from '../src/core/tools/env.js'
-import { gitRepo, tmp } from './helpers.js'
+import { gitRepo, tmp, GIT_TEST } from './helpers.js'
 
 // Every test here runs several git commands; under a full parallel suite the default 5 s can run out, and a timed-out
 // worker is killed before its clones are removed.
@@ -16,7 +16,7 @@ vi.setConfig({ testTimeout: 30_000 })
 
 const TASKS = JSON.stringify({ tasks: [{ name: 'a', prompt: 'p', check: 'node --test' }] })
 const repoWith = (files: Record<string, string> = {}) => gitRepo({ 'lhb-tasks.json': TASKS, 'src/a.js': 'a\n', 'src/a.test.js': 't\n', 'package.json': '{}', ...files })
-const g = (cwd: string, ...a: string[]) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { cwd, encoding: 'utf8', stdio: 'pipe' })
+const g = (cwd: string, ...a: string[]) => execFileSync('git', [...GIT_TEST, ...a], { cwd, encoding: 'utf8', stdio: 'pipe' })
 const task = (over = {}) => ({ name: 'a', prompt: 'p', check: 'true', checkTimeoutS: 30, ...over })
 
 /** What must not change in the user's repo: config, hooks, packed-refs, refs, status. */
@@ -193,7 +193,7 @@ test('prepareModules: setup runs in its own clone, never in the user repo', asyn
     expect(r.from).not.toBe(withSetup)
     expect(readFileSync(join(r.from, 'node_modules', 'x', 'index.js'), 'utf8')).toBe('1\n')
     expect(existsSync(join(withSetup, 'node_modules'))).toBe(false)
-  } finally { await removeClone(r.setupClone!) }
+  } finally { removeAllClonesSync() }
 })
 
 test('prepareModules: a failing setup throws and leaves no clone', async () => {
@@ -242,7 +242,7 @@ test('prepareModules: setup runs with the env it is given', async () => {
   const t = await loadRepoTasks(repo)
   await expect(prepareModules(t)).rejects.toThrow('setup failed (exit 1)')
   const r = await prepareModules(t, { ...childEnv(), LHB_T_FOO: '1' })
-  await removeClone(r.setupClone!)
+  removeAllClonesSync()
 })
 
 test('finishRun: a patch that cannot be kept is said, the clone goes anyway', async () => {
@@ -284,4 +284,93 @@ test('patchOf: a long patch is cut at a line end, never inside a character', asy
     expect(lines.at(-1)).toBe('[patch truncated at 1 MiB]')
     expect(lines.at(-2)).toBe('+' + ye.repeat(99))
   })
+})
+
+test('protect: .npmrc and vite.config.* are protected', async () => {
+  await withClone({}, async (c, _repo, t) => {
+    await writeFile(join(c.dir, '.npmrc'), 'script-shell=/usr/bin/true\n')
+    await writeFile(join(c.dir, 'vite.config.js'), 'export default {}\n')
+    expect((await protectedChanged(c, t)).sort()).toEqual(['.npmrc', 'vite.config.js'])
+  })
+})
+
+test('a repo with no .gitignore at all still checks and keeps its patch', async () => {
+  await withClone({}, async (c, _repo, t) => {
+    await writeFile(join(c.dir, 'src/a.js'), 'b\n')
+    expect(await protectedChanged(c, t)).toEqual([])
+    expect(await patchOf(c)).toContain('src/a.js')
+  })
+})
+
+test('a self-ignoring .gitignore hides nothing', async () => {
+  await withClone({}, async (c, _repo, t) => {
+    await writeFile(join(c.dir, '.gitignore'), '*\n')
+    await writeFile(join(c.dir, '.npmrc'), 'script-shell=/usr/bin/true\n')
+    // the rule would hide .npmrc, but both are seen: the run fails and the patch is kept
+    expect((await protectedChanged(c, t)).sort()).toEqual(['.gitignore', '.npmrc'])
+    expect(await patchOf(c)).toContain('.gitignore')
+  })
+})
+
+test('a tool cache that ignores itself (pytest, ruff, mypy, venv) is no protected change', async () => {
+  for (const files of [{}, { '.gitignore': '.pytest_cache/\n' }]) await withClone(files, async (c, _repo, t) => {
+    await mkdir(join(c.dir, '.pytest_cache', 'v'), { recursive: true })
+    await writeFile(join(c.dir, '.pytest_cache', '.gitignore'), '# Created by pytest automatically.\n*\n')
+    await writeFile(join(c.dir, '.pytest_cache', 'v', 'x'), '1')
+    await writeFile(join(c.dir, 'src/a.js'), 'b\n')
+    expect(await protectedChanged(c, t)).toEqual([])
+    expect(await changedPaths(c, ['.'])).toEqual(['src/a.js'])
+  })
+})
+
+test('a self-ignoring .gitignore in a committed folder hides nothing', async () => {
+  await withClone({ 'tests/b.js': 'b\n' }, async (c, _repo, t) => {
+    await writeFile(join(c.dir, 'tests', '.gitignore'), '*\n')
+    expect(await protectedChanged(c, t)).toEqual(['tests/.gitignore'])
+  })
+})
+
+test('a .gitignore of its own in a new folder hides nothing: a shadow package or node_modules is a protected change', async () => {
+  await withClone({}, async (c, _repo, t) => {
+    await mkdir(join(c.dir, 'pytest'))
+    await writeFile(join(c.dir, 'pytest', '.gitignore'), '*\n')
+    await writeFile(join(c.dir, 'pytest', '__main__.py'), 'raise SystemExit(0)\n')
+    await mkdir(join(c.dir, 'src', 'node_modules', 'chai'), { recursive: true })
+    await writeFile(join(c.dir, 'src', 'node_modules', '.gitignore'), '*\n')
+    await writeFile(join(c.dir, 'src', 'node_modules', 'chai', 'index.js'), 'module.exports = {}\n')
+    expect((await protectedChanged(c, t)).sort()).toEqual(['pytest/.gitignore', 'src/node_modules/.gitignore'])
+  })
+})
+
+test('a venv made in the run (.venv with pyvenv.cfg) is no protected change; pyvenv.cfg in a plain folder is no pass', async () => {
+  await withClone({}, async (c, _repo, t) => {
+    await mkdir(join(c.dir, '.venv', 'bin'), { recursive: true })
+    await writeFile(join(c.dir, '.venv', '.gitignore'), '# Created by venv; see https://docs.python.org/3/library/venv.html\n*\n')
+    await writeFile(join(c.dir, '.venv', 'pyvenv.cfg'), 'home = /usr/bin\n')
+    await writeFile(join(c.dir, '.venv', 'bin', 'python'), '')
+    expect(await protectedChanged(c, t)).toEqual([])
+    await mkdir(join(c.dir, 'pytest'))
+    await writeFile(join(c.dir, 'pytest', '.gitignore'), '*\n')
+    await writeFile(join(c.dir, 'pytest', 'pyvenv.cfg'), '')
+    await writeFile(join(c.dir, 'pytest', '__main__.py'), 'raise SystemExit(0)\n')
+    expect(await protectedChanged(c, t)).toEqual(['pytest/.gitignore'])
+  })
+})
+
+test('an ignored .npmrc is still a protected change', async () => {
+  await withClone({ '.gitignore': '.npmrc\n' }, async (c, _repo, t) => {
+    await writeFile(join(c.dir, '.npmrc'), 'script-shell=/usr/bin/true\n')
+    await mkdir(join(c.dir, 'sub'))
+    await writeFile(join(c.dir, 'sub', '.npmrc'), 'script-shell=/usr/bin/true\n')
+    expect((await protectedChanged(c, t)).sort()).toEqual(['.npmrc', 'sub/.npmrc'])
+  })
+})
+
+test('modulesManifest: a top-level file planted in node_modules changes it', async () => {
+  const d = await tmp('lhb-nm-')
+  const nm = join(d, 'node_modules')
+  await mkdir(join(nm, 'x'), { recursive: true }); await writeFile(join(nm, 'x', 'package.json'), '{}')
+  const m0 = await modulesManifest(nm)
+  await writeFile(join(nm, 'chai.js'), 'module.exports = 1\n')
+  expect(await modulesManifest(nm)).not.toBe(m0)
 })

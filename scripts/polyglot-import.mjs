@@ -77,7 +77,7 @@ for (const name of ORDER) {
     const d = path.join(work, 'run', `${name}-${path.basename(path.dirname(solution))}`)
     await cp(dir, d, { recursive: true })
     await cp(path.join(OUT, 'expect.js'), path.join(d, 'expect.js'))
-    await writeFile(path.join(d, 'package.json'), '{"type":"module"}\n')
+    await writeFile(path.join(d, 'package.json'), '{"type":"module","scripts":{"test":"node --test"}}\n')
     await cp(solution, path.join(d, `${name}.js`))
     return runTests(d, `${name}.test.js`, childEnv())
   }
@@ -100,7 +100,7 @@ for (const name of ORDER) {
 await mkdir(PROOFS, { recursive: true })
 await cp(path.join(work, 'proofs'), PROOFS, { recursive: true })
 await cp(path.join(clone, 'LICENSE'), path.join(OUT, 'LICENSE-exercism-javascript'))
-await writeFile(path.join(OUT, 'package.json'), '{"type":"module"}\n')
+await writeFile(path.join(OUT, 'package.json'), '{"type":"module","scripts":{"test":"node --test"}}\n')
 await writeFile(path.join(OUT, 'set.json'), JSON.stringify({ source: { repo: 'exercism/javascript', commit: COMMIT }, excluded: EXCLUDED, exercises }, null, 2) + '\n')
 await writeFile(path.join(OUT, 'NOTICE.md'), `# Notice
 

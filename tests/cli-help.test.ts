@@ -5,7 +5,7 @@ import { TASKS } from '../src/core/tasks.js'
 const names = Object.keys(COMMANDS) as CommandName[]
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
-test('seven commands, and nothing from Object.prototype counts as one', () => {
+test('eight commands, and nothing from Object.prototype counts as one', () => {
   expect(names).toEqual(['serve', 'run', 'demo', 'bench', 'evolve', 'replay', 'analyze', 'proxy'])
   for (const n of ['toString', 'constructor', '__proto__', 'help', '']) expect(isCommand(n)).toBe(false)
 })
@@ -39,4 +39,23 @@ test('overview: the description first, then each command with its summary', () =
 
 test('--kind names anthropic in every command that takes it', () => {
   for (const n of ['run', 'demo', 'bench'] as const) expect(commandHelp(n)).toMatch(/--kind[^\n]*anthropic/)
+})
+
+test('README usage lines match --help: every command has its line, word for word', async () => {
+  const { readFileSync } = await import('node:fs')
+  for (const f of ['README.md', 'README.uk.md']) {
+    const all = readFileSync(new URL(`../${f}`, import.meta.url), 'utf8').split('\n')
+    const from = all.findIndex(l => l.includes('--help | --version')) // the CLI block: the indented lines from here on
+    expect(from, f).toBeGreaterThan(-1)
+    const lines: string[] = []
+    for (let i = from; all[i]?.startsWith('    llm-harness-builder '); i++) lines.push(all[i].trim())
+    const seen = new Set<string>()
+    for (const line of lines) {
+      const cmd = line.split(' ')[1]
+      if (!isCommand(cmd)) continue // the `--help | --version | help <command>` line
+      expect([f, 'usage: ' + line]).toEqual([f, usage(cmd)])
+      seen.add(cmd)
+    }
+    expect([f, [...seen].sort()]).toEqual([f, [...names].sort()])
+  }
 })

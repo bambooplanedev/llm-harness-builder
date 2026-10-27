@@ -40,7 +40,7 @@ const summaryEnd = (s: string): string => s.length <= SUMMARY_MAX ? s : s.slice(
 async function insideWorkdir(file: string, workdir: string): Promise<boolean> {
   const real = async (p: string): Promise<string> => { try { return await realpath(p) } catch { const d = path.dirname(p); return d === p ? p : path.join(await real(d), path.basename(p)) } }
   const rel = path.relative(await real(workdir), await real(file))
-  return !rel.startsWith('..') && !path.isAbsolute(rel)
+  return rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel)
 }
 
 /** runAgent with the folder's notes: holds the run's `done`, makes the writer call, yields `note_written`, then `done`.
@@ -50,7 +50,7 @@ export async function* withNotes(params: RunParams, opts: RunOpts, store: NotesS
   if (!config.notes?.enabled || !store) { yield* runAgent(params, opts); return }
   if (await insideWorkdir(store.file, params.workdir)) {
     // Said once, where the note would have been, so the trace and the terminal both show why there are none.
-    yield* holdDone(runAgent(params, opts), { type: 'note_written', notes: [], error: `the notes file ${store.file} is inside the workdir, where the model could write it; notes are off for this run (set LHB_NOTES_DIR)` })
+    yield* holdDone(runAgent(params, opts), { type: 'note_written', notes: [], error: `the notes file ${store.file} is inside the workdir, where the model could write it; notes are off for this run (point LHB_NOTES_DIR outside the workdir)` })
     return
   }
   const all = await readNotes(store.file)

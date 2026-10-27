@@ -491,6 +491,9 @@ test('bench --task polyglot --size 2: the first two exercises, each run with its
     expect(h.tests).toEqual({ passed: 0, total: exercises[0].tests.length + exercises[1].tests.length })
   }
   expect(r.stdout).toMatch(/^harness\s+PASS.*\btests$/m)
+  // size 2 × n 1 = 2 real runs per harness, each line names its exercise
+  expect(r.stderr).toMatch(/^bench: 2 harnesses × 2 runs,/m)
+  for (const e of exercises.slice(0, 2)) expect(r.stderr).toContain(`tuned #1 ${e.name} `)
 }, 120_000)
 
 test('bench --task polyglot: a model that writes the proof gets PASS and all its tests green, in the run, the harness and the table', async () => {
@@ -1384,7 +1387,6 @@ test('run with notes on: writes the note to the notes dir, outside the project, 
   const r = cli(['run', await withNotesOn(cwd), '--workdir', wd, '--yes', 'x'], { LHB_FAKE_BACKEND: fake, LHB_NOTES_DIR: nd }, cwd)
   expect(r.status).toBe(0)
   const file = join(nd, `${await notesKey(wd)}.jsonl`)
-  expect(r.stderr).toContain(`notes: 0 loaded from ${file}`)
   expect(r.stderr).toContain('note: tests run with npm test')
   expect((await readNotes(file)).map(n => n.text)).toEqual(['tests run with npm test'])
   expect(existsSync(join(cwd, 'runs', 'notes'))).toBe(false)
@@ -1397,7 +1399,18 @@ test('run with notes on from the project root: a notes dir inside the workdir is
   const r = cli(['run', await withNotesOn(wd), '--workdir', wd, '--yes', 'x'], { LHB_FAKE_BACKEND: fake, LHB_NOTES_DIR: join(wd, 'runs', 'notes') }, wd)
   expect(r.status).toBe(0)
   expect(r.stderr).toContain('is inside the workdir')
+  expect(r.stderr).toContain('LHB_NOTES_DIR outside the workdir')
+  expect(r.stderr).not.toMatch(/notes: \d+ loaded/)
   expect(existsSync(join(wd, 'runs', 'notes'))).toBe(false)
+}, 30_000)
+
+test('run prints the notes count once', async () => {
+  const wd = await tmp('lhb-cli-'), cwd = await tmp('lhb-cwd-'), nd = await tmp('lhb-notes-')
+  const fake = join(wd, 'fake.json')
+  await writeFile(fake, JSON.stringify([{ content: 'done' }, { content: JSON.stringify({ notes: [] }) }]))
+  await writeFile(join(nd, `${await notesKey(wd)}.jsonl`), JSON.stringify({ id: 'a', ts: 1, author: 'model', text: 'old fact' }) + '\n')
+  const r = cli(['run', await withNotesOn(cwd), '--workdir', wd, '--yes', 'x'], { LHB_FAKE_BACKEND: fake, LHB_NOTES_DIR: nd }, cwd)
+  expect(r.stderr.match(/notes: \d+ loaded/g)).toEqual(['notes: 1 loaded'])
 }, 30_000)
 
 test("bench: a run's tokens are the sum of its replies' usage, firstPromptTokens the first prompt", async () => {
@@ -1486,6 +1499,8 @@ test('bench --tasks: runs each task in a clone, PASS and FAIL with a reason, pat
   expect(r.status, r.stderr).toBe(0)
   const j = JSON.parse(await readFile(join(cwd, 'b.json'), 'utf8'))
   const sha = execSync('git rev-parse HEAD', { cwd: repo, encoding: 'utf8' }).trim()
+  expect(r.stderr).toMatch(/^bench: 1 harnesses × 2 runs,/m)
+  expect(r.stderr).toContain('bare #1 a ')
   expect(j).toMatchObject({ taskName: 'tasks', tasksRepo: realpathSync(repo), tasksSha: sha })
   expect(j.harnesses[0].runs.map((x: any) => [x.task, x.verdict, x.lastError])).toEqual([['a', 'PASS', undefined], ['b', 'FAIL', 'check exited 1']])
   expect(clonesIn(env)).toEqual([])
@@ -1505,7 +1520,7 @@ test('bench --tasks: asks before running the commands, remembers, asks again whe
   expect(cli([...args, '--yes'], env, cwd).status).toBe(0)
   expect(cli(args, env, cwd).status).toBe(0)
   writeFileSync(join(repo, 'lhb-tasks.json'), JSON.stringify({ tasks: [TWO[0], { ...TWO[1], check: 'exit 2' }] }))
-  execSync('git -c user.name=t -c user.email=t@t commit -qam next', { cwd: repo })
+  await gitCommit(repo)
   expect(cli(args, env, cwd).status).toBe(2)
 }, 90_000)
 
@@ -1535,7 +1550,7 @@ test('bench --tasks: a changed protected file is a FAIL and the check never runs
 test('bench --tasks: the model changing the shared node_modules stops the bench after its JSON', async () => {
   const repo = await tasksRepo(TWO)
   mkdirSync(join(repo, 'node_modules', 'x'), { recursive: true }); writeFileSync(join(repo, 'node_modules', 'x', 'index.js'), '1')
-  writeFileSync(join(repo, '.gitignore'), 'node_modules\n'); execSync('git -c user.name=t -c user.email=t@t add .gitignore && git -c user.name=t -c user.email=t@t commit -qm ig', { cwd: repo })
+  writeFileSync(join(repo, '.gitignore'), 'node_modules\n'); await gitCommit(repo, 'ig')
   const env = await tasksEnv([bashCall('rm node_modules/x/index.js'), { content: 'done' }, { content: 'done' }])
   const cwd = await tmp('lhb-cwd-')
   const r = cli(['bench', '--tasks', repo, '--n', '1', '--yes', '--out', join(cwd, 'b.json'), harness('bare')], env, cwd)
@@ -1860,7 +1875,7 @@ test('evolve: an edited harness or another --model refuses to resume', async () 
   const before = evRaw(cwd)
   const m = cli(['evolve', h, '--tasks', repo, '--rounds', '2', '--yes', '--model', 'other'], env, cwd)
   expect(m.status).toBe(2)
-  expect(m.stderr).toContain(`the harness or its options changed since this evolve started; delete ${join('harnesses', 'h.evolve.jsonl')} to start over`)
+  expect(m.stderr).toContain(`the harness or its options changed since this evolve started; this evolve has finished: see its results with --report and the harness and options it ran with, or move away ${join('harnesses', 'h.evolve.jsonl')} and ${join('harnesses', 'h.v*.json')} to start over`)
   writeFileSync(h, readFileSync(h, 'utf8') + '\n')
   const e = cli(['evolve', h, '--tasks', repo, '--rounds', '2', '--yes'], env, cwd)
   expect(e.status).toBe(2)
@@ -1940,6 +1955,85 @@ test('evolve: --report prints exactly what the run printed, and runs nothing', a
   expect(clonesIn(env)).toEqual([])
 }, 120_000)
 
+test('evolve: the report says when vN on disk is not the version measured', async () => {
+  const { repo, env, cwd, h } = await evFirst()
+  const v1 = join(cwd, 'harnesses', 'h.v1.json')
+  const same = cli(['evolve', h, '--tasks', repo, '--report'], env, cwd)
+  expect(same.status, same.stderr).toBe(0)
+  expect(same.stdout).toContain(`Try ${join('harnesses', 'h.v1.json')} in place of h.json`)
+  writeFileSync(v1, readFileSync(v1, 'utf8').replace('"name"', '"description": "x",\n  "name"'))
+  const r = cli(['evolve', h, '--tasks', repo, '--report'], env, cwd)
+  expect(r.status, r.stderr).toBe(0)
+  expect(r.stdout).toContain(`${join('harnesses', 'h.v1.json')} on disk is not the version measured`)
+  expect(r.stdout).not.toContain(`Try ${join('harnesses', 'h.v1.json')}`)
+  expect(r.stdout).not.toContain(`Use ${join('harnesses', 'h.v1.json')}`)
+}, 120_000)
+
+// After the run the report reads only the journal: what moved in the repo or the snapshot since does not hide it.
+for (const [what, change] of [
+  ['a new commit', async (repo: string) => { await writeFile(join(repo, 'other.txt'), 'x'); await gitCommit(repo) }],
+  ['a new commit that edits lhb-tasks.json', async (repo: string) => { await writeFile(join(repo, 'lhb-tasks.json'), JSON.stringify({ tasks: evTasks({ train: 2, gate: 2, test: 2 }, 'new') })); await gitCommit(repo) }],
+  ['the notes snapshot is gone', async (_: string, cwd: string) => rmSync(join(cwd, 'harnesses', 'h.evolve.notes.jsonl'))],
+] as const) test(`evolve: --report prints after ${what}`, async () => {
+  const { repo, env, cwd, h } = await evFirst()
+  const first = cli(['evolve', h, '--tasks', repo, '--report'], env, cwd)
+  expect(first.status, first.stderr).toBe(0)
+  await change(repo, cwd)
+  const r = cli(['evolve', h, '--tasks', repo, '--report'], env, cwd)
+  expect(r.status, r.stderr).toBe(0)
+  expect(r.stdout).toBe(first.stdout)
+  // A resume still refuses: its runs would mix two commits or two snapshots.
+  expect(cli(['evolve', h, '--tasks', repo, '--rounds', '2', '--yes'], env, cwd).status).toBe(2)
+  expect(clonesIn(env)).toEqual([])
+}, 120_000)
+
+test('evolve: --report when the start commit is no longer in the repo says so', async () => {
+  const { repo, env, cwd, h } = await evFirst()
+  const lines = journal(cwd)
+  lines[0].sha = 'f'.repeat(40)
+  writeFileSync(join(cwd, 'harnesses', 'h.evolve.jsonl'), lines.map(l => JSON.stringify(l)).join('\n') + '\n')
+  const r = cli(['evolve', h, '--tasks', repo, '--report'], env, cwd)
+  expect(r.status).toBe(2)
+  expect(r.stderr).toContain(`the commit this evolve started at (fffffff) is no longer in the repo; the report cannot be shown from ${join('harnesses', 'h.evolve.jsonl')}`)
+  expect(r.stdout).toBe('')
+}, 120_000)
+
+test('evolve: the start-over hint names the version files', async () => {
+  const { repo, env, cwd, h } = await evFirst()
+  // Unfinished: the final test is not in the journal.
+  writeFileSync(join(cwd, 'harnesses', 'h.evolve.jsonl'), journal(cwd).filter(l => l.type !== 'final').map(l => JSON.stringify(l)).join('\n') + '\n')
+  const m = cli(['evolve', h, '--tasks', repo, '--rounds', '2', '--yes', '--model', 'other'], env, cwd)
+  expect(m.status).toBe(2)
+  expect(m.stderr).toContain(`; delete ${join('harnesses', 'h.evolve.jsonl')} and move away ${join('harnesses', 'h.v*.json')} to start over`)
+}, 120_000)
+
+test('evolve: a finished evolve started again after a new commit points at --report, not at deleting its results', async () => {
+  const { repo, env, cwd, h } = await evFirst()
+  await writeFile(join(repo, 'other.txt'), 'x'); await gitCommit(repo)
+  const r = cli(['evolve', h, '--tasks', repo, '--yes'], env, cwd)
+  expect(r.status).toBe(2)
+  expect(r.stderr).toContain(`the repo has a new commit since this evolve started; this evolve has finished: see its results with --report and the harness and options it ran with, or move away ${join('harnesses', 'h.evolve.jsonl')} and ${join('harnesses', 'h.v*.json')} to start over`)
+  expect(r.stderr).not.toContain('delete')
+}, 120_000)
+
+test('evolve: a journal with a flipped decision is refused on resume and on --report', async () => {
+  const { repo, env, cwd, h } = await evFirst()
+  const lines = journal(cwd)
+  const refused = lines.find(l => l.type === 'candidate' && !l.accepted)
+  // The second candidate is refused before any run (already tried): give it the first one's losing numbers and flip it.
+  const cur = lines.find(l => l.type === 'current')
+  Object.assign(refused, { accepted: true, reason: 'accepted', version: 2, runs: cur.runs, edit: { field: 'loop.maxRepeats', value: 3 } })
+  writeFileSync(join(cwd, 'harnesses', 'h.evolve.jsonl'), lines.map(l => JSON.stringify(l)).join('\n') + '\n')
+  const r = cli(['evolve', h, '--tasks', repo, '--report'], env, cwd)
+  expect(r.status).toBe(2)
+  expect(r.stderr).toContain(`cannot resume: round 1 candidate 2: `)
+  expect(r.stderr).toContain(`; the report cannot be shown from ${join('harnesses', 'h.evolve.jsonl')}`)
+  const again = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
+  expect(again.status).toBe(2)
+  expect(again.stderr).toContain(`cannot resume: round 1 candidate 2: `)
+  expect(clonesIn(env)).toEqual([])
+}, 120_000)
+
 test('evolve: the run\'s stdout is the report and nothing else', async () => {
   const repo = await tasksRepo(evTasks(ONE_EACH))
   const env = await tasksEnv(evFake())
@@ -2005,7 +2099,7 @@ for (const [what, tamper] of [
   const r = cli(['evolve', h, '--tasks', repo, '--rounds', '2', '--yes'], env, cwd)
   expect(r.status).toBe(2)
   expect(r.stderr).toContain('the notes snapshot changed')
-  expect(r.stderr).toContain(`delete ${join('harnesses', 'h.evolve.jsonl')}`)
+  expect(r.stderr).toContain(`; this evolve has finished: see its results with --report and the harness and options it ran with, or move away ${join('harnesses', 'h.evolve.jsonl')} and ${join('harnesses', 'h.v*.json')} to start over`)
   expect(journal(cwd).some(l => l.round === 2)).toBe(false)
   expect(clonesIn(env)).toEqual([])
 }, 120_000)
@@ -2034,3 +2128,12 @@ test('evolve: a proposer reply in prose is a journaled rejection, no edit in the
   expect(r.stdout).toContain('no version beat the original')
   expect(clonesIn(env)).toEqual([])
 }, 120_000)
+
+test('bench --tasks --yes prints the commands before saving consent', async () => {
+  const repo = await tasksRepo(TWO)
+  const env = await tasksEnv([{ content: 'done' }, { content: 'done' }])
+  const cwd = await tmp('lhb-cwd-')
+  const r = cli(['bench', '--tasks', repo, '--n', '1', '--yes', '--out', join(cwd, 'b.json'), harness('bare')], env, cwd)
+  expect(r.status, r.stderr).toBe(0)
+  for (const s of ['make done.txt', "check — in each run's clone, after the run"]) expect(r.stderr).toContain(s)
+}, 60_000)
