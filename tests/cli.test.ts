@@ -2135,6 +2135,16 @@ test('evolve: a proposer reply in prose is a journaled rejection, no edit in the
   expect(clonesIn(env)).toEqual([])
 }, 120_000)
 
+test('evolve: a proposer reply cut at maxTokens is a journaled rejection that says so', async () => {
+  const repo = await tasksRepo(evTasks(ONE_EACH))
+  const [p, ...rest] = evFake()
+  const env = await tasksEnv([{ ...p, content: '{"field":"systemPrompt","value":"Plan', truncated: true }, ...rest])
+  const cwd = await tmp('lhb-cwd-')
+  const r = cli(['evolve', evHarness(cwd), '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
+  expect(r.status, r.stderr).toBe(0)
+  expect(journal(cwd).filter(l => l.type === 'candidate').map(c => c.reason)).toEqual(['reply cut at maxTokens', 'reply cut at maxTokens'])
+}, 120_000)
+
 test('bench --tasks --yes prints the commands before saving consent', async () => {
   const repo = await tasksRepo(TWO)
   const env = await tasksEnv([{ content: 'done' }, { content: 'done' }])

@@ -743,16 +743,16 @@ async function cmdEvolve(argv: string[]) {
       temperature: pb.temperature, maxTokens: pb.maxTokens ?? 1024,
       ...(pb.numCtx === undefined ? {} : { numCtx: pb.numCtx }), ...(pb.think === undefined ? {} : { think: pb.think }),
     }
-    let content: string
+    let content: string, cut: boolean
     try {
       const r = await sendRetrying(pBackend, pBackend.buildPayload(req), AbortSignal.timeout(timeoutS * 1000), undefined, RETRY_MS)
       if (r.usage) proposerTokens += r.usage.promptTokens + r.usage.completionTokens
-      content = r.content
+      content = r.content; cut = !!r.truncated
     // Not a rejection: a journaled one would never be asked again, and the next evolve continues at this candidate.
     } catch (e) {
       if (e instanceof BackendError && isStop(e)) return halt('proposer', pb, e.status!, pRedact, e.midReply)
       dropWork(work); return die(`proposer failed: ${showable(pRedact.text((e as Error).message))}`) }
-    try { return { edit: parseProposal(content) } } catch { return { reason: 'no edit in the reply' } }
+    try { return { edit: parseProposal(content) } } catch { return { reason: cut ? 'reply cut at maxTokens' : 'no edit in the reply' } }
   }
   const writeVersion = (n: number, cfg: object) => {
     const p = vf(n), text = versionText(base, n, cfg)
