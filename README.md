@@ -252,7 +252,7 @@ directory to browse them, and reload the list after a CLI run. On every start `s
 whatever the verdicts, except that `bench` exits 1 when the model changed the `node_modules` its runs were linked to (see Your own tasks); `demo` exits 1 when the server is not up or lacks the model, or when a harness needs something the model lacks (a knob it refuses), with a hint.
 2 for an argument a command cannot take (the message names it and the usage follows), for a file it cannot read, for a key variable that is not set, is empty or holds what a
 key cannot (see [Cloud](#cloud)), and for the refusal below. 130 for Ctrl-C in `run`, `demo` and
-`bench` and `evolve`, which keeps the trace. `proxy` exits 0 when stopped. `evolve` exits 0 with a report, 1 for the `node_modules` change above, 2 for the refusals under [evolve](#evolve) and 130 for Ctrl-C.
+`bench` and `evolve`, which keeps the trace. `proxy` exits 0 when stopped. `evolve` exits 0 with a report, 1 for the `node_modules` change above or a stop under [evolve](#evolve) (a key refused, no credits, a 429 that lasts), 2 for its refusals and 130 for Ctrl-C. `bench` and `evolve` exit 2, with no JSON, when the server does not answer or lacks the model (see Preflight).
 
 **Approvals.** `run` without `--yes` asks before each command it may run. When stdin is not a
 terminal — a pipe, `/dev/null`, CI — nobody can answer, so a harness that may ask (`approveBash`
@@ -427,8 +427,8 @@ even after new commits or a deleted notes snapshot, and it says when `vN.json` o
 the version that was measured. To use `vN`, point at it; copying it over the original file changes
 the harness the journal was pinned to, and a later `--report` refuses.
 
-Exit codes: 0 with a report; 1 when the model changed the linked `node_modules` or a stop above ended it; 2 for a refusal or a
-bad argument; 130 for Ctrl-C, after which the journal holds every finished step.
+Exit codes: 0 with a report; 1 when the model changed the linked `node_modules` or a stop above ended it; 2 for a refusal, a
+bad argument, or a server that does not answer or lacks the model; 130 for Ctrl-C, after which the journal holds every finished step.
 
 #### replay
 
@@ -628,6 +628,7 @@ silently off.
 | `backend.think` | the chat template's thinking switch (below) |
 | `backend.apiKeyEnv` | the variable that holds a hosted API's key — see [Cloud](#cloud) |
 | `backend.pricePerMTok` | prices per million tokens, for `$` per reply and per run — see [Anthropic](#anthropic) |
+| `backend.reasoningEffort` | `low`, `medium` or `high`, on `kind: "openai"`: sent as `reasoning: {effort}` to openrouter.ai and as `reasoning_effort` (the OpenAI API's field) to any other server; absent sends nothing. A model whose OpenRouter `supported_parameters` lack `reasoning` gets it switched off with a `knobs_off` note; the bench JSON keeps it in the harness config |
 | `description` | one line on what the harness is for; shown beside the picker, ignored by diffs |
 | `systemPrompt` | the first message of every request |
 | `tools.enabled` | built-in tools: `list_dir`, `read_file`, `write_file`, `edit_file`, `bash` |
@@ -636,6 +637,7 @@ silently off.
 | `tools.explainEditMiss` | say why an edit did not match |
 | `tools.editMissEscalation` | after N failed edits of one file, tell the model to read it again (below) |
 | `tools.readMaxBytes`, `bashMaxBytes`, `bashTimeoutS` | process limits; defaults 4194304, 1048576 and 30 |
+| `tools.readRanges` | gives `read_file` `start` and `end` (from 1, inclusive; a final newline is not a line); a cut read names the lines shown and the next `start`; with the read guard, a file read only in part cannot be overwritten with `write_file`; off keeps the tool exactly as before |
 | `tools.bashEnv` | names of environment variables `bash` gets from yours (below) |
 | `toolCalls.mode` | `native` (tools in the API) or `prompted` (tools in the text) |
 | `toolCalls.format` | `json` or `hermes`, in prompted mode |
