@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { api, type ActiveTrace, type AnalysisCells, type BenchFile, type BenchHarness, type BenchResult, type BenchRun, type HarnessConfig, type HarnessEvent } from './api'
 import { cellsLine } from '../../src/core/analyze'
-import { formatTable, mmss, wilson, benchTotal, runTitle, BENCH_TASKS } from '../../src/core/bench'
+import { formatTable, mmss, wilson, benchTotal, runTitle, BENCH_TASKS, defaultSize } from '../../src/core/bench'
 import Trace from './Trace.vue'
 import { t, tn, T, lang } from './i18n'
 import Diff from './Diff.vue'
@@ -110,7 +110,7 @@ const runsUnasked = ref<Record<string, string[]>>({})
 const task = ref('slug')
 const size = ref(0)
 const runsPer = ref(3)
-watch(task, t => { size.value = BENCH_TASKS[t] })
+watch(task, t => { size.value = defaultSize(t) })
 async function toggleNew() {
   newOpen.value = !newOpen.value
   if (!newOpen.value) return

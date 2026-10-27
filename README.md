@@ -300,6 +300,7 @@ list says it is incomplete, and the window comes from that list — see [Cloud](
 | `sift` | 1–12 | split a screener's verdicts into two files, checked character by character |
 | `triage` | 1–12 | write KEEP or DROP for each new post into a file; the fixture carries the key |
 | `judge` | 1–12 | the same judgement as one request: posts in the task text, verdicts as the final answer |
+| `polyglot` | 1–47 | the first N of 47 Exercism JavaScript exercises, each checked by its own tests |
 
 `pool3` has the same order and buggy sources as `pool2`, and tests of its own for `parseDuration`
 (minutes alone and next to the other units, so a fix that special-cases the old test's literal
@@ -308,6 +309,24 @@ fails) and `median` (the input array must come back as it was, so a sort in plac
 compare with `pool2`'s. `sift`, `triage` and `judge` are steps of a news curator on synthetic
 fixtures (`examples-sift`, `examples-triage`). How they were measured and what they showed:
 [docs/curator.md](docs/curator.md).
+
+**Polyglot.** Each exercise is one run: the model gets the exercise's `INSTRUCTIONS.md` and stub,
+and the check runs the exercise's tests in a fresh directory. An exercise is PASS when all its tests
+are green; the table adds a `tests` column (green / total, summed over runs) with no interval, since
+the tests of one exercise are not independent. The set is `examples-polyglot/` (47 exercises, the
+names from Aider's polyglot benchmark minus `grep` and `ledger`); sources, licenses and attribution:
+`examples-polyglot/NOTICE.md`.
+
+```bash
+llm-harness-builder bench base.json yours.json --task polyglot --size 5 --n 1    # a rough estimate
+llm-harness-builder bench base.json yours.json --task polyglot --size 47          # the full set, may take a night
+```
+
+Limits. A crashed run does not resume. With `--n` above 1 every run counts, so the interval is a
+little optimistic. Each exercise's check has its own fixed 60 s limit, separate from `--timeout`. The
+model has network, and Exercism's solutions are public. The shell is not isolated, so determined
+cheating (forging the test runner's messages, say) is not fully ruled out. The numbers do not compare
+with Aider's leaderboard (there: two attempts, the second with the test output; here: one agent run).
 
 **Your own tasks.** `bench --tasks <repo>` runs your tasks instead of a built-in one, from a
 `lhb-tasks.json` at the top of a git repo:

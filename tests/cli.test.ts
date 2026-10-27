@@ -1,7 +1,7 @@
 import { test, expect } from 'vitest'
 import { spawn, spawnSync, execSync } from 'node:child_process'
 import { writeFile, readFile, readdir, stat, cp } from 'node:fs/promises'
-import { mkdtempSync, existsSync, writeFileSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
+import { chmodSync, mkdtempSync, existsSync, writeFileSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import http from 'node:http'
@@ -11,6 +11,7 @@ import { SIG } from '../src/core/evolve.js'
 import { fakeOpenAI, toolTurn, textTurn } from './fake-openai.js'
 import { fakeAnthropic, toolReply, textReply } from './fake-anthropic.js'
 import { RunStore } from '../src/server/runs'
+import { loadPolyglot } from '../src/core/polyglot.js'
 import { notesKey, readNotes } from '../src/core/notes.js'
 
 const ROOT = process.cwd()
@@ -472,6 +473,57 @@ test('bench --task pool --size 2 --max-turns 7: a pool workdir, the verdict on i
   expect((await readdir(join(run.workdir, 'src'))).sort()).toEqual(['clamp.js', 'words.js'])
 }, 60_000)
 
+test('bench --task polyglot --size 2: the first two exercises, each run with its test counts, an empty queue included (backend_error)', async () => {
+  const wd = await tmp('lhb-cli-')
+  const fake = join(wd, 'fake.json'); const out = join(wd, 'g.json')
+  await writeFile(fake, JSON.stringify([])) // every run ends in reason 'error'; the check still runs
+  const r = cli(['bench', '--n', '1', '--task', 'polyglot', '--size', '2', '--out', out, harness('tuned'), harness('bare')], { LHB_FAKE_BACKEND: fake })
+  expect(r.status).toBe(0)
+  const j = JSON.parse(await readFile(out, 'utf8'))
+  const { exercises } = loadPolyglot()
+  expect(j).toMatchObject({ taskName: 'polyglot', size: 2, taskCount: 2, complete: true, task: 'polyglot: the first 2 of 47 Exercism JavaScript exercises' })
+  for (const h of j.harnesses) {
+    expect(h.runs.map((x: { task: string }) => x.task)).toEqual(exercises.slice(0, 2).map(e => e.name))
+    h.runs.forEach((x: { tests: unknown; reason: string }, i: number) => {
+      expect(x.reason).toBe('backend_error')
+      expect(x.tests).toEqual({ passed: 0, total: exercises[i].tests.length })
+    })
+    expect(h.tests).toEqual({ passed: 0, total: exercises[0].tests.length + exercises[1].tests.length })
+  }
+  expect(r.stdout).toMatch(/^harness\s+PASS.*\btests$/m)
+}, 120_000)
+
+test('bench --task polyglot: a model that writes the proof gets PASS and all its tests green, in the run, the harness and the table', async () => {
+  const wd = await tmp('lhb-cli-')
+  const fake = join(wd, 'fake.json'); const out = join(wd, 'w.json')
+  const first = loadPolyglot().exercises[0]
+  const proof = await readFile(join(ROOT, 'polyglot-proofs', `${first.name}.js`), 'utf8')
+  await writeFile(fake, JSON.stringify([{ content: JSON.stringify({ calls: [{ name: 'write_file', args: { path: `${first.name}.js`, content: proof } }], final: null }) }, { content: '{"calls":[],"final":"done"}' }]))
+  const r = cli(['bench', '--n', '1', '--task', 'polyglot', '--size', '1', '--out', out, harness('tuned')], { LHB_FAKE_BACKEND: fake })
+  expect(r.status).toBe(0)
+  const j = JSON.parse(await readFile(out, 'utf8'))
+  const run = j.harnesses[0].runs[0], total = first.tests.length
+  expect(total).toBeGreaterThan(0)
+  expect([run.verdict, run.reason, run.tests]).toEqual(['PASS', 'final', { passed: total, total }])
+  expect(j.harnesses[0].tests).toEqual({ passed: total, total })
+  expect(r.stdout).toMatch(new RegExp(`^tuned\\s.*${total}/${total}$`, 'm'))
+}, 120_000)
+
+test.skipIf(process.getuid?.() === 0)('bench --task polyglot: a run that throws before its check still carries tests {passed: 0, total}', async () => {
+  const wd = await tmp('lhb-cli-')
+  const fake = join(wd, 'fake.json'); const out = join(wd, 't.json')
+  await writeFile(fake, JSON.stringify([]))
+  // prepare makes its workdir in the temp dir: one that cannot be written to makes prepare throw (tsx keeps its own cache dir in it, made first).
+  const ro = join(wd, 'ro'); mkdirSync(join(ro, `tsx-${process.getuid?.()}`), { recursive: true }); chmodSync(ro, 0o500)
+  const r = cli(['bench', '--n', '1', '--task', 'polyglot', '--size', '1', '--out', out, harness('tuned')], { LHB_FAKE_BACKEND: fake, TMPDIR: ro })
+  chmodSync(ro, 0o700)
+  expect(r.status).toBe(0)
+  const j = JSON.parse(await readFile(out, 'utf8'))
+  const run = j.harnesses[0].runs[0]
+  expect([run.verdict, run.reason, run.turns]).toEqual(['FAIL', 'error', 0])
+  expect(run.tests).toEqual({ passed: 0, total: loadPolyglot().exercises[0].tests.length })
+}, 120_000)
+
 test('bench without --task is the slug task, and says so', async () => {
   const wd = await tmp('lhb-cli-')
   const fake = join(wd, 'fake.json'); const out = join(wd, 's.json')
@@ -835,7 +887,10 @@ test('argument errors name the option, show the usage, exit 2 and print no stack
     [['serve', '--port', '-1'], /^error: Option '--port' argument is ambiguous\./m],
     [['bench', '--n', 'x'], /^error: --n must be a positive integer$/m],
     [['bench', '--timeout', '0'], /^error: --timeout must be a positive integer$/m],
-    [['bench', '--task', 'nope'], /^error: --task must be one of slug\|pool\|pool2\|pool3\|sift\|triage\|judge$/m],
+    [['bench', '--task', 'nope'], /^error: --task must be one of slug\|pool\|pool2\|pool3\|sift\|triage\|judge\|polyglot$/m],
+    [['bench', '--task', 'polyglot'], /^error: --size must be an integer from 1 to 47 for polyglot$/m],
+    [['bench', '--task', 'polyglot', '--size', '0'], /^error: --size must be an integer from 1 to 47 for polyglot$/m],
+    [['bench', '--task', 'polyglot', '--size', '49'], /^error: --size must be an integer from 1 to 47 for polyglot$/m],
     [['bench', '--task', 'slug', '--size', '3'], /^error: --size: slug has no sizes$/m],
     [['bench', '--max-turns', '1.5'], /^error: --max-turns must be a positive integer$/m],
     [['replay', 'x.jsonl', '--turn', '0', '--kind', 'openai', '--base-url', 'http://x'], /^error: --turn must be a positive integer$/m],

@@ -336,5 +336,5 @@ test('checkSlug: node --test in the workdir, whatever check.sh now says', async 
 })
 
 test("the Bench page's list of tasks and sizes is the one bench runs", () => {
-  expect(BENCH_TASKS).toEqual(Object.fromEntries(Object.entries(TASKS).map(([k, t]) => [k, t.max ?? 0])))
+  expect(BENCH_TASKS).toEqual({ ...Object.fromEntries(Object.entries(TASKS).map(([k, t]) => [k, t.max ?? 0])), polyglot: 47 }) // polyglot is many Tasks, not a key of TASKS
 })
