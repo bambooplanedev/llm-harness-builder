@@ -3,7 +3,7 @@ import { writeFile, stat, chmod } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
-import { loadRepoTasks, validateTasksFile, consentText, consentHash, hasConsent, saveConsent, DEFAULT_PROTECT } from '../src/core/repo-tasks.js'
+import { loadRepoTasks, validateTasksFile, consentText, consentHash, hasConsent, saveConsent, DEFAULT_PROTECT, type RepoTasks } from '../src/core/repo-tasks.js'
 import { notesDir } from '../src/core/notes.js'
 import { gitRepo, gitCommit, tmp } from './helpers.js'
 
@@ -115,4 +115,24 @@ test('a committed node_modules is refused at load', async () => {
   const repo = await gitRepo({ 'lhb-tasks.json': JSON.stringify(good), 'node_modules/x/index.js': '1' })
   const sha7 = execFileSync('git', ['rev-parse', '--short=7', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim()
   await expect(loadRepoTasks(repo)).rejects.toThrow(`node_modules is committed at ${sha7}; bench --tasks links its own: remove it from the repo`)
+})
+
+test('repo-tasks: the evolve consent names the mode, the proposer and the fields; another proposer asks again; bench consent is not touched', async () => {
+  const pinned: RepoTasks = { repo: '/r', sha: 'abc', tasks: [{ name: 'a', prompt: 'p', check: 'c', checkTimeoutS: 60 }], setup: 'npm ci', protect: [], scripts: { test: 'vitest' }, uncommitted: false }
+  // Bench consents already stored hold this hash: the evolve flavour must not move it.
+  expect(consentHash(pinned)).toBe('0b8ded13df23938c32710bc926997a665c9ae46f59dad95f44b316a25c8c485e')
+  const repo = await gitRepo({ 'lhb-tasks.json': JSON.stringify(good) })
+  const t = await loadRepoTasks(repo)
+  const ev = { proposer: 'http://localhost:8080/v1', fields: ['systemPrompt', 'loop.maxRepeats'] }
+  const text = consentText(t, ev)
+  expect(text.startsWith(consentText(t) + '\n')).toBe(true)
+  for (const s of ["mode: evolve — the model's own prompts run unreviewed while Evolve measures them", 'proposer: localhost:8080', 'fields: systemPrompt, loop.maxRepeats']) expect(text).toContain(s)
+  expect(await hasConsent(t, ev)).toBe(false)
+  await saveConsent(t, ev)
+  expect(await hasConsent(t, ev)).toBe(true)
+  expect(await hasConsent(t, { ...ev, proposer: 'https://openrouter.ai/api/v1' })).toBe(false)
+  expect(await hasConsent(t)).toBe(false)
+  await saveConsent(t)
+  expect(await hasConsent(t)).toBe(true)
+  expect(await hasConsent(t, ev)).toBe(true)
 })

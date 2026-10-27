@@ -2,8 +2,9 @@
 // src/cli.ts
 import { parseArgs } from 'node:util'
 import { readFile, cp, mkdir, writeFile } from 'node:fs/promises'
-import { existsSync, readFileSync, writeFileSync, renameSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync, renameSync, appendFileSync, lstatSync, truncateSync } from 'node:fs'
 import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { createInterface } from 'node:readline/promises'
 import { homedir } from 'node:os'
 import path from 'node:path'
@@ -11,12 +12,13 @@ import { fileURLToPath } from 'node:url'
 import { mayAsk, type RunOpts } from './core/run.js'
 import { killTracked } from './core/procs.js'
 import { withNotes, type NotesStore } from './core/notes-run.js'
-import { notesKey, notesPath, readNotes, selectNotes } from './core/notes.js'
-import { loadRepoTasks, consentText, hasConsent, saveConsent, TASKS_FILE, type RepoTasks } from './core/repo-tasks.js'
+import { notesKey, notesPath, readNotes, selectNotes, scrubText } from './core/notes.js'
+import { ALLOWED, CANDIDATES, splitSets, modeOf, referenceLabel, neededFlips, numbersOf, usable, decide, applyEdit, bindingTokens, checkEdit, failureGroups, proposerInput, proposerRequest, parseProposal, parseJournal, replay, verdict, type Edit, type JournalLine, type RunLite } from './core/evolve.js'
+import { loadRepoTasks, consentText, hasConsent, saveConsent, git, TASKS_FILE, type RepoTasks, type EvolveConsent } from './core/repo-tasks.js'
 import { cloneAt, linkNodeModules, protectedChanged, runCheck, finishRun, removeAllClonesSync, prepareModules, modulesManifest, modulesTampered, type Clone } from './core/repo-clone.js'
-import { validateConfig, sendsAnswerSchema, KEY_ENV, FLAG_WORDS, keyNameMessage, keyErrors, keyProblem, keyNote, apiKey, isHttpUrl, isLoopbackUrl, type HarnessConfig, type BackendKind } from './core/config.js'
+import { validateConfig, sendsAnswerSchema, KEY_ENV, FLAG_WORDS, keyNameMessage, keyErrors, keyProblem, keyNote, apiKey, NO_THINK_LINE, isHttpUrl, isLoopbackUrl, type HarnessConfig, type BackendKind } from './core/config.js'
 import { validateWorkdir } from './core/tools/sandbox.js'
-import type { Backend, Delta, NormalizedResponse } from './core/backends/types.js'
+import type { Backend, ChatRequest, Delta, NormalizedResponse } from './core/backends/types.js'
 import { approvalPrompt, mcpCounts, quitWithoutWork, showable, showableText, type HarnessEvent, type ToolCall } from './core/events.js'
 import { startServer } from './server/index.js'
 import { TraceWriter, type Meta } from './server/runs.js'
@@ -52,18 +54,21 @@ const DEMO_HARNESSES = ['bare', 'tuned-nothink', 'tuned-hermes']
 const demoHarnesses = (kind?: string, apiKeyEnv?: string): string[] => kind === 'openai' && apiKeyEnv ? DEMO_HARNESSES.map(h => h === 'tuned-nothink' ? 'tuned' : h) : DEMO_HARNESSES
 
 let fakeCache: Promise<Backend | undefined> | undefined
-/** Test hook: LHB_FAKE_BACKEND=<file.json> with an array of Partial<NormalizedResponse>; an entry may carry `deltas` as well, which stream to the terminal before its reply returns. One shared queue per process. */
+/** Test hook: LHB_FAKE_BACKEND=<file.json> with an array of Partial<NormalizedResponse>; an entry may carry `deltas` as well, which stream to the terminal before its reply returns. An entry with `when` answers only a request whose JSON contains it, and `keep` leaves it in the queue; the first entry that fits is used. One shared queue per process. */
 function fakeBackendFromEnv(): Promise<Backend | undefined> {
   return (fakeCache ??= (async () => {
     const f = process.env.LHB_FAKE_BACKEND
     if (!f) return undefined
-    const queue: (Partial<NormalizedResponse> & { deltas?: Delta[] })[] = JSON.parse(await readFile(f, 'utf8'))
+    const queue: (Partial<NormalizedResponse> & { deltas?: Delta[]; when?: string; keep?: boolean })[] = JSON.parse(await readFile(f, 'utf8'))
     return {
       async listModels() { return ['fake'] }, buildPayload: r => r,
-      async send(_payload: unknown, _signal?: AbortSignal, onDelta?: (d: Delta) => void) {
-        const r = queue.shift()
-        if (!r) throw new Error('fake backend: no more responses')
-        const { deltas, ...reply } = r
+      async send(payload: unknown, _signal?: AbortSignal, onDelta?: (d: Delta) => void) {
+        const text = JSON.stringify(payload)
+        const i = queue.findIndex(e => e.when === undefined || text.includes(e.when))
+        if (i < 0) throw new Error(queue.length ? 'fake backend: no response for this request' : 'fake backend: no more responses')
+        const r = queue[i]!
+        if (!r.keep) queue.splice(i, 1)
+        const { deltas, when: _w, keep: _k, ...reply } = r
         for (const d of deltas ?? []) onDelta?.(d)
         return { content: '', toolCalls: [], raw: {}, ...reply }
       },
@@ -71,12 +76,20 @@ function fakeBackendFromEnv(): Promise<Backend | undefined> {
   })())
 }
 
-async function loadHarness(file: string, over: { model?: string; baseUrl?: string; kind?: string; apiKeyEnv?: string; maxTurns?: number }): Promise<HarnessConfig> {
+type Overrides = { model?: string; baseUrl?: string; kind?: string; apiKeyEnv?: string; maxTurns?: number }
+
+async function loadHarness(file: string, over: Overrides): Promise<HarnessConfig> {
   // One catch for the whole read: a missing file, a directory and malformed JSON all used to reach
   // the top-level handler and print a stack at someone who mistyped a path.
   let cfg: any
   try { cfg = JSON.parse(await readFile(file, 'utf8')) }
   catch (e) { return die(`cannot read harness ${file}:\n  ${(e as Error).message}`) }
+  return overridden(cfg, over, file)
+}
+
+/** The harness file's JSON with the command line's overrides, checked; `raw` itself is left as it was (evolve saves it). */
+function overridden(raw: unknown, over: Overrides, file: string): HarnessConfig {
+  const cfg = structuredClone(raw) as any
   if (!cfg || typeof cfg.backend !== 'object' || cfg.backend === null) die(`invalid harness ${file}:\n  backend must be an object`)
   if (over.model) cfg.backend.model = over.model
   if (over.baseUrl) cfg.backend.baseUrl = over.baseUrl
@@ -279,7 +292,7 @@ const INT = /^[1-9]\d*$/
 async function benchOnce(config: HarnessConfig, round: number, timeoutS: number, out: string, task: Task, notes: NotesStore, size?: number): Promise<BenchRun> {
   // An exception that escapes execRun is text nothing has cleaned yet, and it goes to the bench JSON and the terminal.
   const redact = redactor(apiKey(config.backend, process.env), config.backend.apiKeyEnv ?? '')
-  let workdir = '', traceId: string | undefined, parseErrors = 0, toolChars = 0, costUsd: number | undefined, peakTokens: number | undefined, toolErrors = 0, guardBlocks = 0, editMiss = 0, lastError: string | undefined, t0 = Date.now(), run: BenchRun
+  let workdir = '', traceId: string | undefined, parseErrors = 0, toolChars = 0, costUsd: number | undefined, peakTokens: number | undefined, tokens: number | undefined, firstPromptTokens: number | undefined, seenFirst = false, toolErrors = 0, guardBlocks = 0, editMiss = 0, lastError: string | undefined, t0 = Date.now(), run: BenchRun
   process.stderr.write(`${config.name} #${round} `)
   try {
     workdir = await task.prepare(size)
@@ -292,7 +305,10 @@ async function benchOnce(config: HarnessConfig, round: number, timeoutS: number,
       onEvent: e => {
         if (e.type === 'parse_error') parseErrors++
         if (e.type === 'llm_response' && e.costUsd !== undefined) costUsd = (costUsd ?? 0) + e.costUsd
-        if (e.type === 'llm_response' && e.usage) peakTokens = Math.max(peakTokens ?? 0, e.usage.promptTokens + e.usage.completionTokens)
+        if (e.type === 'llm_response') {
+          if (!seenFirst) { seenFirst = true; firstPromptTokens = e.usage?.promptTokens }
+          if (e.usage) { const t = e.usage.promptTokens + e.usage.completionTokens; peakTokens = Math.max(peakTokens ?? 0, t); tokens = (tokens ?? 0) + t }
+        }
         if (e.type === 'mcp_server_start') toolChars += e.descriptionChars + e.schemaChars
         if (e.type === 'tool_result' && e.error) {
           toolErrors++
@@ -311,9 +327,9 @@ async function benchOnce(config: HarnessConfig, round: number, timeoutS: number,
     const checked = typeof c === 'boolean' ? { pass: c } : c
     if (checked.reason) lastError = checked.reason
     const verdict = checked.pass ? 'PASS' : 'FAIL'
-    run = { ...(task.name ? { task: task.name } : {}), round, verdict, reason: d?.reason ?? 'error', turns: d?.turns ?? 0, toolCalls: d?.toolCallCount ?? 0, parseErrors, lastError, ms, workdir, trace: id, toolChars: toolChars || undefined, costUsd, peakTokens, toolErrors, guardBlocks: config.tools.requireReadBeforeEdit ? guardBlocks : undefined, editMiss }
+    run = { ...(task.name ? { task: task.name } : {}), round, verdict, reason: d?.reason ?? 'error', turns: d?.turns ?? 0, toolCalls: d?.toolCallCount ?? 0, parseErrors, lastError, ms, workdir, trace: id, toolChars: toolChars || undefined, costUsd, peakTokens, tokens: seenFirst ? tokens : 0, firstPromptTokens, toolErrors, guardBlocks: config.tools.requireReadBeforeEdit ? guardBlocks : undefined, editMiss }
   } catch (e) {
-    run = { ...(task.name ? { task: task.name } : {}), round, verdict: 'FAIL', reason: 'error', turns: 0, toolCalls: 0, parseErrors, lastError: redact.text(String(e)), ms: Date.now() - t0, workdir, toolChars: toolChars || undefined, costUsd, peakTokens, toolErrors, guardBlocks: config.tools.requireReadBeforeEdit ? guardBlocks : undefined, editMiss }
+    run = { ...(task.name ? { task: task.name } : {}), round, verdict: 'FAIL', reason: 'error', turns: 0, toolCalls: 0, parseErrors, lastError: redact.text(String(e)), ms: Date.now() - t0, workdir, toolChars: toolChars || undefined, costUsd, peakTokens, tokens: seenFirst ? tokens : 0, firstPromptTokens, toolErrors, guardBlocks: config.tools.requireReadBeforeEdit ? guardBlocks : undefined, editMiss }
   } finally {
     // The check's own leftovers too, and a run that threw: nothing keeps writing into a clone being removed.
     await killTracked()
@@ -372,6 +388,19 @@ function dropWork(w: { live: Map<string, Clone>; setupClone?: Clone }): void {
   w.setupClone = undefined
 }
 
+/** The commands of a repo's tasks run without asking for the whole bench or evolve: accepted once, by hash, before anything runs. */
+async function askConsent(repo: RepoTasks, yes: boolean, ev?: EvolveConsent): Promise<void> {
+  if (await hasConsent(repo, ev)) return
+  const text = consentText(repo, ev)
+  if (yes) return saveConsent(repo, ev)
+  if (!process.stdin.isTTY) die(`${text}\n\npass --yes to accept these commands, or run in a terminal`)
+  const rl = createInterface({ input: process.stdin, output: process.stderr })
+  const answer = await rl.question(`${text}\n\nRun these commands? [y/N] `)
+  rl.close()
+  if (!/^y(es)?$/i.test(answer.trim())) die('not accepted; nothing ran')
+  await saveConsent(repo, ev)
+}
+
 async function cmdBench(argv: string[]) {
   const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: COMMANDS.bench.options })
   if (values.help) return printHelp('bench')
@@ -415,17 +444,7 @@ async function cmdBench(argv: string[]) {
   if (repo) {
     console.error(`tasks: ${repo.tasks.length} from ${repo.repo} at ${repo.sha.slice(0, 7)}`)
     if (repo.uncommitted) console.error('uncommitted changes are not in the clones')
-    if (!(await hasConsent(repo))) {
-      const text = consentText(repo)
-      if (values.yes) await saveConsent(repo)
-      else if (process.stdin.isTTY) {
-        const rl = createInterface({ input: process.stdin, output: process.stderr })
-        const answer = await rl.question(`${text}\n\nRun these commands? [y/N] `)
-        rl.close()
-        if (!/^y(es)?$/i.test(answer.trim())) die('not accepted; nothing ran')
-        await saveConsent(repo)
-      } else die(`${text}\n\npass --yes to accept these commands, or run in a terminal`)
-    }
+    await askConsent(repo, values.yes)
     work = repoWork(repo)
   }
   const tasks = work.tasks
@@ -484,6 +503,203 @@ async function cmdBench(argv: string[]) {
   result.complete = true
   save()
   finish()
+}
+
+/** A path evolve writes to in ./harnesses: never through a link, which the model's bash could have put there. */
+const isLink = (p: string): boolean => { try { return lstatSync(p).isSymbolicLink() } catch { return false } }
+const TRACE_ID = /^[A-Za-z0-9_-]{1,64}$/
+const leafOf = (o: unknown, f: string): unknown => f.split('.').reduce((x: any, k) => x?.[k], o)
+type EvolveState = Exclude<ReturnType<typeof replay>, { error: string }>
+
+/** Proposes one edit at a time, runs it on train + gate, keeps it only past the gates, and measures the last kept
+ *  version against the original on test. Every completed step is a journal line, and the state is always the journal
+ *  replayed: a resumed evolve and an uninterrupted one start each candidate from the same state. */
+async function cmdEvolve(argv: string[]) {
+  const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: COMMANDS.evolve.options })
+  if (values.help) return printHelp('evolve')
+  keyFlag('evolve', values['api-key-env'])
+  const [file] = positionals
+  if (!file || positionals.length > 1) argError('evolve', 'evolve needs one harness file')
+  if (values.tasks === undefined) argError('evolve', 'evolve needs --tasks <repo>')
+  if (!INT.test(values.rounds)) argError('evolve', '--rounds must be a positive integer')
+  if (!INT.test(values.timeout)) argError('evolve', '--timeout must be a positive integer')
+  const rounds = Number(values.rounds), timeoutS = Number(values.timeout)
+  // Read once: edits go onto this JSON and versions are saved from it, without the overrides; the file is never written.
+  let raw: object, bytes: Buffer
+  try { bytes = await readFile(file!); raw = JSON.parse(bytes.toString('utf8')) } catch (e) { return die(`cannot read harness ${file}:\n  ${(e as Error).message}`) }
+  const over = { model: values.model, baseUrl: values['base-url'], kind: values.kind, apiKeyEnv: values['api-key-env'] }
+  const config = overridden(raw, over, file!)
+  const proposer = values.proposer === undefined ? config : await loadHarness(values.proposer, {})
+  // What the runs depend on besides the tasks: a resume with another harness or other flags would mix two evolves.
+  const sha256 = (b: Buffer | string) => createHash('sha256').update(b).digest('hex')
+  const pin = sha256(JSON.stringify({ harness: sha256(bytes), over, timeoutS, proposer: values.proposer === undefined ? null : sha256(readFileSync(values.proposer)) }))
+  let repo!: RepoTasks
+  try { repo = await loadRepoTasks(values.tasks!) } catch (e) { argError('evolve', (e as Error).message) }
+  const sets = splitSets(repo.tasks), mode = modeOf(sets)
+  if (typeof mode === 'string') return die(mode)
+  console.error(autoApproves('evolve'))
+  console.error(`tasks: ${repo.tasks.length} from ${repo.repo} at ${repo.sha.slice(0, 7)}: train ${sets.train.length}, gate ${sets.gate.length}, test ${sets.test.length}`)
+  if (repo.uncommitted) console.error('uncommitted changes are not in the clones')
+  console.error(mode.strict ? `strict: a candidate needs at least ${neededFlips()} tasks FAIL → PASS on train + gate (more if any go PASS → FAIL)` : referenceLabel(mode))
+  // Named from the file, never config.name: that is text inside the file, and it becomes a path.
+  const base = path.basename(file!).replace(/\.json$/, '')
+  const dir = 'harnesses', jf = path.join(dir, `${base}.evolve.jsonl`), snap = path.join(dir, `${base}.evolve.notes.jsonl`)
+  const vf = (n: number) => path.join(dir, `${base}.v${n}.json`)
+  for (const p of [dir, jf, snap]) if (isLink(p)) die(`${p} is a symbolic link; evolve writes only to a plain file there`)
+  const resuming = existsSync(jf)
+  await askConsent(repo, values.yes, { proposer: proposer.backend.baseUrl, fields: ALLOWED })
+  const paths = (await git(['ls-tree', '-r', '-z', '--name-only', repo.sha], repo.repo)).split('\0').filter(Boolean)
+  const binding = bindingTokens({ names: repo.tasks.map(t => t.name), paths, prompts: repo.tasks.map(t => t.prompt) })
+  let lines: JournalLine[] = []
+  const rebuilt = (): EvolveState => {
+    const r = replay(lines, raw, { binding, sets })
+    return 'error' in r ? die(`${r.error} (${jf}); delete it to start over`) : r
+  }
+  if (resuming) {
+    const text = readFileSync(jf, 'utf8')
+    const j = parseJournal(text)
+    if ('error' in j) return die(`cannot resume: ${jf} ${j.error}; delete it to start over`)
+    lines = j.lines
+    if (lines[0]?.type === 'start' && lines[0].sha !== repo.sha) die(`the repo has a new commit since this evolve started; delete ${jf} to start over`)
+    if (lines[0]?.type === 'start' && lines[0].pin !== pin) die(`the harness or its options changed since this evolve started; delete ${jf} to start over`)
+    // A torn last line goes, or the next line would be appended onto it.
+    if (text && !text.endsWith('\n')) truncateSync(jf, Buffer.byteLength(text.slice(0, text.lastIndexOf('\n') + 1)))
+  }
+  // A new journal has no state until its start line.
+  let state = resuming ? rebuilt() : undefined as unknown as EvolveState
+  // The next version is checked now, not after a candidate's runs: a file the journal has no line for is not ours.
+  const next = vf((resuming ? state.version : 0) + 1)
+  if (isLink(next)) die(`${next} is a symbolic link; evolve writes only to a plain file there`)
+  if (existsSync(next)) die(`${next} already exists and the journal has no line for it; move it away first — evolve never overwrites a version`)
+  // One whole line per write: a Ctrl-C leaves the journal at a completed step.
+  const append = (l: JournalLine) => { appendFileSync(jf, JSON.stringify(l) + '\n'); lines.push(l); state = rebuilt() }
+  if (!resuming) {
+    if (!existsSync(dir)) await mkdir(dir)
+    let host = proposer.backend.baseUrl
+    try { host = new URL(host).host || host } catch { /* kept as it is */ }
+    // Every version reads this frozen copy: a note written during evolve would make one version's runs depend on another's.
+    // Before the start line: a journal is never without its snapshot.
+    const live = notesPath(await notesKey(repo.repo))
+    writeFileSync(snap, existsSync(live) ? readFileSync(live) : '')
+    append({ v: 1, type: 'start', base, sha: repo.sha, pin, sets, strict: mode.strict, proposer: host })
+  }
+  const work = repoWork(repo)
+  const byName = new Map(work.tasks.map(t => [t.name!, t]))
+  const no = await preflightAll([{ name: config.name, config }, { name: 'proposer', config: proposer }], work.tasks[0])
+  if (no) { dropWork(work); die(no) }
+  try { await work.ready(childEnv(config.tools.bashEnv ?? [])) } catch (e) { die((e as Error).message) }
+  await killTracked()
+  process.once('SIGINT', () => { dropWork(work); process.exit(130) })
+  const modulesDir = work.modules && path.join(work.modules, 'node_modules')
+  const modules0 = modulesDir && await modulesManifest(modulesDir)
+  const out = path.join('runs', `evolve-${base}.json`), notes: NotesStore = { file: snap, write: false }
+  let stopped = false
+  const stop = () => { dropWork(work); console.error(`the model changed the installed packages in ${modulesDir}; stopping`); process.exitCode = 1 }
+  const runOn = async (cfg: object, name: string, names: string[], round: number): Promise<RunLite[]> => {
+    const c = overridden({ ...cfg, name }, over, file!)
+    const rs: RunLite[] = []
+    for (const n of names) {
+      const r = await benchOnce(c, round, timeoutS, out, byName.get(n)!, notes)
+      rs.push({ task: n, verdict: r.verdict, tokens: r.tokens, firstPromptTokens: r.firstPromptTokens, trace: r.trace, reason: r.reason, lastError: r.lastError })
+      // As in bench: a run that changed the linked node_modules changed every run after it.
+      if (modulesDir && await modulesManifest(modulesDir) !== modules0) { stopped = true; break }
+    }
+    return rs
+  }
+  // A trace id from the journal is a path only when it looks like one of ours.
+  const eventsOf = async (trace?: string): Promise<HarnessEvent[]> => {
+    if (!trace || !TRACE_ID.test(trace)) return []
+    try { return (await readTraceFile(path.join('runs', `${trace}.jsonl`))).events } catch { return [] }
+  }
+  const pb = proposer.backend
+  const pBackend = (await fakeBackendFromEnv()) ?? createBackend(pb)
+  const pRedact = redactor(apiKey(pb, process.env), pb.apiKeyEnv ?? '')
+  const hRedact = redactor(apiKey(config.backend, process.env), config.backend.apiKeyEnv ?? '')
+  const clean = (s: string) => scrubText(s, hRedact, homedir())
+  let proposerTokens = 0
+  // Built like the notes writer's call: the proposer's own knobs, its /no_think line, a schema only where it enforces one.
+  const propose = async (input: string): Promise<{ edit?: Edit; reason?: string }> => {
+    const req: ChatRequest = {
+      ...proposerRequest(pb.model, input, { schema: proposer.toolCalls.enforceSchema, noThink: NO_THINK_LINE.test(proposer.systemPrompt) }),
+      temperature: pb.temperature, maxTokens: pb.maxTokens ?? 1024,
+      ...(pb.numCtx === undefined ? {} : { numCtx: pb.numCtx }), ...(pb.think === undefined ? {} : { think: pb.think }),
+    }
+    let content: string
+    try {
+      const r = await pBackend.send(pBackend.buildPayload(req), AbortSignal.timeout(timeoutS * 1000))
+      if (r.usage) proposerTokens += r.usage.promptTokens + r.usage.completionTokens
+      content = r.content
+    // Not a rejection: a journaled one would never be asked again, and the next evolve continues at this candidate.
+    } catch (e) { dropWork(work); return die(`proposer failed: ${showable(pRedact.text((e as Error).message))}`) }
+    try { return { edit: parseProposal(content) } } catch { return { reason: 'no edit in the reply' } }
+  }
+  const writeVersion = (n: number, cfg: object) => {
+    const p = vf(n), text = JSON.stringify({ ...cfg, name: `${base}.v${n}` }, null, 2) + '\n'
+    if (isLink(p)) die(`${p} is a symbolic link; evolve writes only to a plain file there`)
+    // Checked free before the runs; one that appeared since is not ours to replace.
+    try { writeFileSync(p, text, { flag: 'wx' }) } catch { die(`${p} already exists; move it away first — evolve never overwrites a version`) }
+  }
+  const trainGate = [...sets.train, ...sets.gate]
+  const all = Array.from({ length: rounds }, (_, i) => i + 1).every(round => lines.some(l => l.type === 'current' && l.round === round) &&
+    Array.from({ length: CANDIDATES }, (_, i) => i + 1).every(index => lines.some(l => l.type === 'candidate' && l.round === round && l.index === index)))
+  if (resuming && all) console.error(`all rounds are in the journal${state.version ? '; measuring the final test again' : ''}`)
+  for (let round = 1; round <= rounds; round++) {
+    console.error(`--- round ${round}/${rounds}`)
+    const cur = lines.find(l => l.type === 'current' && l.round === round) as Extract<JournalLine, { type: 'current' }> | undefined
+    // What the next candidate is compared with: this round's run of the current version, or the candidate kept since.
+    let cmp = cur?.runs
+    if (!cmp) {
+      cmp = await runOn(state.current, `${base}.cur`, trainGate, round)
+      if (stopped) return stop()
+      append({ v: 1, type: 'current', round, runs: cmp })
+    }
+    // Every gate divides by the original's tokens: without them each candidate's runs would be spent for a sure refusal.
+    if (!usable(state.baseline!)) { dropWork(work); die(`the server gave no usage for the original's runs; evolve needs a server that reports token usage; delete ${jf} to start over`) }
+    for (let index = 1; index <= CANDIDATES; index++) {
+      const done = lines.find(l => l.type === 'candidate' && l.round === round && l.index === index) as Extract<JournalLine, { type: 'candidate' }> | undefined
+      if (done) { if (done.accepted && done.runs) cmp = done.runs; continue }
+      const train = await Promise.all(cmp.filter(r => sets.train.includes(r.task)).map(async run => ({ run, events: await eventsOf(run.trace) })))
+      const input = proposerInput(state.current, failureGroups(train), state.rejected, clean)
+      const p = await propose(input)
+      const why = p.reason ?? checkEdit(p.edit!, { current: state.current, original: raw, tried: state.tried, binding })
+      if (why) {
+        console.error(`candidate ${round}.${index}: ${showable(why)}`)
+        append({ v: 1, type: 'candidate', round, index, input, ...(p.edit ? { edit: p.edit } : {}), accepted: false, reason: why })
+        continue
+      }
+      const cand = applyEdit(state.current, p.edit!)
+      const runs = await runOn(cand, `${base}.r${round}c${index}`, trainGate, round)
+      if (stopped) return stop()
+      const d = decide(cmp, runs, state.baseline!, sets.gate, mode)
+      const version = d.accepted ? state.version + 1 : undefined
+      if (version) { writeVersion(version, cand); cmp = runs }
+      append({ v: 1, type: 'candidate', round, index, input, edit: p.edit!, accepted: d.accepted, reason: d.reason, numbers: d.numbers, runs, ...(version ? { version } : {}) })
+      console.error(`candidate ${round}.${index}: ${d.reason}${version ? ` — wrote ${vf(version)}` : ''}`)
+    }
+  }
+  const report: string[] = []
+  if (lines.some(l => l.type === 'candidate' && l.reason === 'the server gave no usage'))
+    report.push(state.version ? 'the server gave no usage (token counts) for some candidates\' runs, so those could not pass the gates' : 'the server gave no usage (token counts), so no candidate could pass the gates: evolve needs a server that reports them')
+  if (state.version) {
+    const orig = await runOn(raw, `${base}.orig`, sets.test, 1)
+    if (stopped) return stop()
+    const last = await runOn(state.current, `${base}.v${state.version}`, sets.test, 1)
+    if (stopped) return stop()
+    report.push(`${vf(state.version)} against ${file} on the ${sets.test.length} test tasks:`)
+    for (const l of lines) if (l.type === 'candidate' && l.accepted && l.edit?.field === 'systemPrompt') report.push('systemPrompt, appended:', showableText(String(l.edit.value)).replace(/^/gm, '  '))
+    for (const f of ALLOWED.slice(1)) {
+      const a = leafOf(raw, f), b = leafOf(state.current, f)
+      if (a !== b) report.push(`${f}: ${a ?? '(unset)'} → ${b}`)
+    }
+    const nums = (label: string, rs: RunLite[]) => {
+      const n = numbersOf(rs)
+      return `${label}: PASS ${n.pass}/${rs.length}, tokens per success ${n.tokensPerSuccess === undefined ? '—' : Math.round(n.tokensPerSuccess)}, first requests ${n.weight ?? '—'} tok`
+    }
+    report.push(nums('original', orig), nums(`v${state.version}`, last), verdict(orig, last, mode))
+  } else report.push('no version beat the original')
+  report.push(`proposer: ${proposerTokens} tokens in this session (not in the gates)`)
+  dropWork(work)
+  console.log(report.join('\n'))
 }
 
 /** Sends the recorded request of one turn again, as it was sent, and counts the distinct replies. No tool runs: one reply says where the next call goes, not how the run ends. */
@@ -631,7 +847,7 @@ async function cmdProxy(argv: string[]) {
   process.on('SIGINT', stop); process.on('SIGTERM', stop)
 }
 
-const commands: Record<CommandName, (a: string[]) => Promise<void>> = { serve: cmdServe, run: cmdRun, demo: cmdDemo, bench: cmdBench, replay: cmdReplay, analyze: cmdAnalyze, proxy: cmdProxy }
+const commands: Record<CommandName, (a: string[]) => Promise<void>> = { serve: cmdServe, run: cmdRun, demo: cmdDemo, bench: cmdBench, evolve: cmdEvolve, replay: cmdReplay, analyze: cmdAnalyze, proxy: cmdProxy }
 function unknownCommand(c: string): never { return die(`error: unknown command "${c}"\n\n${overview(PKG.description)}`) }
 
 const [cmd = 'serve', ...rest] = process.argv.slice(2)
