@@ -185,3 +185,30 @@ export async function* jsonChunks(r: { body?: AsyncIterable<Uint8Array> | null }
   }
   if (!any) throw new BackendError(`${what}: response is not an event stream`, head.slice(0, 2000))
 }
+
+/** A status that ends an evolve instead of becoming a FAIL: a refused key, no credits, a refusal that is not moderation,
+ *  a rate limit that outlasted the retries. Decided from the numeric status only, never from message text. */
+export const isStop = (e: { status?: number; moderated?: boolean }): boolean =>
+  e.status === 401 || e.status === 402 || e.status === 429 || (e.status === 403 && !e.moderated)
+
+/** false when the signal fired first. */
+const pause = (ms: number, signal?: AbortSignal): Promise<boolean> => new Promise(res => {
+  if (signal?.aborted) return res(false)
+  const on = () => { clearTimeout(t); res(false) }
+  const t = setTimeout(() => { signal?.removeEventListener('abort', on); res(true) }, ms)
+  signal?.addEventListener('abort', on, { once: true })
+})
+
+/** backend.send, with a 429 tried again up to 3 times after Retry-After (else 60 s; `waitMs` overrides both). Not after
+ *  a delta: the caller has shown it. An abort during a wait throws the 429 itself, so the run ends as the stop. */
+export async function sendRetrying(backend: Backend, payload: unknown, signal?: AbortSignal, onDelta?: (d: Delta) => void, waitMs?: number): Promise<NormalizedResponse> {
+  for (let retries = 0; ; retries++) {
+    let streamed = false
+    try {
+      return await backend.send(payload, signal, d => { streamed = true; onDelta?.(d) })
+    } catch (e) {
+      if (!(e instanceof BackendError) || e.status !== 429 || streamed || retries === 3 || signal?.aborted) throw e
+      if (!await pause(waitMs ?? (e.retryAfter ?? 60) * 1000, signal)) throw e
+    }
+  }
+}

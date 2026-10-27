@@ -19,7 +19,7 @@ import { loadRepoTasks, hostOf, consentText, hasConsent, saveConsent, git, TASKS
 import { cloneAt, linkNodeModules, protectedChanged, runCheck, finishRun, removeAllClonesSync, prepareModules, modulesManifest, modulesTampered, type Clone } from './core/repo-clone.js'
 import { validateConfig, sendsAnswerSchema, KEY_ENV, FLAG_WORDS, keyNameMessage, keyErrors, keyProblem, keyNote, apiKey, NO_THINK_LINE, isHttpUrl, isLoopbackUrl, type HarnessConfig, type BackendKind } from './core/config.js'
 import { validateWorkdir } from './core/tools/sandbox.js'
-import type { Backend, ChatRequest, Delta, NormalizedResponse } from './core/backends/types.js'
+import { BackendError, isStop, sendRetrying, type Backend, type ChatRequest, type Delta, type NormalizedResponse } from './core/backends/types.js'
 import { approvalPrompt, mcpCounts, quitWithoutWork, showable, showableText, type HarnessEvent, type ToolCall } from './core/events.js'
 import { startServer } from './server/index.js'
 import { TraceWriter, type Meta } from './server/runs.js'
@@ -53,15 +53,18 @@ const PORT = (s: string) => /^\d+$/.test(s) && Number(s) <= 65535
 
 const DEMO_HARNESSES = ['bare', 'tuned-nothink', 'tuned-hermes']
 /** tuned-nothink sets backend.think, which config.ts refuses on a hosted API (openai kind with a key): there demo runs tuned. */
+/** Test hook: the wait before a 429 is tried again, in ms. */
+const RETRY_MS = process.env.LHB_RETRY_MS === undefined ? undefined : Number(process.env.LHB_RETRY_MS)
 const demoHarnesses = (kind?: string, apiKeyEnv?: string): string[] => kind === 'openai' && apiKeyEnv ? DEMO_HARNESSES.map(h => h === 'tuned-nothink' ? 'tuned' : h) : DEMO_HARNESSES
 
 let fakeCache: Promise<Backend | undefined> | undefined
-/** Test hook: LHB_FAKE_BACKEND=<file.json> with an array of Partial<NormalizedResponse>; an entry may carry `deltas` as well, which stream to the terminal before its reply returns. An entry with `when` answers only a request whose JSON contains it, and `keep` leaves it in the queue; the first entry that fits is used. One shared queue per process. */
+/** Test hook: LHB_FAKE_BACKEND=<file.json> with an array of Partial<NormalizedResponse>; an entry may carry `deltas` as well, which stream to the terminal before its reply returns, and `throw: { status, message?, moderated?, retryAfter? }` throws that BackendError after them. An entry with `when` answers only a request whose JSON contains it, and `keep` leaves it in the queue; the first entry that fits is used. One shared queue per process. */
 function fakeBackendFromEnv(): Promise<Backend | undefined> {
   return (fakeCache ??= (async () => {
     const f = process.env.LHB_FAKE_BACKEND
     if (!f) return undefined
-    const queue: (Partial<NormalizedResponse> & { deltas?: Delta[]; when?: string; keep?: boolean })[] = JSON.parse(await readFile(f, 'utf8'))
+    type Throw = { status: number; message?: string; moderated?: boolean; retryAfter?: number }
+    const queue: (Partial<NormalizedResponse> & { deltas?: Delta[]; when?: string; keep?: boolean; throw?: Throw })[] = JSON.parse(await readFile(f, 'utf8'))
     return {
       async listModels() { return ['fake'] }, buildPayload: r => r,
       async send(payload: unknown, _signal?: AbortSignal, onDelta?: (d: Delta) => void) {
@@ -70,8 +73,9 @@ function fakeBackendFromEnv(): Promise<Backend | undefined> {
         if (i < 0) throw new Error(queue.length ? 'fake backend: no response for this request' : 'fake backend: no more responses')
         const r = queue[i]!
         if (!r.keep) queue.splice(i, 1)
-        const { deltas, when: _w, keep: _k, ...reply } = r
+        const { deltas, when: _w, keep: _k, throw: t, ...reply } = r
         for (const d of deltas ?? []) onDelta?.(d)
+        if (t) throw new BackendError(t.message ?? `fake backend: ${t.status}`, undefined, t)
         return { content: '', toolCalls: [], raw: {}, ...reply }
       },
     } as Backend
@@ -164,7 +168,7 @@ async function execRun(config: HarnessConfig, task: string, workdir: string, o: 
     const answer = inputClosed ? null : await Promise.race([closed, rl.question(`${reset}${approvalPrompt(call)}\n[y/N] `)])
     return answer === null ? onSigint() : /^y(es)?$/i.test(answer.trim())
   }
-  const opts: RunOpts = { approve, backend: await fakeBackendFromEnv(), signal: o.signal }
+  const opts: RunOpts = { approve, backend: await fakeBackendFromEnv(), signal: o.signal, retryMs: RETRY_MS }
   // Live text only on a terminal: reasoning dim, content plain; a pipe, bench (quiet) and --json see events only.
   let streamed = false
   // The text is the model's own, so it goes through showableText: only the dim and the reset around the reasoning are ours.
@@ -292,7 +296,7 @@ const INT = /^[1-9]\d*$/
 async function benchOnce(config: HarnessConfig, round: number, timeoutS: number, out: string, task: Task, notes: NotesStore, size?: number): Promise<BenchRun> {
   // An exception that escapes execRun is text nothing has cleaned yet, and it goes to the bench JSON and the terminal.
   const redact = redactor(apiKey(config.backend, process.env), config.backend.apiKeyEnv ?? '')
-  let workdir = '', traceId: string | undefined, parseErrors = 0, toolChars = 0, costUsd: number | undefined, peakTokens: number | undefined, tokens: number | undefined, firstPromptTokens: number | undefined, seenFirst = false, toolErrors = 0, guardBlocks = 0, editMiss = 0, lastError: string | undefined, t0 = Date.now(), run: BenchRun
+  let workdir = '', traceId: string | undefined, parseErrors = 0, toolChars = 0, costUsd: number | undefined, peakTokens: number | undefined, tokens: number | undefined, firstPromptTokens: number | undefined, seenFirst = false, toolErrors = 0, guardBlocks = 0, editMiss = 0, lastError: string | undefined, stop: number | undefined, t0 = Date.now(), run: BenchRun
   process.stderr.write(`${config.name} ${runTitle({ round, task: task.name })} `)
   try {
     workdir = await task.prepare(size)
@@ -316,6 +320,7 @@ async function benchOnce(config: HarnessConfig, round: number, timeoutS: number,
           else if (e.output.includes(EDIT_MISS)) editMiss++
         }
         if (e.type === 'parse_error' || e.type === 'error') lastError = e.message
+        if (e.type === 'error' && isStop(e)) stop = e.status
       },
     })
     traceId = id
@@ -323,11 +328,12 @@ async function benchOnce(config: HarnessConfig, round: number, timeoutS: number,
     await killTracked()
     const ms = Date.now() - t0
     const d = last.type === 'done' ? last : undefined
-    const c = await task.check(workdir, size, d?.reason === 'final' ? d.text : undefined, childEnv(config.tools.bashEnv))
+    // A stop is the server's answer, not the model's work: there is nothing to check.
+    const c = stop !== undefined ? false : await task.check(workdir, size, d?.reason === 'final' ? d.text : undefined, childEnv(config.tools.bashEnv))
     const checked = typeof c === 'boolean' ? { pass: c } : c
     if (checked.reason) lastError = checked.reason
     const verdict = checked.pass ? 'PASS' : 'FAIL'
-    run = { ...(task.name ? { task: task.name } : {}), ...checked.tests ? { tests: checked.tests } : {}, round, verdict, reason: d?.reason ?? 'error', turns: d?.turns ?? 0, toolCalls: d?.toolCallCount ?? 0, parseErrors, lastError, ms, workdir, trace: id, toolChars: toolChars || undefined, costUsd, peakTokens, tokens: seenFirst ? tokens : 0, firstPromptTokens, toolErrors, guardBlocks: config.tools.requireReadBeforeEdit ? guardBlocks : undefined, editMiss }
+    run = { ...(task.name ? { task: task.name } : {}), ...checked.tests ? { tests: checked.tests } : {}, round, verdict, reason: d?.reason ?? 'error', turns: d?.turns ?? 0, toolCalls: d?.toolCallCount ?? 0, parseErrors, lastError, ms, workdir, trace: id, toolChars: toolChars || undefined, costUsd, peakTokens, tokens: seenFirst ? tokens : 0, firstPromptTokens, toolErrors, guardBlocks: config.tools.requireReadBeforeEdit ? guardBlocks : undefined, editMiss, ...stop === undefined ? {} : { stop } }
   } catch (e) {
     run = { ...(task.name ? { task: task.name } : {}), round, verdict: 'FAIL', reason: 'error', turns: 0, toolCalls: 0, parseErrors, lastError: redact.text(String(e)), ms: Date.now() - t0, workdir, toolChars: toolChars || undefined, costUsd, peakTokens, tokens: seenFirst ? tokens : 0, firstPromptTokens, toolErrors, guardBlocks: config.tools.requireReadBeforeEdit ? guardBlocks : undefined, editMiss }
   } finally {
@@ -635,11 +641,22 @@ async function cmdEvolve(argv: string[]) {
   const out = path.join('runs', `evolve-${base}.json`), notes: NotesStore = { file: snap, write: false }
   let stopped = false
   const stop = () => { dropWork(work); console.error(`the model changed the installed packages in ${modulesDir}; stopping`); process.exitCode = 1 }
+  const pb = proposer.backend
+  const pRedact = redactor(apiKey(pb, process.env), pb.apiKeyEnv ?? '')
+  const hRedact = redactor(apiKey(config.backend, process.env), config.backend.apiKeyEnv ?? '')
+  // Not a FAIL: the server refused the key, has no credits, or kept limiting. Nothing of the cut step is journaled.
+  const WHY: Record<number, string> = { 401: 'the key was refused', 402: 'no credits left', 403: 'the request was refused', 429: 'rate limited, still after 3 retries' }
+  const halt = (who: 'harness' | 'proposer', b: HarnessConfig['backend'], status: number, redact: ReturnType<typeof redactor>): never => {
+    dropWork(work)
+    console.error(showable(redact.text(`evolve stopped: the ${who} backend (${hostOf(b.baseUrl)}) answered ${status}: ${WHY[status]}; nothing of the cut step is in the journal; run the same command again to resume from the journal`)))
+    return process.exit(1)
+  }
   const runOn = async (cfg: object, name: string, names: string[], round: number): Promise<RunLite[]> => {
     const c = overridden({ ...cfg, name }, over, file!)
     const rs: RunLite[] = []
     for (const n of names) {
       const r = await benchOnce(c, round, timeoutS, out, byName.get(n)!, notes)
+      if (r.stop !== undefined) halt('harness', c.backend, r.stop, hRedact)
       const lite: RunLite = { task: n, verdict: r.verdict, tokens: r.tokens, firstPromptTokens: r.firstPromptTokens, trace: r.trace, reason: r.reason, lastError: r.lastError }
       // Signed now, while the trace is here: the report groups failures by it without reading a trace again.
       rs.push(lite.verdict === 'FAIL' ? { ...lite, sig: signatureOf(lite, await eventsOf(r.trace)) } : lite)
@@ -653,10 +670,7 @@ async function cmdEvolve(argv: string[]) {
     if (!trace || !TRACE_ID.test(trace)) return []
     try { return (await readTraceFile(path.join('runs', `${trace}.jsonl`))).events } catch { return [] }
   }
-  const pb = proposer.backend
   const pBackend = (await fakeBackendFromEnv()) ?? createBackend(pb)
-  const pRedact = redactor(apiKey(pb, process.env), pb.apiKeyEnv ?? '')
-  const hRedact = redactor(apiKey(config.backend, process.env), config.backend.apiKeyEnv ?? '')
   const clean = (s: string) => scrubText(s, hRedact, homedir())
   let proposerTokens = 0
   // Built like the notes writer's call: the proposer's own knobs, its /no_think line, a schema only where it enforces one.
@@ -668,11 +682,13 @@ async function cmdEvolve(argv: string[]) {
     }
     let content: string
     try {
-      const r = await pBackend.send(pBackend.buildPayload(req), AbortSignal.timeout(timeoutS * 1000))
+      const r = await sendRetrying(pBackend, pBackend.buildPayload(req), AbortSignal.timeout(timeoutS * 1000), undefined, RETRY_MS)
       if (r.usage) proposerTokens += r.usage.promptTokens + r.usage.completionTokens
       content = r.content
     // Not a rejection: a journaled one would never be asked again, and the next evolve continues at this candidate.
-    } catch (e) { dropWork(work); return die(`proposer failed: ${showable(pRedact.text((e as Error).message))}`) }
+    } catch (e) {
+      if (e instanceof BackendError && isStop(e)) return halt('proposer', pb, e.status!, pRedact)
+      dropWork(work); return die(`proposer failed: ${showable(pRedact.text((e as Error).message))}`) }
     try { return { edit: parseProposal(content) } } catch { return { reason: 'no edit in the reply' } }
   }
   const writeVersion = (n: number, cfg: object) => {

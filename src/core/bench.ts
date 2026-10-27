@@ -27,6 +27,8 @@ export type BenchRun = {
   task?: string
   /** Green tests of a task that counts them (polyglot); total is fixed per exercise, also for a run that died before its check. */
   tests?: { passed: number; total: number }
+  /** The status that ended the run when it is one evolve stops on (isStop); the check did not run. */
+  stop?: number
 }
 export type BenchHarness = {
   name: string; config: HarnessConfig; pass: number; reasons: Record<string, number>

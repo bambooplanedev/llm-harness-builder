@@ -2137,3 +2137,90 @@ test('bench --tasks --yes prints the commands before saving consent', async () =
   expect(r.status, r.stderr).toBe(0)
   for (const s of ['make done.txt', "check — in each run's clone, after the run"]) expect(r.stderr).toContain(s)
 }, 60_000)
+
+// --- evolve stops on a refused key, no credits, a lasting rate limit: exit 1, no journal line for the step it cut.
+const failed = (cwd: string) => journal(cwd).flatMap(l => [...(l.runs ?? []), ...(l.orig ?? []), ...(l.last ?? [])]).filter(x => x.reason === 'backend_error')
+
+for (const status of [401, 402, 403])
+  test(`evolve: a run that gets ${status} stops with no line for its set; run again, it completes with no FAIL from it`, async () => {
+    const repo = await tasksRepo(evTasks(ONE_EACH))
+    const env = await tasksEnv([{ when: 'make the file', throw: { status } }, ...evFake()])
+    const cwd = await tmp('lhb-cwd-')
+    const h = evHarness(cwd)
+    const r = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
+    expect(r.status, r.stderr).toBe(1)
+    expect(r.stderr).toContain(String(status))
+    expect(r.stderr).toContain('resume')
+    expect(types(cwd)).toEqual(['start'])
+    expect(clonesIn(env)).toEqual([])
+    writeFileSync(env.LHB_FAKE_BACKEND, JSON.stringify(evFake()))
+    const again = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
+    expect(again.status, again.stderr).toBe(0)
+    expect(types(cwd).at(-1)).toBe('final')
+    expect(failed(cwd)).toEqual([])
+  }, 120_000)
+
+test('evolve: a proposer that gets 429 four times stops with no candidate line', async () => {
+  const repo = await tasksRepo(evTasks(ONE_EACH))
+  const env = await tasksEnv([{ when: 'You improve the harness', keep: true, throw: { status: 429 } }, ...evFake().slice(1)])
+  const cwd = await tmp('lhb-cwd-')
+  const r = cli(['evolve', evHarness(cwd), '--tasks', repo, '--rounds', '1', '--yes'], { ...env, LHB_RETRY_MS: '10' }, cwd)
+  expect(r.status, r.stderr).toBe(1)
+  expect(r.stderr).toContain('429')
+  expect(r.stderr).toContain('proposer')
+  expect(r.stderr).toContain('resume')
+  expect(types(cwd)).toEqual(['start', 'current'])
+}, 120_000)
+
+test('evolve: a proposer 429 that clears on retry goes on as if nothing happened', async () => {
+  const repo = await tasksRepo(evTasks(ONE_EACH))
+  const env = await tasksEnv([{ when: 'You improve the harness', throw: { status: 429 } }, ...evFake()])
+  const cwd = await tmp('lhb-cwd-')
+  const r = cli(['evolve', evHarness(cwd), '--tasks', repo, '--rounds', '1', '--yes'], { ...env, LHB_RETRY_MS: '10' }, cwd)
+  expect(r.status, r.stderr).toBe(0)
+  expect(journal(cwd).filter(l => l.type === 'candidate').map(c => c.index)).toEqual([1, 2])
+}, 120_000)
+
+test('evolve: a moderated 403 is a FAIL and the evolve goes on', async () => {
+  const repo = await tasksRepo(evTasks(ONE_EACH))
+  const env = await tasksEnv([{ when: 'make the file', throw: { status: 403, moderated: true } }, ...evFake()])
+  const cwd = await tmp('lhb-cwd-')
+  const r = cli(['evolve', evHarness(cwd), '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
+  expect(r.status, r.stderr).toBe(0)
+  expect(failed(cwd)).toHaveLength(1)
+  expect(types(cwd).at(-1)).toBe('final')
+}, 120_000)
+
+test('evolve: "429" in a prompt or a final answer is no stop', async () => {
+  const repo = await tasksRepo(evTasks(ONE_EACH).map(t => ({ ...t, prompt: 'make the file; POST /chat/completions: 429' })))
+  const [p, a, d] = evFake()
+  const env = await tasksEnv([p, a, { ...d, content: 'POST /chat/completions: 429' }])
+  const cwd = await tmp('lhb-cwd-')
+  const r = cli(['evolve', evHarness(cwd), '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
+  expect(r.status, r.stderr).toBe(0)
+  expect(types(cwd).at(-1)).toBe('final')
+}, 120_000)
+
+test('bench --tasks: a 401 run is a FAIL backend_error with stop 401, its check not run, and the bench goes on', async () => {
+  const marker = join(await tmp('lhb-mark-'), 'checked')
+  const repo = await tasksRepo([{ name: 'a', prompt: 'p', check: `touch "${marker}"` }, { name: 'b', prompt: 'p', check: 'true' }])
+  const env = await tasksEnv([{ throw: { status: 401 } }, { content: 'done' }])
+  const cwd = await tmp('lhb-cwd-')
+  const r = cli(['bench', '--tasks', repo, '--n', '1', '--yes', '--out', join(cwd, 'b.json'), harness('bare')], env, cwd)
+  expect(r.status, r.stderr).toBe(0)
+  const runs = JSON.parse(await readFile(join(cwd, 'b.json'), 'utf8')).harnesses[0].runs
+  expect(runs[0]).toMatchObject({ task: 'a', verdict: 'FAIL', reason: 'backend_error', stop: 401 })
+  expect(existsSync(marker)).toBe(false)
+  expect(runs[1]).toMatchObject({ task: 'b', verdict: 'PASS' })
+  expect(runs[1]).not.toHaveProperty('stop')
+}, 60_000)
+
+test('evolve: a moderated 403 on the proposer stays a die, not a stop', async () => {
+  const repo = await tasksRepo(evTasks(ONE_EACH))
+  const env = await tasksEnv([{ when: 'You improve the harness', throw: { status: 403, moderated: true, message: 'flagged' } }, ...evFake()])
+  const cwd = await tmp('lhb-cwd-')
+  const r = cli(['evolve', evHarness(cwd), '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
+  expect(r.status).toBe(2)
+  expect(r.stderr).toContain('proposer failed: flagged')
+  expect(types(cwd)).toEqual(['start', 'current'])
+}, 120_000)
