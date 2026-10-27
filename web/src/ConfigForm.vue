@@ -145,7 +145,7 @@ function editMcp(text: string) {
       <span :title="t('h.numCtx')">num_ctx</span><input type="number" v-model.number="config.backend.numCtx" :disabled="config.backend.kind !== 'ollama'">
       <span :title="t('h.maxTokens')">max_tokens</span><input type="number" min="1" :value="config.backend.maxTokens ?? ''" :disabled="off('maxTokens')" @change="setMaxTokens(($event.target as HTMLInputElement).value)">
       <span :title="t('h.think')">think</span><select :value="config.backend.think === undefined ? '' : config.backend.think ? 'on' : 'off'" :disabled="off('think')" @change="setThink(($event.target as HTMLSelectElement).value)"><option value="">—</option><option>on</option><option>off</option></select>
-      <span :title="t('h.reasoning')">reasoning</span><select :value="config.backend.reasoningEffort ?? ''" :disabled="off('reasoningEffort')" @change="setReasoning(($event.target as HTMLSelectElement).value)"><option value="">—</option><option v-for="e in REASONING_EFFORTS" :key="e">{{ e }}</option></select>
+      <span :title="t('h.reasoning')">reasoning</span><select :value="config.backend.reasoningEffort ?? ''" :disabled="off('reasoningEffort') || (config.backend.kind !== 'openai' && !config.backend.reasoningEffort)" @change="setReasoning(($event.target as HTMLSelectElement).value)"><option value="">—</option><option v-for="e in REASONING_EFFORTS" :key="e">{{ e }}</option></select>
     </div>
     <div v-if="locked()" class="hint">{{ t('form.locked', { knobs: locked() }) }}<span v-if="modelInfo?.takesFrom"> ({{ modelInfo.takesFrom }})</span></div>
 

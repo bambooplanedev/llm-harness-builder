@@ -1179,3 +1179,22 @@ test('readRanges on: reads of different ranges are different calls', async () =>
   const ev = await collect({ config: rr(true, { loop: { maxTurns: 10, maxRepeats: 0 } }), task: 'do', workdir: await wd() }, { backend: be })
   expect(last(ev).reason).toBe('final')
 })
+
+test('readRanges with the guard: a whole read the run loop cut is a part read, so write_file is refused but edit_file is not', async () => {
+  const dir = await wd(); await writeFile(join(dir, 'ten.txt'), RTEN)
+  const cfg = rr(true, { context: { maxToolOutputChars: 120, budgetTokens: 0 }, tools: { enabled: ['read_file', 'write_file', 'edit_file'], approveBash: false, readRanges: true, requireReadBeforeEdit: true } })
+  const be = Fake([{ toolCalls: [{ name: 'read_file', args: { path: 'ten.txt' } }] }, { toolCalls: [{ name: 'write_file', args: { path: 'ten.txt', content: 'x' } }] },
+    { toolCalls: [{ name: 'edit_file', args: { path: 'ten.txt', old: 'row 01', new: 'ROW 01' } }] }, { content: 'fin' }])
+  const ev = await collect({ config: cfg, task: 'do', workdir: dir }, { backend: be })
+  const r = results(ev)
+  expect(r[0].truncated).toBe(true)
+  expect(r[1]).toMatchObject({ error: true }); expect(r[1].output).toContain('was read only in part')
+  expect(r[2].error).toBe(false)
+})
+
+test('readRanges on: {path}, {path, start: 1} and {path} are one call for maxRepeats', async () => {
+  const rd = (args: Record<string, unknown>) => ({ toolCalls: [{ name: 'read_file', args: { path: 'a.txt', ...args } }] })
+  const be = Fake([rd({}), rd({ start: 1 }), rd({}), { content: 'fin' }])
+  const ev = await collect({ config: rr(true, { loop: { maxTurns: 10, maxRepeats: 1 } }), task: 'do', workdir: await wd() }, { backend: be })
+  expect(last(ev).reason).toBe('repeat_loop')
+})

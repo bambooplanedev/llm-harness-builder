@@ -135,7 +135,7 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
       reads: config.tools.requireReadBeforeEdit ? new Set<string>() : undefined,
       readRanges: config.tools.readRanges,
       partReads: config.tools.readRanges && config.tools.requireReadBeforeEdit ? new Set<string>() : undefined,
-      lastRead: undefined as { first: number; total: number; capped?: number } | undefined,
+      lastRead: undefined as { file: string; first: number; total: number; capped?: number } | undefined,
       explainEditMiss: config.tools.explainEditMiss,
       // bash and loop.untilBash get the base environment plus these names; see tools/env.ts.
       bashEnv: config.tools.bashEnv,
@@ -296,11 +296,13 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
         const lines = ctx.lastRead !== undefined && max !== undefined
         let output = lines ? cutLines(result.output, max, ctx.lastRead!) ?? cut(result.output) : cut(result.output)
         const truncated = lines ? output !== result.output : max !== undefined && result.output.length > max
+        // The cut hid lines the model never saw: that read is a part read for the guard, like a range.
+        if (lines && truncated) ctx.partReads?.add(ctx.lastRead!.file)
         ctx.lastRead = undefined
         let repeats = 0
         if (config.loop.maxRepeats !== undefined) {
           // tools.readRanges: start/end tell reads apart, as numbers or digit strings; off, the key is what it always was.
-          const key = c.name + JSON.stringify(c.name === 'read_file' && config.tools.readRanges ? { path: c.args.path, start: Number(c.args.start) || undefined, end: Number(c.args.end) || undefined } : c.args)
+          const key = c.name + JSON.stringify(c.name === 'read_file' && config.tools.readRanges ? { path: c.args.path, start: Number(c.args.start) > 1 ? Number(c.args.start) : undefined, end: Number(c.args.end) || undefined } : c.args)
           const n = (seen.get(key) ?? 0) + 1
           repeats = n - 1
           if (!result.error && (c.name === 'edit_file' || c.name === 'write_file')) {
@@ -336,7 +338,7 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
         wasReset = true
         const chars = messages.slice(2).reduce((n, m) => n + m.content.length, 0)
         messages.splice(0, messages.length, { role: 'system', content: system }, { role: 'user', content: task + '\n\n' + FRESH_NOTE })
-        seen.clear(); applied.clear(); misses.clear(); ctx.reads?.clear(); hot = false
+        seen.clear(); applied.clear(); misses.clear(); ctx.reads?.clear(); ctx.partReads?.clear(); hot = false
         yield ev({ type: 'context_reset', chars })
         continue
       }

@@ -163,7 +163,7 @@ test('readRanges off: start and end are ignored, and a cut read is today\'s outp
 test.each(['ten.txt', 'ten-nl.txt'])('readRanges on, %s: line ranges, 1-based and inclusive', async f => {
   const c = await ranged()
   expect(await readFile({ path: f, start: 3, end: 5 }, c)).toBe(rows(3, 5))
-  expect(c.lastRead).toEqual({ first: 3, total: 10, capped: undefined })
+  expect(c.lastRead).toMatchObject({ first: 3, total: 10, capped: undefined })
   expect(await readFile({ path: f, start: '3', end: '5' }, c)).toBe(rows(3, 5))
   expect(await readFile({ path: f, start: 8, end: 50 }, c)).toBe(rows(8, 10))
   expect(await readFile({ path: f, start: 11 }, c)).toBe('[no lines: the file has 10]')
@@ -185,7 +185,7 @@ test('readRanges on, readMaxBytes: the cut part is counted, a partly cut line is
   expect(await readFile({ path: 'ten.txt', start: 5 }, c)).toBe('[no lines: the first 50 bytes hold 3 lines; read the rest with bash]')
   expect(await readFile({ path: 'ten.txt', start: 2, end: 2 }, c)).toBe(row(2))
   expect(await readFile({ path: 'ten.txt', start: 2 }, c)).toBe(row(2) + '\n' + row(3).slice(0, 8) + '\n[truncated at 50 bytes]')
-  expect(c.lastRead).toEqual({ first: 2, total: 3, capped: 50 })
+  expect(c.lastRead).toMatchObject({ first: 2, total: 3, capped: 50 })
 })
 
 test('cutLines keeps whole lines and names the rest', () => {
@@ -211,4 +211,10 @@ test('readRanges with the guard: a range that covers the whole file is a whole r
   const c = await ranged({ reads: new Set<string>(), partReads: new Set<string>() })
   await readFile({ path: 'ten.txt', start: 1 }, c)
   await wf({ path: 'ten.txt', content: 'z' }, c)
+})
+
+test('readRanges: lastRead carries the resolved file for the run loop', async () => {
+  const c = await ranged()
+  await readFile({ path: 'ten.txt' }, c)
+  expect(c.lastRead!.file.endsWith('/ten.txt')).toBe(true)
 })

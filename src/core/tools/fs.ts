@@ -3,7 +3,7 @@ import path from 'node:path'
 import { resolveInside } from './sandbox.js'
 import { GUARD_BLOCKED, EDIT_MISS, EDIT_IDENTICAL } from './errors.js'
 
-export type ToolCtx = { workdir: string; reads?: Set<string>; /** tools.readRanges: read_file takes start/end. */ readRanges?: boolean; /** Set by a ranged read_file for run.ts's line-aware cut, which clears it. */ lastRead?: { first: number; total: number; capped?: number }; /** Files read only in part (guard on): write_file refuses them. */ partReads?: Set<string>; explainEditMiss?: boolean; /** Names from tools.bashEnv; absent: the base set only. */ bashEnv?: readonly string[]; /** tools.readMaxBytes, tools.bashMaxBytes, tools.bashTimeoutS; absent: the built-in limit. */ readMaxBytes?: number; bashMaxBytes?: number; bashTimeoutS?: number }
+export type ToolCtx = { workdir: string; reads?: Set<string>; /** tools.readRanges: read_file takes start/end. */ readRanges?: boolean; /** Set by a ranged read_file for run.ts's line-aware cut, which clears it. */ lastRead?: { file: string; first: number; total: number; capped?: number }; /** Files read only in part (guard on): write_file refuses them. */ partReads?: Set<string>; explainEditMiss?: boolean; /** Names from tools.bashEnv; absent: the base set only. */ bashEnv?: readonly string[]; /** tools.readMaxBytes, tools.bashMaxBytes, tools.bashTimeoutS; absent: the built-in limit. */ readMaxBytes?: number; bashMaxBytes?: number; bashTimeoutS?: number }
 type Args = Record<string, unknown>
 
 const str = (args: Args, key: string): string => {
@@ -62,7 +62,7 @@ async function readRange(args: Args, ctx: ToolCtx): Promise<string> {
     }
     if (total === 0) return '[no lines: the file is empty]'
     if (start > total) return capped ? `[no lines: the first ${capped} bytes hold ${total} lines; read the rest with bash]` : `[no lines: the file has ${total}]`
-    ctx.lastRead = { first: start, total, capped }
+    ctx.lastRead = { file, first: start, total, capped }
     return lines.slice(start - 1, end).join('\n') + (capped && end >= total ? `\n[truncated at ${capped} bytes]` : '')
   } finally { await fh.close() }
 }
@@ -71,13 +71,14 @@ async function readRange(args: Args, ctx: ToolCtx): Promise<string> {
 export function cutLines(text: string, max: number, r: { first: number; total: number; capped?: number }): string | undefined {
   if (text.length <= max) return text
   const lines = text.split('\n')
-  let best: string | undefined
+  // Running length, one join at the end: the note's width depends only on k, so each step is O(1).
+  let best = 0, len = 0
   for (let k = 1; k <= lines.length; k++) {
-    const out = lines.slice(0, k).join('\n') + `\n[lines ${r.first}-${r.first + k - 1} of ${r.total}${r.capped ? '+' : ''} shown; read on with start: ${r.first + k}]`
-    if (out.length > max) break
-    best = out
+    len += lines[k - 1].length + (k > 1 ? 1 : 0)
+    if (len + `\n[lines ${r.first}-${r.first + k - 1} of ${r.total}${r.capped ? '+' : ''} shown; read on with start: ${r.first + k}]`.length > max) break
+    best = k
   }
-  return best
+  return best ? lines.slice(0, best).join('\n') + `\n[lines ${r.first}-${r.first + best - 1} of ${r.total}${r.capped ? '+' : ''} shown; read on with start: ${r.first + best}]` : undefined
 }
 
 export async function readFile(args: Args, ctx: ToolCtx): Promise<string> {

@@ -198,6 +198,7 @@ test('reasoning select: options, the set value, locked only by the model, and st
   const off = await withInfo(oa, { takes: { reasoningEffort: false } })
   expect(off).toMatch(/reasoning<\/span><select[^>]*disabled/)
   expect(off.match(/class="hint">[^<]*/g)!.join()).toContain('reasoning')
+  expect(await render(base)).toMatch(/reasoning<\/span><select[^>]*disabled/) // an ollama harness without the field cannot pick one
   const stale = await render({ ...base, backend: { ...base.backend, reasoningEffort: 'low' as const } })
   expect(stale).not.toMatch(/reasoning<\/span><select[^>]*disabled/)
 })
