@@ -161,11 +161,19 @@ export const age = () => 0
     expect(r.pass).toBe(false)
   })
 
-  test('a missing solution is passed: 0', async () => {
+  test('a missing solution is passed: 0, and its reason names no exercise', async () => {
     const task = polyglotTasks(p, 1)[0]
     const dir = await task.prepare()
     made.push(dir)
     await rm(path.join(dir, `${first.name}.js`))
-    expect(await task.check(dir, 1, undefined, env)).toMatchObject({ pass: false, tests: { passed: 0, total } })
+    expect(await task.check(dir, 1, undefined, env)).toEqual({ pass: false, reason: 'missing solution file', tests: { passed: 0, total } })
   })
+})
+
+test('dispose removes the workdir', async () => {
+  const task = polyglotTasks(p, 1)[0]
+  const dir = await task.prepare()
+  made.push(dir)
+  await task.dispose!(dir)
+  await expect(readdir(dir)).rejects.toThrow()
 })

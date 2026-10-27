@@ -21,7 +21,7 @@ export const PARA_MAX = 600
 export type SetName = 'train' | 'gate' | 'test'
 
 /** A task's own `set` wins; the rest go by the first byte of sha1(name), so adding a task never moves another. */
-export function splitSets(tasks: RepoTask[]): Record<SetName, string[]> {
+export function splitSets(tasks: Pick<RepoTask, 'name' | 'set'>[]): Record<SetName, string[]> {
   const out: Record<SetName, string[]> = { train: [], gate: [], test: [] }
   for (const t of tasks) {
     const b = createHash('sha1').update(t.name).digest()[0]! % 4
@@ -30,17 +30,22 @@ export function splitSets(tasks: RepoTask[]): Record<SetName, string[]> {
   return out
 }
 
-export type Mode = { strict: boolean; trainGate: number; test: number }
+/** `polyglot`: the tasks are the first N Exercism exercises, and more of them is a larger --size, not more tasks to write. */
+export type Mode = { strict: boolean; trainGate: number; test: number; polyglot?: true }
 
-export function modeOf(sets: Record<SetName, string[]>): Mode | string {
+export function modeOf(sets: Record<SetName, string[]>, polyglot = false): Mode | string {
   const [t, g, x] = [sets.train.length, sets.gate.length, sets.test.length]
   if (!t || !g || !x) return `evolve needs at least one task in each of train, gate and test (have ${t}/${g}/${x})`
-  return { strict: t + g >= MIN_TRAIN_GATE && x >= MIN_TEST, trainGate: t + g, test: x }
+  return { strict: t + g >= MIN_TRAIN_GATE && x >= MIN_TEST, trainGate: t + g, test: x, ...(polyglot ? { polyglot: true as const } : {}) }
 }
 
 /** The label a reference-mode result carries: too few tasks to tell a gain from luck. */
 export const referenceLabel = (m: Mode): string =>
-  `\u041e\u0420\u0406\u0404\u041d\u0422\u0418\u0420, \u041d\u0415 \u0414\u041e\u041a\u0410\u0417 \u2014 too few tasks (${m.trainGate + m.test} of ${MIN_TRAIN_GATE + MIN_TEST}) for a statistical conclusion; add ${Math.max(0, MIN_TRAIN_GATE - m.trainGate) + Math.max(0, MIN_TEST - m.test)} more tasks`
+  `\u041e\u0420\u0406\u0404\u041d\u0422\u0418\u0420, \u041d\u0415 \u0414\u041e\u041a\u0410\u0417 \u2014 too few ${m.polyglot ? 'exercises' : 'tasks'} (${m.trainGate + m.test} of ${MIN_TRAIN_GATE + MIN_TEST}) for a statistical conclusion; ` +
+  (m.polyglot ? `raise --size to ${STRICT_SIZE}` : `add ${Math.max(0, MIN_TRAIN_GATE - m.trainGate) + Math.max(0, MIN_TEST - m.test)} more tasks`)
+
+/** The smallest polyglot --size whose split (i % 3) gives strict mode: 8 train, 8 gate, 8 test. */
+export const STRICT_SIZE = 24
 
 /** One-sided exact sign test: P(X >= b) for X ~ Binomial(b + c, 1/2). */
 export function signP(b: number, c: number): number {
@@ -138,11 +143,20 @@ export function applyEdit(cfg: object, e: Edit): object {
   return c
 }
 
-/** Words that would tie a paragraph to this repo's tasks rather than to how to work: names, files, identifiers. */
+/** Words that would tie a paragraph to this repo's tasks rather than to how to work: names, files, identifiers.
+ *  A name is kept at any length (`poker`); boundBy matches the short ones as whole words. */
 export function bindingTokens(t: { names: string[]; paths: string[]; prompts: string[] }): string[] {
   const ids = t.prompts.flatMap(p => p.match(/[A-Za-z_][A-Za-z0-9_]*/g) ?? []).filter(w => /_|\d|[a-z][A-Z]/.test(w))
-  const all = [...t.names, ...t.paths, ...t.paths.map(p => p.slice(p.lastIndexOf('/') + 1)), ...ids].map(w => w.toLowerCase())
-  return [...new Set(all.filter(w => w.length >= 6))]
+  const rest = [...t.paths, ...t.paths.map(p => p.slice(p.lastIndexOf('/') + 1)), ...ids].map(w => w.toLowerCase()).filter(w => w.length >= 6)
+  return [...new Set([...t.names.map(n => n.toLowerCase()).filter(Boolean), ...rest])]
+}
+
+const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+/** Does the text hold a binding word: one under 6 chars as a whole word (`poker`, not `pokers`), a longer one anywhere. */
+export const boundBy = (x: unknown, binding: string[]): boolean => {
+  if (typeof x !== 'string') return false
+  const low = x.toLowerCase()
+  return binding.some(t => t.length >= 6 ? low.includes(t) : new RegExp(`(?<![\\p{L}\\p{N}_])${esc(t)}(?![\\p{L}\\p{N}_])`, 'u').test(low))
 }
 
 const DANGER = [/[a-z][a-z0-9+.-]*:\/\//i, /\bwww\./i, /\b[a-z0-9-]+\.(?:com|net|org|io|dev|sh|app|ai|xyz|ru|cn)\b/i, /(?:^|\s)[\/~]/i, /`/, /\$\(/, /\|\s*(?:ba|z)?sh\b/i, /\b(?:curl|wget|nc|ssh|scp)\b/i]
@@ -167,8 +181,7 @@ export function checkEdit(e: Edit, ctx: { current: object; original: object; tri
     // Refused, not stripped: a zero-width char inside `curl` or a file name would hide it from both checks below.
     if (/[\p{Cf}]|[^\P{Cc}\n\t]/u.test(v)) return 'bad value'
     if (DANGER.some(re => re.test(v))) return 'looks like a command or an address'
-    const low = v.toLowerCase()
-    if (ctx.binding.some(t => low.includes(t))) return 'tied to a task'
+    if (boundBy(v, ctx.binding)) return 'tied to a task'
   } else if (typeof v !== 'number' || !Number.isFinite(v)) return 'bad value'
   if (ctx.tried.some(t => t.field === e.field && t.value === v)) return 'already tried'
   const cand = applyEdit(ctx.current, e)
@@ -181,7 +194,9 @@ export function checkEdit(e: Edit, ctx: { current: object; original: object; tri
 
 export type Group = { signature: string; count: number; calls: Record<string, number>; exts: Record<string, number> }
 
-const CHECK_CLASS: [string, string][] = [['check exited', 'check_failed'], ['check timed out', 'check_timeout'], ['the check found 0 tests', 'no_tests'], ['changed a protected file', 'protected']]
+const CHECK_CLASS: [string, string][] = [['check exited', 'check_failed'], ['check timed out', 'check_timeout'], ['the check found 0 tests', 'no_tests'], ['changed a protected file', 'protected'],
+  // polyglot's check: by the reason's prefix only — the rest of it holds a test name.
+  ['a test failed:', 'test'], ['timeout after', 'timeout'], ['missing solution file', 'missing'], ['unexpected test', 'unexpected']]
 /** The reasons a run ends with (DoneReason, and the bench's 'error'); anything else in a journal is `other`. */
 const REASONS: (DoneReason | 'error')[] = ['final', 'max_turns', 'parse_failed', 'aborted', 'backend_error', 'mcp_error', 'repeat_loop', 'proxy_stopped', 'error']
 /** The file types the proposer may hear of: a path's tail is the model's own argument, not a type. */
@@ -392,7 +407,7 @@ export function replay(lines: JournalLine[], original: object, ctx: { binding: s
       current = applyEdit(current, l.edit!)
       cmp.set(l.round, l.runs!)
     } else if (l.edit) {
-      const bound = (x: unknown) => typeof x === 'string' && ctx.binding.some(t => x.toLowerCase().includes(t))
+      const bound = (x: unknown) => boundBy(x, ctx.binding)
       const reason = REASON_RE.some(re => re.test(l.reason)) && !bound(l.reason) ? l.reason : 'other'
       const v = l.edit.value, tied = reason === 'tied to a task' || bound(v)
       // A field outside ALLOWED is free text too.
@@ -427,7 +442,7 @@ export function verdict(orig: RunLite[], last: RunLite[], mode: Mode): string {
     if (v === 'FAIL' && r.verdict === 'PASS') b++
     else if (v === 'PASS' && r.verdict === 'FAIL') c++
   }
-  const SEEN = 'on the tasks of this repo Evolve did not see'
+  const SEEN = mode.polyglot ? 'on the exercises Evolve did not see' : 'on the tasks of this repo Evolve did not see'
   const lines = mode.strict
     ? [signP(b, c) < ALPHA ? `better ${SEEN}` : signP(c, b) < ALPHA ? `worse ${SEEN}` : `not told apart from noise ${SEEN}`]
     : [referenceLabel(mode), pl > po ? 'more PASS' : pl < po ? 'fewer PASS' : 'not told apart']

@@ -895,6 +895,12 @@ test('argument errors name the option, show the usage, exit 2 and print no stack
     [['bench', '--task', 'polyglot', '--size', '0'], /^error: --size must be an integer from 1 to 47 for polyglot$/m],
     [['bench', '--task', 'polyglot', '--size', '49'], /^error: --size must be an integer from 1 to 47 for polyglot$/m],
     [['bench', '--task', 'slug', '--size', '3'], /^error: --size: slug has no sizes$/m],
+    [['evolve', 'h.json'], /^error: evolve needs --tasks <repo> or --task polyglot --size N$/m],
+    [['evolve', 'h.json', '--task', 'polyglot'], /^error: --size must be an integer from 3 to 47 for evolve --task polyglot$/m],
+    [['evolve', 'h.json', '--task', 'polyglot', '--size', '2'], /^error: --size must be an integer from 3 to 47 for evolve --task polyglot$/m],
+    [['evolve', 'h.json', '--task', 'polyglot', '--size', '48'], /^error: --size must be an integer from 3 to 47 for evolve --task polyglot$/m],
+    [['evolve', 'h.json', '--task', 'pool', '--size', '3'], /^error: evolve takes --task polyglot only; your own tasks go in --tasks <repo>$/m],
+    [['evolve', 'h.json', '--task', 'polyglot', '--size', '3', '--tasks', 'x'], /^error: --tasks cannot go with --task or --size$/m],
     [['bench', '--max-turns', '1.5'], /^error: --max-turns must be a positive integer$/m],
     [['replay', 'x.jsonl', '--turn', '0', '--kind', 'openai', '--base-url', 'http://x'], /^error: --turn must be a positive integer$/m],
     [['replay', 'x.jsonl', '--turn', '1', '--kind', 'anthropic', '--base-url', 'http://x'], /^error: --kind anthropic is not yet supported by replay$/m],
@@ -2274,3 +2280,81 @@ test('evolve: a moderated 403 on the proposer stays a die, not a stop', async ()
   expect(r.stderr).toContain('proposer failed: flagged')
   expect(types(cwd)).toEqual(['start', 'current'])
 }, 120_000)
+
+// --- evolve --task polyglot: the Exercism set as practice ground. One real evolve (6 checks); the rest stops before any run.
+const PROOF_PARA = 'ALWAYS finish the solution before you answer.'
+const polyFake = () => [
+  { when: 'You improve the harness', keep: true, content: JSON.stringify({ field: 'systemPrompt', value: PROOF_PARA }), usage: { promptTokens: 50, completionTokens: 5 } },
+  { when: PROOF_PARA, keep: true, ...bashCall(`for f in *.test.js; do n="\${f%.test.js}"; cp "${join(ROOT, 'polyglot-proofs')}/$n.js" "$n.js"; done`), usage: { promptTokens: 100, completionTokens: 10 } },
+  { keep: true, content: 'done', usage: { promptTokens: 100, completionTokens: 10 } },
+]
+const polyArgs = (h: string, size = '3') => ['evolve', h, '--task', 'polyglot', '--size', size]
+
+test('evolve --task polyglot --size 3 --rounds 1: end to end, the report again, a changed set, nothing left in tmp', async () => {
+  const env = await tasksEnv(polyFake())
+  const cwd = await tmp('lhb-cwd-')
+  const h = evHarness(cwd)
+  const r = cli([...polyArgs(h), '--rounds', '1'], env, cwd)
+  expect(r.status, r.stderr).toBe(0)
+  const lines = journal(cwd)
+  const ex = loadPolyglot().exercises.slice(0, 3)
+  expect(lines[0]).toMatchObject({ type: 'start', strict: false, sets: { train: [ex[0].name], gate: [ex[1].name], test: [ex[2].name] } })
+  expect(lines[0].sha).toMatch(/^polyglot:[0-9a-f]{64}:3$/)
+  expect(lines.filter(l => l.type === 'candidate').map(l => [l.accepted, l.reason])).toEqual([[true, 'accepted'], [false, 'already tried']])
+  expect(r.stdout).toContain('\u041e\u0420\u0406\u0404\u041d\u0422\u0418\u0420, \u041d\u0415 \u0414\u041e\u041a\u0410\u0417')
+  expect(r.stdout).toContain('raise --size to 24 for a strict verdict')
+  expect(r.stdout).toContain('more PASS')
+  expect(r.stdout).toContain(`bench ${join('harnesses', 'h.v1.json')} --task polyglot --size 3`)
+  // What the proposer was sent: no exercise name, test name or file of the set.
+  const inputs = lines.filter(l => l.type === 'candidate' || l.type === 'proposal').map(l => l.input as string)
+  expect(inputs.length).toBeGreaterThan(0)
+  for (const i of inputs) for (const s of [...ex.flatMap(e => [e.name, ...e.tests]), 'examples-polyglot', '.js', 'INSTRUCTIONS']) expect(i).not.toContain(s)
+  for (const f of lines.flatMap(l => [...(l.runs ?? []), ...(l.orig ?? [])]).filter(x => x.verdict === 'FAIL')) expect(f.sig).toMatch(/^[^|]+\|test\|/)
+  expect(readdirSync(env.TMPDIR).filter(f => f.startsWith('lhb-polyglot-'))).toEqual([])
+  // --report prints the same report, with nothing run.
+  const rep = cli([...polyArgs(h), '--report'], env, cwd)
+  expect(rep.status, rep.stderr).toBe(0)
+  expect(rep.stdout).toBe(r.stdout)
+  // The set changed since (another fingerprint): a resume is refused, the report still prints.
+  const jf = join(cwd, 'harnesses', 'h.evolve.jsonl'), text = readFileSync(jf, 'utf8')
+  writeFileSync(jf, text.replace(lines[0].sha, `polyglot:${'0'.repeat(64)}:3`))
+  const again = cli([...polyArgs(h), '--rounds', '1', '--yes'], env, cwd)
+  expect(again.status).not.toBe(0)
+  expect(again.stderr).toContain('the exercise set or --size changed since this evolve started; this evolve has finished: see its results with --report')
+  expect(cli([...polyArgs(h), '--report'], env, cwd).stdout).toBe(r.stdout)
+  // An exercise the set no longer has: the report reads its name from the journal.
+  writeFileSync(jf, text.replaceAll(`"${ex[0].name}"`, '"gone-exercise"'))
+  const gone = cli([...polyArgs(h), '--report'], env, cwd)
+  expect(gone.status, gone.stderr).toBe(0)
+  expect(gone.stdout).toContain('== Conclusion')
+}, 180_000)
+
+test('evolve --task polyglot --size 24 starts strict; a proposer on the harness\'s host is said, not asked', async () => {
+  const { LHB_FAKE_BACKEND: _, ...env } = await tasksEnv([])
+  const cwd = await tmp('lhb-cwd-')
+  // Nothing listens on port 1: preflight stops it after the start line, before any run.
+  const r = cli([...polyArgs(evHarness(cwd), '24'), '--base-url', 'http://127.0.0.1:1'], env, cwd)
+  expect(r.status).toBe(2)
+  expect(r.stderr).toContain('preflight: http://127.0.0.1:1')
+  expect(journal(cwd)[0]).toMatchObject({ type: 'start', strict: true })
+  expect(r.stderr).toContain('proposer: 127.0.0.1:1, the harness\'s own server')
+  expect(r.stderr).not.toContain('pass --yes')
+}, 60_000)
+
+test('evolve --task polyglot: a proposer on another host is asked; --yes accepts it once', async () => {
+  const { LHB_FAKE_BACKEND: _, ...env } = await tasksEnv([])
+  const cwd = await tmp('lhb-cwd-')
+  const h = evHarness(cwd), p = join(cwd, 'p.json')
+  writeFileSync(p, JSON.stringify({ ...JSON.parse(readFileSync(h, 'utf8')), name: 'p', backend: { ...JSON.parse(readFileSync(h, 'utf8')).backend, baseUrl: 'http://127.0.0.1:2' } }))
+  const args = [...polyArgs(h), '--proposer', p, '--base-url', 'http://127.0.0.1:1']
+  const no = cli(args, env, cwd)
+  expect(no.status).toBe(2)
+  for (const s of ['proposer: 127.0.0.1:2', 'fields: systemPrompt', 'pass --yes']) expect(no.stderr).toContain(s)
+  expect(existsSync(join(cwd, 'harnesses', 'h.evolve.jsonl'))).toBe(false)
+  const yes = cli([...args, '--yes'], env, cwd)
+  expect(yes.stderr).toContain('proposer: 127.0.0.1:2')
+  expect(yes.stderr).toContain('preflight: http://127.0.0.1:1')
+  expect(journal(cwd)[0]).toMatchObject({ type: 'start', proposer: '127.0.0.1:2' })
+  const later = cli(args, env, cwd)
+  expect(later.stderr).not.toContain('pass --yes')
+}, 60_000)

@@ -3,7 +3,7 @@
 // Every line is a fixed template filled with numbers and fixed words (verdicts, `sig`, `reasonKind`, ALLOWED fields);
 // the only free text is the accepted systemPrompt paragraphs, labelled as the proposer's. Never task names, paths,
 // lastError, trace, why or a run's reason.
-import { ALLOWED, MIN_TEST, MIN_TRAIN_GATE, numbersOf, reasonKind, referenceLabel, verdict, type JournalLine, type Mode, type RunLite, type SetName } from './evolve.js'
+import { ALLOWED, MIN_TEST, MIN_TRAIN_GATE, numbersOf, reasonKind, referenceLabel, STRICT_SIZE, verdict, type JournalLine, type Mode, type RunLite, type SetName } from './evolve.js'
 import { showableText } from './events.js'
 
 export type ReportInput = {
@@ -48,6 +48,8 @@ export function evolveReport(r: ReportInput): string {
   const prompts = accepted.filter(l => l.edit?.field === 'systemPrompt')
   const final = state.final === 'none' ? undefined : state.final
   const told = final ? verdict(final.orig, final.last, mode) : ''
+  // For polyglot the size is the journal's: train + gate + test.
+  const bench = mode.polyglot ? `--task polyglot --size ${mode.trainGate + mode.test}` : '--tasks <repo>'
 
   const conclusion: string[] = []
   const strictLine = `strict mode: ${mode.trainGate} train + gate tasks, ${mode.test} test tasks`
@@ -76,7 +78,8 @@ export function evolveReport(r: ReportInput): string {
   } else why.push('refused:', ...bySize(refused).map(([k, n]) => `  ${k}: ${n}`))
 
   const advice: string[] = []
-  if (!mode.strict) {
+  if (!mode.strict && mode.polyglot) advice.push(`raise --size to ${STRICT_SIZE} for a strict verdict`)
+  else if (!mode.strict) {
     const a = Math.max(0, MIN_TRAIN_GATE - mode.trainGate), b = Math.max(0, MIN_TEST - mode.test)
     if (a && b) advice.push(`add ${a} tasks to train + gate and ${b} to test for a strict verdict`)
     else if (a) advice.push(`add ${a} tasks to train + gate for a strict verdict`)
@@ -92,7 +95,7 @@ export function evolveReport(r: ReportInput): string {
     const hint = KNOB[reason!] ?? KNOB[check!]
     if (hint) advice.push(`${sig} is still the biggest failure on the gate tasks (${n} of ${gateCount}): ${hint}`)
     if ((r.original as any).notes?.enabled !== true && n * 2 >= gateCount)
-      advice.push(`the same failure (${sig}) recurs on ${n} of ${gateCount} gate tasks and Notes is off: Notes carry what one run learned into the next; compare with bench --tasks, Notes on and off`)
+      advice.push(`the same failure (${sig}) recurs on ${n} of ${gateCount} gate tasks and Notes is off: Notes carry what one run learned into the next; compare with bench ${mode.polyglot ? '--task polyglot' : '--tasks'}, Notes on and off`)
   }
   if (!advice.length) advice.push('none from these numbers')
 
@@ -104,7 +107,7 @@ export function evolveReport(r: ReportInput): string {
     if (mode.strict && said[0]!.startsWith('better ')) apply.push(`Use ${versionFile} in place of ${harness}.`)
     else if (!mode.strict && said.includes('more PASS')) apply.push(`Try ${versionFile} in place of ${harness}: a pointer, not proof (too few tasks).`)
     else apply.push(`Keep ${harness}; ${versionFile} is kept for reference.`)
-    apply.push(`Check it yourself: llm-harness-builder bench ${versionFile} --tasks <repo>`)
+    apply.push(`Check it yourself: llm-harness-builder bench ${versionFile} ${bench}`)
     if (prompts.length) apply.push('Read the systemPrompt paragraph above before you use it.')
   }
 

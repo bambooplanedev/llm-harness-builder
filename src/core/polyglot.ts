@@ -110,16 +110,18 @@ const lay = async (p: Polyglot, e: Exercise, solution: string) => {
   return dir
 }
 
+const promptOf = (n: string) => `Implement ${n}.js so that the tests in ${n}.test.js pass: run \`node --test ${n}.test.js\`. INSTRUCTIONS.md describes the exercise. Keep the whole solution in ${n}.js. Do not edit ${n}.test.js or expect.js. Finally answer with a one-line summary.`
+
 export function polyglotTasks(p: Polyglot, size: number, timeoutMs = 60_000): Task[] {
   return p.exercises.slice(0, size).map(e => ({
     name: e.name,
     tests: e.tests.length,
-    prompt: `Implement ${e.name}.js so that the tests in ${e.name}.test.js pass: run \`node --test ${e.name}.test.js\`. INSTRUCTIONS.md describes the exercise. Keep the whole solution in ${e.name}.js. Do not edit ${e.name}.test.js or expect.js. Finally answer with a one-line summary.`,
+    prompt: promptOf(e.name),
     prepare: () => lay(p, e, e.stub),
     async check(workdir, _size, _answer, env) {
       const tests = { passed: 0, total: e.tests.length }
       let src: string
-      try { src = await readFile(path.join(workdir, `${e.name}.js`), 'utf8') } catch { return { pass: false, reason: `${e.name}.js is missing`, tests } }
+      try { src = await readFile(path.join(workdir, `${e.name}.js`), 'utf8') } catch { return { pass: false, reason: 'missing solution file', tests } }
       const dir = await lay(p, e, src)
       try {
         const testFile = path.join(await realpath(dir), `${e.name}.test.js`)
@@ -130,5 +132,17 @@ export function polyglotTasks(p: Polyglot, size: number, timeoutMs = 60_000): Ta
         return { pass: s.pass, ...(s.reason ? { reason: s.reason } : {}), tests: { passed: s.passed, total: s.total } }
       } finally { await rm(dir, { recursive: true, force: true }) }
     },
+    dispose: dir => rm(dir, { recursive: true, force: true }),
   }))
+}
+
+/** What ties a paragraph to these exercises, for bindingTokens: each name, its recorded test names whole (the prompt
+ *  tokenizer would drop them), its files and prompt. A name the set no longer has is still a word; it has nothing else. */
+export function polyglotBinding(p: Polyglot, names: string[]): { names: string[]; paths: string[]; prompts: string[] } {
+  const known = names.flatMap(n => p.exercises.filter(e => e.name === n))
+  return {
+    names: [...names, ...known.flatMap(e => e.tests)],
+    paths: [...known.flatMap(e => [`${e.name}/${e.name}.js`, `${e.name}/${e.name}.test.js`, `${e.name}/INSTRUCTIONS.md`]), ...(known.length ? ['expect.js'] : [])],
+    prompts: known.map(e => promptOf(e.name)),
+  }
 }

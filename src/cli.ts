@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // src/cli.ts
 import { parseArgs } from 'node:util'
-import { readFile, cp, mkdir } from 'node:fs/promises'
+import { readFile, writeFile, cp, mkdir } from 'node:fs/promises'
 import { existsSync, readFileSync, writeFileSync, renameSync, appendFileSync, lstatSync, truncateSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url'
 import { mayAsk, type RunOpts } from './core/run.js'
 import { killTracked } from './core/procs.js'
 import { withNotes, type NotesStore } from './core/notes-run.js'
-import { notesKey, notesPath, readNotes, scrubText } from './core/notes.js'
+import { notesKey, notesPath, readNotes, scrubText, stateDir } from './core/notes.js'
 import { ALLOWED, CANDIDATES, splitSets, modeOf, referenceLabel, neededFlips, usable, decide, applyEdit, bindingTokens, checkEdit, failureGroups, signatureOf, proposerInput, proposerRequest, parseProposal, parseJournal, replay, type Edit, type JournalLine, type RunLite, type SetName } from './core/evolve.js'
 import { evolveReport } from './core/evolve-report.js'
 import { loadRepoTasks, hostOf, consentText, hasConsent, saveConsent, git, TASKS_FILE, type RepoTasks, type EvolveConsent } from './core/repo-tasks.js'
@@ -24,7 +24,7 @@ import { approvalPrompt, mcpCounts, quitWithoutWork, showable, showableText, typ
 import { startServer } from './server/index.js'
 import { TraceWriter, type Meta } from './server/runs.js'
 import { TASKS, type Task } from './core/tasks.js'
-import { loadPolyglot, polyglotTasks, POLYGLOT_MAX } from './core/polyglot.js'
+import { loadPolyglot, polyglotTasks, polyglotBinding, POLYGLOT_MAX } from './core/polyglot.js'
 import { childEnv, bashEnvNote } from './core/tools/env.js'
 import { median, formatTable, BENCH_TASKS, benchTotal, runTitle, benchFileName, autoApproves, type BenchRun, type BenchHarness, type BenchResult } from './core/bench.js'
 import { GUARD_BLOCKED, EDIT_MISS } from './core/tools/fs.js'
@@ -396,13 +396,19 @@ function dropWork(w: { live: Map<string, Clone> }): void {
   w.live.clear()
 }
 
-/** Where evolve's tasks come from: everything the loop reads about them, and nothing it has to know about a repo. */
+/** Where evolve's tasks come from: everything the loop reads about them, and nothing it has to know about a repo.
+ *  `moved`: why the journal's start line no longer fits these tasks, in the source's own words. */
 type EvolveSource = {
   work: Work; id: string; names: string[]; paths: string[]; prompts: string[]; notesFile: string
-  sets: Record<SetName, string[]>; describe: string; consent(yes: boolean, proposer: string): Promise<void>
+  sets: Record<SetName, string[]>; describe: string; moved?: string; consent(yes: boolean, proposer: string): Promise<void>
 }
+type StartLine = Extract<JournalLine, { type: 'start' }>
 
-async function repoSource(repo: RepoTasks): Promise<EvolveSource> {
+/** Under --report the tasks are read where the journal started: a commit since changes none of its numbers. */
+async function repoSource(dir: string, first: StartLine | undefined, report: boolean, refuse: (why: string, read: boolean) => never): Promise<EvolveSource> {
+  const at = report ? first?.sha : undefined
+  let repo!: RepoTasks
+  try { repo = await loadRepoTasks(dir, at) } catch (e) { refuse((e as Error).message, at !== undefined) }
   const sets = splitSets(repo.tasks)
   return {
     work: repoWork(repo), id: repo.sha, sets,
@@ -411,21 +417,53 @@ async function repoSource(repo: RepoTasks): Promise<EvolveSource> {
     notesFile: notesPath(await notesKey(repo.repo)),
     describe: `tasks: ${repo.tasks.length} from ${repo.repo} at ${repo.sha.slice(0, 7)}: train ${sets.train.length}, gate ${sets.gate.length}, test ${sets.test.length}` +
       (repo.uncommitted ? '\nuncommitted changes are not in the clones' : ''),
+    ...(first && first.sha !== repo.sha ? { moved: 'the repo has a new commit since this evolve started' } : {}),
     consent: (yes, proposer) => askConsent(repo, yes, { proposer, fields: ALLOWED }),
+  }
+}
+
+const SET_OF: SetName[] = ['train', 'gate', 'test']
+
+/** The first `size` exercises, split by their place in the set. Under --report the sets are the journal's own: an
+ *  upgraded set (or another --size) changes none of its numbers, and its names still bind what the proposer wrote. */
+function polyglotSource(size: number, first: StartLine | undefined, report: boolean, harnessUrl: string): EvolveSource {
+  const p = loadPolyglot()
+  const id = `polyglot:${createHash('sha256').update(JSON.stringify(p)).digest('hex')}:${size}`
+  const tasks = polyglotTasks(p, size)
+  const sets = report && first ? first.sets : splitSets(tasks.map((t, i) => ({ name: t.name!, set: SET_OF[i % 3] })))
+  return {
+    work: { tasks, live: new Map(), async ready() {} }, id, sets,
+    ...polyglotBinding(p, [...sets.train, ...sets.gate, ...sets.test]),
+    notesFile: notesPath('task-polyglot'),
+    describe: `exercises: the first ${size} of ${POLYGLOT_MAX} polyglot exercises: train ${sets.train.length}, gate ${sets.gate.length}, test ${sets.test.length}`,
+    ...(!report && first && first.sha !== id ? { moved: 'the exercise set or --size changed since this evolve started' } : {}),
+    async consent(yes, proposer) {
+      const host = hostOf(proposer)
+      // The harness's own server already gets everything the runs send; the proposer gets less.
+      if (host === hostOf(harnessUrl)) return void console.error(`proposer: ${host}, the harness's own server`)
+      const text = ["mode: evolve on polyglot — the model's own prompts run unreviewed while Evolve measures them", `proposer: ${host}`, `fields: ${ALLOWED.join(', ')}`].join('\n')
+      const file = path.join(stateDir(), 'consent', 'task-polyglot.evolve.json'), hash = createHash('sha256').update(text).digest('hex')
+      let has = false
+      try { has = JSON.parse(readFileSync(file, 'utf8')).hash === hash } catch {}
+      await ask(text, has, yes, async () => { await mkdir(path.dirname(file), { recursive: true }); await writeFile(file, JSON.stringify({ hash }) + '\n') })
+    },
   }
 }
 
 /** The commands of a repo's tasks run without asking for the whole bench or evolve: accepted once, by hash, before anything runs. */
 async function askConsent(repo: RepoTasks, yes: boolean, ev?: EvolveConsent): Promise<void> {
-  if (await hasConsent(repo, ev)) return
-  const text = consentText(repo, ev)
-  if (yes) { console.error(text); return saveConsent(repo, ev) }
+  await ask(consentText(repo, ev), await hasConsent(repo, ev), yes, () => saveConsent(repo, ev))
+}
+
+async function ask(text: string, has: boolean, yes: boolean, save: () => Promise<void>): Promise<void> {
+  if (has) return
+  if (yes) { console.error(text); return save() }
   if (!process.stdin.isTTY) die(`${text}\n\npass --yes to accept these commands, or run in a terminal`)
   const rl = createInterface({ input: process.stdin, output: process.stderr })
   const answer = await rl.question(`${text}\n\nRun these commands? [y/N] `)
   rl.close()
   if (!/^y(es)?$/i.test(answer.trim())) die('not accepted; nothing ran')
-  await saveConsent(repo, ev)
+  await save()
 }
 
 async function cmdBench(argv: string[]) {
@@ -549,7 +587,12 @@ async function cmdEvolve(argv: string[]) {
   keyFlag('evolve', values['api-key-env'])
   const [file] = positionals
   if (!file || positionals.length > 1) argError('evolve', 'evolve needs one harness file')
-  if (values.tasks === undefined) argError('evolve', 'evolve needs --tasks <repo>')
+  const poly = values.task !== undefined
+  if (values.tasks !== undefined && (poly || values.size !== undefined)) argError('evolve', '--tasks cannot go with --task or --size')
+  if (poly && values.task !== 'polyglot') argError('evolve', 'evolve takes --task polyglot only; your own tasks go in --tasks <repo>')
+  if (!poly && values.tasks === undefined) argError('evolve', 'evolve needs --tasks <repo> or --task polyglot --size N')
+  const size = Number(values.size)
+  if (poly && !(INT.test(values.size ?? '') && size >= 3 && size <= POLYGLOT_MAX)) argError('evolve', `--size must be an integer from 3 to ${POLYGLOT_MAX} for evolve --task polyglot`)
   if (!INT.test(values.rounds)) argError('evolve', '--rounds must be a positive integer')
   if (!INT.test(values.timeout)) argError('evolve', '--timeout must be a positive integer')
   const rounds = Number(values.rounds), timeoutS = Number(values.timeout)
@@ -586,13 +629,11 @@ async function cmdEvolve(argv: string[]) {
     lines = j.lines
     torn = text
   }
-  // The report reads the tasks where its journal started: a commit since changes none of its numbers.
-  const at = values.report && lines[0]?.type === 'start' ? lines[0].sha : undefined
-  let repo!: RepoTasks
-  try { repo = await loadRepoTasks(values.tasks!, at) } catch (e) { if (at !== undefined) die(start((e as Error).message)); argError('evolve', (e as Error).message) }
   // Everything below reads only the source: what the tasks are, where they come from, how they run.
-  const src = await repoSource(repo)
-  const { sets, work } = src, mode = modeOf(sets)
+  const first = lines[0]?.type === 'start' ? lines[0] : undefined
+  const src = poly ? polyglotSource(size, first, values.report, config.backend.baseUrl)
+    : await repoSource(values.tasks!, first, values.report, (why, read) => read ? die(start(why)) : argError('evolve', why))
+  const { sets, work } = src, mode = modeOf(sets, poly)
   if (typeof mode === 'string') return die(mode)
   console.error(src.describe)
   console.error(mode.strict ? `strict: a candidate needs at least ${neededFlips()} tasks FAIL → PASS on train + gate (more if any go PASS → FAIL)` : referenceLabel(mode))
@@ -608,8 +649,7 @@ async function cmdEvolve(argv: string[]) {
   }
   const snapCheck = () => { if (!snapOk()) die(moved(`the notes snapshot changed since this evolve started (${snap})`)) }
   if (resuming) {
-    // Under --report the tasks were read at this very commit.
-    if (lines[0]?.type === 'start' && lines[0].sha !== src.id) die(moved('the repo has a new commit since this evolve started'))
+    if (src.moved) die(moved(src.moved))
     if (lines[0]?.type === 'start' && lines[0].pin !== pin) die(moved('the harness or its options changed since this evolve started'))
     if (lines[0]?.type === 'start' && lines[0].base !== base) die(start('the journal was written for another harness'))
   }

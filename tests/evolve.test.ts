@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { ALPHA, applyEdit, numbersOf, usable, parseJournal, replay, verdict, bindingTokens, checkEdit, decide, failureGroups, reasonKind, signatureOf, SIG, modeOf, neededFlips, parseProposal, proposerInput, proposerRequest, referenceLabel, signP, splitSets, PROPOSAL_SCHEMA, type Edit, type Mode, type RunLite } from '../src/core/evolve.js'
+import { ALPHA, boundBy, applyEdit, numbersOf, usable, parseJournal, replay, verdict, bindingTokens, checkEdit, decide, failureGroups, reasonKind, signatureOf, SIG, modeOf, neededFlips, parseProposal, proposerInput, proposerRequest, referenceLabel, signP, splitSets, PROPOSAL_SCHEMA, type Edit, type Mode, type RunLite } from '../src/core/evolve.js'
 import type { HarnessEvent } from '../src/core/events.js'
 import { harness } from './helpers.js'
 import type { RepoTask } from '../src/core/repo-tasks.js'
+import { loadPolyglot, polyglotBinding } from '../src/core/polyglot.js'
 
 const task = (name: string, set?: RepoTask['set']): RepoTask => ({ name, prompt: 'p', check: 'c', set, checkTimeoutS: 60 })
 const run = (t: string, ok: boolean, tokens = 100, fp = 10): RunLite => ({ task: t, verdict: ok ? 'PASS' : 'FAIL', tokens, firstPromptTokens: fp })
@@ -465,5 +466,56 @@ describe('evolve journal', () => {
     expect(verdict([run('t0', true)], [run('t0', false)], ref)).toBe(`${referenceLabel(ref)}\nfewer PASS\n${P}`)
     expect(verdict([run('t0', true)], [run('t0', true)], ref)).toBe(`${referenceLabel(ref)}\nnot told apart\n${P}`)
     for (const m of [strict, ref]) for (const [o, l] of [[all(false), all(true)], [all(true), all(false)]]) expect(verdict(o, l, m)).not.toMatch(/in general/)
+  })
+})
+
+describe('evolve on polyglot', () => {
+  const p = loadPolyglot()
+  const sets = { train: ['a'], gate: ['b'], test: ['c'] }
+
+  it('boundBy: a token under 6 chars by word boundary, a longer one as a substring', () => {
+    expect(boundBy('Score each Poker hand', ['poker'])).toBe(true)
+    expect(boundBy('pokers and pokerface', ['poker'])).toBe(false)
+    expect(boundBy('see formatBytesHelper', ['formatbytes'])).toBe(true)
+    expect(boundBy(3, ['poker'])).toBe(false)
+  })
+
+  it('the binding of polyglot exercises: short names kept, recorded test names whole and lowercased; checkEdit refuses both', () => {
+    const poker = p.exercises.find(e => e.name === 'poker')!
+    const binding = bindingTokens(polyglotBinding(p, ['space-age', 'poker']))
+    expect(binding).toContain('poker')
+    expect(binding).toContain(poker.tests[0]!.toLowerCase())
+    expect(binding).toContain('space-age.test.js')
+    const para = (value: string) => checkEdit({ field: 'systemPrompt', value }, { current: harness(), original: harness(), tried: [], binding })
+    expect(para('When a task is like poker, rank the cases first.')).toBe('tied to a task')
+    expect(para(`Mind ${poker.tests[0]} first.`)).toBe('tied to a task')
+    expect(para('Read the failing test before editing.')).toBeUndefined()
+    // A name no longer in the set is still a binding word; it has no files or tests to add.
+    expect(bindingTokens(polyglotBinding(p, ['gone']))).toEqual(['gone'])
+  })
+
+  it('replay drops a refused value bound by a short name, by word boundary', () => {
+    const start = { v: 1, type: 'start', base: 'h', sha: 'polyglot:x:3', pin: 'a'.repeat(64), notes: 'b'.repeat(64), sets, strict: false, proposer: 'p' }
+    const cur = { v: 1, type: 'current', round: 1, runs: [run('a', false), run('b', false)] }
+    const c = (index: number, value: string) => ({ v: 1, type: 'candidate', round: 1, index, input: '{}', edit: { field: 'systemPrompt', value }, accepted: false, reason: 'no edit in the reply' })
+    const r = replay([start, cur, c(1, 'think of poker'), c(2, 'write short essays')] as any, harness(), { binding: ['poker', 'say'], sets })
+    expect('error' in r ? r : r.rejected).toEqual([{ field: 'systemPrompt', reason: 'no edit in the reply' }, { field: 'systemPrompt', value: 'write short essays', reason: 'no edit in the reply' }])
+  })
+
+  it('signatureOf classes the polyglot check reasons; SIG takes them', () => {
+    const sig = (lastError: string) => signatureOf({ task: 'a', verdict: 'FAIL', lastError }, [])
+    expect(sig('a test failed: Space Age > age on Earth')).toBe('-|test|-|-')
+    expect(sig('timeout after 60000 ms')).toBe('-|timeout|-|-')
+    expect(sig('missing solution file')).toBe('-|missing|-|-')
+    expect(sig('unexpected test "x" from y.js')).toBe('-|unexpected|-|-')
+    for (const s of ['-|test|-|-', 'final|unexpected|many|-', 'final|check_failed|many|-']) expect(SIG.test(s)).toBe(true)
+  })
+
+  it('reference mode on polyglot advises --size 24, and the verdict speaks of exercises', () => {
+    const m = modeOf(sets, true) as Mode
+    expect(m).toEqual({ strict: false, trainGate: 2, test: 1, polyglot: true })
+    expect(referenceLabel(m)).toBe('\u041e\u0420\u0406\u0404\u041d\u0422\u0418\u0420, \u041d\u0415 \u0414\u041e\u041a\u0410\u0417 — too few exercises (3 of 24) for a statistical conclusion; raise --size to 24')
+    const T = names(8), all = (ok: boolean) => T.map(t => run(t, ok))
+    expect(verdict(all(false), all(true), { ...strict, polyglot: true })).toMatch(/^better on the exercises Evolve did not see\n/)
   })
 })
