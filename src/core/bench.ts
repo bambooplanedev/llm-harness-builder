@@ -19,6 +19,8 @@ export type BenchRun = {
   guardBlocks?: number
   /** Edits whose "old" did not occur exactly once. Absent in JSON written before v2.2. */
   editMiss?: number
+  /** The task's name in a bench on the user's own tasks (bench --tasks). */
+  task?: string
 }
 export type BenchHarness = {
   name: string; config: HarnessConfig; pass: number; reasons: Record<string, number>
@@ -27,6 +29,8 @@ export type BenchHarness = {
   server?: { nCtx?: number; build?: string }
 }
 export type BenchResult = { version: 1; date: string; task: string; taskName?: string; size?: number; node?: string; n: number; timeoutS: number; complete: boolean;
+  /** bench --tasks: the repo (real path) and the commit its lhb-tasks.json was read from; taskName is 'tasks'. */
+  tasksRepo?: string; tasksSha?: string; taskCount?: number
   /** Set by Ctrl-C (or Stop bench on the page): no run of it is live any more, though its last .part stays. */
   stopped?: boolean; harnesses: BenchHarness[] }
 
@@ -92,3 +96,9 @@ export function formatTable(harnesses: BenchHarness[]): string {
   return [line(head), ...rows.map(line), 'medians over all runs incl. failures; s = wall-clock per run',
     '95% CI = Wilson interval of the PASS rate; two harnesses whose intervals overlap are not told apart by this bench'].join('\n')
 }
+
+/** How many runs a bench makes: n per harness, per task of a tasks bench. */
+export const benchTotal = (r: Pick<BenchResult, 'n' | 'harnesses' | 'taskCount'>): number => r.n * r.harnesses.length * (r.taskCount ?? 1)
+
+/** A run's heading on the Bench page: its round, and its task in a tasks bench. */
+export const runTitle = (r: Pick<BenchRun, 'round' | 'task'>): string => `#${r.round}${r.task ? ` ${r.task}` : ''}`

@@ -246,3 +246,22 @@ test('withNotes: a notes file that cannot be read is no notes, not a failed run'
   const { ev } = await runN([{ content: 'done' }, writerReply([])], { file: d, write: true })
   expect(ev.at(-1)).toMatchObject({ type: 'done', reason: 'final' })
 })
+
+test('appendNotes: a file left without a final newline (a hand edit) does not swallow the next note', async () => {
+  const f = join(await tmp('notes-'), 'n.jsonl')
+  await writeFile(f, JSON.stringify(note(1)))
+  await appendNotes(f, [note(2)])
+  expect((await readNotes(f)).map(n => n.id)).toEqual(['1', '2'])
+})
+
+test('withNotes: the writer sees the end of a long run, cut to whole lines', async () => {
+  const s = await store()
+  const backend = fakeBackend([{ toolCalls: Array.from({ length: 2000 }, (_, i) => ({ name: 'read_file', args: { path: `f${i}.js` } })) }, { content: 'done' }, writerReply([])])
+  const ev: HarnessEvent[] = []
+  for await (const e of withNotes({ config: harness({ notes: { enabled: true, maxTokens: 400 }, loop: { maxTurns: 5 } }), task: 'do', workdir: await tmp('nw-') }, { backend }, s, 'r')) ev.push(e)
+  const user = backend.requests.at(-1)!.messages.at(-1)!.content
+  const summary = user.slice(user.indexOf('Run summary:\n') + 13, user.indexOf('\n\nExisting notes:'))
+  expect(summary.length).toBeLessThanOrEqual(8000)
+  expect(summary.split('\n')[0]).toMatch(/^(call read_file keys=path path=f\d+\.js len=\d+|result read_file error)$/)
+  expect(summary).toContain('done final')
+})

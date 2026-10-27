@@ -309,6 +309,42 @@ compare with `pool2`'s. `sift`, `triage` and `judge` are steps of a news curator
 fixtures (`examples-sift`, `examples-triage`). How they were measured and what they showed:
 [docs/curator.md](docs/curator.md).
 
+**Your own tasks.** `bench --tasks <repo>` runs your tasks instead of a built-in one, from a
+`lhb-tasks.json` at the top of a git repo:
+
+```json
+{ "tasks": [
+    { "name": "limit", "prompt": "Add a limit option to paginate() so test/paginate.test.js passes", "check": "npm test -- paginate" },
+    { "name": "dates", "prompt": "Fix parseDate for ISO weeks", "check": "npm test -- dates", "checkTimeoutS": 120 } ],
+  "setup": "npm ci" }
+```
+
+```bash
+llm-harness-builder bench --tasks . --n 3 harnesses/tuned-nothink.json
+```
+
+Only the last commit is read: uncommitted changes, `lhb-tasks.json` included, are not in the runs,
+and `bench` says so. Each run is a `git clone --shared` in the OS temp dir, at that commit, with no
+remote, deleted after its check; the harness reads what a run changed through a git dir of its own,
+so whatever the model writes into the clone's `.git` does not reach your repo or the verdict. Tests,
+manifests, lock files, test-runner configs and `.gitignore` files are protected (add your own paths
+with `protect`), and so is the `node_modules` the run was given: a run that adds, changes or deletes
+one is a FAIL, and its check does not run. A check that finds 0
+tests is a FAIL too. Before the first run `bench` shows every command it will run and where, and
+asks once; `--yes` accepts without a terminal, and a change to a command or to the scripts of
+`package.json` asks again. `setup` runs once in a clone of its own, and the runs link its
+`node_modules` (without `setup`, your repo's): a run that changes its `.bin`, a package's
+`package.json` or a package's top-level code stops the bench after the JSON is written; files deeper
+in a package are not watched. What each run changed is kept as `runs/<trace>.patch` (files that look like secrets left
+out, at most 1 MiB).
+
+A clone is a full checkout of the commit, which is slow on a big monorepo, and its submodules are
+not initialised. `setup` runs with the env names the harnesses pass in `tools.bashEnv`, and what it leaves in the
+background is killed when it ends, so start a service the tests need outside `bench`. A server
+that is down is reported after the consent question and before `setup`. Traces and patches go to
+`./runs` of the folder you run `bench` from: from the repo itself (`bench --tasks .`) that leaves
+the repo with uncommitted files, so run it from another folder or add `runs/` to `.gitignore`.
+
 #### replay
 
 `replay` takes the request a recorded run sent at turn N (`runs/<id>.jsonl` keeps every one) and

@@ -179,6 +179,7 @@ export async function startServer(opts: ServerOpts) {
         const opened = await store.benchOpen(file)
         if (!opened) return json(res, 404, { error: 'not a bench file' })
         const r = opened.result
+        if (r.taskName === 'tasks') return json(res, 400, { error: 'a bench on your own tasks runs again from the CLI: bench --tasks <repo>' })
         const dir = await mkdtemp(path.join(tmpdir(), 'lhb-again-'))
         const harnesses = await Promise.all(r.harnesses.map(async (h, i) => { const f = path.join(dir, `${i}.json`); await writeFile(f, JSON.stringify(h.config)); return f }))
         const cleanup = () => void rm(dir, { recursive: true, force: true })

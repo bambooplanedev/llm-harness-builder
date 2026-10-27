@@ -793,3 +793,16 @@ test('a run with notes on: note_written comes over SSE before done, and the note
   const saved = await readNotes(notesPath(await notesKey(wd)))
   expect(saved.map(n => [n.text, n.run])).toEqual([['use npm test', runId]])
 })
+
+test('bench again refuses a bench on your own tasks', async () => {
+  const dir = await tmp('lhb-bench-t-')
+  await writeFile(join(dir, 'tasksbench.json'), benchJson({ taskName: 'tasks', tasksRepo: '/r' }))
+  let started = false
+  const s = await startServer({ port: 0, runsDir: dir, harnessesDir, backendFactory: () => fake([]), bench: () => { started = true; throw new Error('must not start') } })
+  try {
+    const r = await fetch(`http://127.0.0.1:${s.port}/api/bench/again`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ file: 'tasksbench.json' }) })
+    expect(r.status).toBe(400)
+    expect((await r.json()).error).toBe('a bench on your own tasks runs again from the CLI: bench --tasks <repo>')
+    expect(started).toBe(false)
+  } finally { s.close() }
+})

@@ -48,3 +48,24 @@ export function fakeBackend(queue: FakeResponse[], build: (req: ChatRequest) => 
     },
   }
 }
+
+/** A git repo in a fresh tmp dir whose name has a space in it, with `files` written and, unless `commit: false`, committed. */
+export async function gitRepo(files: Record<string, string>, o: { commit?: boolean } = {}): Promise<string> {
+  const { execFileSync } = await import('node:child_process')
+  const { writeFile, mkdir } = await import('node:fs/promises')
+  const { dirname } = await import('node:path')
+  const dir = join(await tmp('lhb-repo-'), 'my repo')
+  await mkdir(dir)
+  const git = (...a: string[]) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { cwd: dir, stdio: 'pipe' })
+  git('init', '-q')
+  for (const [f, text] of Object.entries(files)) { await mkdir(dirname(join(dir, f)), { recursive: true }); await writeFile(join(dir, f), text) }
+  if (o.commit !== false && Object.keys(files).length) { git('add', '-A'); git('commit', '-qm', 'init') }
+  return dir
+}
+
+/** Commits everything in `dir` as the test user. */
+export async function gitCommit(dir: string, msg = 'next'): Promise<void> {
+  const { execFileSync } = await import('node:child_process')
+  execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', 'add', '-A'], { cwd: dir, stdio: 'pipe' })
+  execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', msg], { cwd: dir, stdio: 'pipe' })
+}

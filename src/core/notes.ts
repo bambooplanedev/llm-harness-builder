@@ -15,9 +15,12 @@ export type Note = { id: string; ts: number; run?: string; author: 'model' | 'us
 export const notesKey = async (workdir: string): Promise<string> =>
   createHash('sha256').update(await realpath(workdir)).digest('hex').slice(0, 16)
 
-/** LHB_NOTES_DIR, else $XDG_STATE_HOME (or ~/.local/state)/llm-harness-builder/notes. */
-export const notesDir = (env: NodeJS.ProcessEnv = process.env): string =>
-  env.LHB_NOTES_DIR || path.join(env.XDG_STATE_HOME || path.join(homedir(), '.local', 'state'), 'llm-harness-builder', 'notes')
+/** Where the harness keeps what outlives a run (notes, consent): LHB_STATE_DIR, else $XDG_STATE_HOME (or ~/.local/state)/llm-harness-builder. */
+export const stateDir = (env: NodeJS.ProcessEnv = process.env): string =>
+  env.LHB_STATE_DIR || path.join(env.XDG_STATE_HOME || path.join(homedir(), '.local', 'state'), 'llm-harness-builder')
+
+/** LHB_NOTES_DIR, else <stateDir>/notes. */
+export const notesDir = (env: NodeJS.ProcessEnv = process.env): string => env.LHB_NOTES_DIR || path.join(stateDir(env), 'notes')
 
 export const notesPath = (key: string, dir = notesDir()): string => path.join(dir, `${key}.jsonl`)
 
@@ -37,7 +40,9 @@ export async function readNotes(file: string): Promise<Note[]> {
 export async function appendNotes(file: string, notes: Note[]): Promise<void> {
   if (!notes.length) return
   await mkdir(path.dirname(file), { recursive: true })
-  await appendFile(file, notes.map(n => JSON.stringify(n) + '\n').join(''))
+  // A file a hand edit left without its last newline would glue the next note onto that line, losing both.
+  const last = await readFile(file).then(b => b.at(-1), () => undefined)
+  await appendFile(file, (last !== undefined && last !== 10 ? '\n' : '') + notes.map(n => JSON.stringify(n) + '\n').join(''))
 }
 
 const line = (n: Note) => `- ${n.text}`
