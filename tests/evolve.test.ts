@@ -408,7 +408,8 @@ describe('evolve journal', () => {
 
   it('replay refuses a candidate whose edit differs from its proposal, a proposal not followed by its candidate, one for a done slot, and one that fails the edit checks', () => {
     const other = { ...a1, edit: { field: 'systemPrompt', value: 'other' } }
-    expect(replay([start, cur, prop(a1), other] as any, harness(), ctx)).toEqual({ error: 'cannot resume: round 1 candidate 1: its edit is not the one proposed' })
+    expect(replay([start, cur, prop(a1), other] as any, harness(), ctx)).toEqual({ error: 'cannot resume: round 1 candidate 1: its edit or input is not the one proposed' })
+    expect(replay([start, cur, prop(a1), { ...a1, input: '{"other":1}' }] as any, harness(), ctx)).toEqual({ error: 'cannot resume: round 1 candidate 1: its edit or input is not the one proposed' })
     expect(replay([start, cur, prop(a1), r2] as any, harness(), ctx)).toEqual({ error: 'cannot resume: round 1 candidate 1: a proposal without its candidate' })
     expect(replay([start, cur, prop(a1), prop(a1)] as any, harness(), ctx)).toEqual({ error: 'cannot resume: round 1 candidate 1: a proposal without its candidate' })
     expect(replay([start, cur, prop(a1), fin()] as any, harness(), ctx)).toEqual({ error: 'cannot resume: round 1 candidate 1: a proposal without its candidate' })

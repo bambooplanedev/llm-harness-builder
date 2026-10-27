@@ -366,7 +366,8 @@ export function replay(lines: JournalLine[], original: object, ctx: { binding: s
       pending = { round: l.round, index: l.index, input: l.input, edit: l.edit }
       continue
     }
-    if (pending && JSON.stringify(l.type === 'candidate' && l.edit) !== JSON.stringify(pending.edit)) return { error: `cannot resume: ${slot}: its edit is not the one proposed` }
+    if (pending && !(l.type === 'candidate' && l.input === pending.input && JSON.stringify(l.edit) === JSON.stringify(pending.edit)))
+      return { error: `cannot resume: ${slot}: its edit or input is not the one proposed` }
     pending = undefined
     done.push({ round: l.round, index })
     if (l.type === 'current') {

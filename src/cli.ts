@@ -598,6 +598,9 @@ async function cmdEvolve(argv: string[]) {
   let state = resuming ? rebuilt() : undefined as unknown as EvolveState
   // The snapshot is what the next runs read; the report runs nothing.
   if (resuming && !values.report) snapCheck()
+  // Fewer rounds would never reach the cut slot, and a final line after its proposal leaves a journal no resume accepts.
+  if (resuming && !values.report && state.pending && state.pending.round > rounds)
+    die(`${jf} ends on round ${state.pending.round}'s candidate ${state.pending.index}, cut before its runs; run evolve again with --rounds ${state.pending.round} or more to finish it`)
   const all = Array.from({ length: rounds }, (_, i) => i + 1).every(round => lines.some(l => l.type === 'current' && l.round === round) &&
     Array.from({ length: CANDIDATES }, (_, i) => i + 1).every(index => lines.some(l => l.type === 'candidate' && l.round === round && l.index === index)))
   if (resuming && all && !values.report) console.error(`all rounds are in the journal${state.version ? '; measuring the final test' : ''}`)
@@ -644,11 +647,11 @@ async function cmdEvolve(argv: string[]) {
   const pb = proposer.backend
   const pRedact = redactor(apiKey(pb, process.env), pb.apiKeyEnv ?? '')
   const hRedact = redactor(apiKey(config.backend, process.env), config.backend.apiKeyEnv ?? '')
-  // Not a FAIL: the server refused the key, has no credits, or kept limiting. Nothing of the cut step is journaled.
+  // Not a FAIL: the server refused the key, has no credits, or kept limiting. The cut step's runs are not journaled (its proposal may be).
   const WHY: Record<number, string> = { 401: 'the key was refused', 402: 'no credits left', 403: 'the request was refused', 429: 'rate limited, still after 3 retries' }
   const halt = (who: 'harness' | 'proposer', b: HarnessConfig['backend'], status: number, redact: ReturnType<typeof redactor>): never => {
     dropWork(work)
-    console.error(showable(redact.text(`evolve stopped: the ${who} backend (${hostOf(b.baseUrl)}) answered ${status}: ${WHY[status]}; nothing of the cut step is in the journal; run the same command again to resume from the journal`)))
+    console.error(showable(redact.text(`evolve stopped: the ${who} backend (${hostOf(b.baseUrl)}) answered ${status}: ${WHY[status]}; the cut step's runs are not in the journal; run the same command again to resume from the journal`)))
     return process.exit(1)
   }
   const runOn = async (cfg: object, name: string, names: string[], round: number): Promise<RunLite[]> => {

@@ -2182,6 +2182,24 @@ test('evolve: a stop during a candidate\'s runs leaves its proposal; run again, 
   expect(types(cwd)).toEqual(['start', 'current', 'proposal', 'candidate', 'candidate', 'final'])
 }, 120_000)
 
+test('evolve: a proposal cut in round 2 and a rerun with --rounds 1 is refused, naming --rounds 2; the journal still resumes', async () => {
+  const { repo, env, cwd, h } = await evFirst()
+  // Only round 2's proposal carries TWICE: the stop falls on its candidate's runs, not on round 2's current runs.
+  const [p, a, d] = evFake({ value: `${ALWAYS} TWICE` })
+  writeFileSync(env.LHB_FAKE_BACKEND, JSON.stringify([{ when: 'TWICE', throw: { status: 401 } }, p, a, d]))
+  expect(cli(['evolve', h, '--tasks', repo, '--rounds', '2', '--yes'], env, cwd).status).toBe(1)
+  expect(types(cwd).at(-1)).toBe('proposal')
+  const n = journal(cwd).length
+  const r = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
+  expect(r.status).not.toBe(0)
+  expect(r.stderr).toContain('--rounds 2')
+  expect(journal(cwd)).toHaveLength(n)
+  writeFileSync(env.LHB_FAKE_BACKEND, JSON.stringify([a, d]))
+  const again = cli(['evolve', h, '--tasks', repo, '--rounds', '2', '--yes'], env, cwd)
+  expect(again.status, again.stderr).toBe(0)
+  expect(types(cwd).at(-1)).toBe('final')
+}, 120_000)
+
 test('evolve: a journal written before proposal lines still resumes', async () => {
   const { repo, env, cwd, h } = await evFirst()
   const jf = join(cwd, 'harnesses', 'h.evolve.jsonl')
