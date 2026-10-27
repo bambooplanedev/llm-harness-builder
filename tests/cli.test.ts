@@ -2160,6 +2160,38 @@ for (const status of [401, 402, 403])
     expect(failed(cwd)).toEqual([])
   }, 120_000)
 
+test('evolve: a stop during a candidate\'s runs leaves its proposal; run again, the same edit is measured without asking the proposer', async () => {
+  const repo = await tasksRepo(evTasks(ONE_EACH))
+  const [p, a, d] = evFake()
+  const env = await tasksEnv([{ when: 'ALWAYS make done.txt', throw: { status: 401 } }, p, a, d])
+  const cwd = await tmp('lhb-cwd-')
+  const h = evHarness(cwd)
+  const r = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
+  expect(r.status, r.stderr).toBe(1)
+  expect(types(cwd)).toEqual(['start', 'current', 'proposal'])
+  const prop = journal(cwd).at(-1)
+  expect(prop).toMatchObject({ round: 1, index: 1, edit: { field: 'systemPrompt', value: ALWAYS } })
+  // No proposer reply at all: a question to it would get 'done' and be no edit.
+  writeFileSync(env.LHB_FAKE_BACKEND, JSON.stringify([a, d]))
+  const again = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
+  expect(again.status, again.stderr).toBe(0)
+  const c1 = journal(cwd).find(l => l.type === 'candidate' && l.index === 1)
+  expect(c1.edit).toEqual(prop.edit)
+  expect(c1.input).toBe(prop.input)
+  expect(c1.runs).toHaveLength(2)
+  expect(types(cwd)).toEqual(['start', 'current', 'proposal', 'candidate', 'candidate', 'final'])
+}, 120_000)
+
+test('evolve: a journal written before proposal lines still resumes', async () => {
+  const { repo, env, cwd, h } = await evFirst()
+  const jf = join(cwd, 'harnesses', 'h.evolve.jsonl')
+  writeFileSync(jf, journal(cwd).filter(l => l.type !== 'proposal').map(l => JSON.stringify(l) + '\n').join(''))
+  expect(cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes', '--report'], env, cwd).status).toBe(0)
+  const r = cli(['evolve', h, '--tasks', repo, '--rounds', '2', '--yes'], env, cwd)
+  expect(r.status, r.stderr).toBe(0)
+  expect(journal(cwd).filter(l => l.type === 'candidate' && l.round === 2)).toHaveLength(2)
+}, 120_000)
+
 test('evolve: a proposer that gets 429 four times stops with no candidate line', async () => {
   const repo = await tasksRepo(evTasks(ONE_EACH))
   const env = await tasksEnv([{ when: 'You improve the harness', keep: true, throw: { status: 429 } }, ...evFake().slice(1)])

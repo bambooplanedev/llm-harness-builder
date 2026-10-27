@@ -714,22 +714,30 @@ async function cmdEvolve(argv: string[]) {
     for (let index = 1; index <= CANDIDATES; index++) {
       const done = lines.find(l => l.type === 'candidate' && l.round === round && l.index === index) as Extract<JournalLine, { type: 'candidate' }> | undefined
       if (done) { if (done.accepted && done.runs) cmp = done.runs; continue }
-      const train = await Promise.all(cmp.filter(r => sets.train.includes(r.task)).map(async run => ({ run, events: await eventsOf(run.trace) })))
-      const input = proposerInput(state.current, failureGroups(train), state.rejected, clean)
-      const p = await propose(input)
-      const why = p.reason ?? checkEdit(p.edit!, { current: state.current, original: raw, tried: state.tried, binding })
-      if (why) {
-        console.error(`candidate ${round}.${index}: ${showable(why)}`)
-        append({ v: 1, type: 'candidate', round, index, input, ...(p.edit ? { edit: p.edit } : {}), accepted: false, reason: why })
-        continue
+      // A proposal journaled before a stop is measured as it was: asking again would let a stop re-roll it.
+      const pend = state.pending?.round === round && state.pending.index === index ? state.pending : undefined
+      let input: string, edit: Edit
+      if (pend) ({ input, edit } = pend)
+      else {
+        const train = await Promise.all(cmp.filter(r => sets.train.includes(r.task)).map(async run => ({ run, events: await eventsOf(run.trace) })))
+        input = proposerInput(state.current, failureGroups(train), state.rejected, clean)
+        const p = await propose(input)
+        const why = p.reason ?? checkEdit(p.edit!, { current: state.current, original: raw, tried: state.tried, binding })
+        if (why) {
+          console.error(`candidate ${round}.${index}: ${showable(why)}`)
+          append({ v: 1, type: 'candidate', round, index, input, ...(p.edit ? { edit: p.edit } : {}), accepted: false, reason: why })
+          continue
+        }
+        edit = p.edit!
+        append({ v: 1, type: 'proposal', round, index, input, edit })
       }
-      const cand = applyEdit(state.current, p.edit!)
+      const cand = applyEdit(state.current, edit)
       const runs = await runOn(cand, `${base}.r${round}c${index}`, trainGate, round)
       if (stopped) return stop()
       const d = decide(cmp, runs, state.baseline!, sets.gate, mode)
       const version = d.accepted ? state.version + 1 : undefined
       if (version) { writeVersion(version, cand); cmp = runs }
-      append({ v: 1, type: 'candidate', round, index, input, edit: p.edit!, accepted: d.accepted, reason: d.reason, numbers: d.numbers, runs, ...(version ? { version } : {}) })
+      append({ v: 1, type: 'candidate', round, index, input, edit, accepted: d.accepted, reason: d.reason, numbers: d.numbers, runs, ...(version ? { version } : {}) })
       console.error(`candidate ${round}.${index}: ${d.reason}${version ? ` — wrote ${vf(version)}` : ''}`)
     }
   }

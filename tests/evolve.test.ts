@@ -384,6 +384,39 @@ describe('evolve journal', () => {
     expect(replay([start] as any, harness(), ctx)).toMatchObject({ version: 0, baseline: undefined })
   })
 
+  // The proposal goes in before its runs: a stop between them cannot re-roll it.
+  const prop = (c: { round: number; index: number; input: string; edit?: Edit }) => ({ v: 1, type: 'proposal', round: c.round, index: c.index, input: c.input, edit: c.edit })
+  it('a proposal line parses; one without an edit or with an extra key is refused', () => {
+    expect(parseJournal(jsonl(start, cur, prop(a1), a1))).toEqual({ lines: [start, cur, prop(a1), a1] })
+    expect(parseJournal(jsonl(start, cur, { ...prop(a1), edit: undefined }))).toEqual({ error: 'line 3: missing edit' })
+    expect(parseJournal(jsonl(start, cur, { ...prop(a1), extra: 1 }))).toEqual({ error: expect.stringMatching(/^line 3: /) })
+  })
+
+  it('replay: a proposal followed by its candidate is not a second line and adds nothing; one without its candidate is pending', () => {
+    const lines = (...ls: object[]) => (parseJournal(jsonl(...ls)) as any).lines
+    // Refused by decide, so it passed the edit checks: the only kind with a proposal.
+    const n2 = cand(2, { field: 'loop.maxRepeats', value: 4 }, false, 'no more PASS than current')
+    const old = replay(lines(start, cur, a1, n2), harness(), ctx) as any
+    const r = replay(lines(start, cur, prop(a1), a1, prop(n2), n2), harness(), ctx) as any
+    expect(r).toEqual(old)
+    expect(old.pending).toBeUndefined()
+    const p = replay(lines(start, cur, a1, prop(n2)), harness(), ctx) as any
+    expect(p.pending).toEqual({ round: 1, index: 2, input: '{}', edit: n2.edit })
+    expect(p.tried).toEqual([a1.edit])
+    expect(p.done).toEqual(old.done.slice(0, 2))
+  })
+
+  it('replay refuses a candidate whose edit differs from its proposal, a proposal not followed by its candidate, one for a done slot, and one that fails the edit checks', () => {
+    const other = { ...a1, edit: { field: 'systemPrompt', value: 'other' } }
+    expect(replay([start, cur, prop(a1), other] as any, harness(), ctx)).toEqual({ error: 'cannot resume: round 1 candidate 1: its edit is not the one proposed' })
+    expect(replay([start, cur, prop(a1), r2] as any, harness(), ctx)).toEqual({ error: 'cannot resume: round 1 candidate 1: a proposal without its candidate' })
+    expect(replay([start, cur, prop(a1), prop(a1)] as any, harness(), ctx)).toEqual({ error: 'cannot resume: round 1 candidate 1: a proposal without its candidate' })
+    expect(replay([start, cur, prop(a1), fin()] as any, harness(), ctx)).toEqual({ error: 'cannot resume: round 1 candidate 1: a proposal without its candidate' })
+    expect(replay([start, cur, a1, prop(a1)] as any, harness(), ctx)).toEqual({ error: 'cannot resume: round 1 candidate 1: a second line for it' })
+    expect(replay([start, cur, a1, prop({ ...r2, edit: a1.edit })] as any, harness(), ctx)).toEqual({ error: 'cannot resume: round 1 candidate 2: proposed edit: already tried' })
+    expect(replay([start, cur, prop({ ...r2, edit: { field: 'loop.untilBash', value: 'x' } })] as any, harness(), ctx)).toEqual({ error: 'cannot resume: round 1 candidate 2: proposed edit: field not allowed' })
+  })
+
   // The journal is checked, not trusted: a decision its own numbers do not support is refused, naming its slot.
   it('replay refuses an accepted line the journal\'s numbers do not support', () => {
     const lost = cand(1, { field: 'loop.maxRepeats', value: 3 }, false, '0 PASS')

@@ -268,6 +268,7 @@ export type JournalLine =
   | { v: 1; type: 'start'; base: string; sha: string; pin: string; notes: string; sets: Record<SetName, string[]>; strict: boolean; proposer: string }
   | { v: 1; type: 'current'; round: number; runs: RunLite[] }
   | { v: 1; type: 'candidate'; round: number; index: number; input: string; edit?: Edit; accepted: boolean; reason: string; numbers?: Numbers; runs?: RunLite[]; version?: number }
+  | { v: 1; type: 'proposal'; round: number; index: number; input: string; edit: Edit }
   | { v: 1; type: 'final'; version: number; orig?: RunLite[]; last?: RunLite[] }
 
 // A field's check: undefined = fine, else why not. The journal sits in the user's cwd, where the model's bash can
@@ -301,6 +302,8 @@ const LINE: Record<string, Check> = {
   current: shape({ v: v1, type: str, round: pos, runs: arr(RUN) }),
   candidate: shape({ v: v1, type: str, round: pos, index: pos, input: str, accepted: bool, reason: str },
     { edit: EDIT, numbers: shape({ pass: num }, { tokensPerSuccess: num, tokens: num, weight: num }), runs: arr(RUN), version: pos }),
+  // Written before the candidate's runs: a stop during them resumes with this edit, not a new roll of the proposer.
+  proposal: shape({ v: v1, type: str, round: pos, index: pos, input: str, edit: EDIT }),
   final: shape({ v: v1, type: str, version: x => Number.isInteger(x) && (x as number) >= 0 ? undefined : 'not a non-negative integer' }, { orig: arr(RUN), last: arr(RUN) }),
 }
 
@@ -334,7 +337,8 @@ export const reasonKind = (reason: string): string => FIXED.test(reason) ? reaso
 /** The current version rebuilt from the original and the journal, each accepted edit checked again as if new:
  *  a vN file or a hand-written line is never what the next round starts from. */
 export function replay(lines: JournalLine[], original: object, ctx: { binding: string[]; sets: Record<SetName, string[]> }):
-  { current: object; version: number; baseline?: RunLite[]; done: { round: number; index: number }[]; tried: Edit[]; rejected: Rejected[]; final?: { orig: RunLite[]; last: RunLite[] } | 'none' } | { error: string } {
+  { current: object; version: number; baseline?: RunLite[]; done: { round: number; index: number }[]; tried: Edit[]; rejected: Rejected[]; final?: { orig: RunLite[]; last: RunLite[] } | 'none'
+    pending?: { round: number; index: number; input: string; edit: Edit } } | { error: string } {
   const [first, ...rest] = lines
   if (first?.type !== 'start') return { error: 'cannot resume: the journal does not begin with a start line' }
   if (JSON.stringify(first.sets) !== JSON.stringify(ctx.sets)) return { error: 'cannot resume: the sets differ from the tasks file' }
@@ -342,15 +346,28 @@ export function replay(lines: JournalLine[], original: object, ctx: { binding: s
   const done: { round: number; index: number }[] = [], tried: Edit[] = [], rejected: Rejected[] = []
   // What each round's next candidate was compared with, as the run loop has it: the round's current runs, then each kept candidate's.
   const cmp = new Map<number, RunLite[]>()
+  // The proposal whose candidate line has not come yet: the next line is that candidate, or the journal ends.
+  let pending: { round: number; index: number; input: string; edit: Edit } | undefined
   const mode = modeOf(ctx.sets)
   // Every candidate is weighed against round 1's current runs: a journal that does not go on with them has no baseline.
   if (rest.length && !(rest[0]!.type === 'current' && rest[0]!.round === 1)) return { error: 'cannot resume: the line after the start line is not round 1\'s current runs' }
   for (const l of rest) {
     if (l.type === 'start') return { error: 'cannot resume: a second start line' }
+    if (pending && !(l.type === 'candidate' && l.round === pending.round && l.index === pending.index))
+      return { error: `cannot resume: round ${pending.round} candidate ${pending.index}: a proposal without its candidate` }
     if (l.type === 'final') continue // not the last line: a later round makes it stale
     const index = l.type === 'current' ? 0 : l.index
     const slot = `round ${l.round} ${index ? `candidate ${index}` : 'current runs'}`
     if (done.some(d => d.round === l.round && d.index === index)) return { error: `cannot resume: ${slot}: a second line for it` }
+    // Checked as the run loop checked it, against what was tried before it; never itself in `tried` or `rejected`.
+    if (l.type === 'proposal') {
+      const why = checkEdit(l.edit, { current, original, tried, binding: ctx.binding })
+      if (why) return { error: `cannot resume: ${slot}: proposed edit: ${why}` }
+      pending = { round: l.round, index: l.index, input: l.input, edit: l.edit }
+      continue
+    }
+    if (pending && JSON.stringify(l.type === 'candidate' && l.edit) !== JSON.stringify(pending.edit)) return { error: `cannot resume: ${slot}: its edit is not the one proposed` }
+    pending = undefined
     done.push({ round: l.round, index })
     if (l.type === 'current') {
       if (l.round === 1) baseline ??= l.runs
@@ -392,7 +409,7 @@ export function replay(lines: JournalLine[], original: object, ctx: { binding: s
     if (!ok) return { error: 'cannot resume: the final line does not match the journal' }
     final = version ? { orig: end.orig!, last: end.last! } : 'none'
   }
-  return { current, version, baseline, done, tried, rejected, final }
+  return { current, version, baseline, done, tried, rejected, final, ...(pending ? { pending } : {}) }
 }
 
 const PRINCIPLE = 'how far this is a principle rather than a fit depends on how unlike the training tasks the test tasks are'
