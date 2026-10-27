@@ -29,6 +29,8 @@ export type BenchRun = {
   tests?: { passed: number; total: number }
   /** The status that ended the run when it is one evolve stops on (isStop); the check did not run. */
   stop?: number
+  /** That stop was a 429 after part of the reply had streamed: not retried. */
+  stopMidReply?: boolean
 }
 export type BenchHarness = {
   name: string; config: HarnessConfig; pass: number; reasons: Record<string, number>

@@ -2228,6 +2228,18 @@ test('evolve: a proposer that gets 429 four times stops with no candidate line',
   expect(types(cwd)).toEqual(['start', 'current'])
 }, 120_000)
 
+for (const [who, when] of [['harness', 'make the file'], ['proposer', 'You improve the harness']])
+  test(`evolve: a ${who} 429 after deltas streamed stops at once and says so, not "after 3 retries"`, async () => {
+    const repo = await tasksRepo(evTasks(ONE_EACH))
+    const env = await tasksEnv([{ when, deltas: [{ content: 'half' }], throw: { status: 429 } }, ...evFake()])
+    const cwd = await tmp('lhb-cwd-')
+    const r = cli(['evolve', evHarness(cwd), '--tasks', repo, '--rounds', '1', '--yes'], { ...env, LHB_RETRY_MS: '10' }, cwd)
+    expect(r.status, r.stderr).toBe(1)
+    expect(r.stderr).toContain(who)
+    expect(r.stderr).toContain('429 mid-reply, not retried')
+    expect(r.stderr).not.toContain('after 3 retries')
+  }, 120_000)
+
 test('evolve: a proposer 429 that clears on retry goes on as if nothing happened', async () => {
   const repo = await tasksRepo(evTasks(ONE_EACH))
   const env = await tasksEnv([{ when: 'You improve the harness', throw: { status: 429 } }, ...evFake()])

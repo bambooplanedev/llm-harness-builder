@@ -118,6 +118,8 @@ export class BackendError extends Error {
   moderated?: boolean
   /** Seconds the server asked to wait (Retry-After). */
   retryAfter?: number
+  /** Set by sendRetrying: the error came after part of the reply had streamed, so it was not tried again. */
+  midReply?: boolean
   constructor(message: string, public body?: string, extra: { status?: number; moderated?: boolean; retryAfter?: number } = {}) {
     super(message)
     if (extra.status !== undefined) this.status = extra.status
@@ -207,6 +209,7 @@ export async function sendRetrying(backend: Backend, payload: unknown, signal?: 
     try {
       return await backend.send(payload, signal, d => { streamed = true; onDelta?.(d) })
     } catch (e) {
+      if (e instanceof BackendError && streamed) e.midReply = true
       if (!(e instanceof BackendError) || e.status !== 429 || streamed || retries === 3 || signal?.aborted) throw e
       if (!await pause(waitMs ?? (e.retryAfter ?? 60) * 1000, signal)) throw e
     }

@@ -296,7 +296,7 @@ const INT = /^[1-9]\d*$/
 async function benchOnce(config: HarnessConfig, round: number, timeoutS: number, out: string, task: Task, notes: NotesStore, size?: number): Promise<BenchRun> {
   // An exception that escapes execRun is text nothing has cleaned yet, and it goes to the bench JSON and the terminal.
   const redact = redactor(apiKey(config.backend, process.env), config.backend.apiKeyEnv ?? '')
-  let workdir = '', traceId: string | undefined, parseErrors = 0, toolChars = 0, costUsd: number | undefined, peakTokens: number | undefined, tokens: number | undefined, firstPromptTokens: number | undefined, seenFirst = false, toolErrors = 0, guardBlocks = 0, editMiss = 0, lastError: string | undefined, stop: number | undefined, t0 = Date.now(), run: BenchRun
+  let workdir = '', traceId: string | undefined, parseErrors = 0, toolChars = 0, costUsd: number | undefined, peakTokens: number | undefined, tokens: number | undefined, firstPromptTokens: number | undefined, seenFirst = false, toolErrors = 0, guardBlocks = 0, editMiss = 0, lastError: string | undefined, stop: number | undefined, stopMidReply = false, t0 = Date.now(), run: BenchRun
   process.stderr.write(`${config.name} ${runTitle({ round, task: task.name })} `)
   try {
     workdir = await task.prepare(size)
@@ -320,7 +320,7 @@ async function benchOnce(config: HarnessConfig, round: number, timeoutS: number,
           else if (e.output.includes(EDIT_MISS)) editMiss++
         }
         if (e.type === 'parse_error' || e.type === 'error') lastError = e.message
-        if (e.type === 'error' && isStop(e)) stop = e.status
+        if (e.type === 'error' && isStop(e)) { stop = e.status; stopMidReply = !!e.midReply }
       },
     })
     traceId = id
@@ -333,7 +333,7 @@ async function benchOnce(config: HarnessConfig, round: number, timeoutS: number,
     const checked = typeof c === 'boolean' ? { pass: c } : c
     if (checked.reason) lastError = checked.reason
     const verdict = checked.pass ? 'PASS' : 'FAIL'
-    run = { ...(task.name ? { task: task.name } : {}), ...checked.tests ? { tests: checked.tests } : {}, round, verdict, reason: d?.reason ?? 'error', turns: d?.turns ?? 0, toolCalls: d?.toolCallCount ?? 0, parseErrors, lastError, ms, workdir, trace: id, toolChars: toolChars || undefined, costUsd, peakTokens, tokens: seenFirst ? tokens : 0, firstPromptTokens, toolErrors, guardBlocks: config.tools.requireReadBeforeEdit ? guardBlocks : undefined, editMiss, ...stop === undefined ? {} : { stop } }
+    run = { ...(task.name ? { task: task.name } : {}), ...checked.tests ? { tests: checked.tests } : {}, round, verdict, reason: d?.reason ?? 'error', turns: d?.turns ?? 0, toolCalls: d?.toolCallCount ?? 0, parseErrors, lastError, ms, workdir, trace: id, toolChars: toolChars || undefined, costUsd, peakTokens, tokens: seenFirst ? tokens : 0, firstPromptTokens, toolErrors, guardBlocks: config.tools.requireReadBeforeEdit ? guardBlocks : undefined, editMiss, ...stop === undefined ? {} : { stop }, ...stopMidReply ? { stopMidReply } : {} }
   } catch (e) {
     run = { ...(task.name ? { task: task.name } : {}), round, verdict: 'FAIL', reason: 'error', turns: 0, toolCalls: 0, parseErrors, lastError: redact.text(String(e)), ms: Date.now() - t0, workdir, toolChars: toolChars || undefined, costUsd, peakTokens, tokens: seenFirst ? tokens : 0, firstPromptTokens, toolErrors, guardBlocks: config.tools.requireReadBeforeEdit ? guardBlocks : undefined, editMiss }
   } finally {
@@ -708,9 +708,10 @@ async function cmdEvolve(argv: string[]) {
   const hRedact = redactor(apiKey(config.backend, process.env), config.backend.apiKeyEnv ?? '')
   // Not a FAIL: the server refused the key, has no credits, or kept limiting. The cut step's runs are not journaled (its proposal may be).
   const WHY: Record<number, string> = { 401: 'the key was refused', 402: 'no credits left', 403: 'the request was refused', 429: 'rate limited, still after 3 retries' }
-  const halt = (who: 'harness' | 'proposer', b: HarnessConfig['backend'], status: number, redact: ReturnType<typeof redactor>): never => {
+  const halt = (who: 'harness' | 'proposer', b: HarnessConfig['backend'], status: number, redact: ReturnType<typeof redactor>, midReply?: boolean): never => {
     dropWork(work)
-    console.error(showable(redact.text(`evolve stopped: the ${who} backend (${hostOf(b.baseUrl)}) answered ${status}: ${WHY[status]}; the cut step's runs are not in the journal; run the same command again to resume from the journal`)))
+    const why = midReply && status === 429 ? '429 mid-reply, not retried' : WHY[status]
+    console.error(showable(redact.text(`evolve stopped: the ${who} backend (${hostOf(b.baseUrl)}) answered ${status}: ${why}; the cut step's runs are not in the journal; run the same command again to resume from the journal`)))
     return process.exit(1)
   }
   const runOn = async (cfg: object, name: string, names: string[], round: number): Promise<RunLite[]> => {
@@ -718,7 +719,7 @@ async function cmdEvolve(argv: string[]) {
     const rs: RunLite[] = []
     for (const n of names) {
       const r = await benchOnce(c, round, timeoutS, out, byName.get(n)!, notes)
-      if (r.stop !== undefined) halt('harness', c.backend, r.stop, hRedact)
+      if (r.stop !== undefined) halt('harness', c.backend, r.stop, hRedact, r.stopMidReply)
       const lite: RunLite = { task: n, verdict: r.verdict, tokens: r.tokens, firstPromptTokens: r.firstPromptTokens, trace: r.trace, reason: r.reason, lastError: r.lastError }
       // Signed now, while the trace is here: the report groups failures by it without reading a trace again.
       rs.push(lite.verdict === 'FAIL' ? { ...lite, sig: signatureOf(lite, await eventsOf(r.trace)) } : lite)
@@ -749,7 +750,7 @@ async function cmdEvolve(argv: string[]) {
       content = r.content
     // Not a rejection: a journaled one would never be asked again, and the next evolve continues at this candidate.
     } catch (e) {
-      if (e instanceof BackendError && isStop(e)) return halt('proposer', pb, e.status!, pRedact)
+      if (e instanceof BackendError && isStop(e)) return halt('proposer', pb, e.status!, pRedact, e.midReply)
       dropWork(work); return die(`proposer failed: ${showable(pRedact.text((e as Error).message))}`) }
     try { return { edit: parseProposal(content) } } catch { return { reason: 'no edit in the reply' } }
   }

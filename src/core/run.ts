@@ -184,8 +184,8 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
         if (opts.signal?.aborted && !(e instanceof BackendError && isStop(e))) { yield done('aborted'); return }
         const cause = (e as any)?.cause?.code ?? (e as any)?.cause?.message
         const message = `${(e as Error).message}${cause ? ` (${cause})` : ''}`
-        const be = e as { body?: string; status?: number; moderated?: boolean }
-        yield ev({ type: 'error', message, body: be.body, ...be.status === undefined ? {} : { status: be.status }, ...be.moderated ? { moderated: true } : {} })
+        const be = e as { body?: string; status?: number; moderated?: boolean; midReply?: boolean }
+        yield ev({ type: 'error', message, body: be.body, ...be.status === undefined ? {} : { status: be.status }, ...be.moderated ? { moderated: true } : {}, ...be.midReply ? { midReply: true } : {} })
         yield done('backend_error'); return
       }
       lastUsage = res.usage
