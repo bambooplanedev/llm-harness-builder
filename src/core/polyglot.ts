@@ -1,6 +1,6 @@
 // src/core/polyglot.ts — runs an exercise's node:test file and scores it by the test names recorded at bench start.
 import { spawn } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { readFileSync, rmSync } from 'node:fs'
 import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -101,12 +101,21 @@ export function loadPolyglot(root = SET_ROOT): Polyglot {
   }
 }
 
+// Every workdir not yet removed, for a Ctrl-C handler that exits right after it.
+const LIVE = new Set<string>()
+const drop = async (dir: string) => { await rm(dir, { recursive: true, force: true }); LIVE.delete(dir) }
+/** Each polyglot workdir that is still there (the model's and a check's), removed now. */
+export function removeAllPolyglotSync(): void {
+  for (const d of [...LIVE]) { rmSync(d, { recursive: true, force: true }); LIVE.delete(d) }
+}
+
 const lay = async (p: Polyglot, e: Exercise, solution: string) => {
   const dir = await mkdtemp(path.join(tmpdir(), 'lhb-polyglot-'))
+  LIVE.add(dir)
   try {
     await Promise.all([[`${e.name}.js`, solution], [`${e.name}.test.js`, e.test], ['expect.js', p.expect], ['package.json', p.pkg], ['INSTRUCTIONS.md', e.instructions]]
       .map(([f, c]) => writeFile(path.join(dir, f), c)))
-  } catch (err) { await rm(dir, { recursive: true, force: true }); throw err }
+  } catch (err) { await drop(dir); throw err }
   return dir
 }
 
@@ -130,9 +139,9 @@ export function polyglotTasks(p: Polyglot, size: number, timeoutMs = 60_000): Ta
         if (run.reason === 'timeout') return { pass: false, reason: `timeout after ${timeoutMs} ms`, tests }
         const s = score(run.results, e.tests, run.exit, testFile)
         return { pass: s.pass, ...(s.reason ? { reason: s.reason } : {}), tests: { passed: s.passed, total: s.total } }
-      } finally { await rm(dir, { recursive: true, force: true }) }
+      } finally { await drop(dir) }
     },
-    dispose: dir => rm(dir, { recursive: true, force: true }),
+    dispose: drop,
   }))
 }
 

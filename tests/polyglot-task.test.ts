@@ -3,7 +3,7 @@ import { cp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { childEnv } from '../src/core/tools/env.js'
-import { loadPolyglot, polyglotTasks, POLYGLOT_MAX } from '../src/core/polyglot.js'
+import { loadPolyglot, polyglotTasks, removeAllPolyglotSync, POLYGLOT_MAX } from '../src/core/polyglot.js'
 import { tmp } from './helpers.js'
 
 vi.setConfig({ testTimeout: 120_000 })
@@ -176,4 +176,12 @@ test('dispose removes the workdir', async () => {
   made.push(dir)
   await task.dispose!(dir)
   await expect(readdir(dir)).rejects.toThrow()
+})
+
+test('removeAllPolyglotSync removes every workdir still there (Ctrl-C during a bench or an evolve)', async () => {
+  const [a, b] = polyglotTasks(p, 2)
+  const da = await a!.prepare(), db = await b!.prepare()
+  await a!.dispose!(da)
+  removeAllPolyglotSync()
+  expect(await readdir(db).catch(() => 'gone')).toBe('gone')
 })

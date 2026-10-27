@@ -24,7 +24,7 @@ import { approvalPrompt, mcpCounts, quitWithoutWork, showable, showableText, typ
 import { startServer } from './server/index.js'
 import { TraceWriter, type Meta } from './server/runs.js'
 import { TASKS, type Task } from './core/tasks.js'
-import { loadPolyglot, polyglotTasks, polyglotBinding, POLYGLOT_MAX } from './core/polyglot.js'
+import { loadPolyglot, polyglotTasks, polyglotBinding, removeAllPolyglotSync, POLYGLOT_MAX } from './core/polyglot.js'
 import { childEnv, bashEnvNote } from './core/tools/env.js'
 import { median, formatTable, BENCH_TASKS, benchTotal, runTitle, benchFileName, autoApproves, type BenchRun, type BenchHarness, type BenchResult } from './core/bench.js'
 import { GUARD_BLOCKED, EDIT_MISS } from './core/tools/fs.js'
@@ -389,10 +389,11 @@ function repoWork(repo: RepoTasks): Work {
   return w
 }
 
-/** Every clone a bench made, removed now: at the end, and from the SIGINT handler that exits right after. An exit
- *  before that handler exists (Ctrl-C during setup) is covered by repo-clone's own exit hook. */
+/** Every clone and polyglot workdir a bench made, removed now: at the end, and from the SIGINT handler that exits right
+ *  after. An exit before that handler exists (Ctrl-C during setup) is covered by repo-clone's own exit hook. */
 function dropWork(w: { live: Map<string, Clone> }): void {
   removeAllClonesSync()
+  removeAllPolyglotSync()
   w.live.clear()
 }
 
