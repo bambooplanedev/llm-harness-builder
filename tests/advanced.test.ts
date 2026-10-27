@@ -24,3 +24,15 @@ test('absent equals the built-in: budget 0, empty mcpServers, no templates, guar
   delete c.toolCalls.promptedTemplate; delete c.toolCalls.parseErrorHint
   expect(advancedSet(c)).toBe(0)
 })
+
+test('readRanges and notes each count one when on; readRanges false is absent', () => {
+  const c = fresh()
+  c.tools.readRanges = false
+  expect(advancedSet(c)).toBe(0)
+  c.tools.readRanges = true
+  expect(advancedSet(c)).toBe(1)
+  c.notes = { enabled: true, maxTokens: 1000 }
+  expect(advancedSet(c)).toBe(2)
+  c.notes = { enabled: false, maxTokens: 1000 }; c.tools.readRanges = false
+  expect(advancedSet(c)).toBe(0)
+})

@@ -11,7 +11,7 @@ export const NEW_HARNESS: HarnessConfig = {
 
 /** The Advanced knobs' effective values: absent is the built-in behaviour, so absent and the same-as-built-in compare equal. */
 const knobs = (c: HarnessConfig) => [
-  !!c.tools.requireReadBeforeEdit, c.tools.editMissEscalation, c.tools.readMaxBytes, c.tools.bashMaxBytes, c.tools.bashTimeoutS,
+  !!c.tools.requireReadBeforeEdit, c.tools.editMissEscalation, c.tools.readMaxBytes, c.tools.bashMaxBytes, c.tools.bashTimeoutS, !!c.tools.readRanges, !!c.notes?.enabled,
   c.context?.maxToolOutputChars, c.context?.budgetTokens || undefined,
   c.loop.maxRepeats, c.loop.freshContext, c.loop.repeatTemperature, c.loop.repeatThinkTokens, c.loop.untilBash,
   Object.keys(c.mcpServers ?? {}).length ? JSON.stringify(c.mcpServers) : undefined,

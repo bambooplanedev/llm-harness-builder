@@ -2,7 +2,7 @@
 import { ref, computed, watch } from 'vue'
 import type { HarnessConfig, ServerInfo } from './api'
 import { PRESETS, FAMILIES, applyFamily, DEFAULT_PROMPTED_TEMPLATE, DEFAULT_PARSE_ERROR_HINT } from '../../src/core/prompts'
-import { TOOL_NAMES, keyNote } from '../../src/core/config'
+import { TOOL_NAMES, REASONING_EFFORTS, keyNote, type ReasoningEffort } from '../../src/core/config'
 import { t, type Key } from './i18n'
 import { advancedSet } from './advanced'
 
@@ -16,9 +16,9 @@ watch(() => config.value.name, n => (saveName.value = n))
 const setTemp = (v: string) => { const n = Number(v.replace(',', '.')); if (v.trim() && Number.isFinite(n)) config.value.backend.temperature = n }
 /** A knob the model does not take cannot be turned; its value stays in the harness, so another model gets it back.
  *  Same pairs as knobsOff: the repeat knobs go with what they change. */
-const off = (k: 'temperature' | 'maxTokens' | 'think') => props.modelInfo?.takes?.[k] === false
+const off = (k: 'temperature' | 'maxTokens' | 'think' | 'reasoningEffort') => props.modelInfo?.takes?.[k] === false
 const lockedThinkTokens = () => off('think') || off('maxTokens')
-const locked = () => [off('temperature') && 'temp', off('maxTokens') && 'max_tokens', off('think') && 'think'].filter(Boolean).join(', ')
+const locked = () => [off('temperature') && 'temp', off('maxTokens') && 'max_tokens', off('think') && 'think', off('reasoningEffort') && 'reasoning'].filter(Boolean).join(', ')
 const lockedRepeat = () => off('temperature') || lockedThinkTokens()
 const advN = computed(() => advancedSet(config.value))
 /** Open or closed is the reader's, kept across reloads; storage may be absent or throw (private window). */
@@ -74,6 +74,10 @@ function setContext(k: 'maxToolOutputChars' | 'budgetTokens', text: string) {
 }
 /** Three states, and the first is no key at all: absent, nothing about thinking is sent. */
 const setThink = (text: string) => put(config.value.backend, 'think', text === '' ? undefined : text === 'on')
+/** Empty removes the key, so nothing is sent; any other text is one of the three efforts the select offers. */
+const setReasoning = (text: string) => put(config.value.backend, 'reasoningEffort', (text || undefined) as ReasoningEffort | undefined)
+/** Checked turns the section on keeping its budget; unchecked turns it off and keeps the budget for the next check. */
+const toggleNotes = (on: boolean) => { config.value.notes = { enabled: on, maxTokens: config.value.notes?.maxTokens ?? 1000 } }
 /** An empty box removes the key: the backend is keyless again, as before. */
 const setKeyEnv = (text: string) => put(config.value.backend, 'apiKeyEnv', text.trim() || undefined)
 /** Where the key goes; nothing for a name or a URL validation would refuse, so a key pasted as a name is never shown. */
@@ -141,6 +145,7 @@ function editMcp(text: string) {
       <span :title="t('h.numCtx')">num_ctx</span><input type="number" v-model.number="config.backend.numCtx" :disabled="config.backend.kind !== 'ollama'">
       <span :title="t('h.maxTokens')">max_tokens</span><input type="number" min="1" :value="config.backend.maxTokens ?? ''" :disabled="off('maxTokens')" @change="setMaxTokens(($event.target as HTMLInputElement).value)">
       <span :title="t('h.think')">think</span><select :value="config.backend.think === undefined ? '' : config.backend.think ? 'on' : 'off'" :disabled="off('think')" @change="setThink(($event.target as HTMLSelectElement).value)"><option value="">—</option><option>on</option><option>off</option></select>
+      <span :title="t('h.reasoning')">reasoning</span><select :value="config.backend.reasoningEffort ?? ''" :disabled="off('reasoningEffort')" @change="setReasoning(($event.target as HTMLSelectElement).value)"><option value="">—</option><option v-for="e in REASONING_EFFORTS" :key="e">{{ e }}</option></select>
     </div>
     <div v-if="locked()" class="hint">{{ t('form.locked', { knobs: locked() }) }}<span v-if="modelInfo?.takesFrom"> ({{ modelInfo.takesFrom }})</span></div>
 
@@ -167,6 +172,8 @@ function editMcp(text: string) {
     <div :title="t('h.guard')"><input type="checkbox" :checked="!!config.tools.requireReadBeforeEdit" @change="toggleGuard(($event.target as HTMLInputElement).checked)"> refuse to edit a file that has not been read</div>
     <div class="row"><span :title="t('h.escalation')">edit misses before a re-read note</span><input type="number" min="1" :value="config.tools.editMissEscalation ?? ''" @change="setEscalation(($event.target as HTMLInputElement).value)"></div>
     <div class="row"><span :title="t('h.readMax')">read_file max bytes</span><input type="number" min="1" placeholder="4194304 (default)" :value="config.tools.readMaxBytes ?? ''" @change="setToolLimit('readMaxBytes', ($event.target as HTMLInputElement).value)"></div>
+    <div :title="t('h.readRanges')"><input type="checkbox" :checked="!!config.tools.readRanges" @change="put(config.tools, 'readRanges', ($event.target as HTMLInputElement).checked || undefined)"> read_file line ranges (start/end)</div>
+    <div :title="t('h.notes')"><input type="checkbox" :checked="!!config.notes?.enabled" @change="toggleNotes(($event.target as HTMLInputElement).checked)"> notes from earlier runs</div>
     <div class="row"><span :title="t('h.bashMax')">bash max bytes</span><input type="number" min="1" placeholder="1048576 (default)" :value="config.tools.bashMaxBytes ?? ''" @change="setToolLimit('bashMaxBytes', ($event.target as HTMLInputElement).value)"></div>
     <div class="row"><span :title="t('h.bashTimeout')">bash timeout, s</span><input type="number" min="1" placeholder="30 (default)" :value="config.tools.bashTimeoutS ?? ''" @change="setToolLimit('bashTimeoutS', ($event.target as HTMLInputElement).value)"></div>
     <details><summary :title="t('h.mcp')">MCP servers ({{ mcpCount() }})</summary>
