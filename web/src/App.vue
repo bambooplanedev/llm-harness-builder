@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
-import { api, type Delta, type HarnessConfig, type HarnessEvent, type RunSummary, type ServerInfo } from './api'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { api, type Delta, type EvolveStatus, type HarnessConfig, type HarnessEvent, type RunSummary, type ServerInfo } from './api'
 import { PRESETS, DEFAULT_PROMPTED_TEMPLATE, DEFAULT_PARSE_ERROR_HINT, DEMO_TASK } from '../../src/core/prompts'
 import { isLoopbackUrl, listsModelsByItself } from '../../src/core/config'
 import { knobsOff } from '../../src/core/knobs'
@@ -9,6 +9,7 @@ import ConfigForm from './ConfigForm.vue'
 import ContextBar from './ContextBar.vue'
 import Trace from './Trace.vue'
 import Bench from './Bench.vue'
+import SelfImprove from './SelfImprove.vue'
 import { t, T, lang, LANGS, langName, setLang } from './i18n'
 import { shown } from './film'
 
@@ -97,10 +98,10 @@ async function refreshLists() { harnessNames.value = (await api.harnesses()).map
 /** A harness describes how the agent thinks; the backend is what it runs on. Switching the first
  *  leaves the second alone — unless no model is picked yet (models never listed), when the
  *  harness's own backend is the only usable one. */
-async function load(name: string) {
+async function load(name: string, keepBackend = false) {
   if (!name) return
   const c = await api.harness(name)
-  config.value = { ...c, backend: config.value.backend.model ? config.value.backend : c.backend }
+  config.value = { ...c, backend: keepBackend || config.value.backend.model ? config.value.backend : c.backend }
 }
 async function saveAs(name: string) { error.value = ''; try { config.value.name = name; await api.saveHarness(name, outbound(config.value)); await refreshLists() } catch (e) { error.value = (e as Error).message } }
 function open(id: string, runTaskText: string, active = false, example = false) {
@@ -139,8 +140,23 @@ function outbound(c: HarnessConfig): HarnessConfig {
 /** Loads a bench run's harness and workdir into the form; the user presses Run themselves. */
 function toWorkbench(c: HarnessConfig, wd: string) { config.value = c; workdir.value = wd; tab.value = 'workbench' }
 
+const evolve = ref<EvolveStatus>({})
+let evolveAsk = 0, evolveTimer: ReturnType<typeof setTimeout> | undefined, gone = false
+/** On mount, on the window's ask, then every 2 s while one runs. An evolve that just ended may have written a vN: the
+ *  harness list is read again, and the status once more, since the report's tail can still be arriving.
+ *  `evolveAsk` drops an answer a later ask overtook, so two chains never run at once. */
+async function pollEvolve() {
+  const ask = ++evolveAsk, was = !!evolve.value.running
+  clearTimeout(evolveTimer)
+  try { const s = await api.evolveStatus(); if (ask !== evolveAsk) return; evolve.value = s }
+  catch { if (ask !== evolveAsk) return } // serve without a cli has no such route: idle; a blip mid-run keeps the last status and polls on
+  if (was && !evolve.value.running) refreshLists().catch(e => (error.value = e.message))
+  if ((evolve.value.running || was) && !gone) evolveTimer = setTimeout(pollEvolve, 2000)
+}
+onUnmounted(() => { gone = true; clearTimeout(evolveTimer) })
+
 const settings = ref<HTMLDialogElement | null>(null)
-onMounted(async () => { await refreshLists(); if (listsModelsByItself(config.value.backend)) await refreshModels() })
+onMounted(async () => { void pollEvolve(); await refreshLists(); if (listsModelsByItself(config.value.backend)) await refreshModels() })
 // Three sources, not one getter returning an array: a new array never equals the last, so a family button, which swaps the
 // whole config, would ask for the model list again and blink the panel with every click.
 watch([() => config.value.backend.kind, () => config.value.backend.baseUrl, () => config.value.backend.apiKeyEnv], () => {
@@ -166,6 +182,7 @@ watch(() => config.value.backend.model, () => {
     <div class="layout" v-else>
       <div class="col left">
         <ConfigForm v-model="config" v-model:mcp-error="mcpError" :models="models" :models-error="modelsError" :model-info="modelInfo" :harness-names="harnessNames" @refresh-models="refreshModels" @load="load" @save-as="saveAs" />
+        <SelfImprove :harness-names="harnessNames" :current="config.name" :workdir="workdir" :notes-on="!!config.notes?.enabled" :status="evolve" @poll="pollEvolve" @use="(n, keep) => { tab = 'workbench'; void load(n, keep) }" />
       </div>
       <div class="col">
         <label class="film-hide" :title="t('h.workdir')">Workdir</label>

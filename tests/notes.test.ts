@@ -1,7 +1,7 @@
 import { test, expect } from 'vitest'
-import { readFile, writeFile, mkdir } from 'node:fs/promises'
+import { readFile, writeFile, mkdir, readdir } from 'node:fs/promises'
 import { join } from 'node:path'
-import { readNotes, appendNotes, selectNotes, notesBlock, scrubNote, traceSignals, NOTE_MAX_CHARS, notesKey, notesPath, notesDir, type Note } from '../src/core/notes.js'
+import { readNotes, appendNotes, removeNotes, selectNotes, notesBlock, scrubNote, traceSignals, NOTE_MAX_CHARS, notesKey, notesPath, notesDir, type Note } from '../src/core/notes.js'
 import { redactor } from '../src/core/redact.js'
 import type { HarnessEvent } from '../src/core/events.js'
 import { withNotes, NOTE_SCHEMA, type NotesStore } from '../src/core/notes-run.js'
@@ -303,4 +303,22 @@ test('withNotes: the writer carries backend.reasoningEffort, unless the run said
     expect(be.requests).toHaveLength(2)
     expect(be.requests[1]).not.toHaveProperty('reasoningEffort')
   } finally { delete process.env.LHB_NOTES_TEST_API_KEY }
+})
+
+test('removeNotes: drops the named notes, keeps every other line byte for byte, leaves no tmp file', async () => {
+  const dir = await tmp('notes-'), f = join(dir, 'n.jsonl')
+  const keep = [JSON.stringify(note(2)), '{"torn', 'garbage']
+  const text = [JSON.stringify(note(1)), ...keep].join('\n') + '\n'
+  await writeFile(f, text)
+  expect(await removeNotes(f, ['1'])).toBe(1)
+  expect(await readFile(f, 'utf8')).toBe(keep.join('\n') + '\n')
+  expect(await removeNotes(f, 'all')).toBe(1)
+  expect(await readFile(f, 'utf8')).toBe('{"torn\ngarbage\n')
+  expect((await readdir(dir)).filter(n => n.endsWith('.tmp'))).toEqual([])
+})
+
+test('removeNotes: a missing file is 0 and stays missing', async () => {
+  const dir = await tmp('notes-')
+  expect(await removeNotes(join(dir, 'none.jsonl'), 'all')).toBe(0)
+  expect(await readdir(dir)).toEqual([])
 })

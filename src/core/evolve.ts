@@ -8,6 +8,8 @@ import { analyzeTrace, EDIT_KINDS } from './analyze.js'
 import { jsonCandidates } from './parse.js'
 import type { DoneReason, HarnessEvent } from './events.js'
 import type { ChatRequest } from './backends/types.js'
+import { ALLOWED, DANGER } from './evolve-labels.js'
+export { ALLOWED }
 
 export const ROUNDS = 3
 export const CANDIDATES = 2
@@ -125,10 +127,6 @@ export function decide(cur: RunLite[], cand: RunLite[], orig: RunLite[], gateNam
   return { accepted: true, reason: 'accepted', numbers }
 }
 
-/** The only leaves an edit may touch: knobs whose effect is general. Commands (untilBash), tools, the backend and
- *  notes stay the user's. */
-export const ALLOWED = ['systemPrompt', 'loop.maxRepeats', 'loop.freshContext', 'loop.repeatTemperature', 'loop.repeatThinkTokens', 'context.maxToolOutputChars', 'context.budgetTokens']
-
 export type Edit = { field: string; value: string | number; why?: string }
 
 /** A new config with the edit at its leaf: a paragraph is appended, a number set; `loop`/`context` made only when missing. */
@@ -159,8 +157,6 @@ export const boundBy = (x: unknown, binding: string[]): boolean => {
   const low = x.toLowerCase()
   return binding.some(t => t.length >= 6 ? low.includes(t) : new RegExp(`(?<![\\p{L}\\p{N}_])${esc(t)}(?![\\p{L}\\p{N}_])`, 'u').test(low))
 }
-
-const DANGER = [/[a-z][a-z0-9+.-]*:\/\//i, /\bwww\./i, /\b[a-z0-9-]+\.(?:com|net|org|io|dev|sh|app|ai|xyz|ru|cn)\b/i, /(?:^|\s)[\/~]/i, /`/, /\$\(/, /\|\s*(?:ba|z)?sh\b/i, /\b(?:curl|wget|nc|ssh|scp)\b/i]
 
 /** Every leaf of a JSON value by dotted path; empty objects and arrays have none. */
 function leaves(x: unknown, at = '', out = new Map<string, unknown>()): Map<string, unknown> {

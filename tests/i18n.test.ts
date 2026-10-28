@@ -84,8 +84,8 @@ test('no v-html and no innerHTML in the page source: translated text never becom
 
 const hintKeys = (Object.keys(en) as Key[]).filter(k => k.startsWith('h.'))
 
-test('all 47 hover hints have both sides, with the same line breaks', () => {
-  expect(hintKeys).toHaveLength(47)
+test('all 49 hover hints have both sides, with the same line breaks', () => {
+  expect(hintKeys).toHaveLength(49)
   for (const k of hintKeys) {
     expect(uk[k], k).toBeTruthy()
     expect(en[k].split('\n').length, k).toBe(uk[k]!.split('\n').length)

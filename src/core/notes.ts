@@ -2,8 +2,8 @@
 // run. One JSON line per note in <notesDir>/<key>.jsonl, under the user's state dir and not under ./runs: `run` from a
 // project's root has its runs/ inside the project, where the model's file tools could write a note of its own and git
 // would see it. bash can still reach the state dir; that is the honest notes' point.
-import { createHash } from 'node:crypto'
-import { appendFile, mkdir, readFile, realpath } from 'node:fs/promises'
+import { createHash, randomUUID } from 'node:crypto'
+import { appendFile, mkdir, readFile, realpath, rename, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import type { HarnessEvent } from './events.js'
@@ -43,6 +43,23 @@ export async function appendNotes(file: string, notes: Note[]): Promise<void> {
   // A file a hand edit left without its last newline would glue the next note onto that line, losing both.
   const last = await readFile(file).then(b => b.at(-1), () => undefined)
   await appendFile(file, (last !== undefined && last !== 10 ? '\n' : '') + notes.map(n => JSON.stringify(n) + '\n').join(''))
+}
+
+/** Drops the notes with these ids (or all); every other line, torn ones too, stays byte for byte. Written aside and
+ *  renamed over, so a kill leaves the old file. Returns how many went. A missing file is 0 and stays missing. */
+export async function removeNotes(file: string, ids: string[] | 'all'): Promise<number> {
+  let text: string
+  try { text = await readFile(file, 'utf8') } catch { return 0 }
+  let removed = 0
+  const kept = text.split('\n').filter(l => {
+    try { const x = JSON.parse(l); if (isNote(x) && (ids === 'all' || ids.includes(x.id))) { removed++; return false } } catch { /* not a note: stays */ }
+    return true
+  })
+  if (!removed) return 0
+  const tmp = `${file}.${randomUUID()}.tmp`
+  await writeFile(tmp, kept.join('\n'), { flag: 'wx' })
+  await rename(tmp, file)
+  return removed
 }
 
 // A note read back is one bullet: a newline in a hand-made one must not forge text outside the block's framing.
