@@ -14,10 +14,12 @@ import type { HarnessEvent } from '../core/events.js'
 import { benchFileName, BENCH_TASKS } from '../core/bench.js'
 import { TASKS, checkSlug } from '../core/tasks.js'
 import { childEnv } from '../core/tools/env.js'
+import { loadRepoTasks, consentText, consentHash, hasConsent, saveConsent } from '../core/repo-tasks.js'
+import { splitSets, modeOf, neededFlips, referenceLabel, ALLOWED } from '../core/evolve.js'
 
-/** `bench` starts `llm-harness-builder bench <args>` with its stderr piped; without it the page cannot start one.
+/** `cli` starts `llm-harness-builder <args>` (args[0] is `bench` or `evolve`) with stdout and stderr piped; without it the page cannot start a job.
  *  `examplesDir`: recorded runs the three GET routes read with `?example=1`; nothing ever writes there. */
-export type ServerOpts = { port: number; runsDir: string; harnessesDir: string; examplesDir?: string; staticDir?: string; backendFactory?: (b: HarnessConfig['backend']) => Backend; bench?: (args: string[]) => ChildProcess }
+export type ServerOpts = { port: number; runsDir: string; harnessesDir: string; examplesDir?: string; staticDir?: string; backendFactory?: (b: HarnessConfig['backend']) => Backend; cli?: (args: string[]) => ChildProcess }
 
 const MIME: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml' }
 const MAX_BODY_BYTES = 5e6
@@ -57,28 +59,34 @@ export async function startServer(opts: ServerOpts) {
   const examples = opts.examplesDir ? new RunStore(opts.examplesDir) : undefined
   const backendFactory = opts.backendFactory ?? createBackend
   await mkdir(opts.harnessesDir, { recursive: true })
-  /** The bench this server started: one at a time, both would share one model server. */
-  let benching: ChildProcess | undefined
+  /** The one bench or evolve this server started: one at a time, both would share one model server. `err` is an evolve's stderr tail. */
+  let job: { kind: 'bench' | 'evolve'; child: ChildProcess; harness?: string; err: string } | undefined
+  /** How the last evolve ended; its stdout and stderr tails keep filling in until the pipes close. */
+  let lastEvolve: { harness: string; code: number | null; signal: string | null; err: string; out: string } | undefined
   /** Stop bench reached `benching` before its JSON existed: the start that waits says so, not a raw 502. */
   let stopping = false
   /** The JSON `benching` writes: GET /api/bench names it while it runs, so a reloaded page still offers Stop. */
   let benchingFile = ''
-  const running = () => !!benching && benching.exitCode === null && benching.signalCode === null
+  const running = () => !!job && job.child.exitCode === null && job.child.signalCode === null
+  const busy = () => running() ? `${job!.kind === 'bench' ? 'a' : 'an'} ${job!.kind} started from this page is still running` : undefined
   /** Realpaths of the demo projects this server created: Check runs only in one of them, never in a folder the page names. */
   const demoDirs = new Set<string>()
 
   const exists = (f: string) => stat(f).then(() => true, () => false)
-  /** The one bench start: 409 while one runs, else spawns `opts.bench(args + --out)`; 201 once its JSON exists (past preflight), else 502 with its stderr. */
+  /** The one bench start: 409 while one runs, else spawns `opts.cli([bench, ...args, --out])`; 201 once its JSON exists (past preflight), else 502 with its stderr. */
   async function startBench(args: string[], cleanup?: () => void): Promise<{ status: 201 | 409 | 502; body: { file?: string; error?: string } }> {
-    if (running()) return { status: 409, body: { error: 'a bench started from this page is still running' } }
+    if (busy()) return { status: 409, body: { error: busy() } }
     const first = benchFileName(new Date())
     let out = first
     for (let i = 2; await exists(path.join(opts.runsDir, out)); i++) out = first.replace(/\.json$/, `-${i}.json`) // two in one second must not share a JSON
     const outPath = path.join(opts.runsDir, out)
     const i = args.findIndex(a => !a.startsWith('--')) // flags first, then the harness files
     const k2 = i < 0 ? args.length : i
+    if (busy()) return { status: 409, body: { error: busy() } } // the awaits above let another start in
     stopping = false; benchingFile = out
-    const child = benching = opts.bench!([...args.slice(0, k2), `--out=${outPath}`, ...args.slice(k2)])
+    const child = opts.cli!(['bench', ...args.slice(0, k2), `--out=${outPath}`, ...args.slice(k2)])
+    job = { kind: 'bench', child, err: '' }
+    child.stdout?.resume() // nothing reads a bench's stdout: a full pipe would stall it
     let tail = ''
     child.stderr?.on('data', (c: Buffer) => { tail = (tail + c).slice(-2000) }) // read to the end, or a full pipe stalls the bench
     if (cleanup) child.once('exit', cleanup)
@@ -165,14 +173,14 @@ export async function startServer(opts: ServerOpts) {
       if (m('GET', /^\/api\/runs$/)) return json(res, 200, await reads!.list())
       if (m('GET', /^\/api\/bench$/)) {
         const file = url.searchParams.get('file')
-        const own = !example && running() ? benchingFile : undefined
+        const own = !example && running() && job!.kind === 'bench' ? benchingFile : undefined
         if (file === null) return json(res, 200, { files: await reads!.benchList(), own })
         if (!benchName(file)) return json(res, 400, { error: 'bad name' })
         const opened = await reads!.benchOpen(file)
         if (!opened) return json(res, 404, { error: 'not a bench file' })
         return json(res, 200, { files: await reads!.benchList(), own, ...opened, analysis: await reads!.benchAnalysis(opened.result) })
       }
-      if (opts.bench && m('POST', /^\/api\/bench\/again$/)) {
+      if (opts.cli && m('POST', /^\/api\/bench\/again$/)) {
         // The same bench once more, from its own JSON: the harnesses as recorded, the task, size, n and timeout. A new JSON, the old one stays.
         const { file } = await readBody(req)
         if (!benchName(file)) return json(res, 400, { error: 'bad name' })
@@ -188,7 +196,7 @@ export async function startServer(opts: ServerOpts) {
         if (status === 409) cleanup() // no child, so no exit to clean up on
         return json(res, status, body)
       }
-      if (opts.bench && m('POST', /^\/api\/bench\/new$/)) {
+      if (opts.cli && m('POST', /^\/api\/bench\/new$/)) {
         // The bench approves everything it runs: only fields checked here reach its argv, each as `--x=value`.
         const body = await readBody(req) as Record<string, unknown>
         const errors: string[] = []
@@ -224,12 +232,58 @@ export async function startServer(opts: ServerOpts) {
           `--model=${backend.model}`, `--base-url=${backend.baseUrl}`, `--kind=${backend.kind}`, ...backend.apiKeyEnv ? [`--api-key-env=${backend.apiKeyEnv}`] : [], ...files])
         return json(res, status, out)
       }
-      if (opts.bench && m('POST', /^\/api\/bench\/stop$/)) {
+      if (opts.cli && m('POST', /^\/api\/bench\/stop$/)) {
         // Only the child this server holds: no pid or name from the page. SIGINT = Ctrl-C, the finished runs stay in its JSON.
-        if (!running()) return json(res, 409, { error: 'no bench started from this page is running' })
+        if (!running() || job!.kind !== 'bench') return json(res, 409, { error: 'no bench started from this page is running' })
         stopping = true
-        benching!.kill('SIGINT')
+        job!.child.kill('SIGINT')
         return json(res, 200, { ok: true })
+      }
+      if (opts.cli && m('POST', /^\/api\/evolve\/start$/)) {
+        // A harness name and a repo, never a flag: argv is built here. Nothing runs before the repo's tasks are accepted (hash of what will run).
+        const body = await readBody(req) as { harness?: unknown; repo?: unknown; accept?: unknown }
+        const bad = (...errors: string[]) => json(res, 400, { errors })
+        if (typeof body.harness !== 'string' || !safeName(body.harness) || body.harness.includes('..')) return bad('harness: not a plain file name')
+        const file = path.resolve(opts.harnessesDir, `${body.harness}.json`)
+        let config: HarnessConfig
+        try { config = JSON.parse(await readFile(file, 'utf8')) } catch { return bad(`${body.harness}: no readable harness file of that name`) }
+        const errs = validateConfig(config)
+        if (errs.length) return bad(...errs)
+        const missing = keyMissing(config.backend)
+        if (missing) return bad(missing)
+        const w = typeof body.repo === 'string' ? await validateWorkdir(body.repo) : 'repo is required'
+        if (w) return bad(w)
+        let t
+        try { t = await loadRepoTasks(body.repo as string) } catch (e) { return bad((e as Error).message) }
+        const sets = splitSets(t.tasks), mode = modeOf(sets)
+        if (typeof mode === 'string') return bad(mode)
+        const ev = { proposer: config.backend.baseUrl, fields: ALLOWED }
+        if (!(await hasConsent(t, ev))) {
+          if (body.accept !== consentHash(t, ev)) return json(res, 409, {
+            consent: { text: consentText(t, ev), hash: consentHash(t, ev) }, sets: { train: sets.train.length, gate: sets.gate.length, test: sets.test.length },
+            strict: mode.strict, ...mode.strict ? { needed: neededFlips() } : { reference: referenceLabel(mode) }, uncommitted: t.uncommitted })
+          await saveConsent(t, ev)
+        }
+        if (busy()) return json(res, 409, { error: busy() })
+        const child = opts.cli(['evolve', file, `--tasks=${t.repo}`])
+        const j = job = { kind: 'evolve' as const, child, harness: body.harness, err: '' }
+        let out = ''
+        let ended: typeof lastEvolve
+        const done = () => { if (ended) { ended.err = j.err; ended.out = out } } // data after exit still lands in the result
+        child.stderr?.on('data', (c: Buffer) => { j.err = (j.err + c).slice(-8000); done() })
+        child.stdout?.on('data', (c: Buffer) => { out = (out + c).slice(-65536); done() })
+        child.once('exit', (code, signal) => { ended = lastEvolve = { harness: j.harness!, code, signal, err: j.err, out } })
+        return json(res, 201, {})
+      }
+      if (opts.cli && m('POST', /^\/api\/evolve\/stop$/)) {
+        if (!running() || job!.kind !== 'evolve') return json(res, 409, { error: 'no evolve started from this page is running' })
+        job!.child.kill('SIGINT')
+        return json(res, 200, { ok: true })
+      }
+      if (opts.cli && m('GET', /^\/api\/evolve$/)) {
+        // No keys, no notes: the stderr of a child that gets the environment of serve, which redacts its own.
+        const round = running() && job!.kind === 'evolve' ? [...job!.err.matchAll(/^--- round (\d+)\/(\d+)$/gm)].pop() : undefined
+        return json(res, 200, { running: running() && job!.kind === 'evolve' ? { harness: job!.harness, err: job!.err, ...round ? { round: [Number(round[1]), Number(round[2])] } : {} } : undefined, last: lastEvolve })
       }
       if (m('POST', /^\/api\/demo$/)) {
         const dir = await realpath(await TASKS.slug.prepare())
@@ -328,5 +382,5 @@ export async function startServer(opts: ServerOpts) {
 
   await new Promise<void>(r => server.listen(opts.port, '127.0.0.1', r))
   const port = (server.address() as { port: number }).port
-  return { port, close: () => new Promise<void>(r => { benching?.kill(); server.close(() => r()); server.closeAllConnections() }) }
+  return { port, close: () => new Promise<void>(r => { job?.child.kill(); server.close(() => r()); server.closeAllConnections() }) }
 }

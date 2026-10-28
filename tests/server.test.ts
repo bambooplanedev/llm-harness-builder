@@ -4,11 +4,15 @@ import { fileURLToPath } from 'node:url'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import http from 'node:http'
+import { EventEmitter } from 'node:events'
+import { PassThrough } from 'node:stream'
 import { startServer } from '../src/server/index.js'
 import viteConfig from '../web/vite.config.js'
 import type { HarnessConfig } from '../src/core/config.js'
-import { fakeBackend, harness, tmp, type FakeResponse } from './helpers.js'
+import { fakeBackend, gitRepo, gitCommit, harness, tmp, type FakeResponse } from './helpers.js'
 import { notesKey, notesPath, readNotes } from '../src/core/notes.js'
+import { loadRepoTasks, hasConsent, consentHash } from '../src/core/repo-tasks.js'
+import { ALLOWED } from '../src/core/evolve.js'
 
 const fake = fakeBackend
 // Every run here goes through bash with an approval; maxTurns 3 keeps a runaway test short.
@@ -581,7 +585,7 @@ test('POST /api/bench/again starts bench from the JSON\'s own harnesses and answ
   const { spawn } = await import('node:child_process')
   const got: { args: string[]; configs: unknown[] }[] = []
   let script = ''
-  const s = await startServer({ port: 0, runsDir: benchDir, harnessesDir, backendFactory: () => fake([]), bench: args => {
+  const s = await startServer({ port: 0, runsDir: benchDir, harnessesDir, backendFactory: () => fake([]), cli: ([, ...args]) => {
     // the harness files go away once the bench exits: read them now
     got.push({ args, configs: args.filter(a => !a.startsWith('--')).map(f => JSON.parse(require('node:fs').readFileSync(f, 'utf8'))) })
     const out = args.find(a => a.startsWith('--out='))!.slice(6)
@@ -638,7 +642,7 @@ async function benchServer(script: () => string) {
   const { spawn } = await import('node:child_process')
   const runs = await tmp('lhb-new-runs-'), hdir = await tmp('lhb-new-h-')
   const got: string[][] = [], children: import('node:child_process').ChildProcess[] = []
-  const s = await startServer({ port: 0, runsDir: runs, harnessesDir: hdir, backendFactory: () => fake([]), bench: args => {
+  const s = await startServer({ port: 0, runsDir: runs, harnessesDir: hdir, backendFactory: () => fake([]), cli: ([, ...args]) => {
     got.push(args)
     const out = args.find(a => a.startsWith('--out='))!.slice(6)
     const c = spawn(process.execPath, ['-e', script().replace('OUT', JSON.stringify(out))], { stdio: ['ignore', 'ignore', 'pipe'] })
@@ -802,11 +806,178 @@ test('bench again refuses a bench on your own tasks', async () => {
   const dir = await tmp('lhb-bench-t-')
   await writeFile(join(dir, 'tasksbench.json'), benchJson({ taskName: 'tasks', tasksRepo: '/r' }))
   let started = false
-  const s = await startServer({ port: 0, runsDir: dir, harnessesDir, backendFactory: () => fake([]), bench: () => { started = true; throw new Error('must not start') } })
+  const s = await startServer({ port: 0, runsDir: dir, harnessesDir, backendFactory: () => fake([]), cli: () => { started = true; throw new Error('must not start') } })
   try {
     const r = await fetch(`http://127.0.0.1:${s.port}/api/bench/again`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ file: 'tasksbench.json' }) })
     expect(r.status).toBe(400)
     expect((await r.json()).error).toBe('a bench on your own tasks runs again from the CLI: bench --tasks <repo>')
     expect(started).toBe(false)
   } finally { s.close() }
+})
+
+// --- evolve from the page: one job slot with bench, consent before the first spawn
+const TASKS3 = JSON.stringify({ tasks: [{ name: 'a', prompt: 'p', check: 'node a.js', set: 'train' }, { name: 'b', prompt: 'p', check: 'node b.js', set: 'gate' }, { name: 'c', prompt: 'p', check: 'node c.js', set: 'test' }] })
+type Fake = EventEmitter & { stdout: PassThrough; stderr: PassThrough; exitCode: number | null; signalCode: string | null; kill: (s?: string) => boolean; signals: string[] }
+const fakeChild = () => {
+  const c = Object.assign(new EventEmitter(), { stdout: new PassThrough(), stderr: new PassThrough(), exitCode: null as number | null, signalCode: null as string | null, signals: [] as string[] }) as Fake
+  c.kill = s => { c.signals.push(s ?? 'SIGTERM'); return true }
+  return c
+}
+const finish = (c: Fake, code: number) => { c.exitCode = code; c.emit('exit', code, null) }
+const tick = () => new Promise(r => setTimeout(r, 30))
+async function evolveServer() {
+  process.env.LHB_STATE_DIR = await tmp('lhb-state-')
+  const runs = await tmp('lhb-ev-runs-'), hdir = await tmp('lhb-ev-h-')
+  const got: string[][] = [], kids: Fake[] = []
+  const s = await startServer({ port: 0, runsDir: runs, harnessesDir: hdir, backendFactory: () => fake([]), cli: args => {
+    got.push(args)
+    const c = fakeChild(); kids.push(c)
+    const out = args.find(a => a.startsWith('--out='))
+    if (out) void writeFile(out.slice(6), '{}')
+    return c as never
+  } })
+  await writeFile(join(hdir, 'tuned.json'), JSON.stringify(config({ name: 'tuned' })))
+  const repo = await gitRepo({ 'lhb-tasks.json': TASKS3 })
+  const u = `http://127.0.0.1:${s.port}`
+  const start = (over: object = {}) => postJson(`${u}/api/evolve/start`, { harness: 'tuned', repo, ...over })
+  return { s, u, hdir, got, kids, repo, start, status: async () => (await fetch(`${u}/api/evolve`)).json() }
+}
+
+test('bench and evolve share one job slot', async () => {
+  const e = await evolveServer()
+  try {
+    const t = await loadRepoTasks(e.repo), ev = { proposer: config().backend.baseUrl, fields: ALLOWED }
+    const first = await e.start({ accept: consentHash(t, ev) })
+    expect(first.status).toBe(201)
+    const nb = await postJson(`${e.u}/api/bench/new`, { harnesses: ['tuned'], task: 'slug', n: 1, backend: form })
+    expect(nb.status).toBe(409)
+    expect((await nb.json()).error).toBe('an evolve started from this page is still running')
+    expect(e.got).toHaveLength(1)
+    expect((await (await fetch(`${e.u}/api/bench`)).json()).own).toBeUndefined()
+    finish(e.kids[0], 0)
+    // now a bench runs: evolve answers 409
+    expect((await postJson(`${e.u}/api/bench/new`, { harnesses: ['tuned'], task: 'slug', n: 1, backend: form })).status).toBe(201)
+    const r = await e.start()
+    expect(r.status).toBe(409)
+    expect((await r.json()).error).toBe('a bench started from this page is still running')
+    expect((await (await fetch(`${e.u}/api/bench`)).json()).own).toMatch(/^bench-/)
+    expect(e.got).toHaveLength(2)
+  } finally { await e.s.close() }
+})
+
+test('the first evolve start asks for consent and spawns nothing', async () => {
+  const e = await evolveServer()
+  try {
+    const r = await e.start()
+    expect(r.status).toBe(409)
+    const b = await r.json()
+    expect(b.sets).toEqual({ train: 1, gate: 1, test: 1 })
+    expect(b.strict).toBe(false)
+    expect(typeof b.reference).toBe('string')
+    expect(b.uncommitted).toBe(false)
+    expect(b.consent.text).toContain('repo:')
+    for (const c of ['node a.js', 'node b.js', 'node c.js']) expect(b.consent.text).toContain(c)
+    expect(b.consent.hash).toMatch(/^[0-9a-f]{64}$/)
+    expect(e.got).toEqual([])
+  } finally { await e.s.close() }
+})
+
+test('an accepted start saves consent and spawns evolve; a changed task asks again', async () => {
+  const e = await evolveServer()
+  try {
+    const hash = (await (await e.start()).json()).consent.hash
+    expect((await e.start({ accept: 'wrong' })).status).toBe(409)
+    expect(e.got).toEqual([])
+    expect((await e.start({ accept: hash })).status).toBe(201)
+    const real = await realpath(e.repo)
+    expect(e.got).toEqual([['evolve', join(e.hdir, 'tuned.json'), `--tasks=${real}`]])
+    expect(await hasConsent(await loadRepoTasks(e.repo), { proposer: config().backend.baseUrl, fields: ALLOWED })).toBe(true)
+    finish(e.kids[0], 0)
+    await writeFile(join(e.repo, 'lhb-tasks.json'), TASKS3.replace('node a.js', 'node a2.js'))
+    await gitCommit(e.repo)
+    const again = await e.start()
+    expect(again.status).toBe(409)
+    expect((await again.json()).consent.hash).not.toBe(hash)
+    expect(e.got).toHaveLength(1)
+  } finally { await e.s.close() }
+})
+
+test('an untracked file shows in the consent answer', async () => {
+  const e = await evolveServer()
+  try {
+    await writeFile(join(e.repo, 'stray.txt'), 'x')
+    expect((await (await e.start()).json()).uncommitted).toBe(true)
+  } finally { await e.s.close() }
+})
+
+test('POST /api/evolve/stop sends SIGINT to the evolve this page started', async () => {
+  const e = await evolveServer()
+  try {
+    const stop = () => postJson(`${e.u}/api/evolve/stop`, {})
+    expect((await stop()).status).toBe(409)
+    const hash = (await (await e.start()).json()).consent.hash
+    await e.start({ accept: hash })
+    expect((await stop()).status).toBe(200)
+    expect(e.kids[0].signals).toEqual(['SIGINT'])
+    finish(e.kids[0], 130)
+    const again = await stop()
+    expect(again.status).toBe(409)
+    expect((await again.json()).error).toBe('no evolve started from this page is running')
+  } finally { await e.s.close() }
+})
+
+test('GET /api/evolve reports the round and the stderr while it runs', async () => {
+  const e = await evolveServer()
+  try {
+    expect(await e.status()).toEqual({})
+    await e.start({ accept: (await (await e.start()).json()).consent.hash })
+    const k = e.kids[0]
+    k.stderr.write('--- round 1/3\n'); k.stderr.write('tuned r1 /tmp/a ... '); k.stderr.write('PASS  reason=final\n'); k.stderr.write('--- round 2/3\n')
+    await tick()
+    const s = await e.status()
+    expect(s.running).toEqual({ harness: 'tuned', round: [2, 3], err: '--- round 1/3\ntuned r1 /tmp/a ... PASS  reason=final\n--- round 2/3\n' })
+    expect(s.last).toBeUndefined()
+  } finally { await e.s.close() }
+})
+
+test('an evolve that dies early leaves its last 8000 stderr chars', async () => {
+  const e = await evolveServer()
+  try {
+    await e.start({ accept: (await (await e.start()).json()).consent.hash })
+    const tail = 'cannot reach http://127.0.0.1:1/v1'
+    e.kids[0].stderr.write('x'.repeat(9000 - tail.length) + tail)
+    await tick(); finish(e.kids[0], 2); await tick()
+    const s = await e.status()
+    expect(s.running).toBeUndefined()
+    expect(s.last.code).toBe(2)
+    expect(s.last.err).toHaveLength(8000)
+    expect(s.last.err.endsWith(tail)).toBe(true)
+  } finally { await e.s.close() }
+})
+
+test('a finished evolve leaves its stdout report', async () => {
+  const e = await evolveServer()
+  try {
+    await e.start({ accept: (await (await e.start()).json()).consent.hash })
+    e.kids[0].stdout.write('REPORT\n')
+    await tick(); finish(e.kids[0], 0); await tick()
+    const s = await e.status()
+    expect(s.last).toMatchObject({ harness: 'tuned', code: 0, out: 'REPORT\n' })
+  } finally { await e.s.close() }
+})
+
+test('evolve start refuses bad input with 400', async () => {
+  const e = await evolveServer()
+  process.env.LHB_EV_UNSET_API_KEY = ''
+  delete process.env.LHB_EV_UNSET_API_KEY
+  await writeFile(join(e.hdir, 'keyed.json'), JSON.stringify(config({ name: 'keyed', backend: { ...config().backend, apiKeyEnv: 'LHB_EV_UNSET_API_KEY' } })))
+  const empty = await gitRepo({ 'lhb-tasks.json': JSON.stringify({ tasks: [{ name: 'a', prompt: 'p', check: 'c' }] }) })
+  try {
+    for (const bad of [{ repo: '/' }, { harness: '..' }, { harness: 'a/b' }, { harness: 'nope' }, { harness: 'keyed' }, { repo: join(e.repo, 'missing') }, { repo: await tmp('lhb-notgit-') }, { repo: empty }]) {
+      const r = await e.start(bad)
+      expect(r.status, JSON.stringify(bad)).toBe(400)
+      expect((await r.json()).errors.length).toBeGreaterThan(0)
+    }
+    expect(e.got).toEqual([])
+  } finally { await e.s.close() }
 })

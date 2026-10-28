@@ -929,7 +929,7 @@ async function cmdServe(argv: string[]) {
     port: Number(values.port), runsDir: path.join(cwd, 'runs'), harnessesDir, examplesDir: path.join(PKG_ROOT, 'example-runs'),
     staticDir: path.join(PKG_ROOT, 'web', 'dist'), backendFactory: fake ? () => fake : undefined,
     // This very CLI, under the same node flags (tsx in development), in serve's cwd: its traces land in the runs/ serve reads.
-    bench: args => spawn(process.execPath, [...process.execArgv, fileURLToPath(import.meta.url), 'bench', ...args], { cwd, stdio: ['ignore', 'ignore', 'pipe'] }),
+    cli: args => spawn(process.execPath, [...process.execArgv, fileURLToPath(import.meta.url), ...args], { cwd, stdio: ['ignore', 'pipe', 'pipe'] }),
   })
   const url = `http://localhost:${srv.port}`
   console.error(`llm-harness-builder serving on ${url}  (harnesses: ${harnessesDir}, runs: ${path.join(cwd, 'runs')})`)
