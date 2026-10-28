@@ -824,9 +824,11 @@ const fakeChild = () => {
   return c
 }
 const finish = (c: Fake, code: number) => { c.exitCode = code; c.emit('exit', code, null) }
+const stateBefore = process.env.LHB_STATE_DIR
+afterAll(() => { if (stateBefore === undefined) delete process.env.LHB_STATE_DIR; else process.env.LHB_STATE_DIR = stateBefore })
 const tick = () => new Promise(r => setTimeout(r, 30))
 async function evolveServer() {
-  process.env.LHB_STATE_DIR = await tmp('lhb-state-')
+  process.env.LHB_STATE_DIR = await tmp('lhb-state-') // restored by afterAll below
   const runs = await tmp('lhb-ev-runs-'), hdir = await tmp('lhb-ev-h-')
   const got: string[][] = [], kids: Fake[] = []
   const s = await startServer({ port: 0, runsDir: runs, harnessesDir: hdir, backendFactory: () => fake([]), cli: args => {
@@ -968,7 +970,6 @@ test('a finished evolve leaves its stdout report', async () => {
 
 test('evolve start refuses bad input with 400', async () => {
   const e = await evolveServer()
-  process.env.LHB_EV_UNSET_API_KEY = ''
   delete process.env.LHB_EV_UNSET_API_KEY
   await writeFile(join(e.hdir, 'keyed.json'), JSON.stringify(config({ name: 'keyed', backend: { ...config().backend, apiKeyEnv: 'LHB_EV_UNSET_API_KEY' } })))
   const empty = await gitRepo({ 'lhb-tasks.json': JSON.stringify({ tasks: [{ name: 'a', prompt: 'p', check: 'c' }] }) })
@@ -979,5 +980,29 @@ test('evolve start refuses bad input with 400', async () => {
       expect((await r.json()).errors.length).toBeGreaterThan(0)
     }
     expect(e.got).toEqual([])
+  } finally { await e.s.close() }
+})
+
+test('evolve start while a bench runs answers 409 before any consent question', async () => {
+  const e = await evolveServer()
+  try {
+    expect((await postJson(`${e.u}/api/bench/new`, { harnesses: ['tuned'], task: 'slug', n: 1, backend: form })).status).toBe(201)
+    const r = await e.start()
+    expect(r.status).toBe(409)
+    expect(await r.json()).toEqual({ error: 'a bench started from this page is still running' })
+  } finally { await e.s.close() }
+})
+
+test('an evolve whose spawn fails frees the slot and says why', async () => {
+  const e = await evolveServer()
+  try {
+    const hash = (await (await e.start()).json()).consent.hash
+    expect((await e.start({ accept: hash })).status).toBe(201)
+    e.kids[0].emit('error', new Error('spawn EAGAIN'))
+    await tick()
+    const s = await e.status()
+    expect(s.running).toBeUndefined()
+    expect(s.last).toMatchObject({ harness: 'tuned', code: null, err: 'Error: spawn EAGAIN' })
+    expect((await e.start()).status).toBe(201)
   } finally { await e.s.close() }
 })

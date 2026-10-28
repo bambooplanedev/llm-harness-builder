@@ -243,6 +243,7 @@ export async function startServer(opts: ServerOpts) {
         // A harness name and a repo, never a flag: argv is built here. Nothing runs before the repo's tasks are accepted (hash of what will run).
         const body = await readBody(req) as { harness?: unknown; repo?: unknown; accept?: unknown }
         const bad = (...errors: string[]) => json(res, 400, { errors })
+        if (busy()) return json(res, 409, { error: busy() }) // before the consent question: nobody accepts while the slot is taken
         if (typeof body.harness !== 'string' || !safeName(body.harness) || body.harness.includes('..')) return bad('harness: not a plain file name')
         const file = path.resolve(opts.harnessesDir, `${body.harness}.json`)
         let config: HarnessConfig
@@ -273,6 +274,8 @@ export async function startServer(opts: ServerOpts) {
         child.stderr?.on('data', (c: Buffer) => { j.err = (j.err + c).slice(-8000); done() })
         child.stdout?.on('data', (c: Buffer) => { out = (out + c).slice(-65536); done() })
         child.once('exit', (code, signal) => { ended = lastEvolve = { harness: j.harness!, code, signal, err: j.err, out } })
+        // A spawn that fails emits 'error', never 'exit': free the slot and say why.
+        child.once('error', e => { if (job === j) job = undefined; lastEvolve = { harness: j.harness!, code: null, signal: null, err: String(e), out: '' } })
         return json(res, 201, {})
       }
       if (opts.cli && m('POST', /^\/api\/evolve\/stop$/)) {
