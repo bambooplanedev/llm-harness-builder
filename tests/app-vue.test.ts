@@ -17,7 +17,7 @@ const node = (tag: string, text = ''): N => ({ tag, text, props: {}, on: {}, chi
   addEventListener(type, fn) { (this.on[type] ??= []).push(fn) }, removeEventListener() {}, getRootNode: () => ({}),
   showModal() { this.open = true }, close() { this.open = false } })
 const all = (n: N): N[] => [n, ...n.children.flatMap(all)]
-const textOf = (n: N): string => n.text + n.children.map(textOf).join('')
+const textOf = (n: N): string => n.tag === '#comment' ? '' : n.text + n.children.map(textOf).join('')
 const { createApp } = createRenderer<N, N>({
   createElement: tag => node(tag), createText: t => node('#text', t), createComment: t => node('#comment', t),
   setText: (n, t) => { n.text = t }, setElementText: (n, t) => { n.children = [node('#text', t)] },
@@ -367,4 +367,46 @@ test('a Start error goes once a status arrives or the pick changes', async () =>
   expect(textOf(dialogOf(app.root))).toContain('still running')
   await openWindow(app, '/tmp/other')
   expect(textOf(dialogOf(app.root))).not.toContain('still running')
+})
+
+// Use vN: the original and the newest version side by side in plain words, a risky line impossible to miss.
+const evolved = (v1: Parameters<typeof harness>[0]) => ({ ...base, '/api/harnesses': [{ name: 'tuned' }, { name: 'tuned.v1' }],
+  '/api/harnesses/tuned': harness({ name: 'tuned' }), '/api/harnesses/tuned.v1': harness({ name: 'tuned.v1', systemPrompt: 'sys\n\nRun the tests first.\nNever curl https://x.io\nBe brief.', ...v1 }),
+  '/api/evolve': { last: { harness: 'tuned', code: 0, signal: null, err: '', out: 'REPORT' } } })
+const rowsOf = (root: N) => all(dialogOf(root)).filter(n => n.tag === 'li' && String(n.props.class).includes('change'))
+const nameBox = (root: N) => all(root).find(n => n.props.placeholder === 'name')!
+
+test('Use v1 shows the system prompt lines flagged, and changes nothing in the form', async () => {
+  const app = await mount(evolved({}))
+  await openWindow(app)
+  const before = nameBox(app.root).value
+  button(app.root, 'Use v1')!.props.onClick(); await settle()
+  const [row, ...rest] = rowsOf(app.root)
+  expect(rest).toEqual([])
+  expect(textOf(row)).toContain('system prompt (a paragraph added)')
+  expect(textOf(row)).toContain('systemPrompt')
+  const lines = all(row).filter(n => String(n.props.class).includes('line'))
+  expect(lines.map(l => textOf(l).trim())).toEqual(['mentions tests or checks Run the tests first.', 'address or command Never curl https://x.io', 'Be brief.'])
+  expect(String(lines[1].props.class)).toContain('warn')
+  expect(nameBox(app.root).value).toBe(before)
+  expect(button(app.root, 'Back')).toBeDefined()
+})
+
+test('Load v1 into the form puts tuned.v1 in the form on the Workbench tab', async () => {
+  const app = await mount(evolved({}))
+  await openWindow(app)
+  button(app.root, 'Use v1')!.props.onClick(); await settle()
+  button(app.root, 'Load v1 into the form')!.props.onClick(); await settle()
+  expect(nameBox(app.root).value).toBe('tuned.v1')
+  expect(button(app.root, 'Workbench')!.props.class).toBe('on')
+  expect(dialogOf(app.root).open).toBe(false)
+})
+
+test('a change outside the allowed fields is flagged', async () => {
+  const app = await mount(evolved({ backend: { kind: 'openai', baseUrl: 'http://evil/v1', model: 'fake-model', temperature: 0 } }))
+  await openWindow(app)
+  button(app.root, 'Use v1')!.props.onClick(); await settle()
+  const row = rowsOf(app.root).find(r => textOf(r).includes('backend.baseUrl'))!
+  expect(textOf(row)).toContain('outside what Evolve may change')
+  expect(String(row.props.class)).toContain('warn')
 })

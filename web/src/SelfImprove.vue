@@ -2,6 +2,8 @@
 import { ref, computed, watch, nextTick } from 'vue'
 import { api, type EvolveConsent, type EvolveStatus, type Note } from './api'
 import { t, lang } from './i18n'
+import { configDiff, lineDiff } from '../../src/core/diff'
+import { FIELD_LABEL, flagLines } from '../../src/core/evolve-labels'
 
 const props = defineProps<{ harnessNames: string[]; current: string; workdir: string; notesOn: boolean; status: EvolveStatus }>()
 /** `poll`: ask App for the status now (opened, started, stopped); App keeps polling while a job runs. */
@@ -59,6 +61,34 @@ function stop() {
   api.evolveStop().then(() => emit('poll'), e => { stopping.value = false; error.value = e.message })
 }
 
+/** The newest version the finished evolve wrote: `<harness>.v<N>` with the highest N, if the list has one. */
+const newest = computed(() => {
+  if (last.value?.code !== 0) return
+  const p = `${last.value.harness}.v`
+  const ns = props.harnessNames.filter(n => n.startsWith(p) && /^\d+$/.test(n.slice(p.length))).map(n => +n.slice(p.length))
+  return ns.length ? `${p}${Math.max(...ns)}` : undefined
+})
+const KNOWN: Record<string, string> = { name: 'name', ...FIELD_LABEL }
+/** A leaf is JSON text; a key missing on one side is the literal 'undefined'. */
+const text = (v: string) => (v === 'undefined' ? '' : String(JSON.parse(v)))
+type Change = { path: string; label?: string; a: string; b: string; added?: ReturnType<typeof flagLines>; removed?: string[] }
+/** What Use vN shows: every differing leaf, the system prompt line by line. Nothing in the form changes until Load. */
+const review = ref<{ name: string; changes: Change[] }>()
+watch(last, () => { review.value = undefined })
+async function use(name: string) {
+  error.value = ''
+  try {
+    const [a, b] = await Promise.all([api.harness(last.value!.harness), api.harness(name)])
+    review.value = { name, changes: configDiff(a, b).map(r => {
+      const c: Change = { ...r, label: KNOWN[r.path] }
+      if (r.path !== 'systemPrompt') return c
+      const d = lineDiff(text(r.a), text(r.b))
+      return { ...c, added: flagLines(d.onlyB.join('\n')).filter(l => l.line), removed: d.onlyA }
+    }) }
+  } catch (e) { error.value = (e as Error).message }
+}
+function load(name: string) { review.value = undefined; dlg.value?.close(); emit('use', name) }
+
 async function loadNotes(del?: string) {
   notesError.value = ''
   if (!repo.value) { notes.value = []; return }
@@ -106,9 +136,25 @@ const clearNotes = () => { if (confirm(t('evolve.clearConfirm'))) void loadNotes
     <section v-else-if="last">
       <template v-if="last.code === 0">
         <p>{{ t('evolve.done', { harness: last.harness }) }}</p>
-        <label :title="t('h.evolveReport')">Report</label>
-        <pre>{{ last.out }}</pre>
-        <div class="row"><button @click="dlg?.close()">Keep original</button></div>
+        <template v-if="review">
+          <p>{{ t(review.changes.length ? 'evolve.diff' : 'evolve.noDiff', { name: review.name, harness: last.harness }) }}</p>
+          <ul class="changes">
+            <li v-for="c in review.changes" :key="c.path" :class="['change', { warn: !c.label }]">
+              <div><b>{{ c.label ?? 'outside what Evolve may change' }}</b> <small class="muted">{{ c.path }}</small></div>
+              <template v-if="c.added">
+                <div v-for="(l, i) in c.added" :key="'+' + i" :class="['line', { warn: l.flag === 'command' }]"><span v-if="l.flag" :class="['chip', { warn: l.flag === 'command' }]">{{ l.flag === 'command' ? 'address or command' : 'mentions tests or checks' }}</span> {{ l.line }}</div>
+                <div v-for="(l, i) in c.removed" :key="'-' + i" class="line warn"><span class="chip warn">removed</span> {{ l }}</div>
+              </template>
+              <div v-else><code>{{ c.a }}</code> → <code>{{ c.b }}</code></div>
+            </li>
+          </ul>
+          <div class="row"><button @click="load(review.name)">Load {{ review.name.slice(last.harness.length + 1) }} into the form</button><button @click="review = undefined">Back</button></div>
+        </template>
+        <template v-else>
+          <label :title="t('h.evolveReport')">Report</label>
+          <pre>{{ last.out }}</pre>
+          <div class="row"><button v-if="newest" @click="use(newest)">Use {{ newest.slice(last.harness.length + 1) }}</button><button @click="dlg?.close()">Keep original</button></div>
+        </template>
       </template>
       <p v-else-if="stopped">{{ t('evolve.stopped', { harness: last.harness }) }}</p>
       <template v-else-if="failed">

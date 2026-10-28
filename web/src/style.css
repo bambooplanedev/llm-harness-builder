@@ -190,3 +190,4 @@ dialog.evolve { width: min(760px, calc(100vw - 64px)); max-height: calc(100vh - 
 .evolve ul { padding-left: 18px; } .evolve ul.notes { list-style: none; padding: 0; }
 .evolve ul.notes li { display: flex; gap: 8px; justify-content: space-between; align-items: flex-start; padding: 6px 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
 .evolve ul.notes .muted { font: 12px var(--mono); }
+.evolve ul.changes { list-style: none; padding: 0; } .evolve ul.changes li { padding: 6px 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; } .evolve .line .chip { margin-right: 4px; }

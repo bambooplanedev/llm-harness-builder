@@ -181,7 +181,7 @@ watch(() => config.value.backend.model, () => {
     <div class="layout" v-else>
       <div class="col left">
         <ConfigForm v-model="config" v-model:mcp-error="mcpError" :models="models" :models-error="modelsError" :model-info="modelInfo" :harness-names="harnessNames" @refresh-models="refreshModels" @load="load" @save-as="saveAs" />
-        <SelfImprove :harness-names="harnessNames" :current="config.name" :workdir="workdir" :notes-on="!!config.notes?.enabled" :status="evolve" @poll="pollEvolve" />
+        <SelfImprove :harness-names="harnessNames" :current="config.name" :workdir="workdir" :notes-on="!!config.notes?.enabled" :status="evolve" @poll="pollEvolve" @use="n => { tab = 'workbench'; void load(n) }" />
       </div>
       <div class="col">
         <label class="film-hide" :title="t('h.workdir')">Workdir</label>
