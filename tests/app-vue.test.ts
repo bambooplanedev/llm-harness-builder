@@ -1,5 +1,5 @@
 import { test, expect, afterEach } from 'vitest'
-import { createRenderer, nextTick } from 'vue'
+import { createRenderer, nextTick, type App as VueApp } from 'vue'
 // @ts-expect-error -- vue SFC, no .d.ts; typechecked separately by vue-tsc
 import App from '../web/src/App.vue'
 import { lang } from '../web/src/i18n'
@@ -12,9 +12,10 @@ const llama = harness({ backend: { kind: 'openai', baseUrl: 'http://127.0.0.1:80
 
 /** A DOM-less renderer, enough to mount App, press its buttons and type into v-model boxes: no component-testing dependency. */
 type N = { tag: string; text: string; value?: unknown; props: Record<string, any>; on: Record<string, ((e: object) => void)[]>; children: N[]; parent?: N; options: N[]
-  addEventListener(type: string, fn: (e: object) => void): void; removeEventListener(): void; getRootNode(): object }
+  addEventListener(type: string, fn: (e: object) => void): void; removeEventListener(): void; getRootNode(): object; showModal(): void; close(): void; open?: boolean }
 const node = (tag: string, text = ''): N => ({ tag, text, props: {}, on: {}, children: [], options: [],
-  addEventListener(type, fn) { (this.on[type] ??= []).push(fn) }, removeEventListener() {}, getRootNode: () => ({}) })
+  addEventListener(type, fn) { (this.on[type] ??= []).push(fn) }, removeEventListener() {}, getRootNode: () => ({}),
+  showModal() { this.open = true }, close() { this.open = false } })
 const all = (n: N): N[] => [n, ...n.children.flatMap(all)]
 const textOf = (n: N): string => n.text + n.children.map(textOf).join('')
 const { createApp } = createRenderer<N, N>({
@@ -26,18 +27,22 @@ const { createApp } = createRenderer<N, N>({
   patchProp: (n, k, _, v) => { n.props[k] = v },
 })
 
-const saved = globalThis.fetch
-afterEach(() => { globalThis.fetch = saved; lang.value = 'en' })
+const saved = globalThis.fetch, savedConfirm = globalThis.confirm
+const apps: VueApp[] = []
+// Unmounted, so a poll App keeps while evolve runs never outlives its test.
+afterEach(() => { apps.splice(0).forEach(a => a.unmount()); globalThis.fetch = saved; globalThis.confirm = savedConfirm; lang.value = 'en' })
 const settle = async () => { for (let i = 0; i < 5; i++) { await new Promise(r => setTimeout(r, 0)); await nextTick() } }
-/** Mounts App against a fetch that answers by URL; `infos` counts what the form asked of /api/model-info. */
+/** Mounts App against a fetch that answers by URL (a function answer gets the body and may return a Response); `infos` counts what the form asked of /api/model-info. */
 async function mount(answers: Record<string, unknown>) {
   const calls: { url: string; body?: any }[] = []
   globalThis.fetch = (async (url: string, init?: RequestInit) => {
-    calls.push({ url, body: init?.body ? JSON.parse(String(init.body)) : undefined })
-    return new Response(JSON.stringify(answers[url] ?? {}))
+    const body = init?.body ? JSON.parse(String(init.body)) : undefined
+    calls.push({ url, body })
+    const a = typeof answers[url] === 'function' ? (answers[url] as (b: any) => unknown)(body) : answers[url]
+    return a instanceof Response ? a : new Response(JSON.stringify(a ?? {}))
   }) as typeof fetch
   const root = node('root')
-  createApp(App).mount(root)
+  const app = createApp(App); apps.push(app); app.mount(root)
   await settle()
   const find = (f: (n: N) => boolean) => all(root).find(f)!
   return {
@@ -203,4 +208,113 @@ test('a Claude Code session is one group: main first, subagents indented under i
   const cls = (s: string) => String(cards.find(c => textOf(c).includes(s))!.props.class)
   expect(cls('sub ex')).toContain('sub'); expect(cls('main one')).toContain('session'); expect(cls('sub plan')).toMatch(/session/); expect(cls('plain task')).not.toContain('session')
   expect(cards.filter(c => /session/.test(String(c.props.class)))).toHaveLength(6)
+})
+
+// The Self-improvement window. Its dialog is in the tree while closed, so what it says is readable without opening it.
+const button = (root: N, label: string) => all(root).find(n => n.tag === 'button' && textOf(n) === label)
+const dialogOf = (root: N) => all(root).find(n => n.tag === 'dialog' && n.props['aria-labelledby'] === 'evolve-title')!
+async function openWindow(app: Awaited<ReturnType<typeof mount>>, workdir = '/tmp/repo') {
+  const box = all(app.root).find(n => n.props.placeholder === '/path/to/project')!
+  box.value = workdir; box.on.input?.forEach(f => f({ target: box })); await settle()
+  all(app.root).find(n => n.tag === 'button' && textOf(n).startsWith('Self-improvement…'))!.props.onClick(); await settle()
+  expect(dialogOf(app.root).open).toBe(true)
+}
+const base = { '/api/runs': [], '/api/models': [], '/api/notes': { notes: [] } }
+
+test('evolve running on another harness than the form: the button names its round', async () => {
+  const app = await mount({ ...base, '/api/harnesses': [{ name: 'bare' }, { name: 'tuned' }], '/api/harnesses/bare': harness({ name: 'bare' }),
+    '/api/evolve': { running: { harness: 'tuned', round: [2, 3], err: '--- round 2/3\nproposing' }, last: { harness: 'old', code: 0, signal: null, err: '', out: 'STALE REPORT' } } })
+  await app.load('bare')
+  const open = all(app.root).find(n => n.tag === 'button' && textOf(n).startsWith('Self-improvement…'))!
+  expect(textOf(open)).toContain('Evolve: round 2/3')
+  expect(textOf(open)).toContain('Notes off')
+  const d = textOf(dialogOf(app.root))
+  expect(d).toContain('round 2 of 3'); expect(d).toContain('tuned'); expect(d).toContain('proposing')
+  expect(d).not.toContain('STALE REPORT') // the previous job's result, while a new one runs
+  expect(button(app.root, 'Start')!.props.disabled).toBe(true)
+})
+
+test('Start without consent shows the sets and the commands; Start waits for the checkbox and then sends the hash', async () => {
+  const consent = { consent: { text: 'CONSENT TEXT', hash: 'h1' }, sets: { train: 5, gate: 4, test: 3 }, strict: true, needed: 6, uncommitted: true }
+  const app = await mount({ ...base, '/api/harnesses': [{ name: 'tuned' }],
+    '/api/evolve/start': (b: any) => b.accept ? new Response('{}', { status: 201 }) : new Response(JSON.stringify(consent), { status: 409 }) })
+  await openWindow(app)
+  button(app.root, 'Start')!.props.onClick(); await settle()
+  const d = textOf(dialogOf(app.root))
+  for (const s of ['5 tasks it learns from', '4 check tasks Evolve never sees', '3 final test', 'CONSENT TEXT', 'at least 6 tasks go FAIL → PASS', 'uncommitted changes are not in the clones', 'for hours without asking'])
+    expect(d).toContain(s)
+  expect(app.calls.find(c => c.url === '/api/evolve/start')!.body).toEqual({ harness: 'tuned', repo: '/tmp/repo' })
+  expect(button(app.root, 'Start')!.props.disabled).toBe(true)
+  const box = all(dialogOf(app.root)).find(n => n.tag === 'input' && n.props.type === 'checkbox')!
+  box.props.onChange({ target: { checked: true } }); await settle()
+  expect(button(app.root, 'Start')!.props.disabled).toBe(false)
+  button(app.root, 'Start')!.props.onClick(); await settle()
+  expect(app.calls.filter(c => c.url === '/api/evolve/start').at(-1)!.body).toEqual({ harness: 'tuned', repo: '/tmp/repo', accept: 'h1' })
+  expect(app.calls.at(-1)!.url).toBe('/api/evolve') // the status, asked again once the start went through
+})
+
+test('a non-strict consent shows the reference line as a warning', async () => {
+  const consent = { consent: { text: 'C', hash: 'h' }, sets: { train: 1, gate: 1, test: 1 }, strict: false, reference: 'too few tasks (3 of 24)', uncommitted: false }
+  const app = await mount({ ...base, '/api/harnesses': [{ name: 'tuned' }], '/api/evolve/start': () => new Response(JSON.stringify(consent), { status: 409 }) })
+  await openWindow(app)
+  button(app.root, 'Start')!.props.onClick(); await settle()
+  expect(all(dialogOf(app.root)).find(n => String(n.props.class).includes('warn') && textOf(n) === 'too few tasks (3 of 24)')).toBeDefined()
+  expect(textOf(dialogOf(app.root))).not.toContain('uncommitted changes')
+})
+
+test('a finished evolve shows its report; one that failed shows why', async () => {
+  const ok = await mount({ ...base, '/api/harnesses': [], '/api/evolve': { last: { harness: 'tuned', code: 0, signal: null, err: '', out: 'REPORT' } } })
+  expect(textOf(dialogOf(ok.root))).toContain('REPORT')
+  expect(textOf(all(ok.root).find(n => n.tag === 'button' && textOf(n).startsWith('Self-improvement…'))!)).toContain('Evolve: idle')
+  await openWindow(ok)
+  button(ok.root, 'Keep original')!.props.onClick(); await settle()
+  expect(dialogOf(ok.root).open).toBe(false)
+  const bad = await mount({ ...base, '/api/harnesses': [], '/api/evolve': { last: { harness: 'tuned', code: 2, signal: null, err: 'error: cannot reach', out: '' } } })
+  expect(textOf(dialogOf(bad.root))).toContain('cannot reach')
+  expect(textOf(dialogOf(bad.root))).toContain('code 2')
+})
+
+test('notes: × deletes one, Clear notes asks first and posts nothing on no', async () => {
+  const app = await mount({ ...base, '/api/harnesses': [], '/api/notes': { notes: [{ id: 'n1', ts: 0, run: 'r9', author: 'model', text: 'hello note' }] } })
+  await openWindow(app)
+  expect(app.calls.filter(c => c.url === '/api/notes').map(c => c.body)).toEqual([{ repo: '/tmp/repo' }])
+  const d = textOf(dialogOf(app.root))
+  expect(d).toContain('hello note'); expect(d).toContain('model'); expect(d).toContain('r9')
+  all(dialogOf(app.root)).find(n => n.tag === 'button' && n.props['aria-label'] === 'Delete note')!.props.onClick(); await settle()
+  expect(app.calls.filter(c => c.url === '/api/notes').at(-1)!.body).toEqual({ repo: '/tmp/repo', delete: 'n1' })
+  const before = app.calls.length
+  let asked = ''
+  globalThis.confirm = (m?: string) => { asked = String(m); return false }
+  button(app.root, 'Clear notes')!.props.onClick(); await settle()
+  expect(asked).toBeTruthy()
+  expect(app.calls.length).toBe(before)
+  globalThis.confirm = () => true
+  button(app.root, 'Clear notes')!.props.onClick(); await settle()
+  expect(app.calls.at(-1)!.body).toEqual({ repo: '/tmp/repo', delete: 'all' })
+})
+
+test('under uk the lede is Ukrainian, the buttons stay English', async () => {
+  lang.value = 'uk'
+  const app = await mount({ ...base, '/api/harnesses': [] })
+  expect(textOf(dialogOf(app.root))).toContain(uk['evolve.lede'])
+  for (const b of ['Start', 'Clear notes']) expect(button(app.root, b)).toBeDefined()
+  expect(all(app.root).find(n => n.tag === 'button' && textOf(n).startsWith('Self-improvement…'))).toBeDefined()
+})
+
+test('Esc and × only hide the window: nothing goes to /api/evolve/stop', async () => {
+  const app = await mount({ ...base, '/api/harnesses': [{ name: 'tuned' }], '/api/evolve': { running: { harness: 'tuned', err: '' } } })
+  await openWindow(app)
+  const d = dialogOf(app.root)
+  d.on.cancel?.forEach(f => f({})); d.on.close?.forEach(f => f({}))
+  all(d).find(n => n.tag === 'button' && n.props['aria-label'] === 'Close')!.props.onClick(); await settle()
+  expect(d.open).toBe(false)
+  expect(app.calls.some(c => c.url === '/api/evolve/stop')).toBe(false)
+  expect(button(app.root, 'Stop — resume later')).toBeDefined()
+})
+
+test('a note is text, never markup', async () => {
+  const app = await mount({ ...base, '/api/harnesses': [], '/api/notes': { notes: [{ id: 'x', ts: 0, author: 'user', text: '<img src=x onerror=alert(1)>' }] } })
+  await openWindow(app)
+  expect(textOf(dialogOf(app.root))).toContain('<img src=x onerror=alert(1)>')
+  expect(all(app.root).some(n => n.tag === 'img')).toBe(false)
 })

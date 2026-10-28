@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
-import { api, type Delta, type HarnessConfig, type HarnessEvent, type RunSummary, type ServerInfo } from './api'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { api, type Delta, type EvolveStatus, type HarnessConfig, type HarnessEvent, type RunSummary, type ServerInfo } from './api'
 import { PRESETS, DEFAULT_PROMPTED_TEMPLATE, DEFAULT_PARSE_ERROR_HINT, DEMO_TASK } from '../../src/core/prompts'
 import { isLoopbackUrl, listsModelsByItself } from '../../src/core/config'
 import { knobsOff } from '../../src/core/knobs'
@@ -9,6 +9,7 @@ import ConfigForm from './ConfigForm.vue'
 import ContextBar from './ContextBar.vue'
 import Trace from './Trace.vue'
 import Bench from './Bench.vue'
+import SelfImprove from './SelfImprove.vue'
 import { t, T, lang, LANGS, langName, setLang } from './i18n'
 import { shown } from './film'
 
@@ -139,8 +140,22 @@ function outbound(c: HarnessConfig): HarnessConfig {
 /** Loads a bench run's harness and workdir into the form; the user presses Run themselves. */
 function toWorkbench(c: HarnessConfig, wd: string) { config.value = c; workdir.value = wd; tab.value = 'workbench' }
 
+const evolve = ref<EvolveStatus>({})
+let evolveAsk = 0, evolveTimer: ReturnType<typeof setTimeout> | undefined, gone = false
+/** On mount, on the window's ask, then every 2 s while one runs. An evolve that just ended may have written a vN: the
+ *  harness list is read again. `evolveAsk` drops an answer a later ask overtook, so two chains never run at once. */
+async function pollEvolve() {
+  const ask = ++evolveAsk, was = !!evolve.value.running
+  clearTimeout(evolveTimer)
+  try { const s = await api.evolveStatus(); if (ask !== evolveAsk) return; evolve.value = s }
+  catch { if (ask !== evolveAsk) return } // serve without a cli has no such route: idle; a blip mid-run keeps the last status and polls on
+  if (was && !evolve.value.running) refreshLists().catch(e => (error.value = e.message))
+  if (evolve.value.running && !gone) evolveTimer = setTimeout(pollEvolve, 2000)
+}
+onUnmounted(() => { gone = true; clearTimeout(evolveTimer) })
+
 const settings = ref<HTMLDialogElement | null>(null)
-onMounted(async () => { await refreshLists(); if (listsModelsByItself(config.value.backend)) await refreshModels() })
+onMounted(async () => { void pollEvolve(); await refreshLists(); if (listsModelsByItself(config.value.backend)) await refreshModels() })
 // Three sources, not one getter returning an array: a new array never equals the last, so a family button, which swaps the
 // whole config, would ask for the model list again and blink the panel with every click.
 watch([() => config.value.backend.kind, () => config.value.backend.baseUrl, () => config.value.backend.apiKeyEnv], () => {
@@ -166,6 +181,7 @@ watch(() => config.value.backend.model, () => {
     <div class="layout" v-else>
       <div class="col left">
         <ConfigForm v-model="config" v-model:mcp-error="mcpError" :models="models" :models-error="modelsError" :model-info="modelInfo" :harness-names="harnessNames" @refresh-models="refreshModels" @load="load" @save-as="saveAs" />
+        <SelfImprove :harness-names="harnessNames" :current="config.name" :workdir="workdir" :notes-on="!!config.notes?.enabled" :status="evolve" @poll="pollEvolve" />
       </div>
       <div class="col">
         <label class="film-hide" :title="t('h.workdir')">Workdir</label>

@@ -1,0 +1,118 @@
+<script setup lang="ts">
+import { ref, computed, watch, nextTick } from 'vue'
+import { api, type EvolveConsent, type EvolveStatus, type Note } from './api'
+import { t, lang } from './i18n'
+
+const props = defineProps<{ harnessNames: string[]; current: string; workdir: string; notesOn: boolean; status: EvolveStatus }>()
+/** `poll`: ask App for the status now (opened, started, stopped); App keeps polling while a job runs. */
+const emit = defineEmits<{ use: [name: string]; poll: [] }>()
+
+const dlg = ref<HTMLDialogElement | null>(null)
+const harness = ref(''); const repo = ref(props.workdir)
+watch(() => props.workdir, w => { repo.value = w })
+const consent = ref<EvolveConsent>(); const accepted = ref(false); const error = ref('')
+// A yes is to one harness and one repo: another pick asks again.
+watch([harness, repo], () => { consent.value = undefined; accepted.value = false })
+const notes = ref<Note[]>([]); const notesError = ref('')
+
+const running = computed(() => props.status.running)
+/** While a job runs, `last` is the one before it: not news here. */
+const last = computed(() => running.value ? undefined : props.status.last)
+const round = computed(() => running.value?.round)
+const state = computed(() => round.value ? `round ${round.value[0]}/${round.value[1]}` : running.value ? 'running' : 'idle')
+/** SIGINT from Stop exits 130: a pause, not a failure. */
+const stopped = computed(() => last.value?.code === 130 || last.value?.signal === 'SIGINT')
+const failed = computed(() => !!last.value && last.value.code !== 0 && !stopped.value)
+const canStart = computed(() => !running.value && !!harness.value && !!repo.value && (!consent.value || accepted.value))
+
+const tail = ref<HTMLElement | null>(null)
+/** The newest log line is the one that says what is going on. */
+const toEnd = () => nextTick(() => { if (tail.value) tail.value.scrollTop = tail.value.scrollHeight })
+watch(() => running.value?.err ?? last.value?.err, toEnd)
+
+function open() {
+  if (!props.harnessNames.includes(harness.value)) harness.value = props.harnessNames.includes(props.current) ? props.current : props.harnessNames[0] ?? ''
+  dlg.value?.showModal()
+  emit('poll'); void loadNotes(); void toEnd()
+}
+async function start() {
+  error.value = ''
+  try {
+    const c = await api.evolveStart({ harness: harness.value, repo: repo.value, ...consent.value && accepted.value ? { accept: consent.value.consent.hash } : {} })
+    consent.value = c; accepted.value = false
+    if (!c) emit('poll')
+  } catch (e) { error.value = (e as Error).message }
+}
+const stop = () => api.evolveStop().then(() => emit('poll'), e => (error.value = e.message))
+
+async function loadNotes(del?: string) {
+  notesError.value = ''
+  if (!repo.value) { notes.value = []; return }
+  try { notes.value = (await api.notes(repo.value, del)).notes } catch (e) { notes.value = []; notesError.value = (e as Error).message }
+}
+const clearNotes = () => { if (confirm(t('evolve.clearConfirm'))) void loadNotes('all') }
+</script>
+
+<template>
+  <button class="evolve-open" @click="open">Self-improvement…<span class="muted">Evolve: {{ state }} · Notes {{ notesOn ? 'on' : 'off' }}</span></button>
+  <!-- Esc and × only hide it: the job lives in serve, not in this window. -->
+  <dialog ref="dlg" class="evolve" aria-labelledby="evolve-title">
+    <div class="evolve-head"><h3 id="evolve-title">Self-improvement</h3><button aria-label="Close" @click="dlg?.close()">×</button></div>
+    <p class="muted">{{ t('evolve.lede') }}</p>
+    <div class="row"><span>Harness</span><select v-model="harness" :disabled="!!running"><option v-for="n in harnessNames" :key="n" :value="n">{{ n }}</option></select></div>
+    <div class="hint">{{ t('evolve.saved') }}</div>
+    <div class="row"><span :title="t('evolve.repo')">Repo</span><input type="text" v-model="repo" placeholder="/path/to/repo" :disabled="!!running" @change="loadNotes()"></div>
+    <div class="row">
+      <button :disabled="!canStart" @click="start">Start</button>
+      <span class="err">{{ error }}</span>
+    </div>
+
+    <section v-if="consent && !running">
+      <label :title="t('h.evolveSets')">Tasks</label>
+      <ul class="sets">
+        <li><b>{{ consent.sets.train }}</b> {{ t('evolve.train') }}</li>
+        <li><b>{{ consent.sets.gate }}</b> {{ t('evolve.gate') }}</li>
+        <li><b>{{ consent.sets.test }}</b> {{ t('evolve.test') }}</li>
+      </ul>
+      <p v-if="consent.strict">{{ t('evolve.strict', { needed: consent.needed ?? '' }) }}</p>
+      <div v-else class="warn block">{{ consent.reference }}</div>
+      <p v-if="consent.uncommitted" class="warn">{{ t('evolve.uncommitted') }}</p>
+      <div class="warn block">{{ t('evolve.warning') }}</div>
+      <p>{{ t('evolve.consent') }}</p>
+      <pre>{{ consent.consent.text }}</pre>
+      <label class="accept"><input type="checkbox" :checked="accepted" @change="accepted = ($event.target as HTMLInputElement).checked"> I accept these commands</label>
+    </section>
+
+    <section v-if="running">
+      <p><b>{{ t('evolve.running', { harness: running.harness }) }}</b> <span class="chip">{{ round ? t('evolve.round', { r: round[0], R: round[1] }) : t('evolve.starting') }}</span></p>
+      <pre ref="tail">{{ running.err }}</pre>
+      <div class="row"><button @click="stop">Stop — resume later</button><span class="muted">{{ t('evolve.stopNote') }}</span></div>
+    </section>
+    <section v-else-if="last">
+      <template v-if="last.code === 0">
+        <p>{{ t('evolve.done', { harness: last.harness }) }}</p>
+        <label :title="t('h.evolveReport')">Report</label>
+        <pre>{{ last.out }}</pre>
+        <div class="row"><button @click="dlg?.close()">Keep original</button></div>
+      </template>
+      <p v-else-if="stopped">{{ t('evolve.stopped', { harness: last.harness }) }}</p>
+      <template v-else-if="failed">
+        <div class="err block">{{ t('evolve.failed', { harness: last.harness, code: last.code !== null ? `code ${last.code}` : last.signal ?? 'an error' }) }}</div>
+        <pre ref="tail">{{ last.err }}</pre>
+      </template>
+    </section>
+    <p v-else class="muted">{{ t('evolve.idle') }}</p>
+
+    <h4>Notes</h4>
+    <p class="muted">{{ t(notesOn ? 'evolve.notesOn' : 'evolve.notesOff') }}</p>
+    <div v-if="notesError" class="err">{{ notesError }}</div>
+    <div v-else-if="!notes.length" class="muted">{{ t('evolve.noNotes') }}</div>
+    <ul class="notes">
+      <li v-for="n in notes" :key="n.id">
+        <div><div>{{ n.text }}</div><div class="muted">{{ n.author }} · {{ new Date(n.ts).toLocaleString(lang) }}<template v-if="n.run"> · run {{ n.run }}</template></div></div>
+        <button aria-label="Delete note" title="Delete note" @click="loadNotes(n.id)">×</button>
+      </li>
+    </ul>
+    <div class="row"><button :disabled="!notes.length" @click="clearNotes">Clear notes</button></div>
+  </dialog>
+</template>

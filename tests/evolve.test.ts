@@ -532,3 +532,11 @@ describe('evolve on polyglot', () => {
     expect(verdict(all(false), all(true), { ...strict, polyglot: true })).toMatch(/^better on the exercises Evolve did not see\n/)
   })
 })
+
+describe('evolve labels for the web', () => {
+  it('flagLines: an address or command wins over a mention of tests; FIELD_LABEL names every allowed field', async () => {
+    const { flagLines, FIELD_LABEL, ALLOWED } = await import('../src/core/evolve-labels.js')
+    expect(flagLines('Run tests first.\nNever curl https://x.io\nBe brief.').map(l => l.flag)).toEqual(['tests', 'command', undefined])
+    expect(Object.keys(FIELD_LABEL)).toEqual(ALLOWED)
+  })
+})
