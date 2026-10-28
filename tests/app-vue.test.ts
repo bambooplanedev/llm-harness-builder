@@ -419,3 +419,77 @@ test('a system prompt changed only in blank lines or order says so instead of an
   expect(textOf(row)).toContain('only blank lines or line order changed')
   expect(all(row).some(n => String(n.props.class).includes('line'))).toBe(false)
 })
+
+// The final review's findings: what the window says has to be true.
+const urlBox = (root: N) => all(root).find(n => n.tag === 'input' && !!n.parent?.children.some(c => c.tag === 'select' && textOf(c).includes('openai-compatible')))!
+test('Load v1 with a rewritten backend keeps the form\'s backend even on a fresh page, as its note says', async () => {
+  const app = await mount(evolved({ backend: { kind: 'openai', baseUrl: 'http://evil/v1', model: 'fake-model', temperature: 0 } }))
+  await openWindow(app)
+  const before = urlBox(app.root).value
+  expect(before).not.toBe('http://evil/v1')
+  button(app.root, 'Use v1')!.props.onClick(); await settle()
+  button(app.root, 'Load v1 into the form')!.props.onClick(); await settle()
+  expect(nameBox(app.root).value).toBe('tuned.v1')
+  expect(urlBox(app.root).value).toBe(before)
+})
+
+test('Load v1 with no backend row on a fresh page still takes its backend, as any load does', async () => {
+  const app = await mount(evolved({}))
+  await openWindow(app)
+  button(app.root, 'Use v1')!.props.onClick(); await settle()
+  expect(rowsOf(app.root).some(r => textOf(r).includes('backend.'))).toBe(false)
+  button(app.root, 'Load v1 into the form')!.props.onClick(); await settle()
+  expect(urlBox(app.root).value).toBe('http://x/v1')
+})
+
+test('while a job runs, the disabled Harness select shows the running harness, not the form\'s', async () => {
+  const app = await mount({ ...base, '/api/harnesses': [{ name: 'bare' }, { name: 'tuned' }], '/api/harnesses/bare': harness({ name: 'bare' }),
+    '/api/evolve': { running: { harness: 'tuned', err: '' } } })
+  await app.load('bare')
+  await openWindow(app)
+  const sel = all(dialogOf(app.root)).find(n => n.tag === 'select' && n.props.id === 'evolve-harness')!
+  expect(sel.props.disabled).toBe(true)
+  expect(sel.props.value).toBe('tuned')
+})
+
+test('a Start refused because another tab started a job asks for the status: the window shows it running', async () => {
+  const answers: Record<string, unknown> = { ...base, '/api/harnesses': [{ name: 'tuned' }],
+    '/api/evolve/start': () => new Response(JSON.stringify({ error: 'an evolve started from this page is still running' }), { status: 409 }) }
+  const app = await mount(answers)
+  await openWindow(app)
+  answers['/api/evolve'] = { running: { harness: 'tuned', err: '' } } // the other tab's job
+  button(app.root, 'Start')!.props.onClick(); await settle()
+  const d = textOf(dialogOf(app.root))
+  expect(d).toContain('an evolve started from this page is still running')
+  expect(d).toContain('Evolve is running on tuned.')
+  expect(d).not.toContain('Nothing is running.')
+})
+
+test('once a job is gone the status is asked once more, for the report\'s tail and the Use button; then polling stops', async () => {
+  const answers: Record<string, unknown> = { ...base, '/api/harnesses': [{ name: 'tuned' }, { name: 'tuned.v1' }], '/api/evolve': { running: { harness: 'tuned', err: '' } } }
+  const app = await mount(answers)
+  answers['/api/evolve'] = { last: { harness: 'tuned', code: 0, signal: null, err: '', out: 'PART' } }
+  await openWindow(app)
+  expect(textOf(dialogOf(app.root))).toContain('PART')
+  answers['/api/evolve'] = { last: { harness: 'tuned', code: 0, signal: null, err: '', out: 'PART AND THE REST' } }
+  await new Promise(r => setTimeout(r, 2100)); await settle()
+  expect(textOf(dialogOf(app.root))).toContain('PART AND THE REST')
+  const asked = app.calls.filter(c => c.url === '/api/evolve').length
+  await new Promise(r => setTimeout(r, 2100)); await settle()
+  expect(app.calls.filter(c => c.url === '/api/evolve').length).toBe(asked) // one extra ask, not a loop
+}, 10000)
+
+test('a Start with a yes that comes back with consent again says the commands changed', async () => {
+  let n = 0
+  const consent = () => ({ consent: { text: `COMMANDS ${++n}`, hash: `h${n}` }, sets: { train: 1, gate: 1, test: 1 }, strict: true, needed: 1, uncommitted: false })
+  const app = await mount({ ...base, '/api/harnesses': [{ name: 'tuned' }], '/api/evolve/start': () => new Response(JSON.stringify(consent()), { status: 409 }) })
+  await openWindow(app)
+  const said = 'The commands changed since you accepted them; read them again.'
+  button(app.root, 'Start')!.props.onClick(); await settle()
+  expect(textOf(dialogOf(app.root))).not.toContain(said)
+  all(dialogOf(app.root)).find(n => n.tag === 'input' && n.props.type === 'checkbox')!.props.onChange({ target: { checked: true } }); await settle()
+  button(app.root, 'Start')!.props.onClick(); await settle()
+  const d = textOf(dialogOf(app.root))
+  expect(d).toContain(said); expect(d).toContain('COMMANDS 2')
+  expect(d.indexOf(said)).toBeLessThan(d.indexOf('COMMANDS 2'))
+})

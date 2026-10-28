@@ -6,17 +6,22 @@ import { configDiff, lineDiff } from '../../src/core/diff'
 import { FIELD_LABEL, flagLines } from '../../src/core/evolve-labels'
 
 const props = defineProps<{ harnessNames: string[]; current: string; workdir: string; notesOn: boolean; status: EvolveStatus }>()
-/** `poll`: ask App for the status now (opened, started, stopped); App keeps polling while a job runs. */
-const emit = defineEmits<{ use: [name: string]; poll: [] }>()
+/** `poll`: ask App for the status now (opened, started, stopped); App keeps polling while a job runs.
+ *  `use`: `keepBackend` when the version's backend differs from the original's: the form keeps its own, as the diff says. */
+const emit = defineEmits<{ use: [name: string, keepBackend: boolean]; poll: [] }>()
 
 const dlg = ref<HTMLDialogElement | null>(null)
 const harness = ref(''); const repo = ref(props.workdir)
 watch(() => props.workdir, w => { repo.value = w })
 const consent = ref<EvolveConsent>(); const accepted = ref(false); const error = ref('')
+/** A yes was sent and the server asked again: the commands changed since they were read. */
+const changed = ref(false)
 // A yes is to one harness and one repo: another pick asks again, and an error about the old pick is gone.
-watch([harness, repo], () => { consent.value = undefined; accepted.value = false; error.value = '' })
-// Every status that arrived is news: an error from an earlier Start no longer holds.
-watch(() => props.status, () => { error.value = '' })
+watch([harness, repo], () => { consent.value = undefined; accepted.value = false; changed.value = false; error.value = '' })
+/** A failed Start asks for the status; that answer is not news about the error, so it keeps it. */
+let keepError = false
+// Every other status that arrived is news: an error from an earlier Start no longer holds.
+watch(() => props.status, () => { if (keepError) keepError = false; else error.value = '' })
 const notes = ref<Note[]>([]); const notesError = ref('')
 
 const running = computed(() => props.status.running)
@@ -51,10 +56,11 @@ function open() {
 async function start() {
   error.value = ''
   try {
-    const c = await api.evolveStart({ harness: harness.value, repo: repo.value, ...consent.value && accepted.value ? { accept: consent.value.consent.hash } : {} })
-    consent.value = c; accepted.value = false
+    const accept = consent.value && accepted.value ? consent.value.consent.hash : undefined
+    const c = await api.evolveStart({ harness: harness.value, repo: repo.value, ...accept ? { accept } : {} })
+    consent.value = c; accepted.value = false; changed.value = !!(c && accept)
     if (!c) emit('poll')
-  } catch (e) { error.value = (e as Error).message }
+  } catch (e) { error.value = (e as Error).message; keepError = true; emit('poll') } // e.g. a job another tab started: show it
 }
 function stop() {
   stopping.value = true
@@ -87,7 +93,10 @@ async function use(name: string) {
     }) }
   } catch (e) { error.value = (e as Error).message }
 }
-function load(name: string) { review.value = undefined; dlg.value?.close(); emit('use', name) }
+function load(name: string) {
+  const keepBackend = !!review.value?.changes.some(c => c.path.startsWith('backend.'))
+  review.value = undefined; dlg.value?.close(); emit('use', name, keepBackend)
+}
 
 async function loadNotes(del?: string) {
   notesError.value = ''
@@ -103,7 +112,7 @@ const clearNotes = () => { if (confirm(t('evolve.clearConfirm'))) void loadNotes
   <dialog ref="dlg" class="evolve" aria-labelledby="evolve-title">
     <div class="evolve-head"><h3 id="evolve-title">Self-improvement</h3><button aria-label="Close" @click="dlg?.close()">×</button></div>
     <p class="muted">{{ t('evolve.lede') }}</p>
-    <div class="row"><label for="evolve-harness">Harness</label><select id="evolve-harness" v-model="harness" :disabled="!!running"><option v-for="n in harnessNames" :key="n" :value="n">{{ n }}</option></select></div>
+    <div class="row"><label for="evolve-harness">Harness</label><select id="evolve-harness" :value="running?.harness ?? harness" :disabled="!!running" @change="harness = ($event.target as HTMLSelectElement).value"><option v-for="n in harnessNames" :key="n" :value="n">{{ n }}</option><option v-if="running && !harnessNames.includes(running.harness)" :value="running.harness">{{ running.harness }}</option></select></div>
     <div class="hint">{{ t('evolve.saved') }}</div>
     <div class="row"><label for="evolve-repo">Repo</label><input id="evolve-repo" type="text" v-model="repo" placeholder="/path/to/repo" :disabled="!!running" @change="loadNotes()"></div>
     <div class="hint">{{ t('evolve.repo') }}</div>
@@ -123,6 +132,7 @@ const clearNotes = () => { if (confirm(t('evolve.clearConfirm'))) void loadNotes
       <div v-else class="warn block">{{ consent.reference }}</div>
       <p v-if="consent.uncommitted" class="warn">{{ t('evolve.uncommitted') }}</p>
       <div class="warn block">{{ t('evolve.warning') }}</div>
+      <p v-if="changed" class="warn">{{ t('evolve.changed') }}</p>
       <p>{{ t('evolve.consent') }}</p>
       <pre>{{ consent.consent.text }}</pre>
       <label class="accept"><input type="checkbox" :checked="accepted" @change="accepted = ($event.target as HTMLInputElement).checked"> I accept these commands</label>

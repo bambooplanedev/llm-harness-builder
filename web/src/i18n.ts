@@ -93,6 +93,7 @@ export const en = {
   'evolve.strict': 'a change is kept when at least {needed} tasks go FAIL → PASS',
   'evolve.uncommitted': 'uncommitted changes are not in the clones',
   'evolve.warning': "Evolve runs the model's shell commands for hours without asking, as you. It notices changes to node_modules and stops, but it does not isolate them.",
+  'evolve.changed': 'The commands changed since you accepted them; read them again.',
   'evolve.consent': 'Nothing has run yet. These are the commands Evolve will run in your repo; read them, tick the box, press Start again.',
   'evolve.idle': 'Nothing is running.',
   'evolve.running': 'Evolve is running on {harness}. Closing this window does not stop it.',
