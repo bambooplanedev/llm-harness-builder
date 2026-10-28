@@ -11,8 +11,10 @@ const dlg = ref<HTMLDialogElement | null>(null)
 const harness = ref(''); const repo = ref(props.workdir)
 watch(() => props.workdir, w => { repo.value = w })
 const consent = ref<EvolveConsent>(); const accepted = ref(false); const error = ref('')
-// A yes is to one harness and one repo: another pick asks again.
-watch([harness, repo], () => { consent.value = undefined; accepted.value = false })
+// A yes is to one harness and one repo: another pick asks again, and an error about the old pick is gone.
+watch([harness, repo], () => { consent.value = undefined; accepted.value = false; error.value = '' })
+// Every status that arrived is news: an error from an earlier Start no longer holds.
+watch(() => props.status, () => { error.value = '' })
 const notes = ref<Note[]>([]); const notesError = ref('')
 
 const running = computed(() => props.status.running)
@@ -23,15 +25,24 @@ const state = computed(() => round.value ? `round ${round.value[0]}/${round.valu
 /** SIGINT from Stop exits 130: a pause, not a failure. */
 const stopped = computed(() => last.value?.code === 130 || last.value?.signal === 'SIGINT')
 const failed = computed(() => !!last.value && last.value.code !== 0 && !stopped.value)
+/** Stop pressed, the job not gone yet: SIGINT can take a while to end the run. */
+const stopping = ref(false)
+watch(running, r => { if (!r) stopping.value = false })
 const canStart = computed(() => !running.value && !!harness.value && !!repo.value && (!consent.value || accepted.value))
 
 const tail = ref<HTMLElement | null>(null)
 /** The newest log line is the one that says what is going on. */
 const toEnd = () => nextTick(() => { if (tail.value) tail.value.scrollTop = tail.value.scrollHeight })
-watch(() => running.value?.err ?? last.value?.err, toEnd)
+// Followed only from the bottom: someone who scrolled up to read is not pulled away. Measured before the patch (flush 'pre').
+watch(() => running.value?.err ?? last.value?.err, () => {
+  const el = tail.value
+  if (!el || el.scrollHeight - el.scrollTop - el.clientHeight <= 40) void toEnd()
+})
 
 function open() {
-  if (!props.harnessNames.includes(harness.value)) harness.value = props.harnessNames.includes(props.current) ? props.current : props.harnessNames[0] ?? ''
+  // The form's harness each time, unless a yes is half given or a job runs: those are about the harness picked here.
+  if ((!consent.value && !running.value) || !props.harnessNames.includes(harness.value))
+    harness.value = props.harnessNames.includes(props.current) ? props.current : props.harnessNames[0] ?? ''
   dlg.value?.showModal()
   emit('poll'); void loadNotes(); void toEnd()
 }
@@ -43,7 +54,10 @@ async function start() {
     if (!c) emit('poll')
   } catch (e) { error.value = (e as Error).message }
 }
-const stop = () => api.evolveStop().then(() => emit('poll'), e => (error.value = e.message))
+function stop() {
+  stopping.value = true
+  api.evolveStop().then(() => emit('poll'), e => { stopping.value = false; error.value = e.message })
+}
 
 async function loadNotes(del?: string) {
   notesError.value = ''
@@ -59,9 +73,10 @@ const clearNotes = () => { if (confirm(t('evolve.clearConfirm'))) void loadNotes
   <dialog ref="dlg" class="evolve" aria-labelledby="evolve-title">
     <div class="evolve-head"><h3 id="evolve-title">Self-improvement</h3><button aria-label="Close" @click="dlg?.close()">×</button></div>
     <p class="muted">{{ t('evolve.lede') }}</p>
-    <div class="row"><span>Harness</span><select v-model="harness" :disabled="!!running"><option v-for="n in harnessNames" :key="n" :value="n">{{ n }}</option></select></div>
+    <div class="row"><label for="evolve-harness">Harness</label><select id="evolve-harness" v-model="harness" :disabled="!!running"><option v-for="n in harnessNames" :key="n" :value="n">{{ n }}</option></select></div>
     <div class="hint">{{ t('evolve.saved') }}</div>
-    <div class="row"><span :title="t('evolve.repo')">Repo</span><input type="text" v-model="repo" placeholder="/path/to/repo" :disabled="!!running" @change="loadNotes()"></div>
+    <div class="row"><label for="evolve-repo">Repo</label><input id="evolve-repo" type="text" v-model="repo" placeholder="/path/to/repo" :disabled="!!running" @change="loadNotes()"></div>
+    <div class="hint">{{ t('evolve.repo') }}</div>
     <div class="row">
       <button :disabled="!canStart" @click="start">Start</button>
       <span class="err">{{ error }}</span>
@@ -86,7 +101,7 @@ const clearNotes = () => { if (confirm(t('evolve.clearConfirm'))) void loadNotes
     <section v-if="running">
       <p><b>{{ t('evolve.running', { harness: running.harness }) }}</b> <span class="chip">{{ round ? t('evolve.round', { r: round[0], R: round[1] }) : t('evolve.starting') }}</span></p>
       <pre ref="tail">{{ running.err }}</pre>
-      <div class="row"><button @click="stop">Stop — resume later</button><span class="muted">{{ t('evolve.stopNote') }}</span></div>
+      <div class="row"><button :disabled="stopping" @click="stop">Stop — resume later</button><span class="muted">{{ t(stopping ? 'evolve.stopping' : 'evolve.stopNote') }}</span></div>
     </section>
     <section v-else-if="last">
       <template v-if="last.code === 0">
@@ -104,7 +119,7 @@ const clearNotes = () => { if (confirm(t('evolve.clearConfirm'))) void loadNotes
     <p v-else class="muted">{{ t('evolve.idle') }}</p>
 
     <h4>Notes</h4>
-    <p class="muted">{{ t(notesOn ? 'evolve.notesOn' : 'evolve.notesOff') }}</p>
+    <p class="muted">{{ t(notesOn ? 'evolve.notesOn' : 'evolve.notesOff', { harness: current }) }}</p>
     <div v-if="notesError" class="err">{{ notesError }}</div>
     <div v-else-if="!notes.length" class="muted">{{ t('evolve.noNotes') }}</div>
     <ul class="notes">

@@ -305,7 +305,7 @@ test('Esc and × only hide the window: nothing goes to /api/evolve/stop', async 
   const app = await mount({ ...base, '/api/harnesses': [{ name: 'tuned' }], '/api/evolve': { running: { harness: 'tuned', err: '' } } })
   await openWindow(app)
   const d = dialogOf(app.root)
-  d.on.cancel?.forEach(f => f({})); d.on.close?.forEach(f => f({}))
+  // Esc is the native dialog's own cancel: no listener of ours, so only × is pressed here.
   all(d).find(n => n.tag === 'button' && n.props['aria-label'] === 'Close')!.props.onClick(); await settle()
   expect(d.open).toBe(false)
   expect(app.calls.some(c => c.url === '/api/evolve/stop')).toBe(false)
@@ -317,4 +317,54 @@ test('a note is text, never markup', async () => {
   await openWindow(app)
   expect(textOf(dialogOf(app.root))).toContain('<img src=x onerror=alert(1)>')
   expect(all(app.root).some(n => n.tag === 'img')).toBe(false)
+})
+
+test('Stop says it is stopping and stays disabled until the job is gone', async () => {
+  const answers: Record<string, unknown> = { ...base, '/api/harnesses': [{ name: 'tuned' }], '/api/evolve': { running: { harness: 'tuned', err: '' } }, '/api/evolve/stop': { ok: true } }
+  const app = await mount(answers)
+  await openWindow(app)
+  button(app.root, 'Stop — resume later')!.props.onClick(); await settle()
+  expect(app.calls.filter(c => c.url === '/api/evolve/stop')).toHaveLength(1)
+  expect(button(app.root, 'Stop — resume later')!.props.disabled).toBe(true) // still running: the poll said so
+  expect(textOf(dialogOf(app.root))).toContain('stopping…: Evolve ends the current run, this can take up to a minute')
+  answers['/api/evolve'] = { last: { harness: 'tuned', code: 130, signal: null, err: '', out: '' } }
+  await openWindow(app)
+  expect(textOf(dialogOf(app.root))).toContain('Evolve on tuned was stopped. Start with the same harness and repo to go on.')
+  answers['/api/evolve'] = { running: { harness: 'tuned', err: '' } }
+  await openWindow(app)
+  expect(button(app.root, 'Stop — resume later')!.props.disabled).toBe(false)
+})
+
+test('each open picks the harness the form holds again', async () => {
+  const app = await mount({ ...base, '/api/harnesses': [{ name: 'a' }, { name: 'b' }], '/api/harnesses/a': harness({ name: 'a' }), '/api/harnesses/b': harness({ name: 'b' }),
+    '/api/evolve/start': () => new Response('{}', { status: 201 }) })
+  await app.load('a')
+  await openWindow(app)
+  button(app.root, 'Start')!.props.onClick(); await settle()
+  expect(app.calls.filter(c => c.url === '/api/evolve/start').at(-1)!.body.harness).toBe('a')
+  all(dialogOf(app.root)).find(n => n.props['aria-label'] === 'Close')!.props.onClick()
+  await app.load('b')
+  await openWindow(app)
+  button(app.root, 'Start')!.props.onClick(); await settle()
+  expect(app.calls.filter(c => c.url === '/api/evolve/start').at(-1)!.body.harness).toBe('b')
+})
+
+test('the notes line names the harness in the form', async () => {
+  const app = await mount({ ...base, '/api/harnesses': [{ name: 'bare' }], '/api/harnesses/bare': harness({ name: 'bare' }) })
+  await app.load('bare')
+  expect(textOf(dialogOf(app.root))).toContain('Notes are off in bare, the harness in the form (the switch is there).')
+})
+
+test('a Start error goes once a status arrives or the pick changes', async () => {
+  const app = await mount({ ...base, '/api/harnesses': [{ name: 'tuned' }],
+    '/api/evolve/start': () => new Response(JSON.stringify({ error: 'a bench started from this page is still running' }), { status: 409 }) })
+  await openWindow(app)
+  button(app.root, 'Start')!.props.onClick(); await settle()
+  expect(textOf(dialogOf(app.root))).toContain('a bench started from this page is still running')
+  await openWindow(app) // opening asks for the status
+  expect(textOf(dialogOf(app.root))).not.toContain('a bench started from this page is still running')
+  button(app.root, 'Start')!.props.onClick(); await settle()
+  expect(textOf(dialogOf(app.root))).toContain('still running')
+  await openWindow(app, '/tmp/other')
+  expect(textOf(dialogOf(app.root))).not.toContain('still running')
 })
