@@ -15,6 +15,7 @@ import { benchFileName, BENCH_TASKS } from '../core/bench.js'
 import { TASKS, checkSlug } from '../core/tasks.js'
 import { childEnv } from '../core/tools/env.js'
 import { loadRepoTasks, consentText, consentHash, hasConsent, saveConsent } from '../core/repo-tasks.js'
+import { readNotes, removeNotes, notesPath, notesKey } from '../core/notes.js'
 import { splitSets, modeOf, neededFlips, referenceLabel, ALLOWED } from '../core/evolve.js'
 
 /** `cli` starts `llm-harness-builder <args>` (args[0] is `bench` or `evolve`) with stdout and stderr piped; without it the page cannot start a job.
@@ -287,6 +288,17 @@ export async function startServer(opts: ServerOpts) {
         // No keys, no notes: the stderr of a child that gets the environment of serve, which redacts its own.
         const round = running() && job!.kind === 'evolve' ? [...job!.err.matchAll(/^--- round (\d+)\/(\d+)$/gm)].pop() : undefined
         return json(res, 200, { running: running() && job!.kind === 'evolve' ? { harness: job!.harness, err: job!.err, ...round ? { round: [Number(round[1]), Number(round[2])] } : {} } : undefined, last: lastEvolve })
+      }
+      if (m('POST', /^\/api\/notes$/)) {
+        // POST for all of it: the page lists and deletes through the one refusal(), a GET would answer any page that guesses the folder.
+        const body = await readBody(req) as { repo?: unknown; delete?: unknown }
+        const w = typeof body.repo === 'string' ? await validateWorkdir(body.repo) : 'repo is required'
+        if (w) return json(res, 400, { errors: [w] })
+        const del = body.delete
+        if (del !== undefined && typeof del !== 'string') return json(res, 400, { errors: ['delete: an id or "all"'] })
+        const file = notesPath(await notesKey(body.repo as string))
+        const removed = del === undefined ? undefined : await removeNotes(file, del === 'all' ? 'all' : [del])
+        return json(res, 200, { notes: await readNotes(file), ...removed === undefined ? {} : { removed } })
       }
       if (m('POST', /^\/api\/demo$/)) {
         const dir = await realpath(await TASKS.slug.prepare())

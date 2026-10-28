@@ -10,7 +10,7 @@ import { startServer } from '../src/server/index.js'
 import viteConfig from '../web/vite.config.js'
 import type { HarnessConfig } from '../src/core/config.js'
 import { fakeBackend, gitRepo, gitCommit, harness, tmp, type FakeResponse } from './helpers.js'
-import { notesKey, notesPath, readNotes } from '../src/core/notes.js'
+import { notesKey, notesPath, readNotes, appendNotes } from '../src/core/notes.js'
 import { loadRepoTasks, hasConsent, consentHash } from '../src/core/repo-tasks.js'
 import { ALLOWED } from '../src/core/evolve.js'
 
@@ -1005,4 +1005,18 @@ test('an evolve whose spawn fails frees the slot and says why', async () => {
     expect(s.last).toMatchObject({ harness: 'tuned', code: null, err: 'Error: spawn EAGAIN' })
     expect((await e.start()).status).toBe(201)
   } finally { await e.s.close() }
+})
+
+test('POST /api/notes lists, deletes one or all; a bad repo is 400', async () => {
+  const s = await startServer({ port: 0, runsDir: await tmp('lhb-nt-runs-'), harnessesDir: await tmp('lhb-nt-h-'), backendFactory: () => fake([]) })
+  try {
+    const repo = await tmp('lhb-nt-repo-'), u = `http://127.0.0.1:${s.port}/api/notes`
+    const file = notesPath(await notesKey(repo))
+    await appendNotes(file, [{ id: 'a', ts: 1, author: 'user', text: 'one' }, { id: 'b', ts: 2, author: 'user', text: 'two' }])
+    expect(await (await postJson(u, { repo })).json()).toMatchObject({ notes: [{ id: 'a' }, { id: 'b' }] })
+    expect(await (await postJson(u, { repo, delete: 'a' })).json()).toMatchObject({ removed: 1, notes: [{ id: 'b' }] })
+    expect(await (await postJson(u, { repo, delete: 'all' })).json()).toEqual({ removed: 1, notes: [] })
+    expect((await postJson(u, { repo: '/' })).status).toBe(400)
+    expect((await fetch(u)).status).not.toBe(200)
+  } finally { await s.close() }
 })
