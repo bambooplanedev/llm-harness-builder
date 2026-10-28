@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { ALPHA, applyEdit, numbersOf, usable, parseJournal, replay, verdict, bindingTokens, checkEdit, decide, failureGroups, reasonKind, signatureOf, SIG, modeOf, neededFlips, parseProposal, proposerInput, proposerRequest, referenceLabel, signP, splitSets, PROPOSAL_SCHEMA, type Edit, type Mode, type RunLite } from '../src/core/evolve.js'
+import { ALPHA, boundBy, applyEdit, numbersOf, usable, parseJournal, replay, verdict, bindingTokens, checkEdit, decide, failureGroups, reasonKind, signatureOf, SIG, modeOf, neededFlips, parseProposal, proposerInput, proposerRequest, referenceLabel, signP, splitSets, PROPOSAL_SCHEMA, type Edit, type Mode, type RunLite } from '../src/core/evolve.js'
 import type { HarnessEvent } from '../src/core/events.js'
 import { harness } from './helpers.js'
 import type { RepoTask } from '../src/core/repo-tasks.js'
+import { loadPolyglot, polyglotBinding } from '../src/core/polyglot.js'
 
 const task = (name: string, set?: RepoTask['set']): RepoTask => ({ name, prompt: 'p', check: 'c', set, checkTimeoutS: 60 })
 const run = (t: string, ok: boolean, tokens = 100, fp = 10): RunLite => ({ task: t, verdict: ok ? 'PASS' : 'FAIL', tokens, firstPromptTokens: fp })
@@ -384,6 +385,40 @@ describe('evolve journal', () => {
     expect(replay([start] as any, harness(), ctx)).toMatchObject({ version: 0, baseline: undefined })
   })
 
+  // The proposal goes in before its runs: a stop between them cannot re-roll it.
+  const prop = (c: { round: number; index: number; input: string; edit?: Edit }) => ({ v: 1, type: 'proposal', round: c.round, index: c.index, input: c.input, edit: c.edit })
+  it('a proposal line parses; one without an edit or with an extra key is refused', () => {
+    expect(parseJournal(jsonl(start, cur, prop(a1), a1))).toEqual({ lines: [start, cur, prop(a1), a1] })
+    expect(parseJournal(jsonl(start, cur, { ...prop(a1), edit: undefined }))).toEqual({ error: 'line 3: missing edit' })
+    expect(parseJournal(jsonl(start, cur, { ...prop(a1), extra: 1 }))).toEqual({ error: expect.stringMatching(/^line 3: /) })
+  })
+
+  it('replay: a proposal followed by its candidate is not a second line and adds nothing; one without its candidate is pending', () => {
+    const lines = (...ls: object[]) => (parseJournal(jsonl(...ls)) as any).lines
+    // Refused by decide, so it passed the edit checks: the only kind with a proposal.
+    const n2 = cand(2, { field: 'loop.maxRepeats', value: 4 }, false, 'no more PASS than current')
+    const old = replay(lines(start, cur, a1, n2), harness(), ctx) as any
+    const r = replay(lines(start, cur, prop(a1), a1, prop(n2), n2), harness(), ctx) as any
+    expect(r).toEqual(old)
+    expect(old.pending).toBeUndefined()
+    const p = replay(lines(start, cur, a1, prop(n2)), harness(), ctx) as any
+    expect(p.pending).toEqual({ round: 1, index: 2, input: '{}', edit: n2.edit })
+    expect(p.tried).toEqual([a1.edit])
+    expect(p.done).toEqual(old.done.slice(0, 2))
+  })
+
+  it('replay refuses a candidate whose edit differs from its proposal, a proposal not followed by its candidate, one for a done slot, and one that fails the edit checks', () => {
+    const other = { ...a1, edit: { field: 'systemPrompt', value: 'other' } }
+    expect(replay([start, cur, prop(a1), other] as any, harness(), ctx)).toEqual({ error: 'cannot resume: round 1 candidate 1: its edit or input is not the one proposed' })
+    expect(replay([start, cur, prop(a1), { ...a1, input: '{"other":1}' }] as any, harness(), ctx)).toEqual({ error: 'cannot resume: round 1 candidate 1: its edit or input is not the one proposed' })
+    expect(replay([start, cur, prop(a1), r2] as any, harness(), ctx)).toEqual({ error: 'cannot resume: round 1 candidate 1: a proposal without its candidate' })
+    expect(replay([start, cur, prop(a1), prop(a1)] as any, harness(), ctx)).toEqual({ error: 'cannot resume: round 1 candidate 1: a proposal without its candidate' })
+    expect(replay([start, cur, prop(a1), fin()] as any, harness(), ctx)).toEqual({ error: 'cannot resume: round 1 candidate 1: a proposal without its candidate' })
+    expect(replay([start, cur, a1, prop(a1)] as any, harness(), ctx)).toEqual({ error: 'cannot resume: round 1 candidate 1: a second line for it' })
+    expect(replay([start, cur, a1, prop({ ...r2, edit: a1.edit })] as any, harness(), ctx)).toEqual({ error: 'cannot resume: round 1 candidate 2: proposed edit: already tried' })
+    expect(replay([start, cur, prop({ ...r2, edit: { field: 'loop.untilBash', value: 'x' } })] as any, harness(), ctx)).toEqual({ error: 'cannot resume: round 1 candidate 2: proposed edit: field not allowed' })
+  })
+
   // The journal is checked, not trusted: a decision its own numbers do not support is refused, naming its slot.
   it('replay refuses an accepted line the journal\'s numbers do not support', () => {
     const lost = cand(1, { field: 'loop.maxRepeats', value: 3 }, false, '0 PASS')
@@ -431,5 +466,69 @@ describe('evolve journal', () => {
     expect(verdict([run('t0', true)], [run('t0', false)], ref)).toBe(`${referenceLabel(ref)}\nfewer PASS\n${P}`)
     expect(verdict([run('t0', true)], [run('t0', true)], ref)).toBe(`${referenceLabel(ref)}\nnot told apart\n${P}`)
     for (const m of [strict, ref]) for (const [o, l] of [[all(false), all(true)], [all(true), all(false)]]) expect(verdict(o, l, m)).not.toMatch(/in general/)
+  })
+})
+
+describe('evolve on polyglot', () => {
+  const p = loadPolyglot()
+  const sets = { train: ['a'], gate: ['b'], test: ['c'] }
+
+  it('boundBy: a token under 6 chars by word boundary, a longer one as a substring', () => {
+    expect(boundBy('Score each Poker hand', ['poker'])).toBe(true)
+    expect(boundBy('pokers and pokerface', ['poker'])).toBe(false)
+    expect(boundBy('see formatBytesHelper', ['formatbytes'])).toBe(true)
+    expect(boundBy(3, ['poker'])).toBe(false)
+  })
+
+  it('the binding of polyglot exercises: poker is not bound; a hyphenated exercise name and a recorded test name are', () => {
+    const poker = p.exercises.find(e => e.name === 'poker')!
+    const binding = bindingTokens(polyglotBinding(p, ['space-age', 'poker']))
+    expect(binding).not.toContain('poker')
+    expect(binding).toContain('space-age')
+    expect(binding).toContain(poker.tests[0]!.toLowerCase())
+    expect(binding).toContain('space-age.test.js')
+    const para = (value: string) => checkEdit({ field: 'systemPrompt', value }, { current: harness(), original: harness(), tried: [], binding })
+    expect(para('When a task is like poker, rank the cases first.')).toBeUndefined()
+    expect(para('On space-age, convert the units first.')).toBe('tied to a task')
+    expect(para(`Mind ${poker.tests[0]} first.`)).toBe('tied to a task')
+    expect(para('Read the failing test before editing.')).toBeUndefined()
+    // A hyphenated name no longer in the set is still a binding word; a single word is not.
+    expect(bindingTokens(polyglotBinding(p, ['gone-away', 'gone']))).toEqual(['gone-away'])
+  })
+
+  it('a short repo task name binds nothing: an accepted paragraph using it still replays', () => {
+    const binding = bindingTokens({ names: ['test', 'fix'], paths: [], prompts: [] })
+    expect(binding).toEqual([])
+    const start = { v: 1, type: 'start', base: 'h', sha: 'abc', pin: 'a'.repeat(64), notes: 'b'.repeat(64), sets: { train: ['test'], gate: ['fix'], test: ['c'] }, strict: false, proposer: 'p' }
+    const cur = { v: 1, type: 'current', round: 1, runs: [run('test', false), run('fix', false)] }
+    const won = [run('test', true), run('fix', true)]
+    const a = { v: 1, type: 'candidate', round: 1, index: 1, input: '{}', edit: { field: 'systemPrompt', value: 'run the test first, then fix it' }, accepted: true, reason: 'accepted', numbers: { pass: 2, tokens: 200, tokensPerSuccess: 100, weight: 20 }, runs: won, version: 1 }
+    const r = replay([start, cur, a] as any, harness(), { binding, sets: start.sets })
+    expect('error' in r ? r.error : r.version).toBe(1)
+  })
+
+  it('replay drops a refused value bound by a short name, by word boundary', () => {
+    const start = { v: 1, type: 'start', base: 'h', sha: 'polyglot:x:3', pin: 'a'.repeat(64), notes: 'b'.repeat(64), sets, strict: false, proposer: 'p' }
+    const cur = { v: 1, type: 'current', round: 1, runs: [run('a', false), run('b', false)] }
+    const c = (index: number, value: string) => ({ v: 1, type: 'candidate', round: 1, index, input: '{}', edit: { field: 'systemPrompt', value }, accepted: false, reason: 'no edit in the reply' })
+    const r = replay([start, cur, c(1, 'think of poker'), c(2, 'write short essays')] as any, harness(), { binding: ['poker', 'say'], sets })
+    expect('error' in r ? r : r.rejected).toEqual([{ field: 'systemPrompt', reason: 'no edit in the reply' }, { field: 'systemPrompt', value: 'write short essays', reason: 'no edit in the reply' }])
+  })
+
+  it('signatureOf classes the polyglot check reasons; SIG takes them', () => {
+    const sig = (lastError: string) => signatureOf({ task: 'a', verdict: 'FAIL', lastError }, [])
+    expect(sig('a test failed: Space Age > age on Earth')).toBe('-|test|-|-')
+    expect(sig('timeout after 60000 ms')).toBe('-|timeout|-|-')
+    expect(sig('missing solution file')).toBe('-|missing|-|-')
+    expect(sig('unexpected test "x" from y.js')).toBe('-|unexpected|-|-')
+    for (const s of ['-|test|-|-', 'final|unexpected|many|-', 'final|check_failed|many|-']) expect(SIG.test(s)).toBe(true)
+  })
+
+  it('reference mode on polyglot advises --size 24, and the verdict speaks of exercises', () => {
+    const m = modeOf(sets, true) as Mode
+    expect(m).toEqual({ strict: false, trainGate: 2, test: 1, polyglot: true })
+    expect(referenceLabel(m)).toBe('\u041e\u0420\u0406\u0404\u041d\u0422\u0418\u0420, \u041d\u0415 \u0414\u041e\u041a\u0410\u0417 — too few exercises (3 of 24) for a statistical conclusion; raise --size to 24')
+    const T = names(8), all = (ok: boolean) => T.map(t => run(t, ok))
+    expect(verdict(all(false), all(true), { ...strict, polyglot: true })).toMatch(/^better on the exercises Evolve did not see\n/)
   })
 })

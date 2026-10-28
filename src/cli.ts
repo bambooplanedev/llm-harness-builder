@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // src/cli.ts
 import { parseArgs } from 'node:util'
-import { readFile, cp, mkdir } from 'node:fs/promises'
+import { readFile, writeFile, cp, mkdir } from 'node:fs/promises'
 import { existsSync, readFileSync, writeFileSync, renameSync, appendFileSync, lstatSync, truncateSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -12,19 +12,19 @@ import { fileURLToPath } from 'node:url'
 import { mayAsk, type RunOpts } from './core/run.js'
 import { killTracked } from './core/procs.js'
 import { withNotes, type NotesStore } from './core/notes-run.js'
-import { notesKey, notesPath, readNotes, scrubText } from './core/notes.js'
-import { ALLOWED, CANDIDATES, splitSets, modeOf, referenceLabel, neededFlips, usable, decide, applyEdit, bindingTokens, checkEdit, failureGroups, signatureOf, proposerInput, proposerRequest, parseProposal, parseJournal, replay, type Edit, type JournalLine, type RunLite } from './core/evolve.js'
+import { notesKey, notesPath, readNotes, scrubText, stateDir } from './core/notes.js'
+import { ALLOWED, CANDIDATES, splitSets, modeOf, referenceLabel, neededFlips, usable, decide, applyEdit, bindingTokens, checkEdit, failureGroups, signatureOf, proposerInput, proposerRequest, parseProposal, parseJournal, replay, type Edit, type JournalLine, type RunLite, type SetName } from './core/evolve.js'
 import { evolveReport } from './core/evolve-report.js'
 import { loadRepoTasks, hostOf, consentText, hasConsent, saveConsent, git, TASKS_FILE, type RepoTasks, type EvolveConsent } from './core/repo-tasks.js'
 import { cloneAt, linkNodeModules, protectedChanged, runCheck, finishRun, removeAllClonesSync, prepareModules, modulesManifest, modulesTampered, type Clone } from './core/repo-clone.js'
 import { validateConfig, sendsAnswerSchema, KEY_ENV, FLAG_WORDS, keyNameMessage, keyErrors, keyProblem, keyNote, apiKey, NO_THINK_LINE, isHttpUrl, isLoopbackUrl, type HarnessConfig, type BackendKind } from './core/config.js'
 import { validateWorkdir } from './core/tools/sandbox.js'
-import type { Backend, ChatRequest, Delta, NormalizedResponse } from './core/backends/types.js'
+import { BackendError, isStop, sendRetrying, type Backend, type ChatRequest, type Delta, type NormalizedResponse } from './core/backends/types.js'
 import { approvalPrompt, mcpCounts, quitWithoutWork, showable, showableText, type HarnessEvent, type ToolCall } from './core/events.js'
 import { startServer } from './server/index.js'
 import { TraceWriter, type Meta } from './server/runs.js'
 import { TASKS, type Task } from './core/tasks.js'
-import { loadPolyglot, polyglotTasks, POLYGLOT_MAX } from './core/polyglot.js'
+import { loadPolyglot, polyglotTasks, polyglotBinding, removeAllPolyglotSync, POLYGLOT_MAX } from './core/polyglot.js'
 import { childEnv, bashEnvNote } from './core/tools/env.js'
 import { median, formatTable, BENCH_TASKS, benchTotal, runTitle, benchFileName, autoApproves, type BenchRun, type BenchHarness, type BenchResult } from './core/bench.js'
 import { GUARD_BLOCKED, EDIT_MISS } from './core/tools/fs.js'
@@ -53,15 +53,18 @@ const PORT = (s: string) => /^\d+$/.test(s) && Number(s) <= 65535
 
 const DEMO_HARNESSES = ['bare', 'tuned-nothink', 'tuned-hermes']
 /** tuned-nothink sets backend.think, which config.ts refuses on a hosted API (openai kind with a key): there demo runs tuned. */
+/** Test hook: the wait before a 429 is tried again, in ms. */
+const RETRY_MS = process.env.LHB_RETRY_MS === undefined ? undefined : Number(process.env.LHB_RETRY_MS)
 const demoHarnesses = (kind?: string, apiKeyEnv?: string): string[] => kind === 'openai' && apiKeyEnv ? DEMO_HARNESSES.map(h => h === 'tuned-nothink' ? 'tuned' : h) : DEMO_HARNESSES
 
 let fakeCache: Promise<Backend | undefined> | undefined
-/** Test hook: LHB_FAKE_BACKEND=<file.json> with an array of Partial<NormalizedResponse>; an entry may carry `deltas` as well, which stream to the terminal before its reply returns. An entry with `when` answers only a request whose JSON contains it, and `keep` leaves it in the queue; the first entry that fits is used. One shared queue per process. */
+/** Test hook: LHB_FAKE_BACKEND=<file.json> with an array of Partial<NormalizedResponse>; an entry may carry `deltas` as well, which stream to the terminal before its reply returns, and `throw: { status, message?, moderated?, retryAfter? }` throws that BackendError after them. An entry with `when` answers only a request whose JSON contains it, and `keep` leaves it in the queue; the first entry that fits is used. One shared queue per process. */
 function fakeBackendFromEnv(): Promise<Backend | undefined> {
   return (fakeCache ??= (async () => {
     const f = process.env.LHB_FAKE_BACKEND
     if (!f) return undefined
-    const queue: (Partial<NormalizedResponse> & { deltas?: Delta[]; when?: string; keep?: boolean })[] = JSON.parse(await readFile(f, 'utf8'))
+    type Throw = { status: number; message?: string; moderated?: boolean; retryAfter?: number }
+    const queue: (Partial<NormalizedResponse> & { deltas?: Delta[]; when?: string; keep?: boolean; throw?: Throw })[] = JSON.parse(await readFile(f, 'utf8'))
     return {
       async listModels() { return ['fake'] }, buildPayload: r => r,
       async send(payload: unknown, _signal?: AbortSignal, onDelta?: (d: Delta) => void) {
@@ -70,8 +73,9 @@ function fakeBackendFromEnv(): Promise<Backend | undefined> {
         if (i < 0) throw new Error(queue.length ? 'fake backend: no response for this request' : 'fake backend: no more responses')
         const r = queue[i]!
         if (!r.keep) queue.splice(i, 1)
-        const { deltas, when: _w, keep: _k, ...reply } = r
+        const { deltas, when: _w, keep: _k, throw: t, ...reply } = r
         for (const d of deltas ?? []) onDelta?.(d)
+        if (t) throw new BackendError(t.message ?? `fake backend: ${t.status}`, undefined, t)
         return { content: '', toolCalls: [], raw: {}, ...reply }
       },
     } as Backend
@@ -164,7 +168,7 @@ async function execRun(config: HarnessConfig, task: string, workdir: string, o: 
     const answer = inputClosed ? null : await Promise.race([closed, rl.question(`${reset}${approvalPrompt(call)}\n[y/N] `)])
     return answer === null ? onSigint() : /^y(es)?$/i.test(answer.trim())
   }
-  const opts: RunOpts = { approve, backend: await fakeBackendFromEnv(), signal: o.signal }
+  const opts: RunOpts = { approve, backend: await fakeBackendFromEnv(), signal: o.signal, retryMs: RETRY_MS }
   // Live text only on a terminal: reasoning dim, content plain; a pipe, bench (quiet) and --json see events only.
   let streamed = false
   // The text is the model's own, so it goes through showableText: only the dim and the reset around the reasoning are ours.
@@ -292,7 +296,7 @@ const INT = /^[1-9]\d*$/
 async function benchOnce(config: HarnessConfig, round: number, timeoutS: number, out: string, task: Task, notes: NotesStore, size?: number): Promise<BenchRun> {
   // An exception that escapes execRun is text nothing has cleaned yet, and it goes to the bench JSON and the terminal.
   const redact = redactor(apiKey(config.backend, process.env), config.backend.apiKeyEnv ?? '')
-  let workdir = '', traceId: string | undefined, parseErrors = 0, toolChars = 0, costUsd: number | undefined, peakTokens: number | undefined, tokens: number | undefined, firstPromptTokens: number | undefined, seenFirst = false, toolErrors = 0, guardBlocks = 0, editMiss = 0, lastError: string | undefined, t0 = Date.now(), run: BenchRun
+  let workdir = '', traceId: string | undefined, parseErrors = 0, toolChars = 0, costUsd: number | undefined, peakTokens: number | undefined, tokens: number | undefined, firstPromptTokens: number | undefined, seenFirst = false, toolErrors = 0, guardBlocks = 0, editMiss = 0, lastError: string | undefined, stop: number | undefined, stopMidReply = false, t0 = Date.now(), run: BenchRun
   process.stderr.write(`${config.name} ${runTitle({ round, task: task.name })} `)
   try {
     workdir = await task.prepare(size)
@@ -316,6 +320,7 @@ async function benchOnce(config: HarnessConfig, round: number, timeoutS: number,
           else if (e.output.includes(EDIT_MISS)) editMiss++
         }
         if (e.type === 'parse_error' || e.type === 'error') lastError = e.message
+        if (e.type === 'error' && isStop(e)) { stop = e.status; stopMidReply = !!e.midReply }
       },
     })
     traceId = id
@@ -323,11 +328,12 @@ async function benchOnce(config: HarnessConfig, round: number, timeoutS: number,
     await killTracked()
     const ms = Date.now() - t0
     const d = last.type === 'done' ? last : undefined
-    const c = await task.check(workdir, size, d?.reason === 'final' ? d.text : undefined, childEnv(config.tools.bashEnv))
+    // A stop is the server's answer, not the model's work: there is nothing to check.
+    const c = stop !== undefined ? false : await task.check(workdir, size, d?.reason === 'final' ? d.text : undefined, childEnv(config.tools.bashEnv))
     const checked = typeof c === 'boolean' ? { pass: c } : c
     if (checked.reason) lastError = checked.reason
     const verdict = checked.pass ? 'PASS' : 'FAIL'
-    run = { ...(task.name ? { task: task.name } : {}), ...checked.tests ? { tests: checked.tests } : {}, round, verdict, reason: d?.reason ?? 'error', turns: d?.turns ?? 0, toolCalls: d?.toolCallCount ?? 0, parseErrors, lastError, ms, workdir, trace: id, toolChars: toolChars || undefined, costUsd, peakTokens, tokens: seenFirst ? tokens : 0, firstPromptTokens, toolErrors, guardBlocks: config.tools.requireReadBeforeEdit ? guardBlocks : undefined, editMiss }
+    run = { ...(task.name ? { task: task.name } : {}), ...checked.tests ? { tests: checked.tests } : {}, round, verdict, reason: d?.reason ?? 'error', turns: d?.turns ?? 0, toolCalls: d?.toolCallCount ?? 0, parseErrors, lastError, ms, workdir, trace: id, toolChars: toolChars || undefined, costUsd, peakTokens, tokens: seenFirst ? tokens : 0, firstPromptTokens, toolErrors, guardBlocks: config.tools.requireReadBeforeEdit ? guardBlocks : undefined, editMiss, ...stop === undefined ? {} : { stop }, ...stopMidReply ? { stopMidReply } : {} }
   } catch (e) {
     run = { ...(task.name ? { task: task.name } : {}), round, verdict: 'FAIL', reason: 'error', turns: 0, toolCalls: 0, parseErrors, lastError: redact.text(String(e)), ms: Date.now() - t0, workdir, toolChars: toolChars || undefined, costUsd, peakTokens, tokens: seenFirst ? tokens : 0, firstPromptTokens, toolErrors, guardBlocks: config.tools.requireReadBeforeEdit ? guardBlocks : undefined, editMiss }
   } finally {
@@ -383,24 +389,84 @@ function repoWork(repo: RepoTasks): Work {
   return w
 }
 
-/** Every clone a bench made, removed now: at the end, and from the SIGINT handler that exits right after. An exit
- *  before that handler exists (Ctrl-C during setup) is covered by repo-clone's own exit hook. */
+/** Every clone and polyglot workdir a bench made, removed now: at the end, and from the SIGINT handler that exits right
+ *  after. An exit before that handler exists (Ctrl-C during setup) is covered by repo-clone's own exit hook. */
 function dropWork(w: { live: Map<string, Clone> }): void {
   removeAllClonesSync()
+  removeAllPolyglotSync()
   w.live.clear()
+}
+
+/** Where evolve's tasks come from: everything the loop reads about them, and nothing it has to know about a repo.
+ *  `moved`: why the journal's start line no longer fits these tasks, in the source's own words. */
+type EvolveSource = {
+  work: Work; id: string; names: string[]; words?: string[]; paths: string[]; prompts: string[]; notesFile: string
+  sets: Record<SetName, string[]>; describe: string; moved?: string; consent(yes: boolean, proposer: string): Promise<void>
+}
+type StartLine = Extract<JournalLine, { type: 'start' }>
+
+/** Under --report the tasks are read where the journal started: a commit since changes none of its numbers. */
+async function repoSource(dir: string, first: StartLine | undefined, report: boolean, refuse: (why: string, read: boolean) => never): Promise<EvolveSource> {
+  const at = report ? first?.sha : undefined
+  let repo!: RepoTasks
+  try { repo = await loadRepoTasks(dir, at) } catch (e) { refuse((e as Error).message, at !== undefined) }
+  const sets = splitSets(repo.tasks)
+  return {
+    work: repoWork(repo), id: repo.sha, sets,
+    names: repo.tasks.map(t => t.name), prompts: repo.tasks.map(t => t.prompt),
+    paths: (await git(['ls-tree', '-r', '-z', '--name-only', repo.sha], repo.repo)).split('\0').filter(Boolean),
+    notesFile: notesPath(await notesKey(repo.repo)),
+    describe: `tasks: ${repo.tasks.length} from ${repo.repo} at ${repo.sha.slice(0, 7)}: train ${sets.train.length}, gate ${sets.gate.length}, test ${sets.test.length}` +
+      (repo.uncommitted ? '\nuncommitted changes are not in the clones' : ''),
+    ...(first && first.sha !== repo.sha ? { moved: 'the repo has a new commit since this evolve started' } : {}),
+    consent: (yes, proposer) => askConsent(repo, yes, { proposer, fields: ALLOWED }),
+  }
+}
+
+const SET_OF: SetName[] = ['train', 'gate', 'test']
+
+/** The first `size` exercises, split by their place in the set. Under --report the sets are the journal's own: an
+ *  upgraded set (or another --size) changes none of its numbers, and its names still bind what the proposer wrote. */
+function polyglotSource(size: number, first: StartLine | undefined, report: boolean, harnessUrl: string): EvolveSource {
+  const p = loadPolyglot()
+  const id = `polyglot:${createHash('sha256').update(JSON.stringify(p)).digest('hex')}:${size}`
+  const tasks = polyglotTasks(p, size)
+  const sets = report && first ? first.sets : splitSets(tasks.map((t, i) => ({ name: t.name!, set: SET_OF[i % 3] })))
+  return {
+    work: { tasks, live: new Map(), async ready() {} }, id, sets,
+    ...polyglotBinding(p, [...sets.train, ...sets.gate, ...sets.test]),
+    notesFile: notesPath('task-polyglot'),
+    describe: `exercises: the first ${size} of ${POLYGLOT_MAX} polyglot exercises: train ${sets.train.length}, gate ${sets.gate.length}, test ${sets.test.length}`,
+    ...(!report && first && first.sha !== id ? { moved: 'the exercise set or --size changed since this evolve started' } : {}),
+    async consent(yes, proposer) {
+      const host = hostOf(proposer)
+      // The harness's own server already gets everything the runs send; the proposer gets less.
+      if (host === hostOf(harnessUrl)) return void console.error(`proposer: ${host}, the harness's own server`)
+      const text = ["mode: evolve on polyglot — the model's own prompts run unreviewed while Evolve measures them", `proposer: ${host}`,
+        'it receives how the runs failed (fixed-word signatures) and the current values of these fields, and proposes an edit to one of them', `fields: ${ALLOWED.join(', ')}`].join('\n')
+      const file = path.join(stateDir(), 'consent', 'task-polyglot.evolve.json'), hash = createHash('sha256').update(text).digest('hex')
+      let has = false
+      try { has = JSON.parse(readFileSync(file, 'utf8')).hash === hash } catch {}
+      await ask(text, has, yes, async () => { await mkdir(path.dirname(file), { recursive: true }); await writeFile(file, JSON.stringify({ hash }) + '\n') },
+        { accept: 'send these to this proposer', question: 'Send them to this proposer?' })
+    },
+  }
 }
 
 /** The commands of a repo's tasks run without asking for the whole bench or evolve: accepted once, by hash, before anything runs. */
 async function askConsent(repo: RepoTasks, yes: boolean, ev?: EvolveConsent): Promise<void> {
-  if (await hasConsent(repo, ev)) return
-  const text = consentText(repo, ev)
-  if (yes) { console.error(text); return saveConsent(repo, ev) }
-  if (!process.stdin.isTTY) die(`${text}\n\npass --yes to accept these commands, or run in a terminal`)
+  await ask(consentText(repo, ev), await hasConsent(repo, ev), yes, () => saveConsent(repo, ev))
+}
+
+async function ask(text: string, has: boolean, yes: boolean, save: () => Promise<void>, q = { accept: 'accept these commands', question: 'Run these commands?' }): Promise<void> {
+  if (has) return
+  if (yes) { console.error(text); return save() }
+  if (!process.stdin.isTTY) die(`${text}\n\npass --yes to ${q.accept}, or run in a terminal`)
   const rl = createInterface({ input: process.stdin, output: process.stderr })
-  const answer = await rl.question(`${text}\n\nRun these commands? [y/N] `)
+  const answer = await rl.question(`${text}\n\n${q.question} [y/N] `)
   rl.close()
   if (!/^y(es)?$/i.test(answer.trim())) die('not accepted; nothing ran')
-  await saveConsent(repo, ev)
+  await save()
 }
 
 async function cmdBench(argv: string[]) {
@@ -524,7 +590,12 @@ async function cmdEvolve(argv: string[]) {
   keyFlag('evolve', values['api-key-env'])
   const [file] = positionals
   if (!file || positionals.length > 1) argError('evolve', 'evolve needs one harness file')
-  if (values.tasks === undefined) argError('evolve', 'evolve needs --tasks <repo>')
+  const poly = values.task !== undefined
+  if (values.tasks !== undefined && (poly || values.size !== undefined)) argError('evolve', '--tasks cannot go with --task or --size')
+  if (poly && values.task !== 'polyglot') argError('evolve', 'evolve takes --task polyglot only; your own tasks go in --tasks <repo>')
+  if (!poly && values.tasks === undefined) argError('evolve', 'evolve needs --tasks <repo> or --task polyglot --size N')
+  const size = Number(values.size)
+  if (poly && !(INT.test(values.size ?? '') && size >= 3 && size <= POLYGLOT_MAX)) argError('evolve', `--size must be an integer from 3 to ${POLYGLOT_MAX} for evolve --task polyglot`)
   if (!INT.test(values.rounds)) argError('evolve', '--rounds must be a positive integer')
   if (!INT.test(values.timeout)) argError('evolve', '--timeout must be a positive integer')
   const rounds = Number(values.rounds), timeoutS = Number(values.timeout)
@@ -561,17 +632,15 @@ async function cmdEvolve(argv: string[]) {
     lines = j.lines
     torn = text
   }
-  // The report reads the tasks where its journal started: a commit since changes none of its numbers.
-  const at = values.report && lines[0]?.type === 'start' ? lines[0].sha : undefined
-  let repo!: RepoTasks
-  try { repo = await loadRepoTasks(values.tasks!, at) } catch (e) { if (at !== undefined) die(start((e as Error).message)); argError('evolve', (e as Error).message) }
-  const sets = splitSets(repo.tasks), mode = modeOf(sets)
+  // Everything below reads only the source: what the tasks are, where they come from, how they run.
+  const first = lines[0]?.type === 'start' ? lines[0] : undefined
+  const src = poly ? polyglotSource(size, first, values.report, config.backend.baseUrl)
+    : await repoSource(values.tasks!, first, values.report, (why, read) => read ? die(start(why)) : argError('evolve', why))
+  const { sets, work } = src, mode = modeOf(sets, poly)
   if (typeof mode === 'string') return die(mode)
-  console.error(`tasks: ${repo.tasks.length} from ${repo.repo} at ${repo.sha.slice(0, 7)}: train ${sets.train.length}, gate ${sets.gate.length}, test ${sets.test.length}`)
-  if (repo.uncommitted) console.error('uncommitted changes are not in the clones')
+  console.error(src.describe)
   console.error(mode.strict ? `strict: a candidate needs at least ${neededFlips()} tasks FAIL → PASS on train + gate (more if any go PASS → FAIL)` : referenceLabel(mode))
-  const paths = (await git(['ls-tree', '-r', '-z', '--name-only', repo.sha], repo.repo)).split('\0').filter(Boolean)
-  const binding = bindingTokens({ names: repo.tasks.map(t => t.name), paths, prompts: repo.tasks.map(t => t.prompt) })
+  const binding = bindingTokens({ names: src.names, words: src.words, paths: src.paths, prompts: src.prompts })
   const rebuilt = (): EvolveState => {
     const r = replay(lines, raw, { binding, sets })
     return 'error' in r ? die(start(r.error)) : r
@@ -583,8 +652,7 @@ async function cmdEvolve(argv: string[]) {
   }
   const snapCheck = () => { if (!snapOk()) die(moved(`the notes snapshot changed since this evolve started (${snap})`)) }
   if (resuming) {
-    // Under --report the tasks were read at this very commit.
-    if (lines[0]?.type === 'start' && lines[0].sha !== repo.sha) die(moved('the repo has a new commit since this evolve started'))
+    if (src.moved) die(moved(src.moved))
     if (lines[0]?.type === 'start' && lines[0].pin !== pin) die(moved('the harness or its options changed since this evolve started'))
     if (lines[0]?.type === 'start' && lines[0].base !== base) die(start('the journal was written for another harness'))
   }
@@ -592,6 +660,9 @@ async function cmdEvolve(argv: string[]) {
   let state = resuming ? rebuilt() : undefined as unknown as EvolveState
   // The snapshot is what the next runs read; the report runs nothing.
   if (resuming && !values.report) snapCheck()
+  // Fewer rounds would never reach the cut slot, and a final line after its proposal leaves a journal no resume accepts.
+  if (resuming && !values.report && state.pending && state.pending.round > rounds)
+    die(`${jf} ends on round ${state.pending.round}'s candidate ${state.pending.index}, cut before its runs; run evolve again with --rounds ${state.pending.round} or more to finish it`)
   const all = Array.from({ length: rounds }, (_, i) => i + 1).every(round => lines.some(l => l.type === 'current' && l.round === round) &&
     Array.from({ length: CANDIDATES }, (_, i) => i + 1).every(index => lines.some(l => l.type === 'candidate' && l.round === round && l.index === index)))
   if (resuming && all && !values.report) console.error(`all rounds are in the journal${state.version ? '; measuring the final test' : ''}`)
@@ -605,7 +676,7 @@ async function cmdEvolve(argv: string[]) {
     return
   }
   console.error(autoApproves('evolve'))
-  await askConsent(repo, values.yes, { proposer: proposer.backend.baseUrl, fields: ALLOWED })
+  await src.consent(values.yes, proposer.backend.baseUrl)
   // A torn last line goes, or the next line would be appended onto it; only after consent, and only on the run path.
   if (torn && !torn.endsWith('\n')) truncateSync(jf, Buffer.byteLength(torn.slice(0, torn.lastIndexOf('\n') + 1)))
   // The next version is checked now, not after a candidate's runs: a file the journal has no line for is not ours.
@@ -619,11 +690,9 @@ async function cmdEvolve(argv: string[]) {
     const host = hostOf(proposer.backend.baseUrl)
     // Every version reads this frozen copy: a note written during evolve would make one version's runs depend on another's.
     // Before the start line: a journal is never without its snapshot.
-    const live = notesPath(await notesKey(repo.repo))
-    writeFileSync(snap, existsSync(live) ? readFileSync(live) : '')
-    append({ v: 1, type: 'start', base, sha: repo.sha, pin, sets, strict: mode.strict, proposer: host, notes: sha256(readFileSync(snap)) })
+    writeFileSync(snap, existsSync(src.notesFile) ? readFileSync(src.notesFile) : '')
+    append({ v: 1, type: 'start', base, sha: src.id, pin, sets, strict: mode.strict, proposer: host, notes: sha256(readFileSync(snap)) })
   }
-  const work = repoWork(repo)
   const byName = new Map(work.tasks.map(t => [t.name!, t]))
   const no = await preflightAll([{ name: config.name, config }, { name: 'proposer', config: proposer }], work.tasks[0])
   if (no) { dropWork(work); die(no) }
@@ -635,11 +704,23 @@ async function cmdEvolve(argv: string[]) {
   const out = path.join('runs', `evolve-${base}.json`), notes: NotesStore = { file: snap, write: false }
   let stopped = false
   const stop = () => { dropWork(work); console.error(`the model changed the installed packages in ${modulesDir}; stopping`); process.exitCode = 1 }
+  const pb = proposer.backend
+  const pRedact = redactor(apiKey(pb, process.env), pb.apiKeyEnv ?? '')
+  const hRedact = redactor(apiKey(config.backend, process.env), config.backend.apiKeyEnv ?? '')
+  // Not a FAIL: the server refused the key, has no credits, or kept limiting. The cut step's runs are not journaled (its proposal may be).
+  const WHY: Record<number, string> = { 401: 'the key was refused', 402: 'no credits left', 403: 'the request was refused', 429: 'rate limited, still after 3 retries' }
+  const halt = (who: 'harness' | 'proposer', b: HarnessConfig['backend'], status: number, redact: ReturnType<typeof redactor>, midReply?: boolean): never => {
+    dropWork(work)
+    const why = midReply && status === 429 ? '429 mid-reply, not retried' : WHY[status]
+    console.error(showable(redact.text(`evolve stopped: the ${who} backend (${hostOf(b.baseUrl)}) answered ${status}: ${why}; the cut step's runs are not in the journal; run the same command again to resume from the journal`)))
+    return process.exit(1)
+  }
   const runOn = async (cfg: object, name: string, names: string[], round: number): Promise<RunLite[]> => {
     const c = overridden({ ...cfg, name }, over, file!)
     const rs: RunLite[] = []
     for (const n of names) {
       const r = await benchOnce(c, round, timeoutS, out, byName.get(n)!, notes)
+      if (r.stop !== undefined) halt('harness', c.backend, r.stop, hRedact, r.stopMidReply)
       const lite: RunLite = { task: n, verdict: r.verdict, tokens: r.tokens, firstPromptTokens: r.firstPromptTokens, trace: r.trace, reason: r.reason, lastError: r.lastError }
       // Signed now, while the trace is here: the report groups failures by it without reading a trace again.
       rs.push(lite.verdict === 'FAIL' ? { ...lite, sig: signatureOf(lite, await eventsOf(r.trace)) } : lite)
@@ -653,10 +734,7 @@ async function cmdEvolve(argv: string[]) {
     if (!trace || !TRACE_ID.test(trace)) return []
     try { return (await readTraceFile(path.join('runs', `${trace}.jsonl`))).events } catch { return [] }
   }
-  const pb = proposer.backend
   const pBackend = (await fakeBackendFromEnv()) ?? createBackend(pb)
-  const pRedact = redactor(apiKey(pb, process.env), pb.apiKeyEnv ?? '')
-  const hRedact = redactor(apiKey(config.backend, process.env), config.backend.apiKeyEnv ?? '')
   const clean = (s: string) => scrubText(s, hRedact, homedir())
   let proposerTokens = 0
   // Built like the notes writer's call: the proposer's own knobs, its /no_think line, a schema only where it enforces one.
@@ -666,14 +744,16 @@ async function cmdEvolve(argv: string[]) {
       temperature: pb.temperature, maxTokens: pb.maxTokens ?? 1024,
       ...(pb.numCtx === undefined ? {} : { numCtx: pb.numCtx }), ...(pb.think === undefined ? {} : { think: pb.think }),
     }
-    let content: string
+    let content: string, cut: boolean
     try {
-      const r = await pBackend.send(pBackend.buildPayload(req), AbortSignal.timeout(timeoutS * 1000))
+      const r = await sendRetrying(pBackend, pBackend.buildPayload(req), AbortSignal.timeout(timeoutS * 1000), undefined, RETRY_MS)
       if (r.usage) proposerTokens += r.usage.promptTokens + r.usage.completionTokens
-      content = r.content
+      content = r.content; cut = !!r.truncated
     // Not a rejection: a journaled one would never be asked again, and the next evolve continues at this candidate.
-    } catch (e) { dropWork(work); return die(`proposer failed: ${showable(pRedact.text((e as Error).message))}`) }
-    try { return { edit: parseProposal(content) } } catch { return { reason: 'no edit in the reply' } }
+    } catch (e) {
+      if (e instanceof BackendError && isStop(e)) return halt('proposer', pb, e.status!, pRedact, e.midReply)
+      dropWork(work); return die(`proposer failed: ${showable(pRedact.text((e as Error).message))}`) }
+    try { return { edit: parseProposal(content) } } catch { return { reason: cut ? 'reply cut at maxTokens' : 'no edit in the reply' } }
   }
   const writeVersion = (n: number, cfg: object) => {
     const p = vf(n), text = versionText(base, n, cfg)
@@ -698,22 +778,30 @@ async function cmdEvolve(argv: string[]) {
     for (let index = 1; index <= CANDIDATES; index++) {
       const done = lines.find(l => l.type === 'candidate' && l.round === round && l.index === index) as Extract<JournalLine, { type: 'candidate' }> | undefined
       if (done) { if (done.accepted && done.runs) cmp = done.runs; continue }
-      const train = await Promise.all(cmp.filter(r => sets.train.includes(r.task)).map(async run => ({ run, events: await eventsOf(run.trace) })))
-      const input = proposerInput(state.current, failureGroups(train), state.rejected, clean)
-      const p = await propose(input)
-      const why = p.reason ?? checkEdit(p.edit!, { current: state.current, original: raw, tried: state.tried, binding })
-      if (why) {
-        console.error(`candidate ${round}.${index}: ${showable(why)}`)
-        append({ v: 1, type: 'candidate', round, index, input, ...(p.edit ? { edit: p.edit } : {}), accepted: false, reason: why })
-        continue
+      // A proposal journaled before a stop is measured as it was: asking again would let a stop re-roll it.
+      const pend = state.pending?.round === round && state.pending.index === index ? state.pending : undefined
+      let input: string, edit: Edit
+      if (pend) ({ input, edit } = pend)
+      else {
+        const train = await Promise.all(cmp.filter(r => sets.train.includes(r.task)).map(async run => ({ run, events: await eventsOf(run.trace) })))
+        input = proposerInput(state.current, failureGroups(train), state.rejected, clean)
+        const p = await propose(input)
+        const why = p.reason ?? checkEdit(p.edit!, { current: state.current, original: raw, tried: state.tried, binding })
+        if (why) {
+          console.error(`candidate ${round}.${index}: ${showable(why)}`)
+          append({ v: 1, type: 'candidate', round, index, input, ...(p.edit ? { edit: p.edit } : {}), accepted: false, reason: why })
+          continue
+        }
+        edit = p.edit!
+        append({ v: 1, type: 'proposal', round, index, input, edit })
       }
-      const cand = applyEdit(state.current, p.edit!)
+      const cand = applyEdit(state.current, edit)
       const runs = await runOn(cand, `${base}.r${round}c${index}`, trainGate, round)
       if (stopped) return stop()
       const d = decide(cmp, runs, state.baseline!, sets.gate, mode)
       const version = d.accepted ? state.version + 1 : undefined
       if (version) { writeVersion(version, cand); cmp = runs }
-      append({ v: 1, type: 'candidate', round, index, input, edit: p.edit!, accepted: d.accepted, reason: d.reason, numbers: d.numbers, runs, ...(version ? { version } : {}) })
+      append({ v: 1, type: 'candidate', round, index, input, edit, accepted: d.accepted, reason: d.reason, numbers: d.numbers, runs, ...(version ? { version } : {}) })
       console.error(`candidate ${round}.${index}: ${d.reason}${version ? ` — wrote ${vf(version)}` : ''}`)
     }
   }

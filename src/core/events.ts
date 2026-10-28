@@ -20,7 +20,7 @@ export type HarnessEvent = Base & (
   | { type: 'mcp_server_start'; server: string; command: string; args: string[]
       offered: number; tools: string[]; descriptionChars: number; schemaChars: number }
   | { type: 'knobs_off'; off: KnobOff[] }
-  | { type: 'error'; message: string; body?: string }
+  | { type: 'error'; message: string; body?: string; status?: number; moderated?: boolean; midReply?: boolean }
   /** Notes sent after the task (notes.ts): which ones, and the length of their block. */
   | { type: 'notes_loaded'; ids: string[]; chars: number }
   /** The call after the run that writes notes (notes-run.ts): what it added, or why nothing. Not a turn. */

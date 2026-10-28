@@ -1,10 +1,10 @@
-import { test, expect } from 'vitest'
+import { test, expect, vi } from 'vitest'
 import { writeFile, access } from 'node:fs/promises'
 import { join } from 'node:path'
 import { runAgent, mayAsk } from '../src/core/run.js'
 import type { HarnessConfig, RunParams } from '../src/core/config.js'
 import type { HarnessEvent } from '../src/core/events.js'
-import { BackendError } from '../src/core/backends/types.js'
+import { BackendError, sendRetrying } from '../src/core/backends/types.js'
 import { notesBlock } from '../src/core/notes.js'
 import { fakeBackend, harness, tmp, type FakeResponse } from './helpers.js'
 
@@ -1024,4 +1024,86 @@ test('notes: a freshContext reset sends the task with its notes again', async ()
   const notes = [nt('a', 'one')]
   await collect({ config: base({ loop: { maxTurns: 10, maxRepeats: 1, freshContext: 1 } }), task: 'do', workdir: await wd(), notes }, { backend: be })
   expect(be.requests[2].messages[1].content.startsWith('do\n\n' + notesBlock(notes) + '\n\nNote: an earlier attempt')).toBe(true)
+})
+
+test('the error event carries the BackendError status and moderated flag, and only those', async () => {
+  const failing = (e: Error) => ({ ...Fake([]), send: async () => { throw e } })
+  const run = async (e: Error) => (await collect({ config: base(), task: 'do', workdir: await wd() }, { backend: failing(e) as any }))
+  const withStatus = await run(Object.assign(new BackendError('POST /x: nope'), { status: 402 }))
+  expect(withStatus.find(e => e.type === 'error')).toMatchObject({ status: 402 })
+  expect(last(withStatus).reason).toBe('backend_error')
+  const mod = await run(Object.assign(new BackendError('flagged'), { status: 403, moderated: true }))
+  expect(mod.find(e => e.type === 'error')).toMatchObject({ status: 403, moderated: true })
+  const textOnly = (await run(new BackendError('POST /x: 429 too many'))).find(e => e.type === 'error') as any
+  expect(textOnly).not.toHaveProperty('status')
+  expect(textOnly).not.toHaveProperty('moderated')
+})
+
+// --- sendRetrying: a 429 is tried again up to 3 times; nothing else is, and nothing that already streamed.
+const scripted = (steps: (Error | { content: string; deltas?: { content: string }[] })[]) => {
+  let calls = 0
+  return {
+    get calls() { return calls },
+    ...Fake([]),
+    async send(_p: unknown, _s?: AbortSignal, onDelta?: (d: any) => void) {
+      const s = steps[calls++]
+      if (!s) throw new Error('fake backend: no more responses')
+      if (s instanceof Error) { if ((s as any).deltas) for (const d of (s as any).deltas) onDelta?.(d); throw s }
+      return { content: s.content, toolCalls: [], raw: {} }
+    },
+  }
+}
+const r429 = (extra: object = {}) => Object.assign(new BackendError('POST /chat/completions: 429', undefined, { status: 429 }), extra)
+
+test('a 429 is retried and the run goes on as if nothing happened', async () => {
+  const be = scripted([r429(), { content: 'fin' }])
+  const ev = await collect({ config: base(), task: 'do', workdir: await wd() }, { backend: be as any, retryMs: 10 })
+  expect(be.calls).toBe(2)
+  expect(types(ev)).not.toContain('error')
+  expect(last(ev)).toMatchObject({ reason: 'final', text: 'fin' })
+})
+
+test('four 429s end the run as backend_error with status 429', async () => {
+  const be = scripted([r429(), r429(), r429(), r429(), { content: 'never' }])
+  const ev = await collect({ config: base(), task: 'do', workdir: await wd() }, { backend: be as any, retryMs: 10 })
+  expect(be.calls).toBe(4)
+  expect(ev.find(e => e.type === 'error')).toMatchObject({ status: 429 })
+  expect(last(ev).reason).toBe('backend_error')
+})
+
+test('a 401 and a 429 after a delta are not retried', async () => {
+  for (const e of [new BackendError('POST /x: 401', undefined, { status: 401 }), r429({ deltas: [{ content: 'half' }] })]) {
+    const be = scripted([e, { content: 'never' }])
+    const ev = await collect({ config: base(), task: 'do', workdir: await wd() }, { backend: be as any, retryMs: 10, onDelta: () => {} })
+    expect(be.calls).toBe(1)
+    expect(ev.find(x => x.type === 'error')).toMatchObject({ status: e.status })
+    expect(last(ev).reason).toBe('backend_error')
+  }
+})
+
+test('a run timeout during a retry wait ends the run with the 429, not aborted', async () => {
+  const be = scripted([r429(), { content: 'never' }])
+  const ev = await collect({ config: base(), task: 'do', workdir: await wd() }, { backend: be as any, retryMs: 60_000, signal: AbortSignal.timeout(100) })
+  expect(be.calls).toBe(1)
+  expect(ev.find(e => e.type === 'error')).toMatchObject({ status: 429 })
+  expect(last(ev).reason).toBe('backend_error')
+}, 10_000)
+
+test('retryAfter is the wait when no override is given', async () => {
+  const be = scripted([r429({ retryAfter: 0.01 }), { content: 'fin' }])
+  const ev = await collect({ config: base(), task: 'do', workdir: await wd() }, { backend: be as any })
+  expect(last(ev)).toMatchObject({ reason: 'final', text: 'fin' })
+})
+
+test('a Retry-After over 300 s waits 300 s', async () => {
+  vi.useFakeTimers()
+  try {
+    const be = scripted([r429({ retryAfter: 10_000 }), { content: 'fin' }])
+    const p = sendRetrying(be as any, {})
+    await vi.advanceTimersByTimeAsync(299_999)
+    expect(be.calls).toBe(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(be.calls).toBe(2)
+    expect((await p).content).toBe('fin')
+  } finally { vi.useRealTimers() }
 })

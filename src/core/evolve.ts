@@ -21,7 +21,7 @@ export const PARA_MAX = 600
 export type SetName = 'train' | 'gate' | 'test'
 
 /** A task's own `set` wins; the rest go by the first byte of sha1(name), so adding a task never moves another. */
-export function splitSets(tasks: RepoTask[]): Record<SetName, string[]> {
+export function splitSets(tasks: Pick<RepoTask, 'name' | 'set'>[]): Record<SetName, string[]> {
   const out: Record<SetName, string[]> = { train: [], gate: [], test: [] }
   for (const t of tasks) {
     const b = createHash('sha1').update(t.name).digest()[0]! % 4
@@ -30,17 +30,22 @@ export function splitSets(tasks: RepoTask[]): Record<SetName, string[]> {
   return out
 }
 
-export type Mode = { strict: boolean; trainGate: number; test: number }
+/** `polyglot`: the tasks are the first N Exercism exercises, and more of them is a larger --size, not more tasks to write. */
+export type Mode = { strict: boolean; trainGate: number; test: number; polyglot?: true }
 
-export function modeOf(sets: Record<SetName, string[]>): Mode | string {
+export function modeOf(sets: Record<SetName, string[]>, polyglot = false): Mode | string {
   const [t, g, x] = [sets.train.length, sets.gate.length, sets.test.length]
   if (!t || !g || !x) return `evolve needs at least one task in each of train, gate and test (have ${t}/${g}/${x})`
-  return { strict: t + g >= MIN_TRAIN_GATE && x >= MIN_TEST, trainGate: t + g, test: x }
+  return { strict: t + g >= MIN_TRAIN_GATE && x >= MIN_TEST, trainGate: t + g, test: x, ...(polyglot ? { polyglot: true as const } : {}) }
 }
 
 /** The label a reference-mode result carries: too few tasks to tell a gain from luck. */
 export const referenceLabel = (m: Mode): string =>
-  `\u041e\u0420\u0406\u0404\u041d\u0422\u0418\u0420, \u041d\u0415 \u0414\u041e\u041a\u0410\u0417 \u2014 too few tasks (${m.trainGate + m.test} of ${MIN_TRAIN_GATE + MIN_TEST}) for a statistical conclusion; add ${Math.max(0, MIN_TRAIN_GATE - m.trainGate) + Math.max(0, MIN_TEST - m.test)} more tasks`
+  `\u041e\u0420\u0406\u0404\u041d\u0422\u0418\u0420, \u041d\u0415 \u0414\u041e\u041a\u0410\u0417 \u2014 too few ${m.polyglot ? 'exercises' : 'tasks'} (${m.trainGate + m.test} of ${MIN_TRAIN_GATE + MIN_TEST}) for a statistical conclusion; ` +
+  (m.polyglot ? `raise --size to ${STRICT_SIZE}` : `add ${Math.max(0, MIN_TRAIN_GATE - m.trainGate) + Math.max(0, MIN_TEST - m.test)} more tasks`)
+
+/** The smallest polyglot --size whose split (i % 3) gives strict mode: 8 train, 8 gate, 8 test. */
+export const STRICT_SIZE = 24
 
 /** One-sided exact sign test: P(X >= b) for X ~ Binomial(b + c, 1/2). */
 export function signP(b: number, c: number): number {
@@ -138,11 +143,21 @@ export function applyEdit(cfg: object, e: Edit): object {
   return c
 }
 
-/** Words that would tie a paragraph to this repo's tasks rather than to how to work: names, files, identifiers. */
-export function bindingTokens(t: { names: string[]; paths: string[]; prompts: string[] }): string[] {
+/** Words that would tie a paragraph to this repo's tasks rather than to how to work: names, files, identifiers, 6+ chars.
+ *  `words` are kept at any length (polyglot's exercise and test names: `poker`); boundBy matches the short ones as whole words.
+ *  A repo's short task names stay out: `test` or `fix` would refuse every paragraph, and old journals with it. */
+export function bindingTokens(t: { names: string[]; paths: string[]; prompts: string[]; words?: string[] }): string[] {
   const ids = t.prompts.flatMap(p => p.match(/[A-Za-z_][A-Za-z0-9_]*/g) ?? []).filter(w => /_|\d|[a-z][A-Z]/.test(w))
-  const all = [...t.names, ...t.paths, ...t.paths.map(p => p.slice(p.lastIndexOf('/') + 1)), ...ids].map(w => w.toLowerCase())
-  return [...new Set(all.filter(w => w.length >= 6))]
+  const rest = [...t.names, ...t.paths, ...t.paths.map(p => p.slice(p.lastIndexOf('/') + 1)), ...ids].map(w => w.toLowerCase()).filter(w => w.length >= 6)
+  return [...new Set([...(t.words ?? []).map(w => w.toLowerCase()).filter(Boolean), ...rest])]
+}
+
+const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+/** Does the text hold a binding word: one under 6 chars as a whole word (`poker`, not `pokers`), a longer one anywhere. */
+export const boundBy = (x: unknown, binding: string[]): boolean => {
+  if (typeof x !== 'string') return false
+  const low = x.toLowerCase()
+  return binding.some(t => t.length >= 6 ? low.includes(t) : new RegExp(`(?<![\\p{L}\\p{N}_])${esc(t)}(?![\\p{L}\\p{N}_])`, 'u').test(low))
 }
 
 const DANGER = [/[a-z][a-z0-9+.-]*:\/\//i, /\bwww\./i, /\b[a-z0-9-]+\.(?:com|net|org|io|dev|sh|app|ai|xyz|ru|cn)\b/i, /(?:^|\s)[\/~]/i, /`/, /\$\(/, /\|\s*(?:ba|z)?sh\b/i, /\b(?:curl|wget|nc|ssh|scp)\b/i]
@@ -167,8 +182,7 @@ export function checkEdit(e: Edit, ctx: { current: object; original: object; tri
     // Refused, not stripped: a zero-width char inside `curl` or a file name would hide it from both checks below.
     if (/[\p{Cf}]|[^\P{Cc}\n\t]/u.test(v)) return 'bad value'
     if (DANGER.some(re => re.test(v))) return 'looks like a command or an address'
-    const low = v.toLowerCase()
-    if (ctx.binding.some(t => low.includes(t))) return 'tied to a task'
+    if (boundBy(v, ctx.binding)) return 'tied to a task'
   } else if (typeof v !== 'number' || !Number.isFinite(v)) return 'bad value'
   if (ctx.tried.some(t => t.field === e.field && t.value === v)) return 'already tried'
   const cand = applyEdit(ctx.current, e)
@@ -181,7 +195,9 @@ export function checkEdit(e: Edit, ctx: { current: object; original: object; tri
 
 export type Group = { signature: string; count: number; calls: Record<string, number>; exts: Record<string, number> }
 
-const CHECK_CLASS: [string, string][] = [['check exited', 'check_failed'], ['check timed out', 'check_timeout'], ['the check found 0 tests', 'no_tests'], ['changed a protected file', 'protected']]
+const CHECK_CLASS: [string, string][] = [['check exited', 'check_failed'], ['check timed out', 'check_timeout'], ['the check found 0 tests', 'no_tests'], ['changed a protected file', 'protected'],
+  // polyglot's check: by the reason's prefix only — the rest of it holds a test name.
+  ['a test failed:', 'test'], ['timeout after', 'timeout'], ['missing solution file', 'missing'], ['unexpected test', 'unexpected']]
 /** The reasons a run ends with (DoneReason, and the bench's 'error'); anything else in a journal is `other`. */
 const REASONS: (DoneReason | 'error')[] = ['final', 'max_turns', 'parse_failed', 'aborted', 'backend_error', 'mcp_error', 'repeat_loop', 'proxy_stopped', 'error']
 /** The file types the proposer may hear of: a path's tail is the model's own argument, not a type. */
@@ -268,6 +284,7 @@ export type JournalLine =
   | { v: 1; type: 'start'; base: string; sha: string; pin: string; notes: string; sets: Record<SetName, string[]>; strict: boolean; proposer: string }
   | { v: 1; type: 'current'; round: number; runs: RunLite[] }
   | { v: 1; type: 'candidate'; round: number; index: number; input: string; edit?: Edit; accepted: boolean; reason: string; numbers?: Numbers; runs?: RunLite[]; version?: number }
+  | { v: 1; type: 'proposal'; round: number; index: number; input: string; edit: Edit }
   | { v: 1; type: 'final'; version: number; orig?: RunLite[]; last?: RunLite[] }
 
 // A field's check: undefined = fine, else why not. The journal sits in the user's cwd, where the model's bash can
@@ -301,6 +318,8 @@ const LINE: Record<string, Check> = {
   current: shape({ v: v1, type: str, round: pos, runs: arr(RUN) }),
   candidate: shape({ v: v1, type: str, round: pos, index: pos, input: str, accepted: bool, reason: str },
     { edit: EDIT, numbers: shape({ pass: num }, { tokensPerSuccess: num, tokens: num, weight: num }), runs: arr(RUN), version: pos }),
+  // Written before the candidate's runs: a stop during them resumes with this edit, not a new roll of the proposer.
+  proposal: shape({ v: v1, type: str, round: pos, index: pos, input: str, edit: EDIT }),
   final: shape({ v: v1, type: str, version: x => Number.isInteger(x) && (x as number) >= 0 ? undefined : 'not a non-negative integer' }, { orig: arr(RUN), last: arr(RUN) }),
 }
 
@@ -322,7 +341,7 @@ export function parseJournal(text: string): { lines: JournalLine[] } | { error: 
 
 // The reasons the edit checks and `decide` write. Rejected edits reach the proposer, maybe in the cloud, and the
 // journal is bash-writable: anything else is passed on as `other`.
-const FIXED = /^(?:field not allowed|bad value|looks like a command or an address|tied to a task|already tried|changes more than one field|the server gave no usage|0 PASS|no more PASS than current|worse on gate|no edit in the reply)$/
+const FIXED = /^(?:field not allowed|bad value|looks like a command or an address|tied to a task|already tried|changes more than one field|the server gave no usage|0 PASS|no more PASS than current|worse on gate|no edit in the reply|reply cut at maxTokens)$/
 const PATTERNED: [RegExp, string][] = [
   [/^within noise \(p=\d\.\d\d\)$/, 'within noise'], [/^costs \d+% more tokens(?: per success)? than the original$/, 'costs more tokens'],
   [/^first request \d+% heavier than the original$/, 'first request heavier'], [/^first request not measured on \d+ tasks$/, 'first request not measured'], [/^invalid config: /, 'invalid config'],
@@ -334,7 +353,8 @@ export const reasonKind = (reason: string): string => FIXED.test(reason) ? reaso
 /** The current version rebuilt from the original and the journal, each accepted edit checked again as if new:
  *  a vN file or a hand-written line is never what the next round starts from. */
 export function replay(lines: JournalLine[], original: object, ctx: { binding: string[]; sets: Record<SetName, string[]> }):
-  { current: object; version: number; baseline?: RunLite[]; done: { round: number; index: number }[]; tried: Edit[]; rejected: Rejected[]; final?: { orig: RunLite[]; last: RunLite[] } | 'none' } | { error: string } {
+  { current: object; version: number; baseline?: RunLite[]; done: { round: number; index: number }[]; tried: Edit[]; rejected: Rejected[]; final?: { orig: RunLite[]; last: RunLite[] } | 'none'
+    pending?: { round: number; index: number; input: string; edit: Edit } } | { error: string } {
   const [first, ...rest] = lines
   if (first?.type !== 'start') return { error: 'cannot resume: the journal does not begin with a start line' }
   if (JSON.stringify(first.sets) !== JSON.stringify(ctx.sets)) return { error: 'cannot resume: the sets differ from the tasks file' }
@@ -342,15 +362,29 @@ export function replay(lines: JournalLine[], original: object, ctx: { binding: s
   const done: { round: number; index: number }[] = [], tried: Edit[] = [], rejected: Rejected[] = []
   // What each round's next candidate was compared with, as the run loop has it: the round's current runs, then each kept candidate's.
   const cmp = new Map<number, RunLite[]>()
+  // The proposal whose candidate line has not come yet: the next line is that candidate, or the journal ends.
+  let pending: { round: number; index: number; input: string; edit: Edit } | undefined
   const mode = modeOf(ctx.sets)
   // Every candidate is weighed against round 1's current runs: a journal that does not go on with them has no baseline.
   if (rest.length && !(rest[0]!.type === 'current' && rest[0]!.round === 1)) return { error: 'cannot resume: the line after the start line is not round 1\'s current runs' }
   for (const l of rest) {
     if (l.type === 'start') return { error: 'cannot resume: a second start line' }
+    if (pending && !(l.type === 'candidate' && l.round === pending.round && l.index === pending.index))
+      return { error: `cannot resume: round ${pending.round} candidate ${pending.index}: a proposal without its candidate` }
     if (l.type === 'final') continue // not the last line: a later round makes it stale
     const index = l.type === 'current' ? 0 : l.index
     const slot = `round ${l.round} ${index ? `candidate ${index}` : 'current runs'}`
     if (done.some(d => d.round === l.round && d.index === index)) return { error: `cannot resume: ${slot}: a second line for it` }
+    // Checked as the run loop checked it, against what was tried before it; never itself in `tried` or `rejected`.
+    if (l.type === 'proposal') {
+      const why = checkEdit(l.edit, { current, original, tried, binding: ctx.binding })
+      if (why) return { error: `cannot resume: ${slot}: proposed edit: ${why}` }
+      pending = { round: l.round, index: l.index, input: l.input, edit: l.edit }
+      continue
+    }
+    if (pending && !(l.type === 'candidate' && l.input === pending.input && JSON.stringify(l.edit) === JSON.stringify(pending.edit)))
+      return { error: `cannot resume: ${slot}: its edit or input is not the one proposed` }
+    pending = undefined
     done.push({ round: l.round, index })
     if (l.type === 'current') {
       if (l.round === 1) baseline ??= l.runs
@@ -374,7 +408,7 @@ export function replay(lines: JournalLine[], original: object, ctx: { binding: s
       current = applyEdit(current, l.edit!)
       cmp.set(l.round, l.runs!)
     } else if (l.edit) {
-      const bound = (x: unknown) => typeof x === 'string' && ctx.binding.some(t => x.toLowerCase().includes(t))
+      const bound = (x: unknown) => boundBy(x, ctx.binding)
       const reason = REASON_RE.some(re => re.test(l.reason)) && !bound(l.reason) ? l.reason : 'other'
       const v = l.edit.value, tied = reason === 'tied to a task' || bound(v)
       // A field outside ALLOWED is free text too.
@@ -392,7 +426,7 @@ export function replay(lines: JournalLine[], original: object, ctx: { binding: s
     if (!ok) return { error: 'cannot resume: the final line does not match the journal' }
     final = version ? { orig: end.orig!, last: end.last! } : 'none'
   }
-  return { current, version, baseline, done, tried, rejected, final }
+  return { current, version, baseline, done, tried, rejected, final, ...(pending ? { pending } : {}) }
 }
 
 const PRINCIPLE = 'how far this is a principle rather than a fit depends on how unlike the training tasks the test tasks are'
@@ -409,7 +443,7 @@ export function verdict(orig: RunLite[], last: RunLite[], mode: Mode): string {
     if (v === 'FAIL' && r.verdict === 'PASS') b++
     else if (v === 'PASS' && r.verdict === 'FAIL') c++
   }
-  const SEEN = 'on the tasks of this repo Evolve did not see'
+  const SEEN = mode.polyglot ? 'on the exercises Evolve did not see' : 'on the tasks of this repo Evolve did not see'
   const lines = mode.strict
     ? [signP(b, c) < ALPHA ? `better ${SEEN}` : signP(c, b) < ALPHA ? `worse ${SEEN}` : `not told apart from noise ${SEEN}`]
     : [referenceLabel(mode), pl > po ? 'more PASS' : pl < po ? 'fewer PASS' : 'not told apart']

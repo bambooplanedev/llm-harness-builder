@@ -228,7 +228,7 @@ directory to browse them, and reload the list after a CLI run. On every start `s
     llm-harness-builder run <harness.json> "task" [--workdir <dir>] [--yes] [--json] [--answer-schema <file.json>] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
     llm-harness-builder demo [--json] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
     llm-harness-builder bench [harness.json ...] [--n <n>] [--timeout <s>] [--out <file>] [--task <name>] [--size <N>] [--tasks <repo>] [--yes] [--max-turns <N>] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
-    llm-harness-builder evolve <harness.json> [--tasks <repo>] [--rounds <N>] [--proposer <harness.json>] [--timeout <s>] [--yes] [--report] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
+    llm-harness-builder evolve <harness.json> [--tasks <repo>] [--task polyglot] [--size <N>] [--rounds <N>] [--proposer <harness.json>] [--timeout <s>] [--yes] [--report] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
     llm-harness-builder replay <run-id | trace.jsonl> [--turn <N>] [--n <n>] [--temperature <t>] [--max-tokens <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>] [--json]
     llm-harness-builder analyze <bench.json | run-id | trace.jsonl> ... [--json]
     llm-harness-builder proxy [--upstream <url>] [--port <n>] [--name <label>]
@@ -331,7 +331,7 @@ little optimistic. Each exercise's check has its own fixed 60 s limit, separate 
 model has network, and Exercism's solutions are public. The shell is not isolated, so determined
 cheating is not ruled out: a solution can rewrite the test file while it runs, or otherwise forge the
 test runner, and a model that does so on purpose can PASS. There are no hidden rules; the check runs
-what the model ran, and the workdir has `npm test`. The bench header counts the real runs per harness
+what the model ran, and while it runs the model's workdir has `npm test`. The bench header counts the real runs per harness
 (size × `--n`). The numbers do not compare
 with Aider's leaderboard (there: two attempts, the second with the test output; here: one agent run).
 
@@ -399,6 +399,23 @@ names it called, which file types it edited (from a fixed list of extensions). N
 paths or task names. `--proposer` picks another harness
 for the proposing backend.
 
+No repo of your own? `--task polyglot --size N` (3 to 47, required, not with `--tasks`) practises evolve on
+the Exercism set: exercise `i` goes to train, gate or test by `i % 3`. `--size 6 --rounds 1` is a quick
+estimate, "orientation, not proof"; verdicts are strict from `--size 24`, `--size 47` is the full set.
+The proposer never gets exercise names, test names or paths. The journal is bound to the loaded set and
+the size: a changed set refuses a resume, `--report` still prints. The proposer is asked about only when
+its host differs from the harness's (`--yes` accepts); the same host gets a notice line.
+
+A 429 is retried up to 3 times (the `Retry-After` wait, at most 300 s, else 60 s); a 429 after part of
+the reply has streamed is not retried and stops at once. A 401, a 402, a 403 without
+moderation reasons and a 429 that lasts stop evolve with exit 1 and none of the cut step's runs in the
+journal; the same command resumes. A stop in the middle of a set re-measures that set, in the middle of
+the final test up to 30 runs. The proposal is journaled before its runs, so a resume measures the same
+edit. `bench` records `stop` in its JSON and skips that run's check. A new key under the same variable
+resumes an evolve; a different variable (`--api-key-env`) is refused as "the harness or its options
+changed". Give the harness enough `backend.maxTokens`: the proposer inherits it when there is no
+`--proposer`, and a proposal cut there is refused as `reply cut at maxTokens`.
+
 The journal is checked, not trusted. Every start and every resume replays it and re-checks each
 decision against its own numbers; a journal edited by hand, a changed harness or option, a new commit
 in the repo or a changed notes snapshot is refused, and the message says how to start over: delete
@@ -410,7 +427,7 @@ even after new commits or a deleted notes snapshot, and it says when `vN.json` o
 the version that was measured. To use `vN`, point at it; copying it over the original file changes
 the harness the journal was pinned to, and a later `--report` refuses.
 
-Exit codes: 0 with a report; 1 when the model changed the linked `node_modules`; 2 for a refusal or a
+Exit codes: 0 with a report; 1 when the model changed the linked `node_modules` or a stop above ended it; 2 for a refusal or a
 bad argument; 130 for Ctrl-C, after which the journal holds every finished step.
 
 #### replay
@@ -771,7 +788,9 @@ so token counts are the estimate next to the `usage` each reply reports; no `/pr
 sent is incomplete, and the preflight does not refuse a model missing from it. OpenRouter's list is
 public, so a wrong key passes the preflight and shows up as a 401 on the first request. A stream that
 fails after its 200 (OpenRouter's `finish_reason: "error"`) is a `backend_error` with the provider's
-message, not an empty reply; a 429 or a 5xx ends the run the same way, and nothing is retried.
+message, not an empty reply; a 5xx ends the run the same way and is not retried. A 429 is retried
+up to 3 times unless part of the reply has already streamed; one that lasts is a stop, and the run's
+check is skipped (see evolve above).
 `replay --api-key-env` sends the recorded request to a hosted API as it was recorded.
 
 **In the UI.** `serve` reads the variable from the environment it was started in. The form takes a

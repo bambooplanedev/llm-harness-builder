@@ -37,7 +37,7 @@ export const text = (x: unknown): string | undefined => typeof x === 'string' &&
 /** A 2xx body or chunk carrying only `error` is a failure, not an empty reply. */
 export function errorOnly(what: string, c: any, raw: string): BackendError | undefined {
   if (c?.error !== undefined && c?.choices === undefined && c?.message === undefined)
-    return new BackendError(`${what}: ${typeof c.error === 'string' ? c.error : c.error?.message ?? 'stream error'}`, raw)
+    return new BackendError(`${what}: ${typeof c.error === 'string' ? c.error : c.error?.message ?? 'stream error'}`, raw, errorFields(c.error))
 }
 
 /** One streamed piece of the assistant turn; either field may be absent. */
@@ -112,7 +112,40 @@ export interface Backend {
 }
 
 export class BackendError extends Error {
-  constructor(message: string, public body?: string) { super(message) }
+  /** The HTTP status, or the numeric `error.code` of an in-stream / 2xx-body error; never read from message text. */
+  status?: number
+  /** The error carried `metadata.reasons` (OpenRouter moderation). */
+  moderated?: boolean
+  /** Seconds the server asked to wait (Retry-After). */
+  retryAfter?: number
+  /** Set by sendRetrying: the error came after part of the reply had streamed, so it was not tried again. */
+  midReply?: boolean
+  constructor(message: string, public body?: string, extra: { status?: number; moderated?: boolean; retryAfter?: number } = {}) {
+    super(message)
+    if (extra.status !== undefined) this.status = extra.status
+    if (extra.moderated) this.moderated = true
+    if (extra.retryAfter !== undefined) this.retryAfter = extra.retryAfter
+  }
+}
+
+/** What an `error` object (a body's or a chunk's) says in structure: a numeric `code` is a status, `metadata.reasons` is moderation. */
+export function errorFields(e: any): { status?: number; moderated?: boolean } {
+  return {
+    ...Number.isInteger(e?.code) ? { status: e.code } : {},
+    ...e?.metadata?.reasons !== undefined ? { moderated: true } : {},
+  }
+}
+
+/** The structured part of a non-2xx: its HTTP status, the moderation flag from the JSON body, and Retry-After in seconds. */
+export function httpFields(r: { status: number; headers?: { get(name: string): string | null } }, body: string): { status: number; moderated?: boolean; retryAfter?: number } {
+  let parsed: any
+  try { parsed = JSON.parse(body) } catch { /* not JSON */ }
+  const ra = Number(r.headers?.get('retry-after'))
+  return {
+    status: r.status,
+    ...errorFields(parsed?.error).moderated ? { moderated: true } : {},
+    ...r.headers?.get('retry-after') && Number.isFinite(ra) && ra >= 0 ? { retryAfter: ra } : {},
+  }
 }
 
 /** Reads a JSON body; a non-JSON body becomes a BackendError carrying the raw text. */
@@ -153,4 +186,32 @@ export async function* jsonChunks(r: { body?: AsyncIterable<Uint8Array> | null }
     yield c
   }
   if (!any) throw new BackendError(`${what}: response is not an event stream`, head.slice(0, 2000))
+}
+
+/** A status that ends an evolve instead of becoming a FAIL: a refused key, no credits, a refusal that is not moderation,
+ *  a rate limit that outlasted the retries. Decided from the numeric status only, never from message text. */
+export const isStop = (e: { status?: number; moderated?: boolean }): boolean =>
+  e.status === 401 || e.status === 402 || e.status === 429 || (e.status === 403 && !e.moderated)
+
+/** false when the signal fired first. */
+const pause = (ms: number, signal?: AbortSignal): Promise<boolean> => new Promise(res => {
+  if (signal?.aborted) return res(false)
+  const on = () => { clearTimeout(t); res(false) }
+  const t = setTimeout(() => { signal?.removeEventListener('abort', on); res(true) }, ms)
+  signal?.addEventListener('abort', on, { once: true })
+})
+
+/** backend.send, with a 429 tried again up to 3 times after Retry-After (at most 300 s; else 60 s; `waitMs` overrides both). Not after
+ *  a delta: the caller has shown it. An abort during a wait throws the 429 itself, so the run ends as the stop. */
+export async function sendRetrying(backend: Backend, payload: unknown, signal?: AbortSignal, onDelta?: (d: Delta) => void, waitMs?: number): Promise<NormalizedResponse> {
+  for (let retries = 0; ; retries++) {
+    let streamed = false
+    try {
+      return await backend.send(payload, signal, d => { streamed = true; onDelta?.(d) })
+    } catch (e) {
+      if (e instanceof BackendError && streamed) e.midReply = true
+      if (!(e instanceof BackendError) || e.status !== 429 || streamed || retries === 3 || signal?.aborted) throw e
+      if (!await pause(waitMs ?? Math.min(e.retryAfter ?? 60, 300) * 1000, signal)) throw e
+    }
+  }
 }

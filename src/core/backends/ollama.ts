@@ -1,11 +1,11 @@
-import { BackendError, defaultFetch, readJson, jsonChunks, toolsField, usageFrom, type Backend, type ChatRequest, type Delta, type FetchLike, type NormalizedResponse, type NormalizedToolCall, type ServerInfo } from './types.js'
+import { BackendError, httpFields, defaultFetch, readJson, jsonChunks, toolsField, usageFrom, type Backend, type ChatRequest, type Delta, type FetchLike, type NormalizedResponse, type NormalizedToolCall, type ServerInfo } from './types.js'
 
 export class OllamaBackend implements Backend {
   constructor(private baseUrl: string, private fetchFn: FetchLike = defaultFetch) { this.baseUrl = baseUrl.replace(/\/+$/, '') }
 
   async listModels(): Promise<string[]> {
     const r = await this.fetchFn(`${this.baseUrl}/api/tags`)
-    if (!r.ok) throw new BackendError(`GET /api/tags: ${r.status}`, await r.text())
+    if (!r.ok) { const b = await r.text(); throw new BackendError(`GET /api/tags: ${r.status}`, b, httpFields(r, b)) }
     const j = (await readJson(r, 'GET /api/tags')) as { models: { name: string }[] }
     return j.models.map(m => m.name)
   }
@@ -41,7 +41,7 @@ export class OllamaBackend implements Backend {
 
   async send(payload: unknown, signal?: AbortSignal, onDelta?: (d: Delta) => void): Promise<NormalizedResponse> {
     const r = await this.fetchFn(`${this.baseUrl}/api/chat`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload), signal })
-    if (!r.ok) throw new BackendError(`POST /api/chat: ${r.status}`, await r.text())
+    if (!r.ok) { const b = await r.text(); throw new BackendError(`POST /api/chat: ${r.status}`, b, httpFields(r, b)) }
     let content = '', thinking = '', last: any = {}
     const rawCalls: any[] = []
     for await (const c of jsonChunks(r, 'POST /api/chat', '')) {

@@ -1,6 +1,6 @@
 // src/core/polyglot.ts — runs an exercise's node:test file and scores it by the test names recorded at bench start.
 import { spawn } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { readFileSync, rmSync } from 'node:fs'
 import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -101,25 +101,36 @@ export function loadPolyglot(root = SET_ROOT): Polyglot {
   }
 }
 
+// Every workdir not yet removed, for a Ctrl-C handler that exits right after it.
+const LIVE = new Set<string>()
+const drop = async (dir: string) => { await rm(dir, { recursive: true, force: true }); LIVE.delete(dir) }
+/** Each polyglot workdir that is still there (the model's and a check's), removed now. */
+export function removeAllPolyglotSync(): void {
+  for (const d of [...LIVE]) { rmSync(d, { recursive: true, force: true }); LIVE.delete(d) }
+}
+
 const lay = async (p: Polyglot, e: Exercise, solution: string) => {
   const dir = await mkdtemp(path.join(tmpdir(), 'lhb-polyglot-'))
+  LIVE.add(dir)
   try {
     await Promise.all([[`${e.name}.js`, solution], [`${e.name}.test.js`, e.test], ['expect.js', p.expect], ['package.json', p.pkg], ['INSTRUCTIONS.md', e.instructions]]
       .map(([f, c]) => writeFile(path.join(dir, f), c)))
-  } catch (err) { await rm(dir, { recursive: true, force: true }); throw err }
+  } catch (err) { await drop(dir); throw err }
   return dir
 }
+
+const promptOf = (n: string) => `Implement ${n}.js so that the tests in ${n}.test.js pass: run \`node --test ${n}.test.js\`. INSTRUCTIONS.md describes the exercise. Keep the whole solution in ${n}.js. Do not edit ${n}.test.js or expect.js. Finally answer with a one-line summary.`
 
 export function polyglotTasks(p: Polyglot, size: number, timeoutMs = 60_000): Task[] {
   return p.exercises.slice(0, size).map(e => ({
     name: e.name,
     tests: e.tests.length,
-    prompt: `Implement ${e.name}.js so that the tests in ${e.name}.test.js pass: run \`node --test ${e.name}.test.js\`. INSTRUCTIONS.md describes the exercise. Keep the whole solution in ${e.name}.js. Do not edit ${e.name}.test.js or expect.js. Finally answer with a one-line summary.`,
+    prompt: promptOf(e.name),
     prepare: () => lay(p, e, e.stub),
     async check(workdir, _size, _answer, env) {
       const tests = { passed: 0, total: e.tests.length }
       let src: string
-      try { src = await readFile(path.join(workdir, `${e.name}.js`), 'utf8') } catch { return { pass: false, reason: `${e.name}.js is missing`, tests } }
+      try { src = await readFile(path.join(workdir, `${e.name}.js`), 'utf8') } catch { return { pass: false, reason: 'missing solution file', tests } }
       const dir = await lay(p, e, src)
       try {
         const testFile = path.join(await realpath(dir), `${e.name}.test.js`)
@@ -128,7 +139,20 @@ export function polyglotTasks(p: Polyglot, size: number, timeoutMs = 60_000): Ta
         if (run.reason === 'timeout') return { pass: false, reason: `timeout after ${timeoutMs} ms`, tests }
         const s = score(run.results, e.tests, run.exit, testFile)
         return { pass: s.pass, ...(s.reason ? { reason: s.reason } : {}), tests: { passed: s.passed, total: s.total } }
-      } finally { await rm(dir, { recursive: true, force: true }) }
+      } finally { await drop(dir) }
     },
+    dispose: drop,
   }))
+}
+
+/** What ties a paragraph to these exercises, for bindingTokens: its recorded test names and a hyphenated name
+ *  (`affine-cipher`) as words kept at any length, its files and prompt. A one-word name (`say`, `poker`) is an ordinary
+ *  word: refusing it would burn a round's candidates. A hyphenated name the set no longer has is still a word. */
+export function polyglotBinding(p: Polyglot, names: string[]): { names: string[]; words: string[]; paths: string[]; prompts: string[] } {
+  const known = names.flatMap(n => p.exercises.filter(e => e.name === n))
+  return {
+    names: [], words: [...names.filter(n => n.includes('-')), ...known.flatMap(e => e.tests)],
+    paths: [...known.flatMap(e => [`${e.name}/${e.name}.js`, `${e.name}/${e.name}.test.js`, `${e.name}/INSTRUCTIONS.md`]), ...(known.length ? ['expect.js'] : [])],
+    prompts: known.map(e => promptOf(e.name)),
+  }
 }

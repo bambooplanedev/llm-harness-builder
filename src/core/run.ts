@@ -1,6 +1,6 @@
 import { NO_THINK_LINE, apiKey, listsModelsByItself, type HarnessConfig, type RunParams } from './config.js'
 import { mcpApprovalName, UNTIL_BASH, type Ev, type HarnessEvent, type ToolCall, type DoneReason } from './events.js'
-import { createBackend, type Backend, type ChatMessage, type ChatRequest, type Delta, type NormalizedResponse, type Usage } from './backends/index.js'
+import { createBackend, sendRetrying, isStop, BackendError, type Backend, type ChatMessage, type ChatRequest, type Delta, type NormalizedResponse, type Usage } from './backends/index.js'
 import { TOOL_SCHEMAS, runTool } from './tools/index.js'
 import { GUARD_BLOCKED } from './tools/fs.js'
 import { bash } from './tools/bash.js'
@@ -19,6 +19,8 @@ export type RunOpts = {
   approve?: (call: ToolCall) => Promise<boolean>
   backend?: Backend
   onDelta?: (d: Delta) => void
+  /** The wait before a 429 is tried again, in ms; absent = Retry-After, else 60 s. */
+  retryMs?: number
   /** Seam for tests; defaults to the real stdio client. */
   mcp?: typeof startServers
 }
@@ -176,12 +178,14 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
       const t0 = Date.now()
       let res: NormalizedResponse
       try {
-        res = await backend.send(payload, opts.signal, opts.onDelta)
+        res = await sendRetrying(backend, payload, opts.signal, opts.onDelta, opts.retryMs)
       } catch (e) {
-        if (opts.signal?.aborted) { yield done('aborted'); return }
+        // A stop thrown back by a wait the timeout cut short is that stop, not an abort.
+        if (opts.signal?.aborted && !(e instanceof BackendError && isStop(e))) { yield done('aborted'); return }
         const cause = (e as any)?.cause?.code ?? (e as any)?.cause?.message
         const message = `${(e as Error).message}${cause ? ` (${cause})` : ''}`
-        yield ev({ type: 'error', message, body: (e as { body?: string }).body })
+        const be = e as { body?: string; status?: number; moderated?: boolean; midReply?: boolean }
+        yield ev({ type: 'error', message, body: be.body, ...be.status === undefined ? {} : { status: be.status }, ...be.moderated ? { moderated: true } : {}, ...be.midReply ? { midReply: true } : {} })
         yield done('backend_error'); return
       }
       lastUsage = res.usage

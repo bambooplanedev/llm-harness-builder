@@ -462,3 +462,30 @@ test('ollama serverInfo: capabilities from POST /api/show; without them nothing 
   expect(await new OllamaBackend('http://x', recorder(() => jsonRes({ error: 'no' }, 404)).f).serverInfo('q')).toBeUndefined()
   expect(await new OllamaBackend('http://x', (async () => { throw new Error('fetch failed') }) as unknown as FetchLike).serverInfo('q')).toBeUndefined()
 })
+
+// ---- BackendError.status / moderated / retryAfter ----
+const failWith = (status: number, body: unknown, headers: Record<string, string> = {}) =>
+  (async () => ({ ok: false, status, text: async () => JSON.stringify(body), headers: { get: (n: string) => headers[n.toLowerCase()] ?? null } })) as unknown as FetchLike
+
+test('a non-2xx carries its HTTP status (and Retry-After) on every adapter', async () => {
+  for (const s of [401, 402, 429]) {
+    await expect(new OpenAIBackend('http://x/v1', failWith(s, {})).send({})).rejects.toMatchObject({ status: s })
+    await expect(new OllamaBackend('http://x', failWith(s, {})).send({})).rejects.toMatchObject({ status: s })
+    await expect(new AnthropicBackend('http://x', failWith(s, {}), 'K', 'KEY').send({})).rejects.toMatchObject({ status: s })
+  }
+  await expect(new OpenAIBackend('http://x/v1', failWith(429, {}, { 'retry-after': '7' })).send({})).rejects.toMatchObject({ status: 429, retryAfter: 7 })
+  await expect(new OpenAIBackend('http://x/v1', failWith(429, {})).send({})).rejects.toSatisfy((e: any) => e.retryAfter === undefined)
+})
+
+test('a 403 whose body carries metadata.reasons is moderated; one without is not', async () => {
+  const mod = { error: { code: 403, message: 'flagged', metadata: { reasons: ['violence'], flagged_input: 'x' } } }
+  await expect(new OpenAIBackend('http://x/v1', failWith(403, mod)).send({})).rejects.toMatchObject({ status: 403, moderated: true })
+  await expect(new OpenAIBackend('http://x/v1', failWith(403, { error: { message: 'no' } })).send({})).rejects.toSatisfy((e: any) => e.status === 403 && !e.moderated)
+})
+
+test('a failed stream takes its status from a numeric error.code, never from text', async () => {
+  await expect(openai([orError]).send({})).rejects.toMatchObject({ status: 429 })
+  const text = { error: { code: 'rate_limited', message: 'HTTP 429 slow down' }, choices: [{ index: 0, delta: {}, finish_reason: 'error' }] }
+  await expect(openai([text]).send({})).rejects.toSatisfy((e: any) => e.status === undefined)
+  await expect(openai([{ error: { code: 402, message: 'credits' } }]).send({})).rejects.toMatchObject({ status: 402 })
+})
