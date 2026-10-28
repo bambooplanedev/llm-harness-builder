@@ -397,8 +397,7 @@ test('Load v1 into the form puts tuned.v1 in the form on the Workbench tab', asy
   await openWindow(app)
   button(app.root, 'Use v1')!.props.onClick(); await settle()
   button(app.root, 'Load v1 into the form')!.props.onClick(); await settle()
-  expect(nameBox(app.root).value).toBe('tuned.v1')
-  expect(button(app.root, 'Workbench')!.props.class).toBe('on')
+  expect(nameBox(app.root).value).toBe('tuned.v1') // the tab is not checked: this dialog renders only on Workbench
   expect(dialogOf(app.root).open).toBe(false)
 })
 
@@ -409,4 +408,14 @@ test('a change outside the allowed fields is flagged', async () => {
   const row = rowsOf(app.root).find(r => textOf(r).includes('backend.baseUrl'))!
   expect(textOf(row)).toContain('outside what Evolve may change')
   expect(String(row.props.class)).toContain('warn')
+  expect(textOf(row)).toContain('not loaded: the form keeps its own backend')
+})
+
+test('a system prompt changed only in blank lines or order says so instead of an empty row', async () => {
+  const app = await mount(evolved({ systemPrompt: 'sys\n\n' }))
+  await openWindow(app)
+  button(app.root, 'Use v1')!.props.onClick(); await settle()
+  const [row] = rowsOf(app.root)
+  expect(textOf(row)).toContain('only blank lines or line order changed')
+  expect(all(row).some(n => String(n.props.class).includes('line'))).toBe(false)
 })

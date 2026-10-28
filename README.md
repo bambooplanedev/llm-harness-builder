@@ -432,11 +432,15 @@ bad argument, or a server that does not answer or lacks the model; 130 for Ctrl-
 
 ##### Self-improvement window
 
-**Self-improvement…**, under the form on the Workbench tab, runs the same evolve as the CLI on a saved harness and a repo, one job at a time together with a bench started from the page.
-**Stop — resume later** stops it the way Ctrl-C does; the next Start with the same harness and repo resumes. After a finished evolve, **Use vN** shows what `vN` changes in plain words, field by field,
-with lines that look like an address or a command and fields outside what evolve may change flagged; nothing reaches the form before **Load vN into the form**. The repo's notes can be deleted there, one or all.
-Polyglot and `--proposer` stay in the CLI. Evolve runs the model's shell commands for hours without asking, as you. It notices changes to `node_modules` and stops, but it does not isolate them.
-Start runs `git status` in the folder you name; open only repos you trust.
+**Self-improvement…**, under the form on the Workbench tab, runs the same evolve as the CLI on a
+saved harness and a repo, one job at a time together with a bench started from the page.
+**Stop — resume later** stops it the way Ctrl-C does; the next Start with the same harness and repo
+resumes. After a finished evolve, **Use vN** shows what `vN` changes in plain words, field by field,
+with lines that look like an address or a command and fields outside what evolve may change flagged;
+nothing reaches the form before **Load vN into the form**. The repo's notes can be deleted there,
+one or all. Polyglot and `--proposer` stay in the CLI. Evolve runs the model's shell commands for
+hours without asking, as you. It notices changes to `node_modules` and stops, but it does not
+isolate them. Start runs `git status` in the folder you name; open only repos you trust.
 
 #### replay
 

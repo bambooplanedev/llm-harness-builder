@@ -108,6 +108,8 @@ export const en = {
   'evolve.noNotes': 'no notes for this repo',
   'evolve.diff': 'What {name} changes against {harness}, field by field. Read every line marked "address or command" and every field marked "outside what Evolve may change" before you load. Loading puts {name} in the form; nothing is saved or run.',
   'evolve.noDiff': '{name} has the same settings as {harness}.',
+  'evolve.backendKept': 'not loaded: the form keeps its own backend',
+  'evolve.sameLines': 'only blank lines or line order changed',
   'evolve.clearConfirm': 'Delete all notes of this repo? This cannot be undone.',
   // Hover hints for the names on the page, for someone who opens it for the first time: what it is, what it is for, what it takes.
   'h.advanced': 'Rarer knobs live here: tool limits, MCP, prompted templates, context and the loop.\nThe number is how many of them differ from a new harness.',

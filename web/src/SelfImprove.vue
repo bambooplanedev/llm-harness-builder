@@ -141,7 +141,9 @@ const clearNotes = () => { if (confirm(t('evolve.clearConfirm'))) void loadNotes
           <ul class="changes">
             <li v-for="c in review.changes" :key="c.path" :class="['change', { warn: !c.label }]">
               <div><b>{{ c.label ?? 'outside what Evolve may change' }}</b> <small class="muted">{{ c.path }}</small></div>
-              <template v-if="c.added">
+              <div v-if="c.path.startsWith('backend.')" class="muted">{{ t('evolve.backendKept') }}</div>
+              <div v-if="c.added && !c.added.length && !c.removed?.length" class="muted">{{ t('evolve.sameLines') }}</div>
+              <template v-else-if="c.added">
                 <div v-for="(l, i) in c.added" :key="'+' + i" :class="['line', { warn: l.flag === 'command' }]"><span v-if="l.flag" :class="['chip', { warn: l.flag === 'command' }]">{{ l.flag === 'command' ? 'address or command' : 'mentions tests or checks' }}</span> {{ l.line }}</div>
                 <div v-for="(l, i) in c.removed" :key="'-' + i" class="line warn"><span class="chip warn">removed</span> {{ l }}</div>
               </template>
