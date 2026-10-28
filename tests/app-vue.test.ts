@@ -452,6 +452,14 @@ test('while a job runs, the disabled Harness select shows the running harness, n
   expect(sel.props.value).toBe('tuned')
 })
 
+test('while a bench runs the window says so, not that nothing runs', async () => {
+  const app = await mount({ ...base, '/api/harnesses': [{ name: 'tuned' }], '/api/evolve': { bench: true } })
+  await openWindow(app)
+  const d = textOf(dialogOf(app.root))
+  expect(d).toContain('A bench is running.')
+  expect(d).not.toContain('Nothing is running.')
+})
+
 test('a Start refused because another tab started a job asks for the status: the window shows it running', async () => {
   const answers: Record<string, unknown> = { ...base, '/api/harnesses': [{ name: 'tuned' }],
     '/api/evolve/start': () => new Response(JSON.stringify({ error: 'an evolve started from this page is still running' }), { status: 409 }) }

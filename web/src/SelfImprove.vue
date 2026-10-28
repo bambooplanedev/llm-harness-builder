@@ -174,6 +174,7 @@ const clearNotes = () => { if (confirm(t('evolve.clearConfirm'))) void loadNotes
         <pre ref="tail">{{ last.err }}</pre>
       </template>
     </section>
+    <p v-else-if="status.bench" class="muted">{{ t('evolve.bench') }}</p>
     <p v-else class="muted">{{ t('evolve.idle') }}</p>
 
     <h4>Notes</h4>

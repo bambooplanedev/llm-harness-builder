@@ -287,7 +287,7 @@ export async function startServer(opts: ServerOpts) {
       if (opts.cli && m('GET', /^\/api\/evolve$/)) {
         // No keys, no notes: the stderr of a child that gets the environment of serve, which redacts its own.
         const round = running() && job!.kind === 'evolve' ? [...job!.err.matchAll(/^--- round (\d+)\/(\d+)$/gm)].pop() : undefined
-        return json(res, 200, { running: running() && job!.kind === 'evolve' ? { harness: job!.harness, err: job!.err, ...round ? { round: [Number(round[1]), Number(round[2])] } : {} } : undefined, last: lastEvolve })
+        return json(res, 200, { ...running() && job!.kind === 'bench' ? { bench: true } : {}, running: running() && job!.kind === 'evolve' ? { harness: job!.harness, err: job!.err, ...round ? { round: [Number(round[1]), Number(round[2])] } : {} } : undefined, last: lastEvolve })
       }
       if (m('POST', /^\/api\/notes$/)) {
         // POST for all of it: the page lists and deletes through the one refusal(), a GET would answer any page that guesses the folder.

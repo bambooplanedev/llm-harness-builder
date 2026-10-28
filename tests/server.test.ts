@@ -863,6 +863,7 @@ test('bench and evolve share one job slot', async () => {
     expect(r.status).toBe(409)
     expect((await r.json()).error).toBe('a bench started from this page is still running')
     expect((await (await fetch(`${e.u}/api/bench`)).json()).own).toMatch(/^bench-/)
+    expect((await (await fetch(`${e.u}/api/evolve`)).json()).bench).toBe(true)
     expect(e.got).toHaveLength(2)
   } finally { await e.s.close() }
 })

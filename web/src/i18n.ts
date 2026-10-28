@@ -96,6 +96,7 @@ export const en = {
   'evolve.changed': 'The commands changed since you accepted them; read them again.',
   'evolve.consent': 'Nothing has run yet. These are the commands Evolve will run in your repo; read them, tick the box, press Start again.',
   'evolve.idle': 'Nothing is running.',
+  'evolve.bench': 'A bench is running.',
   'evolve.running': 'Evolve is running on {harness}. Closing this window does not stop it.',
   'evolve.round': 'round {r} of {R}',
   'evolve.starting': 'starting: no round has begun yet',

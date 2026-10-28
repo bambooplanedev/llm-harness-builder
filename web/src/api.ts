@@ -9,6 +9,8 @@ export type { HarnessConfig, HarnessEvent, RunSummary, Delta, ServerInfo, BenchF
 
 /** GET /api/evolve. While `running` is there, `last` may be the job before it. */
 export type EvolveStatus = {
+  /** A bench started from this page runs: the slot evolve needs is taken. */
+  bench?: true
   running?: { harness: string; err: string; round?: [number, number] }
   last?: { harness: string; code: number | null; signal: string | null; err: string; out: string }
 }
