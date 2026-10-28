@@ -1,4 +1,5 @@
 import { fetch as undiciFetch, Agent } from 'undici'
+import type { ReasoningEffort } from '../config.js'
 
 /** The subset of fetch the adapters use; lets tests pass a fake and keeps undici's types out of the public surface. */
 export type FetchLike = (
@@ -75,6 +76,8 @@ export type ChatRequest = {
   maxTokens?: number
   /** The chat template's thinking switch (llama-server `chat_template_kwargs.enable_thinking`, Ollama `think`); absent = not sent, the model's default. */
   think?: boolean
+  /** Hosted reasoning effort (OpenAI `reasoning_effort`, OpenRouter `reasoning.effort`); absent = not sent. */
+  reasoningEffort?: ReasoningEffort
 }
 
 export type NormalizedResponse = {
@@ -94,7 +97,7 @@ export type NormalizedResponse = {
  *  server said the model does not take is `false`, no entry is unknown; `takesFrom` names where that was said. */
 export type ServerInfo = { nCtx?: number; maxOutput?: number; build?: string; router?: boolean; takes?: Partial<Record<Knob, false>>; takesFrom?: string }
 
-export type Knob = 'temperature' | 'maxTokens' | 'think' | 'tools' | 'responseSchema'
+export type Knob = 'temperature' | 'maxTokens' | 'think' | 'reasoningEffort' | 'tools' | 'responseSchema'
 
 export interface Backend {
   listModels(): Promise<string[]>

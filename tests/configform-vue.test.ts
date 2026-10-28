@@ -189,3 +189,26 @@ test('a locked repeat knob inside Advanced shows the lock hint there too', async
 test('film mode hides the harness description, which often names the model', async () => {
   expect(await render({ ...base, description: 'qwen3 on Ollama' })).toContain('<div class="hint film-hide">qwen3 on Ollama</div>')
 })
+
+test('reasoning select: options, the set value, locked only by the model, and still open on a kind that cannot take it', async () => {
+  const oa = { ...base, backend: { ...base.backend, kind: 'openai' as const, reasoningEffort: 'medium' as const } }
+  const html = await render(oa)
+  expect(html).toMatch(/reasoning<\/span><select value="medium"[^>]*><option value="">—<\/option><!--\[--><option>low<\/option><option>medium<\/option><option>high<\/option><!--\]--><\/select>/)
+  expect(html).not.toMatch(/reasoning<\/span><select[^>]*disabled/)
+  const off = await withInfo(oa, { takes: { reasoningEffort: false } })
+  expect(off).toMatch(/reasoning<\/span><select[^>]*disabled/)
+  expect(off.match(/class="hint">[^<]*/g)!.join()).toContain('reasoning')
+  expect(await render(base)).toMatch(/reasoning<\/span><select[^>]*disabled/) // an ollama harness without the field cannot pick one
+  const stale = await render({ ...base, backend: { ...base.backend, reasoningEffort: 'low' as const } })
+  expect(stale).not.toMatch(/reasoning<\/span><select[^>]*disabled/)
+})
+
+test('Advanced has read_file ranges and notes checkboxes that reflect the config', async () => {
+  const html = await render(base)
+  const inside = html.split(/<summary[^>]*>Advanced/)[1]
+  expect(inside).toMatch(/<input type="checkbox"(?![^>]*checked)[^>]*> read_file line ranges \(start\/end\)/)
+  expect(inside).toMatch(/<input type="checkbox"(?![^>]*checked)[^>]*> notes from earlier runs/)
+  const on = (await render({ ...base, tools: { ...base.tools, readRanges: true }, notes: { enabled: true, maxTokens: 500 } })).split(/<summary[^>]*>Advanced/)[1]
+  expect(on).toMatch(/<input type="checkbox"[^>]*checked[^>]*> read_file line ranges/)
+  expect(on).toMatch(/<input type="checkbox"[^>]*checked[^>]*> notes from earlier runs/)
+})

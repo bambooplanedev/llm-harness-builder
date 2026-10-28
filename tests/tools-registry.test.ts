@@ -53,3 +53,7 @@ test('a built-in wins over an mcp tool of the same name', async () => {
   const r = await runTool('read_file', { path: 'nope' }, ctx, ['read_file'], mcp as any)
   expect(r.output).not.toBe('mcp')
 })
+
+test('read_file schema is today\'s, byte for byte', () => {
+  expect(TOOL_SCHEMAS.read_file).toEqual({ name: 'read_file', description: 'Read a text file. Large files are truncated.', parameters: { type: 'object', properties: { path: { type: 'string', description: 'File path relative to the project root' } }, required: ['path'] } })
+})

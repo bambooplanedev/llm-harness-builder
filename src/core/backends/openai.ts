@@ -85,7 +85,9 @@ export class OpenAIBackend implements Backend {
    *  another origin, but a 307 would send the whole conversation again, and nothing about a hosted API redirects. The
    *  rule for any other adapter: undici strips only authorization, never a custom header such as x-api-key, so every
    *  request with a key goes with redirect: 'manual', no exception. */
-  constructor(private baseUrl: string, private fetchFn: FetchLike = defaultFetch, private key?: string) { this.baseUrl = baseUrl.replace(/\/+$/, '') }
+  // OpenRouter spells the effort as reasoning.effort; the OpenAI API and llama-server as reasoning_effort.
+  private openRouter: boolean
+  constructor(private baseUrl: string, private fetchFn: FetchLike = defaultFetch, private key?: string) { this.baseUrl = baseUrl.replace(/\/+$/, ''); this.openRouter = new URL(this.baseUrl).hostname === 'openrouter.ai' }
 
   private keyed(init: NonNullable<Parameters<FetchLike>[1]> = {}) {
     return this.key ? { ...init, headers: { ...init.headers, authorization: `Bearer ${this.key}` }, redirect: 'manual' as const } : init
@@ -126,6 +128,7 @@ export class OpenAIBackend implements Backend {
       model: req.model, messages, temperature: req.temperature, stream: true, stream_options: { include_usage: true },
       ...(req.maxTokens ? { max_tokens: req.maxTokens } : {}),
       ...(req.think !== undefined ? { chat_template_kwargs: { enable_thinking: req.think } } : {}),
+      ...(req.reasoningEffort ? this.openRouter ? { reasoning: { effort: req.reasoningEffort } } : { reasoning_effort: req.reasoningEffort } : {}),
       ...toolsField(req.tools),
       ...(req.responseSchema ? { response_format: { type: 'json_schema', json_schema: { name: 'harness', schema: req.responseSchema } } } : {}),
     }
@@ -184,6 +187,7 @@ export class OpenAIBackend implements Backend {
       const takes = p && {
         ...(p.includes('temperature') ? {} : { temperature: false as const }),
         ...(p.includes('max_tokens') ? {} : { maxTokens: false as const }),
+        ...(p.includes('reasoning') ? {} : { reasoningEffort: false as const }),
         ...(p.includes('tools') ? {} : { tools: false as const }),
         ...(p.includes('response_format') || p.includes('structured_outputs') ? {} : { responseSchema: false as const }),
       }

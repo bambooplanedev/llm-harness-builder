@@ -72,3 +72,9 @@ test('a refusal says which one it is, for a page that words it in its own langua
   expect(knobsOff({ ...h, backend: { ...h.backend, kind: 'anthropic' } }, undefined).refuseKind).toBe('maxTokens')
   expect(knobsOff(h, { takes: {} }).refuseKind).toBeUndefined()
 })
+
+test('a reasoning effort the model does not take is off, with its value; absent in the harness, nothing', () => {
+  const c = { ...h, backend: { ...h.backend, reasoningEffort: 'low' as const } }
+  expect(knobsOff(c, { takes: { reasoningEffort: false }, takesFrom: from }).off).toEqual([{ knob: 'reasoningEffort', value: 'low', reason: `m/x takes no reasoning effort (${from})` }])
+  expect(knobsOff(h, { takes: { reasoningEffort: false }, takesFrom: from }).off).toEqual([])
+})

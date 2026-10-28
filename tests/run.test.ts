@@ -5,6 +5,8 @@ import { runAgent, mayAsk } from '../src/core/run.js'
 import type { HarnessConfig, RunParams } from '../src/core/config.js'
 import type { HarnessEvent } from '../src/core/events.js'
 import { BackendError, sendRetrying } from '../src/core/backends/types.js'
+import { READ_FILE_RANGES } from '../src/core/tools/index.js'
+import { renderTools } from '../src/core/prompts.js'
 import { notesBlock } from '../src/core/notes.js'
 import { fakeBackend, harness, tmp, type FakeResponse } from './helpers.js'
 
@@ -1106,4 +1108,93 @@ test('a Retry-After over 300 s waits 300 s', async () => {
     expect(be.calls).toBe(2)
     expect((await p).content).toBe('fin')
   } finally { vi.useRealTimers() }
+})
+
+test('backend.reasoningEffort goes on every request; off when the model does not take it; absent when the harness has none', () => withKey(async () => {
+  const eff = (over: Partial<HarnessConfig['backend']> = {}) => keyed({ backend: { ...keyed().backend, reasoningEffort: 'low', ...over } })
+  const be = Fake([{ toolCalls: [{ name: 'bash', args: { command: 'true' } }] }, { content: 'fin' }])
+  await collect({ config: eff({ reasoningEffort: 'low' }), task: 'do', workdir: await wd() }, { backend: Object.assign(be, { async serverInfo() { return {} } }), approve: async () => true })
+  expect(be.requests.map(r => r.reasoningEffort)).toEqual(['low', 'low'])
+
+  const off = Object.assign(Fake([{ content: 'fin' }]), { async serverInfo() { return { takes: { reasoningEffort: false as const }, takesFrom: 'test' } } })
+  const ev = await collect({ config: eff(), task: 'do', workdir: await wd() }, { backend: off })
+  expect(ev[0]).toMatchObject({ type: 'knobs_off', off: [{ knob: 'reasoningEffort', value: 'low' }] })
+  expect(off.requests[0]).not.toHaveProperty('reasoningEffort')
+
+  const none = Fake([{ content: 'fin' }])
+  await collect({ config: keyed(), task: 'do', workdir: await wd() }, { backend: none })
+  expect(none.requests[0]).not.toHaveProperty('reasoningEffort')
+}))
+
+// ---- tools.readRanges ----------------------------------------------------------
+const rrow = (n: number) => 'row ' + String(n).padStart(2, '0') + ' ' + 'x'.repeat(13)
+const RTEN = Array.from({ length: 10 }, (_, i) => rrow(i + 1)).join('\n')
+const LINE_NOTE = '[lines 1-3 of 10 shown; read on with start: 4]'
+const rr = (readRanges?: boolean, extra: Partial<HarnessConfig> = {}) => base({ tools: { enabled: ['read_file'], approveBash: false, ...(readRanges === undefined ? {} : { readRanges }) }, ...extra })
+const OLD_READ = { name: 'read_file', description: 'Read a text file. Large files are truncated.', parameters: { type: 'object', properties: { path: { type: 'string', description: 'File path relative to the project root' } }, required: ['path'] } }
+
+test('readRanges: off sends today\'s read_file schema natively and prompted; on sends the ranged one', async () => {
+  const sent = async (cfg: HarnessConfig) => { const be = Fake([{ content: 'x' }]); await collect({ config: cfg, task: 'do', workdir: await wd() }, { backend: be }); return be.requests[0] }
+  expect((await sent(rr())).tools).toEqual([OLD_READ])
+  expect((await sent(rr(false))).tools).toEqual([OLD_READ])
+  const on = (await sent(rr(true))).tools![0]
+  expect(on).toEqual(READ_FILE_RANGES)
+  expect(on.description).toBe('Read a text file, or only lines start to end (1-based, inclusive). Large files are truncated; the note says which lines were shown.')
+  expect(Object.keys(on.parameters.properties as object)).toEqual(['path', 'start', 'end'])
+  expect(on.parameters.required).toEqual(['path'])
+  const prompted = { toolCalls: { mode: 'prompted' as const, enforceSchema: false, promptedTemplate: 'T:{{tools}}', parseErrorHint: 'HINT' } }
+  const sys = async (cfg: HarnessConfig) => (await sent(cfg)).messages[0].content
+  expect(await sys(rr(undefined, prompted))).toBe(`sys\n\nT:- read_file: Read a text file. Large files are truncated.\n  parameters: ${JSON.stringify(OLD_READ.parameters)}`)
+  expect(await sys(rr(true, prompted))).toBe(`sys\n\nT:${renderTools([READ_FILE_RANGES])}`)
+})
+
+test('readRanges: a cut read is cut at a line, says so, and counts as truncated; a note-like last line does not', async () => {
+  const dir = await wd(); await writeFile(join(dir, 'ten.txt'), RTEN); await writeFile(join(dir, 'tricky.txt'), 'a\n' + LINE_NOTE)
+  const be = Fake([{ toolCalls: [{ name: 'read_file', args: { path: 'ten.txt' } }] }, { toolCalls: [{ name: 'read_file', args: { path: 'tricky.txt' } }] }, { content: 'fin' }])
+  const ev = await collect({ config: rr(true, { context: { maxToolOutputChars: 120, budgetTokens: 0 } }), task: 'do', workdir: dir }, { backend: be })
+  const [a, b] = results(ev)
+  expect(a.output.endsWith(LINE_NOTE)).toBe(true); expect(a.truncated).toBe(true)
+  expect(b.output).toBe('a\n' + LINE_NOTE); expect(b.truncated).toBe(false)
+})
+
+test('readRanges: a redacted key stays out and the line note still ends the output', () => withKey(async () => {
+  const dir = await wd(); await writeFile(join(dir, 'k.txt'), [rrow(1), 'key ' + KEY, rrow(3), rrow(4), rrow(5)].join('\n'))
+  const be = Fake([{ toolCalls: [{ name: 'read_file', args: { path: 'k.txt' } }] }, { content: 'fin' }])
+  const ev = await collect({ config: keyed({ tools: { enabled: ['read_file'], approveBash: false, readRanges: true }, context: { maxToolOutputChars: 110, budgetTokens: 0 } }), task: 'do', workdir: dir }, { backend: be })
+  const tr = results(ev)[0]
+  expect(tr.output).toContain(MARK); expect(leaked(ev)).toBe(false)
+  expect(tr.output).toMatch(/\n\[lines 1-\d of 5 shown; read on with start: \d\]$/); expect(tr.truncated).toBe(true)
+}))
+
+test('readRanges off: reads that differ only in start are different calls for maxRepeats, as today', async () => {
+  const rd = (start: number) => ({ toolCalls: [{ name: 'read_file', args: { path: 'a.txt', start } }] })
+  const be = Fake([rd(1), rd(2), rd(3), { content: 'fin' }])
+  const ev = await collect({ config: rr(undefined, { loop: { maxTurns: 10, maxRepeats: 1 } }), task: 'do', workdir: await wd() }, { backend: be })
+  expect(last(ev).reason).toBe('final')
+})
+
+test('readRanges on: reads of different ranges are different calls', async () => {
+  const rd = (start: number) => ({ toolCalls: [{ name: 'read_file', args: { path: 'a.txt', start } }] })
+  const be = Fake([rd(1), rd(2), rd(3), { content: 'fin' }])
+  const ev = await collect({ config: rr(true, { loop: { maxTurns: 10, maxRepeats: 0 } }), task: 'do', workdir: await wd() }, { backend: be })
+  expect(last(ev).reason).toBe('final')
+})
+
+test('readRanges with the guard: a whole read the run loop cut is a part read, so write_file is refused but edit_file is not', async () => {
+  const dir = await wd(); await writeFile(join(dir, 'ten.txt'), RTEN)
+  const cfg = rr(true, { context: { maxToolOutputChars: 120, budgetTokens: 0 }, tools: { enabled: ['read_file', 'write_file', 'edit_file'], approveBash: false, readRanges: true, requireReadBeforeEdit: true } })
+  const be = Fake([{ toolCalls: [{ name: 'read_file', args: { path: 'ten.txt' } }] }, { toolCalls: [{ name: 'write_file', args: { path: 'ten.txt', content: 'x' } }] },
+    { toolCalls: [{ name: 'edit_file', args: { path: 'ten.txt', old: 'row 01', new: 'ROW 01' } }] }, { content: 'fin' }])
+  const ev = await collect({ config: cfg, task: 'do', workdir: dir }, { backend: be })
+  const r = results(ev)
+  expect(r[0].truncated).toBe(true)
+  expect(r[1]).toMatchObject({ error: true }); expect(r[1].output).toContain('was read only in part')
+  expect(r[2].error).toBe(false)
+})
+
+test('readRanges on: {path}, {path, start: 1} and {path} are one call for maxRepeats', async () => {
+  const rd = (args: Record<string, unknown>) => ({ toolCalls: [{ name: 'read_file', args: { path: 'a.txt', ...args } }] })
+  const be = Fake([rd({}), rd({ start: 1 }), rd({}), { content: 'fin' }])
+  const ev = await collect({ config: rr(true, { loop: { maxTurns: 10, maxRepeats: 1 } }), task: 'do', workdir: await wd() }, { backend: be })
+  expect(last(ev).reason).toBe('repeat_loop')
 })

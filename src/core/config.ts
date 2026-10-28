@@ -104,15 +104,19 @@ export function keyNote(b: { apiKeyEnv?: unknown; baseUrl?: unknown }, env?: Rec
 /** Dollars per million tokens; cache prices default to input's. */
 export type Price = { input: number; output: number; cacheRead?: number; cacheWrite?: number }
 
+/** A hosted reasoning model's effort setting; OpenRouter and OpenAI define exactly these three. */
+export type ReasoningEffort = 'low' | 'medium' | 'high'
+export const REASONING_EFFORTS: ReasoningEffort[] = ['low', 'medium', 'high']
+
 export type McpServerConfig = { command: string; args?: string[]; tools?: string[] }
 
 export type HarnessConfig = {
   name: string
   /** One line on what the harness is for; a label, so a diff ignores it. */
   description?: string
-  backend: { kind: BackendKind; baseUrl: string; model: string; numCtx?: number; maxTokens?: number; think?: boolean; temperature: number; apiKeyEnv?: string; pricePerMTok?: Price }
+  backend: { kind: BackendKind; baseUrl: string; model: string; numCtx?: number; maxTokens?: number; think?: boolean; reasoningEffort?: ReasoningEffort; temperature: number; apiKeyEnv?: string; pricePerMTok?: Price }
   systemPrompt: string
-  tools: { enabled: ToolName[]; approveBash: boolean; requireReadBeforeEdit?: boolean; explainEditMiss?: boolean; editMissEscalation?: number; bashEnv?: string[]; readMaxBytes?: number; bashMaxBytes?: number; bashTimeoutS?: number }
+  tools: { enabled: ToolName[]; approveBash: boolean; requireReadBeforeEdit?: boolean; readRanges?: boolean; explainEditMiss?: boolean; editMissEscalation?: number; bashEnv?: string[]; readMaxBytes?: number; bashMaxBytes?: number; bashTimeoutS?: number }
   toolCalls: { mode: 'native' | 'prompted'; format?: ToolCallFormat; enforceSchema: boolean; promptedTemplate: string; parseErrorHint: string }
   /** Both limits are off when absent; budgetTokens 0 is off too. */
   context?: { maxToolOutputChars?: number; budgetTokens?: number }
@@ -133,8 +137,8 @@ export const sendsAnswerSchema = (c: HarnessConfig): boolean =>
 // A misspelt key would be silently off, and every optional knob is off when absent. '' is the top level.
 const KEYS: Record<string, string[]> = {
   '': ['name', 'description', 'backend', 'systemPrompt', 'tools', 'toolCalls', 'context', 'loop', 'mcpServers', 'notes'],
-  backend: ['kind', 'baseUrl', 'model', 'numCtx', 'maxTokens', 'think', 'temperature', 'apiKeyEnv', 'pricePerMTok'],
-  tools: ['enabled', 'approveBash', 'requireReadBeforeEdit', 'explainEditMiss', 'editMissEscalation', 'bashEnv', 'readMaxBytes', 'bashMaxBytes', 'bashTimeoutS'],
+  backend: ['kind', 'baseUrl', 'model', 'numCtx', 'maxTokens', 'think', 'reasoningEffort', 'temperature', 'apiKeyEnv', 'pricePerMTok'],
+  tools: ['enabled', 'approveBash', 'requireReadBeforeEdit', 'readRanges', 'explainEditMiss', 'editMissEscalation', 'bashEnv', 'readMaxBytes', 'bashMaxBytes', 'bashTimeoutS'],
   toolCalls: ['mode', 'format', 'enforceSchema', 'promptedTemplate', 'parseErrorHint'],
   context: ['maxToolOutputChars', 'budgetTokens'],
   loop: ['maxTurns', 'maxRepeats', 'repeatTemperature', 'repeatThinkTokens', 'freshContext', 'untilBash'],
@@ -167,6 +171,10 @@ export function validateConfig(c: unknown): string[] {
     if (b.numCtx !== undefined && !(Number.isInteger(b.numCtx) && b.numCtx > 0)) e.push('backend.numCtx must be a positive integer')
     if (b.maxTokens !== undefined && !(Number.isInteger(b.maxTokens) && b.maxTokens > 0)) e.push('backend.maxTokens must be a positive integer')
     if (b.think !== undefined && typeof b.think !== 'boolean') e.push('backend.think must be true or false')
+    if (b.reasoningEffort !== undefined) {
+      if (!REASONING_EFFORTS.includes(b.reasoningEffort)) e.push('backend.reasoningEffort must be low|medium|high')
+      if (b.kind !== 'openai') e.push('backend.reasoningEffort goes only with kind openai')
+    }
     const pr = b.pricePerMTok
     if (pr !== undefined) {
       if (!isObj(pr) || Array.isArray(pr)) e.push('backend.pricePerMTok must be an object')
@@ -185,7 +193,7 @@ export function validateConfig(c: unknown): string[] {
   else {
     for (const n of t.enabled) if (!TOOL_NAMES.includes(n)) e.push(`unknown tool: ${n}`)
     if (typeof t.approveBash !== 'boolean') e.push('tools.approveBash must be boolean')
-    for (const k of ['requireReadBeforeEdit', 'explainEditMiss'] as const)
+    for (const k of ['requireReadBeforeEdit', 'readRanges', 'explainEditMiss'] as const)
       if (t[k] !== undefined && typeof t[k] !== 'boolean') e.push(`tools.${k} must be boolean`)
     if (t.editMissEscalation !== undefined && !(Number.isInteger(t.editMissEscalation) && t.editMissEscalation >= 1)) e.push('tools.editMissEscalation must be a positive integer')
     for (const k of ['readMaxBytes', 'bashMaxBytes', 'bashTimeoutS'] as const)

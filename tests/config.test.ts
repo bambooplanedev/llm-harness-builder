@@ -443,3 +443,20 @@ test('rejects a bad notes section', () => {
   expect(validateConfig({ ...harness(), notes: { enabled: true, maxTokens: 1, file: 'x' } })).toContain('notes.file is not a known key')
   expect(validateConfig({ ...harness(), notes: 1 })).toContain('notes must be an object')
 })
+
+test('backend.reasoningEffort is low|medium|high, and only with kind openai', () => {
+  const make = (backend: Record<string, unknown>) => validateConfig({ ...validConfig, backend: { ...validConfig.backend, kind: 'openai', ...backend } })
+  expect(make({ reasoningEffort: 'low' })).toEqual([])
+  expect(make({ reasoningEffort: 'max' })).toContain('backend.reasoningEffort must be low|medium|high')
+  for (const kind of ['ollama', 'anthropic'])
+    expect(make({ kind, apiKeyEnv: 'X_API_KEY', baseUrl: 'https://x.example/v1', reasoningEffort: 'low' })).toContain('backend.reasoningEffort goes only with kind openai')
+})
+
+test('tools.readRanges is optional and must be boolean', () => {
+  const ok = structuredClone(validConfig) as any
+  ok.tools.readRanges = true
+  expect(validateConfig(ok)).toEqual([])
+  const bad = structuredClone(validConfig) as any
+  bad.tools.readRanges = 'yes'
+  expect(validateConfig(bad)).toContain('tools.readRanges must be boolean')
+})
