@@ -407,8 +407,8 @@ the size: a changed set refuses a resume, `--report` still prints. The proposer 
 its host differs from the harness's (`--yes` accepts); the same host gets a notice line.
 
 Measured on 28–29 October 2026 (`qwen/qwen3-coder-30b-a3b-instruct` on OpenRouter, `tuned-qwen-coder`,
-`--task polyglot --size 47 --rounds 3`, strict mode, about 8.5 hours of runs, about $0.07 per step of
-32 runs, so about $0.65 for the whole evolve):
+`--task polyglot --size 47 --rounds 3`, strict mode, about 8.5 hours of runs; $0.14 measured for two steps of
+32 runs, so about $0.65 for all nine):
 
 | Step | Edit | PASS of 32 (train + gate) | Verdict |
 |---|---|---|---|
@@ -422,12 +422,12 @@ Measured on 28–29 October 2026 (`qwen/qwen3-coder-30b-a3b-instruct` on OpenRou
 | candidate 3.1 | `loop.maxRepeats` 5 | 12 | within noise (p=0.50) |
 | candidate 3.2 | `loop.maxRepeats` 3 | 12 | within noise (p=0.50) |
 
-No version beat the original, so the 15 test tasks were not run. Zero is this model on this task, not
-a property of evolve. The unchanged harness alone scored 15, 8 and 11 of 32, so a gain of a few
+No version beat the original, so the 15 test tasks were not run. No gain is this model on this task,
+not a property of evolve. The unchanged harness alone scored 15, 8 and 11 of 32, so a gain of a few
 tasks is noise here, which is what the strict threshold is for. The proposer edited only
 `loop.maxRepeats`, all six times. The report's advice was the field it may not edit: `loop.maxTurns`
-(15) ended 5 of the 16 gate tasks; raise it by hand. `--size 6 --rounds 1` takes about 20 minutes and
-about $0.04.
+(15) ended 5 of the 16 gate tasks; raise it by hand. In an earlier, shorter run, `--size 6 --rounds 1` took about
+20 minutes and about $0.04.
 
 A 429 is retried up to 3 times (the `Retry-After` wait, at most 300 s, else 60 s); a 429 after part of
 the reply has streamed is not retried and stops at once. A 401, a 402, a 403 without

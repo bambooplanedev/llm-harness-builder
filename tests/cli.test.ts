@@ -1965,10 +1965,14 @@ test('evolve: --report needs no API key: it reads only the journal', async () =>
   const repo = await tasksRepo(evTasks({ train: 12, gate: 4, test: 8 }))
   const env = await tasksEnv(evFake())
   const cwd = await tmp('lhb-cwd-')
-  const h = evHarness(cwd)
-  const first = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes', '--kind', 'openai', '--api-key-env', 'LHB_REPORT_API_KEY'], { ...env, LHB_REPORT_API_KEY: 'k' }, cwd)
+  const h = evHarness(cwd), p = join(cwd, 'p.json')
+  // The proposer's key too: under --report only its bytes are pinned.
+  const ph = JSON.parse(readFileSync(h, 'utf8'))
+  writeFileSync(p, JSON.stringify({ ...ph, backend: { ...ph.backend, kind: 'openai', apiKeyEnv: 'LHB_REPORT_API_KEY' } }))
+  const flags = ['--proposer', p, '--kind', 'openai', '--api-key-env', 'LHB_REPORT_API_KEY']
+  const first = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes', ...flags], { ...env, LHB_REPORT_API_KEY: 'k' }, cwd)
   expect(first.status, first.stderr).toBe(0)
-  const r = cli(['evolve', h, '--tasks', repo, '--report', '--kind', 'openai', '--api-key-env', 'LHB_REPORT_API_KEY'], env, cwd)
+  const r = cli(['evolve', h, '--tasks', repo, '--report', ...flags], env, cwd)
   expect(r.status, r.stderr).toBe(0)
   expect(r.stdout).toBe(first.stdout)
 }, 120_000)
