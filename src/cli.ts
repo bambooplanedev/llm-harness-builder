@@ -94,7 +94,7 @@ async function loadHarness(file: string, over: Overrides): Promise<HarnessConfig
 }
 
 /** The harness file's JSON with the command line's overrides, checked; `raw` itself is left as it was (evolve saves it). */
-function overridden(raw: unknown, over: Overrides, file: string): HarnessConfig {
+function overridden(raw: unknown, over: Overrides, file: string, needKey = true): HarnessConfig {
   const cfg = structuredClone(raw) as any
   if (!cfg || typeof cfg.backend !== 'object' || cfg.backend === null) die(`invalid harness ${file}:\n  backend must be an object`)
   if (over.model) cfg.backend.model = over.model
@@ -106,7 +106,8 @@ function overridden(raw: unknown, over: Overrides, file: string): HarnessConfig 
   const errs = validateConfig(cfg)
   if (errs.length) die(`invalid harness ${file}:\n  ${errs.join('\n  ')}`)
   // The value the name points at: missing, empty or unsendable, nothing can run — and the message says where the name came from.
-  const problem = keyProblem(cfg.backend, process.env)
+  // Not for evolve --report: it reads only the journal, so an expired or unset key is no reason to refuse it.
+  const problem = needKey && keyProblem(cfg.backend, process.env)
   if (problem) die(`${problem}: ${over.apiKeyEnv !== undefined ? '--api-key-env names it as the API key' : `${file} sends its value as the API key (backend.apiKeyEnv)`}`)
   return cfg
 }
@@ -603,7 +604,7 @@ async function cmdEvolve(argv: string[]) {
   let raw: object, bytes: Buffer
   try { bytes = await readFile(file!); raw = JSON.parse(bytes.toString('utf8')) } catch (e) { return die(`cannot read harness ${file}:\n  ${(e as Error).message}`) }
   const over = { model: values.model, baseUrl: values['base-url'], kind: values.kind, apiKeyEnv: values['api-key-env'] }
-  const config = overridden(raw, over, file!)
+  const config = overridden(raw, over, file!, !values.report)
   const proposer = values.proposer === undefined ? config : await loadHarness(values.proposer, {})
   // What the runs depend on besides the tasks: a resume with another harness or other flags would mix two evolves.
   const sha256 = (b: Buffer | string) => createHash('sha256').update(b).digest('hex')

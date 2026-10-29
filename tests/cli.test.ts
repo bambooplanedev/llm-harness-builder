@@ -1961,6 +1961,18 @@ test('evolve: --report prints exactly what the run printed, and runs nothing', a
   expect(clonesIn(env)).toEqual([])
 }, 120_000)
 
+test('evolve: --report needs no API key: it reads only the journal', async () => {
+  const repo = await tasksRepo(evTasks({ train: 12, gate: 4, test: 8 }))
+  const env = await tasksEnv(evFake())
+  const cwd = await tmp('lhb-cwd-')
+  const h = evHarness(cwd)
+  const first = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes', '--kind', 'openai', '--api-key-env', 'LHB_REPORT_API_KEY'], { ...env, LHB_REPORT_API_KEY: 'k' }, cwd)
+  expect(first.status, first.stderr).toBe(0)
+  const r = cli(['evolve', h, '--tasks', repo, '--report', '--kind', 'openai', '--api-key-env', 'LHB_REPORT_API_KEY'], env, cwd)
+  expect(r.status, r.stderr).toBe(0)
+  expect(r.stdout).toBe(first.stdout)
+}, 120_000)
+
 test('evolve: the report says when vN on disk is not the version measured', async () => {
   const { repo, env, cwd, h } = await evFirst()
   const v1 = join(cwd, 'harnesses', 'h.v1.json')
