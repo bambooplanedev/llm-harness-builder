@@ -227,7 +227,7 @@ directory to browse them, and reload the list after a CLI run. On every start `s
     llm-harness-builder serve [--port <n>] [--no-open]
     llm-harness-builder run <harness.json> "task" [--workdir <dir>] [--yes] [--json] [--answer-schema <file.json>] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
     llm-harness-builder demo [--json] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
-    llm-harness-builder bench [harness.json ...] [--n <n>] [--timeout <s>] [--out <file>] [--task <name>] [--size <N>] [--tasks <repo>] [--yes] [--max-turns <N>] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
+    llm-harness-builder bench [harness.json ...] [--n <n>] [--timeout <s>] [--out <file>] [--task <name>] [--size <N>] [--tasks <repo>] [--only <a,b>] [--yes] [--max-turns <N>] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
     llm-harness-builder evolve <harness.json> [--tasks <repo>] [--task polyglot] [--size <N>] [--rounds <N>] [--proposer <harness.json>] [--timeout <s>] [--yes] [--report] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
     llm-harness-builder replay <run-id | trace.jsonl> [--turn <N>] [--n <n>] [--temperature <t>] [--max-tokens <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>] [--json]
     llm-harness-builder analyze <bench.json | run-id | trace.jsonl> ... [--json]
@@ -347,6 +347,7 @@ with Aider's leaderboard (there: two attempts, the second with the test output; 
 
 ```bash
 llm-harness-builder bench --tasks ../myrepo --n 3
+llm-harness-builder bench --tasks ../myrepo --only a2   # just these tasks, by name; the JSON records "only"
 ```
 
 Only the last commit is read: uncommitted changes, `lhb-tasks.json` included, are not in the runs,

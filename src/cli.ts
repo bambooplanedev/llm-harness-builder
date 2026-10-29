@@ -479,6 +479,14 @@ async function cmdBench(argv: string[]) {
   if (values.tasks !== undefined && (values.task !== undefined || values.size !== undefined)) argError('bench', '--tasks cannot go with --task or --size')
   let repo: RepoTasks | undefined
   if (values.tasks !== undefined) try { repo = await loadRepoTasks(values.tasks) } catch (e) { argError('bench', (e as Error).message) }
+  if (values.only !== undefined && !repo) argError('bench', '--only needs --tasks')
+  const only = values.only?.split(',').map(s => s.trim())
+  if (repo && only) {
+    const names = repo.tasks.map(t => t.name), bad = only.filter(o => !names.includes(o))
+    if (!only.every(Boolean) || bad.length) argError('bench', `--only: ${bad.length ? `no task ${bad.join(', ')}` : 'an empty name'}; the tasks are ${names.join(', ')}`)
+    // Narrowed before anything reads it: the consent, the tasks line and the runs see only these.
+    repo = { ...repo, tasks: repo.tasks.filter(t => only.includes(t.name)) }
+  }
   const taskName = repo ? 'tasks' : values.task ?? 'slug'
   const poly = !repo && taskName === 'polyglot'
   const builtin: Task | undefined = repo || poly ? undefined : Object.hasOwn(TASKS, taskName) ? TASKS[taskName as keyof typeof TASKS] : undefined
@@ -528,7 +536,7 @@ async function cmdBench(argv: string[]) {
   await killTracked()
   await mkdir(path.dirname(out), { recursive: true })
   const result: BenchResult = { version: 1, date: started.toISOString(), task: repo ? `${TASKS_FILE} at ${repo.sha.slice(0, 7)} in ${repo.repo}` : poly ? `polyglot: the first ${size} of ${POLYGLOT_MAX} Exercism JavaScript exercises` : builtin!.prompt, taskName, size, node: process.version, n, timeoutS, complete: false, harnesses,
-    ...(repo ? { tasksRepo: repo.repo, tasksSha: repo.sha, taskCount: repo.tasks.length } : poly ? { taskCount: size } : {}) }
+    ...(repo ? { tasksRepo: repo.repo, tasksSha: repo.sha, taskCount: repo.tasks.length, ...only && { only } } : poly ? { taskCount: size } : {}) }
   // tmp + rename in the same directory: the SIGINT handler exits immediately, and a half-written
   // JSON would be the only thing left of a 90-minute run. `.tmp`, not `.json`, so /api/bench skips it.
   const tmpOut = `${out}.${process.pid}.tmp`
@@ -586,6 +594,8 @@ type EvolveState = Exclude<ReturnType<typeof replay>, { error: string }>
  *  version against the original on test. Every completed step is a journal line, and the state is always the journal
  *  replayed: a resumed evolve and an uninterrupted one start each candidate from the same state. */
 async function cmdEvolve(argv: string[]) {
+  // Before parseArgs, whose "Unknown option" would only advise a `--`.
+  if (argv.some(a => a === '--only' || a.startsWith('--only='))) argError('evolve', '--only is for bench: evolve splits all the tasks of the repo into train, gate and test')
   const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: COMMANDS.evolve.options })
   if (values.help) return printHelp('evolve')
   keyFlag('evolve', values['api-key-env'])

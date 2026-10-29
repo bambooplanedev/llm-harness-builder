@@ -901,6 +901,7 @@ test('argument errors name the option, show the usage, exit 2 and print no stack
     [['evolve', 'h.json', '--task', 'polyglot', '--size', '48'], /^error: --size must be an integer from 3 to 47 for evolve --task polyglot$/m],
     [['evolve', 'h.json', '--task', 'pool', '--size', '3'], /^error: evolve takes --task polyglot only; your own tasks go in --tasks <repo>$/m],
     [['evolve', 'h.json', '--task', 'polyglot', '--size', '3', '--tasks', 'x'], /^error: --tasks cannot go with --task or --size$/m],
+    [['evolve', 'h.json', '--tasks', 'x', '--only', 'a'], /^error: --only is for bench: /m],
     [['bench', '--max-turns', '1.5'], /^error: --max-turns must be a positive integer$/m],
     [['replay', 'x.jsonl', '--turn', '0', '--kind', 'openai', '--base-url', 'http://x'], /^error: --turn must be a positive integer$/m],
     [['replay', 'x.jsonl', '--turn', '1', '--kind', 'anthropic', '--base-url', 'http://x'], /^error: --kind anthropic is not yet supported by replay$/m],
@@ -1539,6 +1540,25 @@ test('bench --tasks: refuses --task or --size with it, and a folder that is not 
   }
   const r = cli(['bench', '--tasks', await tmp('lhb-plain-'), '--yes', harness('bare')], env)
   expect(r.status).toBe(2); expect(r.stderr).toContain('is not a git repository')
+}, 60_000)
+
+test('bench --tasks --only: runs just the named tasks and says so; an unknown name lists the tasks; --only needs --tasks', async () => {
+  const repo = await tasksRepo(TWO)
+  const env = await tasksEnv([{ content: 'done' }])
+  const cwd = await tmp('lhb-cwd-')
+  const r = cli(['bench', '--tasks', repo, '--only', 'b', '--n', '1', '--yes', '--out', join(cwd, 'b.json'), harness('bare')], env, cwd)
+  expect(r.status, r.stderr).toBe(0)
+  expect(r.stderr).toMatch(/^tasks: 1 from /m)
+  expect(r.stderr).not.toContain('make done.txt')
+  const j = JSON.parse(await readFile(join(cwd, 'b.json'), 'utf8'))
+  expect(j).toMatchObject({ taskCount: 1, only: ['b'] })
+  expect(j.harnesses[0].runs.map((x: any) => x.task)).toEqual(['b'])
+  for (const only of ['c', 'a,', '']) {
+    const bad = cli(['bench', '--tasks', repo, '--only', only, '--yes', harness('bare')], env)
+    expect(bad.status).toBe(2); expect(bad.stderr).toContain('the tasks are a, b')
+  }
+  const no = cli(['bench', '--only', 'a', harness('bare')], env)
+  expect(no.status).toBe(2); expect(no.stderr).toContain('--only needs --tasks')
 }, 60_000)
 
 test('bench --tasks: a changed protected file is a FAIL and the check never runs', async () => {

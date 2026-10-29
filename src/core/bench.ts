@@ -42,7 +42,7 @@ export type BenchHarness = {
 }
 export type BenchResult = { version: 1; date: string; task: string; taskName?: string; size?: number; node?: string; n: number; timeoutS: number; complete: boolean;
   /** bench --tasks: the repo (real path) and the commit its lhb-tasks.json was read from; taskName is 'tasks'. */
-  tasksRepo?: string; tasksSha?: string; taskCount?: number
+  tasksRepo?: string; tasksSha?: string; taskCount?: number; only?: string[]
   /** Set by Ctrl-C (or Stop bench on the page): no run of it is live any more, though its last .part stays. */
   stopped?: boolean; harnesses: BenchHarness[] }
 
