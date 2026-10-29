@@ -49,9 +49,11 @@ export async function collect(chunks: AsyncIterable<any>, onDelta?: (d: Delta) =
     if (ch?.finish_reason) finish = ch.finish_reason
     if (c.usage) usage = c.usage
   }
-  const message = { role: 'assistant', content, reasoning_content: reasoning || undefined, tool_calls: calls.map(t => ({ id: t.id, type: 'function', function: { name: t.name, arguments: t.args } })) }
+  // A server may start at index 1 or 3 (Chutes does): the slots before it are holes, and map keeps holes.
+  const got = calls.filter(Boolean)
+  const message = { role: 'assistant', content, reasoning_content: reasoning || undefined, tool_calls: got.map(t => ({ id: t.id, type: 'function', function: { name: t.name, arguments: t.args } })) }
   return {
-    content, reasoning: reasoning || undefined, toolCalls: parseCalls(calls), usage: usageOf(usage),
+    content, reasoning: reasoning || undefined, toolCalls: parseCalls(got), usage: usageOf(usage),
     truncated: finish === 'length' || undefined,
     raw: { ...last, choices: [{ index: 0, message, finish_reason: finish ?? null }], usage },
   }
