@@ -234,7 +234,7 @@ Ollama думає, якщо їй не сказати інакше, витрач�
     llm-harness-builder serve [--port <n>] [--no-open]
     llm-harness-builder run <harness.json> "task" [--workdir <dir>] [--yes] [--json] [--answer-schema <file.json>] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
     llm-harness-builder demo [--json] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
-    llm-harness-builder bench [harness.json ...] [--n <n>] [--timeout <s>] [--out <file>] [--task <name>] [--size <N>] [--tasks <repo>] [--yes] [--max-turns <N>] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
+    llm-harness-builder bench [harness.json ...] [--n <n>] [--timeout <s>] [--out <file>] [--task <name>] [--size <N>] [--tasks <repo>] [--only <a,b>] [--yes] [--max-turns <N>] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
     llm-harness-builder evolve <harness.json> [--tasks <repo>] [--task polyglot] [--size <N>] [--rounds <N>] [--proposer <harness.json>] [--timeout <s>] [--yes] [--report] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
     llm-harness-builder replay <run-id | trace.jsonl> [--turn <N>] [--n <n>] [--temperature <t>] [--max-tokens <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>] [--json]
     llm-harness-builder analyze <bench.json | run-id | trace.jsonl> ... [--json]
@@ -355,6 +355,7 @@ llm-harness-builder bench base.json yours.json --task polyglot --size 47        
 
 ```bash
 llm-harness-builder bench --tasks ../myrepo --n 3
+llm-harness-builder bench --tasks ../myrepo --only a2   # лише ці задачі, за назвою; JSON записує "only"
 ```
 
 Читається лише останній коміт: незакомічені зміни, `lhb-tasks.json` теж, у прогони не потрапляють, і

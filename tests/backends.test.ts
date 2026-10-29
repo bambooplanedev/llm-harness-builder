@@ -266,6 +266,16 @@ test('collect over the same stream gives what send gives', async () => {
   expect(b).toEqual(a)
 })
 
+test('a tool call that starts at a non-zero index is still the one call, with no holes before it', async () => {
+  const r = await openai([
+    { choices: [{ index: 0, delta: { tool_calls: [{ index: 3, id: 'c', function: { name: 'read_file', arguments: '{"path":' } }] } }] },
+    { choices: [{ index: 0, delta: { tool_calls: [{ index: 3, function: { arguments: '"a"}' } }] } }] },
+    { choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] },
+  ]).send({})
+  expect(r.toolCalls).toEqual([{ backendId: 'c', name: 'read_file', args: { path: 'a' } }])
+  expect((r.raw as any).choices[0].message.tool_calls).toEqual([{ id: 'c', type: 'function', function: { name: 'read_file', arguments: '{"path":"a"}' } }])
+})
+
 test('a server\'s junk reaches nobody raw: usage only from numbers, text only from strings, a tool name as a string', async () => {
   const esc = '\u001b[?7l'
   const deltas: Delta[] = []
