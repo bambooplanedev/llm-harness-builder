@@ -1546,16 +1546,17 @@ test('bench --tasks --only: runs just the named tasks and says so; an unknown na
   const repo = await tasksRepo(TWO)
   const env = await tasksEnv([{ content: 'done' }])
   const cwd = await tmp('lhb-cwd-')
-  const r = cli(['bench', '--tasks', repo, '--only', 'b', '--n', '1', '--yes', '--out', join(cwd, 'b.json'), harness('bare')], env, cwd)
+  const r = cli(['bench', '--tasks', repo, '--only', 'b,b', '--n', '1', '--yes', '--out', join(cwd, 'b.json'), harness('bare')], env, cwd)
   expect(r.status, r.stderr).toBe(0)
   expect(r.stderr).toMatch(/^tasks: 1 from /m)
   expect(r.stderr).not.toContain('make done.txt')
   const j = JSON.parse(await readFile(join(cwd, 'b.json'), 'utf8'))
   expect(j).toMatchObject({ taskCount: 1, only: ['b'] })
+  expect(j.task).toMatch(/ \(only b\)$/)
   expect(j.harnesses[0].runs.map((x: any) => x.task)).toEqual(['b'])
-  for (const only of ['c', 'a,', '']) {
+  for (const [only, why] of [['c', 'no task c'], ['a,', 'an empty name'], ['', 'an empty name']]) {
     const bad = cli(['bench', '--tasks', repo, '--only', only, '--yes', harness('bare')], env)
-    expect(bad.status).toBe(2); expect(bad.stderr).toContain('the tasks are a, b')
+    expect(bad.status).toBe(2); expect(bad.stderr).toContain(`--only: ${why}; the tasks are a, b`)
   }
   const no = cli(['bench', '--only', 'a', harness('bare')], env)
   expect(no.status).toBe(2); expect(no.stderr).toContain('--only needs --tasks')

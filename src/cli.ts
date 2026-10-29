@@ -480,10 +480,10 @@ async function cmdBench(argv: string[]) {
   let repo: RepoTasks | undefined
   if (values.tasks !== undefined) try { repo = await loadRepoTasks(values.tasks) } catch (e) { argError('bench', (e as Error).message) }
   if (values.only !== undefined && !repo) argError('bench', '--only needs --tasks')
-  const only = values.only?.split(',').map(s => s.trim())
+  const only = values.only === undefined ? undefined : [...new Set(values.only.split(',').map(s => s.trim()))]
   if (repo && only) {
     const names = repo.tasks.map(t => t.name), bad = only.filter(o => !names.includes(o))
-    if (!only.every(Boolean) || bad.length) argError('bench', `--only: ${bad.length ? `no task ${bad.join(', ')}` : 'an empty name'}; the tasks are ${names.join(', ')}`)
+    if (bad.length) argError('bench', `--only: ${only.every(Boolean) ? `no task ${bad.join(', ')}` : 'an empty name'}; the tasks are ${names.join(', ')}`)
     // Narrowed before anything reads it: the consent, the tasks line and the runs see only these.
     repo = { ...repo, tasks: repo.tasks.filter(t => only.includes(t.name)) }
   }
@@ -535,7 +535,7 @@ async function cmdBench(argv: string[]) {
   // What setup left in the background would reach the first run only: every run starts without it.
   await killTracked()
   await mkdir(path.dirname(out), { recursive: true })
-  const result: BenchResult = { version: 1, date: started.toISOString(), task: repo ? `${TASKS_FILE} at ${repo.sha.slice(0, 7)} in ${repo.repo}` : poly ? `polyglot: the first ${size} of ${POLYGLOT_MAX} Exercism JavaScript exercises` : builtin!.prompt, taskName, size, node: process.version, n, timeoutS, complete: false, harnesses,
+  const result: BenchResult = { version: 1, date: started.toISOString(), task: repo ? `${TASKS_FILE} at ${repo.sha.slice(0, 7)} in ${repo.repo}${only ? ` (only ${only.join(', ')})` : ''}` : poly ? `polyglot: the first ${size} of ${POLYGLOT_MAX} Exercism JavaScript exercises` : builtin!.prompt, taskName, size, node: process.version, n, timeoutS, complete: false, harnesses,
     ...(repo ? { tasksRepo: repo.repo, tasksSha: repo.sha, taskCount: repo.tasks.length, ...only && { only } } : poly ? { taskCount: size } : {}) }
   // tmp + rename in the same directory: the SIGINT handler exits immediately, and a half-written
   // JSON would be the only thing left of a 90-minute run. `.tmp`, not `.json`, so /api/bench skips it.
