@@ -213,7 +213,9 @@ const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 // tearing it down, so the pid dropped out of procs.ts's registry (Ctrl-C's exit hook no longer
 // covers it) while the child kept running. Reuses the "dies on its own" test's vi.doMock trick to
 // get the pid, then checks the process itself, not just what got called.
-test('a call that times out actually kills the server, not just marks it dead', async () => {
+// Calls `tool` on a server whose procs.js is wrapped to reveal its pid; the call must fail, and the process itself
+// must be gone afterwards, not merely forgotten. Same vi.doMock trick as the "dies on its own" test.
+async function callKillsServer(tool: string, opts: { timeoutMs?: number }, check: (r: { output: string; error: boolean }) => void) {
   const tracked: number[] = []
   vi.doMock('../src/core/procs.js', async (importOriginal) => {
     const actual = await importOriginal<typeof import('../src/core/procs.js')>()
@@ -222,13 +224,13 @@ test('a call that times out actually kills the server, not just marks it dead', 
   vi.resetModules()
   try {
     const { startServers: freshStartServers } = await import('../src/core/mcp.js')
-    const s = await freshStartServers(fake(), await wd(), { timeoutMs: 300 })
+    const s = await freshStartServers(fake(), await wd(), opts)
     const pid = tracked[0]
     expect(pid).toBeTypeOf('number')
     expect(isAlive(pid)).toBe(true)
 
-    const r = await s.call('stall', {})   // fixture never answers -> the call times out at 300ms
-    expect(r.error).toBe(true)
+    const r = await s.call(tool, {})
+    check(r)
 
     const deadline = Date.now() + 2000
     while (isAlive(pid) && Date.now() < deadline) await sleep(20)
@@ -237,7 +239,11 @@ test('a call that times out actually kills the server, not just marks it dead', 
     vi.doUnmock('../src/core/procs.js')
     vi.resetModules()
   }
-})
+}
+
+test('a call that times out actually kills the server, not just marks it dead', () =>
+  // fixture never answers -> the call times out at 300ms
+  callKillsServer('stall', { timeoutMs: 300 }, r => expect(r.error).toBe(true)))
 
 // Regression for a review finding: the oversize-line guard used to die() without killing the
 // group, so a server that kept flooding stdout kept the accumulator growing without bound. The
@@ -250,32 +256,8 @@ test('a call that times out actually kills the server, not just marks it dead', 
 // pinning what it claimed to. That guard stays in onData as defence-in-depth for data already
 // queued in the pipe before the kill lands; it just isn't separately observable from outside once
 // the kill happens, so this test doesn't try to reach it.)
-test('the oversize-line guard trips and actually kills the server, not just marks it dead', async () => {
-  const tracked: number[] = []
-  vi.doMock('../src/core/procs.js', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('../src/core/procs.js')>()
-    return { track: (pid: number) => { tracked.push(pid); actual.track(pid) }, untrack: actual.untrack }
-  })
-  vi.resetModules()
-  try {
-    const { startServers: freshStartServers } = await import('../src/core/mcp.js')
-    const s = await freshStartServers(fake(), await wd())
-    const pid = tracked[0]
-    expect(pid).toBeTypeOf('number')
-    expect(isAlive(pid)).toBe(true)
-
-    const r = await s.call('flood', {})
-    expect(r.error).toBe(true)
-    expect(r.output).toMatch(/over 1 MB/)
-
-    const deadline = Date.now() + 2000
-    while (isAlive(pid) && Date.now() < deadline) await sleep(20)
-    expect(isAlive(pid)).toBe(false)   // gone, not merely forgotten
-  } finally {
-    vi.doUnmock('../src/core/procs.js')
-    vi.resetModules()
-  }
-})
+test('the oversize-line guard trips and actually kills the server, not just marks it dead', () =>
+  callKillsServer('flood', {}, r => { expect(r.error).toBe(true); expect(r.output).toMatch(/over 1 MB/) }))
 
 test('a server starts with this process\'s environment except the variable named in dropEnv', async () => {
   process.env.LHB_MCP_KEEP = 'kept'; process.env.LHB_MCP_TEST_API_KEY = 'secret-value-0123456789'
