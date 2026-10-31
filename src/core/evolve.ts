@@ -327,7 +327,7 @@ type Proposal = { round: number; index: number; input: string; edit: Edit }
 type SweepLine = { v: 2; type: 'sweep'; round: number; sweep: number; cur: RunLite[]; cands: { index: number; runs: RunLite[] }[] }
 type TestSweep = { v: 2; type: 'testsweep'; sweep: number; orig: RunLite[]; last: RunLite[] }
 export type JournalLine =
-  | { v: 2; type: 'start'; base: string; sha: string; pin: string; notes: string; sets: Record<SetName, string[]>; strict: boolean; proposer: string; repeats: number; rounds: number }
+  | { v: 2; type: 'start'; base: string; sha: string; pin: string; notes: string; sets: Record<SetName, string[]>; strict: boolean; proposer: string; repeats: number; rounds: number; attempt?: number }
   | { v: 2; type: 'probe'; round: number; runs: RunLite[] }
   | ({ v: 2; type: 'proposal' } & Proposal)
   | SweepLine
@@ -362,7 +362,7 @@ const EDIT = shape({ field: str, value: x => typeof x === 'string' || (typeof x 
 const sha256: Check = x => typeof x === 'string' && /^[0-9a-f]{64}$/.test(x) ? undefined : 'not a sha256'
 const v2: Check = x => x === 2 ? undefined : 'not 2'
 const LINE: Record<string, Check> = {
-  start: shape({ v: v2, type: str, base: str, sha: str, pin: sha256, notes: sha256, sets: shape({ train: arr(name), gate: arr(name), test: arr(name) }), strict: bool, proposer: str, repeats: pos, rounds: pos }),
+  start: shape({ v: v2, type: str, base: str, sha: str, pin: sha256, notes: sha256, sets: shape({ train: arr(name), gate: arr(name), test: arr(name) }), strict: bool, proposer: str, repeats: pos, rounds: pos }, { attempt: pos }),
   // The current version on train, the proposer's first input; never in a decision.
   probe: shape({ v: v2, type: str, round: pos, runs: arr(RUN) }),
   candidate: shape({ v: v2, type: str, round: pos, index: pos, input: str, accepted: bool, reason: str },

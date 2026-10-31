@@ -1842,6 +1842,22 @@ const evFirst = async () => {
   return { repo, env, cwd, h }
 }
 
+test('evolve: a journal moved away and started again is attempt 2; a resume and --report keep attempt 1', async () => {
+  const { repo, env, cwd, h } = await evFirst()
+  const jf = join(cwd, 'harnesses', 'h.evolve.jsonl')
+  expect(journal(cwd)[0].attempt).toBe(1)
+  expect(cli(['evolve', h, '--tasks', repo, '--report'], env, cwd).stdout).toContain('attempt 1')
+  expect(cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes'], env, cwd).stdout).toContain('attempt 1')
+  rmSync(jf); rmSync(join(cwd, 'harnesses', 'h.v1.json'), { force: true })
+  expect(cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes'], env, cwd).status).toBe(0)
+  expect(journal(cwd)[0].attempt).toBe(2)
+  expect(cli(['evolve', h, '--tasks', repo, '--report'], env, cwd).stdout).toContain('attempt 2')
+  // A start line without it, or a counter nobody can read: unknown, never a guess.
+  const lines = evRaw(cwd).split('\n'), { attempt, ...start } = JSON.parse(lines[0]!)
+  writeFileSync(jf, [JSON.stringify(start), ...lines.slice(1)].join('\n'))
+  expect(cli(['evolve', h, '--tasks', repo, '--report'], env, cwd).stdout).toContain('attempt unknown')
+}, 240_000)
+
 test('evolve: --rounds 1 then --rounds 2 continues from the journal', async () => {
   const { repo, env, cwd, h } = await evFirst()
   const before = evRaw(cwd)

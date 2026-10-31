@@ -16,6 +16,8 @@ export type ReportInput = {
   versionFile: string
   /** The vN file on disk is not the text evolve wrote for the version measured (edited, replaced or gone). */
   changed?: boolean
+  /** Which attempt this journal was (the start line's); 'unknown' when it says nothing. Absent: no line. */
+  attempt?: number | 'unknown'
 }
 
 const leafOf = (o: unknown, f: string): unknown => f.split('.').reduce((x: any, k) => x?.[k], o)
@@ -115,6 +117,7 @@ export function evolveReport(r: ReportInput): string {
     apply.push(`Check it yourself: llm-harness-builder bench ${versionFile} ${bench}`)
     if (prompts.length) apply.push('Read the systemPrompt paragraph above before you use it.')
   }
+  if (r.attempt !== undefined) conclusion.push(`attempt ${r.attempt}`)
 
   return [
     '== Conclusion', ...conclusion, '',

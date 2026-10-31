@@ -682,7 +682,7 @@ async function cmdEvolve(argv: string[]) {
   // The report reads only the journal, after replay re-checked it: a finished evolve started again prints it as it was, without a clone or a request.
   // vN is what the user is told to use: it has to be the text evolve wrote for the version the numbers are about.
   const changed = (): boolean => { const p = vf(state.version); try { return isLink(p) || readFileSync(p, 'utf8') !== versionText(base, state.version, state.current) } catch { return true } }
-  const report = (): string => evolveReport({ lines, state: { ...state, final: state.final! }, original: raw, mode, sets, harness: path.basename(file!), versionFile: state.version ? vf(state.version) : '', changed: !!state.version && changed() })
+  const report = (): string => evolveReport({ lines, attempt: (lines[0] as StartLine).attempt ?? 'unknown', state: { ...state, final: state.final! }, original: raw, mode, sets, harness: path.basename(file!), versionFile: state.version ? vf(state.version) : '', changed: !!state.version && changed() })
   if (values.report || (resuming && all && state.final)) {
     if (!state.final) die(`evolve has not finished: no final test in ${jf}; run evolve again to finish`)
     console.log(report())
@@ -704,7 +704,17 @@ async function cmdEvolve(argv: string[]) {
     // Every version reads this frozen copy: a note written during evolve would make one version's runs depend on another's.
     // Before the start line: a journal is never without its snapshot.
     writeFileSync(snap, existsSync(src.notesFile) ? readFileSync(src.notesFile) : '')
-    append({ v: 2, type: 'start', base, sha: src.id, pin, sets, strict: mode.strict, proposer: host, notes: sha256(readFileSync(snap)), repeats: REPEATS, rounds })
+    // Counted per harness bytes + source, on a new journal only; the journal keeps its own number, so a later attempt never relabels it.
+    // An unreadable counter restarts at 1 and the start line says nothing: the report prints `attempt unknown`.
+    const cf = path.join(stateDir(), 'evolve-attempts', `${sha256(Buffer.concat([bytes, Buffer.from(src.id)]))}.txt`)
+    let attempt: number | undefined
+    try {
+      const t = existsSync(cf) ? readFileSync(cf, 'utf8').trim() : '0'
+      attempt = /^\d{1,9}$/.test(t) ? Number(t) + 1 : undefined
+      await mkdir(path.dirname(cf), { recursive: true })
+      writeFileSync(cf + '.tmp', `${attempt ?? 1}\n`); renameSync(cf + '.tmp', cf)
+    } catch { attempt = undefined }
+    append({ v: 2, type: 'start', base, sha: src.id, pin, sets, strict: mode.strict, proposer: host, notes: sha256(readFileSync(snap)), repeats: REPEATS, rounds, ...(attempt ? { attempt } : {}) })
   }
   const byName = new Map(work.tasks.map(t => [t.name!, t]))
   const no = await preflightAll([{ name: config.name, config }, { name: 'proposer', config: proposer }], work.tasks[0])
