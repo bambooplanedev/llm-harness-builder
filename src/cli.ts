@@ -405,7 +405,7 @@ function dropWork(w: { live: Map<string, Clone> }): void {
  *  `moved`: why the journal's start line no longer fits these tasks, in the source's own words. */
 type EvolveSource = {
   work: Work; id: string; names: string[]; words?: string[]; paths: string[]; prompts: string[]; notesFile: string
-  sets: Record<SetName, string[]>; describe: string; moved?: string; consent(yes: boolean, proposer: string): Promise<void>
+  sets: Record<SetName, string[]>; describe: string; moved?: string; consent(yes: boolean, ev: EvolveConsent): Promise<void>
 }
 type StartLine = Extract<JournalLine, { type: 'start' }>
 
@@ -423,7 +423,7 @@ async function repoSource(dir: string, first: StartLine | undefined, report: boo
     describe: `tasks: ${repo.tasks.length} from ${repo.repo} at ${repo.sha.slice(0, 7)}: train ${sets.train.length}, gate ${sets.gate.length}, test ${sets.test.length}` +
       (repo.uncommitted ? '\nuncommitted changes are not in the clones' : ''),
     ...(first && first.sha !== repo.sha ? { moved: 'the repo has a new commit since this evolve started' } : {}),
-    consent: (yes, proposer) => askConsent(repo, yes, { proposer, fields: ALLOWED }),
+    consent: (yes, ev) => askConsent(repo, yes, ev),
   }
 }
 
@@ -442,7 +442,7 @@ function polyglotSource(size: number, first: StartLine | undefined, report: bool
     notesFile: notesPath('task-polyglot'),
     describe: `exercises: the first ${size} of ${POLYGLOT_MAX} polyglot exercises: train ${sets.train.length}, gate ${sets.gate.length}, test ${sets.test.length}`,
     ...(!report && first && first.sha !== id ? { moved: 'the exercise set or --size changed since this evolve started' } : {}),
-    async consent(yes, proposer) {
+    async consent(yes, { proposer }) {
       const host = hostOf(proposer)
       // The harness's own server already gets everything the runs send; the proposer gets less.
       if (host === hostOf(harnessUrl)) return void console.error(`proposer: ${host}, the harness's own server`)
@@ -726,7 +726,7 @@ async function cmdEvolve(argv: string[]) {
   overStop()
   console.error(`mode ${mode}: up to ${count.all} runs: ${count.probe} probe, ${count.sweeps} sweeps, ${count.test} test`)
   console.error(autoApproves('evolve'))
-  await src.consent(values.yes, proposer.backend.baseUrl)
+  await src.consent(values.yes, { proposer: proposer.backend.baseUrl, fields: ALLOWED, mode, runs: count.all })
   // A torn last line goes, or the next line would be appended onto it; only after consent, and only on the run path.
   if (torn && !torn.endsWith('\n')) truncateSync(jf, Buffer.byteLength(torn.slice(0, torn.lastIndexOf('\n') + 1)))
   // The next version is checked now, not after a candidate's runs: a file the journal has no line for is not ours.

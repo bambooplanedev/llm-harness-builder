@@ -17,7 +17,7 @@ export type EvolveStatus = {
 /** The 409 of an evolve start that needs the user's yes first. */
 export type EvolveConsent = {
   consent: { text: string; hash: string }; sets: { train: number; gate: number; test: number }
-  declarable: boolean; needed?: number; reference?: string; uncommitted: boolean
+  declarable: boolean; runs: number; priced: boolean; needed?: number; reference?: string; uncommitted: boolean
 }
 
 async function send(url: string, init?: RequestInit) {
@@ -50,7 +50,7 @@ export const api = {
   benchStop: () => j<{ ok: true }>('/api/bench/stop', { method: 'POST' }),
   evolveStatus: () => j<EvolveStatus>('/api/evolve'),
   /** undefined: started. A consent: nothing started, the user has to say yes to it first. */
-  evolveStart: async (body: { harness: string; repo: string; accept?: string }): Promise<EvolveConsent | undefined> => {
+  evolveStart: async (body: { harness: string; repo: string; mode: string; maxUsd?: number; accept?: string }): Promise<EvolveConsent | undefined> => {
     const { r, body: b } = await send('/api/evolve/start', { method: 'POST', body: JSON.stringify(body) })
     if (r.status === 409 && b.consent) return b as EvolveConsent
     if (!r.ok) throw failed(r, b)

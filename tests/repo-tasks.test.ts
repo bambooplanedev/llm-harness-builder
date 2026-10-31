@@ -123,14 +123,15 @@ test('repo-tasks: the evolve consent names the mode, the proposer and the fields
   expect(consentHash(pinned)).toBe('610e7ef3846c76fb139bfe07fa3cabfc2380e61890e3b7fc6f264cdcf0be65e3')
   const repo = await gitRepo({ 'lhb-tasks.json': JSON.stringify(good) })
   const t = await loadRepoTasks(repo)
-  const ev = { proposer: 'http://localhost:8080/v1', fields: ['systemPrompt', 'loop.maxRepeats'] }
+  const ev = { proposer: 'http://localhost:8080/v1', fields: ['systemPrompt', 'loop.maxRepeats'], mode: 'night', runs: 25 }
   const text = consentText(t, ev)
   expect(text.startsWith(consentText(t) + '\n')).toBe(true)
-  for (const s of ["mode: evolve — the model's own prompts run unreviewed while Evolve measures them", 'proposer: localhost:8080', 'fields: systemPrompt, loop.maxRepeats']) expect(text).toContain(s)
+  for (const s of ["mode: evolve — the model's own prompts run unreviewed while Evolve measures them", 'proposer: localhost:8080', 'fields: systemPrompt, loop.maxRepeats', 'run limit: mode night, up to 25 runs']) expect(text).toContain(s)
   expect(await hasConsent(t, ev)).toBe(false)
   await saveConsent(t, ev)
   expect(await hasConsent(t, ev)).toBe(true)
   expect(await hasConsent(t, { ...ev, proposer: 'https://openrouter.ai/api/v1' })).toBe(false)
+  expect(await hasConsent(t, { ...ev, mode: 'hours', runs: 9 })).toBe(false)
   expect(await hasConsent(t)).toBe(false)
   await saveConsent(t)
   expect(await hasConsent(t)).toBe(true)

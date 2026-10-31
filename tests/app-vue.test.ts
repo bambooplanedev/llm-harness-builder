@@ -243,13 +243,13 @@ test('Start without consent shows the sets and the commands; Start waits for the
   const d = textOf(dialogOf(app.root))
   for (const s of ['5 tasks it learns from', '4 check tasks Evolve never sees', '3 final test', 'CONSENT TEXT', 'at least 6 tasks go FAIL → PASS', 'uncommitted changes are not in the clones', 'for hours without asking'])
     expect(d).toContain(s)
-  expect(app.calls.find(c => c.url === '/api/evolve/start')!.body).toEqual({ harness: 'tuned', repo: '/tmp/repo' })
+  expect(app.calls.find(c => c.url === '/api/evolve/start')!.body).toEqual({ harness: 'tuned', repo: '/tmp/repo', mode: 'hours' })
   expect(button(app.root, 'Start')!.props.disabled).toBe(true)
   const box = all(dialogOf(app.root)).find(n => n.tag === 'input' && n.props.type === 'checkbox')!
   box.props.onChange({ target: { checked: true } }); await settle()
   expect(button(app.root, 'Start')!.props.disabled).toBe(false)
   button(app.root, 'Start')!.props.onClick(); await settle()
-  expect(app.calls.filter(c => c.url === '/api/evolve/start').at(-1)!.body).toEqual({ harness: 'tuned', repo: '/tmp/repo', accept: 'h1' })
+  expect(app.calls.filter(c => c.url === '/api/evolve/start').at(-1)!.body).toEqual({ harness: 'tuned', repo: '/tmp/repo', mode: 'hours', accept: 'h1' })
   expect(app.calls.at(-1)!.url).toBe('/api/evolve') // the status, asked again once the start went through
 })
 

@@ -57,7 +57,7 @@ async function start() {
   error.value = ''
   try {
     const accept = consent.value && accepted.value ? consent.value.consent.hash : undefined
-    const c = await api.evolveStart({ harness: harness.value, repo: repo.value, ...accept ? { accept } : {} })
+    const c = await api.evolveStart({ harness: harness.value, repo: repo.value, mode: 'hours', ...accept ? { accept } : {} })
     consent.value = c; accepted.value = false; changed.value = !!(c && accept)
     if (!c) emit('poll')
   } catch (e) { error.value = (e as Error).message; keepError = true; emit('poll') } // e.g. a job another tab started: show it
