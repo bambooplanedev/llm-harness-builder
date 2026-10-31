@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { api, type ActiveTrace, type AnalysisCells, type BenchFile, type BenchHarness, type BenchResult, type BenchRun, type HarnessConfig, type HarnessEvent } from './api'
 import { cellsLine } from '../../src/core/analyze'
-import { formatTable, wideCells, WIDE_HEAD, pCells, P_HEAD, rowNames, benchModels, mmss, wilson, benchTotal, runTitle, BENCH_TASKS, defaultSize } from '../../src/core/bench'
+import { formatTable, wideCells, WIDE_HEAD, pCells, P_HEAD, rowNames, benchModels, median, mmss, wilson, benchTotal, runTitle, BENCH_TASKS, defaultSize } from '../../src/core/bench'
 import Trace from './Trace.vue'
 import { t, tn, T, lang } from './i18n'
 import Diff from './Diff.vue'
@@ -148,7 +148,7 @@ const wide = computed(() => {
 const plainTable = computed(() => (wide.value, pText))
 /** A row's name: with --models the same harness name stands on several models, so the model is part of it (and of every key). */
 const labels = computed(() => result.value ? rowNames(result.value.harnesses) : [])
-const medCost = (h: BenchHarness) => { const c = h.runs.flatMap(r => r.costUsd ?? []).sort((a, b) => a - b); return c.length ? `$${Number(c[(c.length - 1) >> 1].toPrecision(3))}` : '-' }
+const medCost = (h: BenchHarness) => { const c = h.runs.flatMap(r => r.costUsd ?? []); return c.length ? `$${Number(median(c).toPrecision(3))}` : '-' }
 
 /**
  * One poll. A setTimeout chain, not setInterval: a tick reads the whole .part and every bench JSON,

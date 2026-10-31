@@ -15,6 +15,13 @@ function rng(seed: number): () => number {
   }
 }
 const sum = (x: number[]) => x.reduce((s, v) => s + v, 0)
+export const mean = (xs: number[]) => sum(xs) / xs.length
+/** `value(r)` per key, in row order; a row it answers undefined for is left out. */
+export function groupBy<R, T>(rows: R[], key: (r: R) => string, value: (r: R) => T | undefined): Map<string, T[]> {
+  const m = new Map<string, T[]>()
+  for (const r of rows) { const v = value(r); if (v !== undefined) m.set(key(r), [...m.get(key(r)) ?? [], v]) }
+  return m
+}
 const hit = (t: number, obs: number, side: 'greater' | 'two') => side === 'two' ? Math.abs(t) >= Math.abs(obs) - EPS : t >= obs - EPS
 
 /** Stratified permutation test of sum over strata of mean(b) - mean(a): labels are shuffled inside each stratum only. */

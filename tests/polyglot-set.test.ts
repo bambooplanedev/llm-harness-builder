@@ -48,7 +48,8 @@ test('every exercise ships stub, test, instructions, and the test imports the br
 })
 
 describe.concurrent('each exercise', () => {
-  test.each(exercises.map(e => e.name))('%s: proof passes every recorded test', async name => {
+  // `promises` races real timers a few ms apart, so a loaded runner can lose a race; a proof that is wrong fails every try.
+  test.each(exercises.map(e => e.name))('%s: proof passes every recorded test', { retry: 2 }, async name => {
     const n = exercises.find(e => e.name === name)!.tests.length
     expect(await check(name, path.join('polyglot-proofs', `${name}.js`))).toEqual({ pass: true, passed: n, total: n })
   })

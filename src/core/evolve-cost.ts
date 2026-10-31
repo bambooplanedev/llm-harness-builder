@@ -1,7 +1,7 @@
 // The cost rule of `evolve`: a candidate may cost a little more than the base, but not past the noise.
 // Pure — no fs, no process — so the Bench tab can import it. RunLite is a type-only import: no cycle with evolve.ts.
 import type { RunLite } from './evolve.js'
-import { signFlipP } from './stats.js'
+import { groupBy, mean, signFlipP } from './stats.js'
 
 export const MIN_SHARED = 5 // fewer shared tasks say nothing about cost
 const COST_ALPHA = 0.10 // looser than the win test: a dear candidate is refused on weaker evidence
@@ -38,17 +38,11 @@ export const allowedTurns = (base: number): number => base <= 10 ? Math.max(base
 export const allowedTenth = (base: number): number => base * 1.1
 
 const read = (r: RunLite, cost: Cost) => cost === 'turns' ? r.turns : cost === 'tokens' ? r.tokens : r.modelMs
-const mean = (xs: number[]) => xs.reduce((a, x) => a + x, 0) / xs.length
 
 /** Per task, the mean of its eligible runs: passes with the metric (the candidate's also within the old turn cap). */
 function perTask(runs: RunLite[], cost: Cost, cap: number): Map<string, number> {
-  const by = new Map<string, number[]>()
-  for (const r of runs) {
-    const v = read(r, cost)
-    // A candidate pass past the old cap is a new win, not a dearer harness; a run without the metric has no cost.
-    if (r.verdict !== 'PASS' || v === undefined || (r.turns ?? 0) > cap) continue
-    by.set(r.task, [...(by.get(r.task) ?? []), v])
-  }
+  // A candidate pass past the old cap is a new win, not a dearer harness; a run without the metric has no cost.
+  const by = groupBy(runs, r => r.task, r => r.verdict !== 'PASS' || (r.turns ?? 0) > cap ? undefined : read(r, cost))
   return new Map([...by].map(([t, vs]) => [t, mean(vs)]))
 }
 

@@ -5,10 +5,10 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { RunStore, WorkdirBusyError, safeName } from './runs.js'
 import { refusal } from './origin.js'
-import { validateConfig, backendErrors, keyProblem, apiKey, type HarnessConfig, type RunParams } from '../core/config.js'
+import { validateConfig, backendErrors, keyProblem, type HarnessConfig, type RunParams } from '../core/config.js'
 import { validateWorkdir } from '../core/tools/sandbox.js'
 import { createBackend, type Backend } from '../core/backends/index.js'
-import { redactor } from '../core/redact.js'
+import { keyRedactor } from '../core/redact.js'
 import { unreachable } from '../core/preflight.js'
 import type { HarnessEvent } from '../core/events.js'
 import { benchFileName, BENCH_TASKS } from '../core/bench.js'
@@ -68,24 +68,22 @@ export async function startServer(opts: ServerOpts) {
   let stopping = false
   /** The JSON `benching` writes: GET /api/bench names it while it runs, so a reloaded page still offers Stop. */
   let benchingFile = ''
-  const running = () => !!job && job.child.exitCode === null && job.child.signalCode === null
-  const busy = () => running() ? `${job!.kind === 'bench' ? 'a' : 'an'} ${job!.kind} started from this page is still running` : undefined
+  const runningKind = () => job && job.child.exitCode === null && job.child.signalCode === null ? job.kind : undefined
+  const busy = () => { const k = runningKind(); return k && `${k === 'bench' ? 'a' : 'an'} ${k} started from this page is still running` }
   /** Realpaths of the demo projects this server created: Check runs only in one of them, never in a folder the page names. */
   const demoDirs = new Set<string>()
 
   const exists = (f: string) => stat(f).then(() => true, () => false)
-  /** The one bench start: 409 while one runs, else spawns `opts.cli([bench, ...args, --out])`; 201 once its JSON exists (past preflight), else 502 with its stderr. */
+  /** The one bench start: 409 while one runs, else spawns `opts.cli([bench, --out, ...args])`; 201 once its JSON exists (past preflight), else 502 with its stderr. */
   async function startBench(args: string[], cleanup?: () => void): Promise<{ status: 201 | 409 | 502; body: { file?: string; error?: string } }> {
     if (busy()) return { status: 409, body: { error: busy() } }
     const first = benchFileName(new Date())
     let out = first
     for (let i = 2; await exists(path.join(opts.runsDir, out)); i++) out = first.replace(/\.json$/, `-${i}.json`) // two in one second must not share a JSON
     const outPath = path.join(opts.runsDir, out)
-    const i = args.findIndex(a => !a.startsWith('--')) // flags first, then the harness files
-    const k2 = i < 0 ? args.length : i
     if (busy()) return { status: 409, body: { error: busy() } } // the awaits above let another start in
     stopping = false; benchingFile = out
-    const child = opts.cli!(['bench', ...args.slice(0, k2), `--out=${outPath}`, ...args.slice(k2)])
+    const child = opts.cli!(['bench', `--out=${outPath}`, ...args])
     job = { kind: 'bench', child, err: '' }
     child.stdout?.resume() // nothing reads a bench's stdout: a full pipe would stall it
     let tail = ''
@@ -125,7 +123,7 @@ export async function startServer(opts: ServerOpts) {
         const missing = errors.length ? undefined : keyMissing(backend)
         if (missing) errors.push(missing)
         if (errors.length) return json(res, 400, { errors })
-        const redact = redactor(apiKey(backend, process.env), backend.apiKeyEnv ?? '')
+        const redact = keyRedactor(backend)
         try {
           if (!info) return json(res, 200, await backendFactory(backend).listModels())
           // Only what the form shows: undefined fields drop out of the JSON.
@@ -174,7 +172,7 @@ export async function startServer(opts: ServerOpts) {
       if (m('GET', /^\/api\/runs$/)) return json(res, 200, await reads!.list())
       if (m('GET', /^\/api\/bench$/)) {
         const file = url.searchParams.get('file')
-        const own = !example && running() && job!.kind === 'bench' ? benchingFile : undefined
+        const own = !example && runningKind() === 'bench' ? benchingFile : undefined
         if (file === null) return json(res, 200, { files: await reads!.benchList(), own })
         if (!benchName(file)) return json(res, 400, { error: 'bad name' })
         const opened = await reads!.benchOpen(file)
@@ -233,10 +231,10 @@ export async function startServer(opts: ServerOpts) {
           `--model=${backend.model}`, `--base-url=${backend.baseUrl}`, `--kind=${backend.kind}`, ...backend.apiKeyEnv ? [`--api-key-env=${backend.apiKeyEnv}`] : [], ...files])
         return json(res, status, out)
       }
-      if (opts.cli && m('POST', /^\/api\/bench\/stop$/)) {
+      if (opts.cli && (mm = m('POST', /^\/api\/(bench|evolve)\/stop$/))) {
         // Only the child this server holds: no pid or name from the page. SIGINT = Ctrl-C, the finished runs stay in its JSON.
-        if (!running() || job!.kind !== 'bench') return json(res, 409, { error: 'no bench started from this page is running' })
-        stopping = true
+        if (runningKind() !== mm[1]) return json(res, 409, { error: `no ${mm[1]} started from this page is running` })
+        if (mm[1] === 'bench') stopping = true // read only by a bench's startBench
         job!.child.kill('SIGINT')
         return json(res, 200, { ok: true })
       }
@@ -293,15 +291,10 @@ export async function startServer(opts: ServerOpts) {
         child.once('error', e => { if (job === j) job = undefined; lastEvolve = { harness: j.harness!, code: null, signal: null, err: String(e), out: '' } })
         return json(res, 201, {})
       }
-      if (opts.cli && m('POST', /^\/api\/evolve\/stop$/)) {
-        if (!running() || job!.kind !== 'evolve') return json(res, 409, { error: 'no evolve started from this page is running' })
-        job!.child.kill('SIGINT')
-        return json(res, 200, { ok: true })
-      }
       if (opts.cli && m('GET', /^\/api\/evolve$/)) {
         // No keys, no notes: the stderr of a child that gets the environment of serve, which redacts its own.
-        const round = running() && job!.kind === 'evolve' ? [...job!.err.matchAll(/^--- round (\d+)\/(\d+)$/gm)].pop() : undefined
-        return json(res, 200, { ...running() && job!.kind === 'bench' ? { bench: true } : {}, running: running() && job!.kind === 'evolve' ? { harness: job!.harness, err: job!.err, ...round ? { round: [Number(round[1]), Number(round[2])] } : {} } : undefined, last: lastEvolve })
+        const round = runningKind() === 'evolve' ? [...job!.err.matchAll(/^--- round (\d+)\/(\d+)$/gm)].pop() : undefined
+        return json(res, 200, { ...runningKind() === 'bench' ? { bench: true } : {}, running: runningKind() === 'evolve' ? { harness: job!.harness, err: job!.err, ...round ? { round: [Number(round[1]), Number(round[2])] } : {} } : undefined, last: lastEvolve })
       }
       if (m('POST', /^\/api\/notes$/)) {
         // POST for all of it: the page lists and deletes through the one refusal(), a GET would answer any page that guesses the folder.

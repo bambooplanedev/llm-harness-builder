@@ -4,13 +4,13 @@ import { randomUUID } from 'node:crypto'
 import { realpath } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import path from 'node:path'
-import { apiKey, NO_THINK_LINE, type RunParams } from './config.js'
+import { NO_THINK_LINE, type RunParams } from './config.js'
 import type { HarnessEvent, Ev } from './events.js'
 import { createBackend, type ChatRequest, type Knob, type Usage } from './backends/index.js'
 import { jsonCandidates } from './parse.js'
 import { costOf } from './cost.js'
 import { runAgent, type RunOpts } from './run.js'
-import { redactor } from './redact.js'
+import { keyRedactor, type Redactor } from './redact.js'
 import { appendNotes, readNotes, scrubNote, selectNotes, traceSignals, NOTE_MAX_CHARS, type Note } from './notes.js'
 
 /** Where a run's notes are, and whether it may add to them: bench reads only, so its runs stay independent. */
@@ -65,8 +65,7 @@ export async function* withNotes(params: RunParams, opts: RunOpts, store: NotesS
   if (!done) return
   // A run that never got a reply has nothing to note, and a dead server would only be asked again.
   if (store.write && done.turns > 0 && !['aborted', 'backend_error', 'mcp_error'].includes(done.reason)) {
-    const name = config.backend.apiKeyEnv
-    const redact = redactor(apiKey(config.backend, process.env), name ?? '')
+    const redact = keyRedactor(config.backend)
     const written: Ev = await writeNotes(params, opts, store.file, sent, [...events, done], runId, redact)
     yield redact.deep({ ...written, seq: done.seq, turn: done.turn, ts: Date.now() } as HarnessEvent)
     yield { ...done, seq: done.seq + 1 }
@@ -83,7 +82,7 @@ async function* holdDone(run: AsyncGenerator<HarnessEvent>, extra: Ev): AsyncGen
 }
 
 async function writeNotes(params: RunParams, opts: RunOpts, file: string, existing: Note[], events: HarnessEvent[], runId: string,
-  redact: ReturnType<typeof redactor>): Promise<Ev> {
+  redact: Redactor): Promise<Ev> {
   const { config, task } = params
   // What the run's knobs_off said the model does not take is left out here too.
   const off = new Set<Knob | string>(events.flatMap(e => e.type === 'knobs_off' ? e.off.map(o => o.knob) : []))

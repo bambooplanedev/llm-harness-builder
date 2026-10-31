@@ -3,7 +3,7 @@ import { showable, type DoneReason, type HarnessEvent } from './events.js'
 import type { HarnessConfig } from './config.js'
 import { costCheck, tokensGate, type Cost } from './evolve-cost.js'
 import type { RunLite } from './evolve.js'
-import { permP } from './stats.js'
+import { groupBy, mean, permP } from './stats.js'
 
 export type BenchRun = {
   round: number; verdict: 'PASS' | 'FAIL'; reason: DoneReason | 'error'
@@ -98,7 +98,6 @@ export function wilson(pass: number, n: number, z = 1.96): [number, number] | un
   return [Math.max(0, center - half), Math.min(1, center + half)]
 }
 
-const mean = (xs: number[]) => xs.reduce((a, x) => a + x, 0) / xs.length
 /** Calls per run by tool, over the runs that counted them: "bash 2.5 read_file 1"; '-' when none did. */
 const toolsCell = (runs: BenchRun[]): string => {
   const rs = runs.filter(r => r.toolCounts), names = [...new Set(rs.flatMap(r => Object.keys(r.toolCounts!)))].sort()
@@ -142,7 +141,7 @@ export function pCells(harnesses: BenchHarness[]): string[][] {
     const base = harnesses.find(b => b.config.backend?.model === h.config.backend?.model)!
     return P_NUMBERS.map(f => {
       if (base === h) return '-'
-      const by = (x: BenchHarness) => { const m = new Map<string, number[]>(); for (const r of x.runs) { const v = f(r); if (v !== undefined) m.set(r.task ?? 'task', [...m.get(r.task ?? 'task') ?? [], v]) } return m }
+      const by = (x: BenchHarness) => groupBy(x.runs, r => r.task ?? 'task', f)
       const a = by(base), b = by(h)
       const strata = [...b].filter(([t]) => a.has(t)).map(([t, bs]) => ({ a: a.get(t)!, b: bs }))
       if (!strata.length) return '-'

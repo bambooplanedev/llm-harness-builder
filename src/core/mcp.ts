@@ -17,8 +17,7 @@ export type McpSession = {
   close(): void
 }
 
-const MCP_HANDSHAKE_TIMEOUT_MS = 60_000
-const MCP_CALL_TIMEOUT_MS = 60_000
+const MCP_TIMEOUT_MS = 60_000
 /** A line longer than this means the server is broken; grow no further. */
 const MAX_LINE_BYTES = 1 << 20
 const STDERR_TAIL = 8 << 10
@@ -136,7 +135,7 @@ export async function startServers(
   // backend key, which nothing the harness starts needs.
   let env: NodeJS.ProcessEnv | undefined
   if (opts.dropEnv) { env = { ...process.env }; delete env[opts.dropEnv] }
-  const handshake = opts.timeoutMs ?? MCP_HANDSHAKE_TIMEOUT_MS
+  const handshake = opts.timeoutMs ?? MCP_TIMEOUT_MS
   const conns: Conn[] = []
   const byTool = new Map<string, Conn>()
   const tools: ToolSchema[] = []
@@ -188,7 +187,7 @@ export async function startServers(
       const conn = byTool.get(name)
       if (!conn) return { output: `no mcp server provides "${name}"`, error: true }
       try {
-        const m = await conn.request('tools/call', { name, arguments: args }, opts.timeoutMs ?? MCP_CALL_TIMEOUT_MS)
+        const m = await conn.request('tools/call', { name, arguments: args }, opts.timeoutMs ?? MCP_TIMEOUT_MS)
         if (m.error) return { output: `mcp error ${m.error.code}: ${m.error.message}`, error: true }
         return { output: flatten(m.result?.content), error: m.result?.isError === true }
       } catch (e) {

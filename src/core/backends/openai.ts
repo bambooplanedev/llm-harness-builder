@@ -91,6 +91,7 @@ export class OpenAIBackend implements Backend {
   private openRouter: boolean
   constructor(private baseUrl: string, private fetchFn: FetchLike = defaultFetch, private key?: string) { this.baseUrl = baseUrl.replace(/\/+$/, ''); this.openRouter = new URL(this.baseUrl).hostname === 'openrouter.ai' }
 
+  private get root(): string { return this.baseUrl.replace(/\/v1$/, '') }
   private keyed(init: NonNullable<Parameters<FetchLike>[1]> = {}) {
     return this.key ? { ...init, headers: { ...init.headers, authorization: `Bearer ${this.key}` }, redirect: 'manual' as const } : init
   }
@@ -139,16 +140,14 @@ export class OpenAIBackend implements Backend {
   /** llama-server only: /apply-template renders the chat template (tools included), /tokenize counts it. Both live at the server root, not under /v1. */
   async countTokens(payload: unknown, signal?: AbortSignal): Promise<number | undefined> {
     if (this.key) return undefined // a hosted API has no /apply-template or /tokenize; the estimate and usage remain
-    const root = this.baseUrl.replace(/\/v1$/, '')
     const post = async (path: string, body: unknown) => {
-      const r = await this.fetchFn(`${root}${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal })
-      if (!r.ok) { const b = await r.text(); throw new BackendError(`POST ${path}: ${r.status}`, b, httpFields(r, b)) }
-      return readJson(r, `POST ${path}`)
+      const r = await this.fetchFn(`${this.root}${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal })
+      return r.ok ? readJson(r, `POST ${path}`) : undefined
     }
     try {
-      const { prompt } = await post('/apply-template', payload)
+      const { prompt } = await post('/apply-template', payload) ?? {}
       if (typeof prompt !== 'string') return undefined
-      const { tokens } = await post('/tokenize', { content: prompt, add_special: true, model: (payload as { model?: string }).model })
+      const { tokens } = await post('/tokenize', { content: prompt, add_special: true, model: (payload as { model?: string }).model }) ?? {}
       return Array.isArray(tokens) ? tokens.length : undefined
     } catch { return undefined }
   }
@@ -159,9 +158,8 @@ export class OpenAIBackend implements Backend {
    */
   async serverInfo(model: string): Promise<ServerInfo | undefined> {
     if (this.key) return this.listedInfo(model)
-    const root = this.baseUrl.replace(/\/v1$/, '')
     const props = async (q = '') => {
-      const r = await this.fetchFn(`${root}/props${q}`)
+      const r = await this.fetchFn(`${this.root}/props${q}`)
       return r.ok ? readJson(r, 'GET /props') : undefined
     }
     const info = (p: any): ServerInfo => ({

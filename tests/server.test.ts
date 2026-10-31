@@ -598,7 +598,7 @@ test('POST /api/bench/again starts bench from the JSON\'s own harnesses and answ
     expect(ok.status).toBe(201)
     const { file } = await ok.json()
     expect(file).toMatch(/^bench-\d{8}-\d{6}(-\d+)?\.json$/)
-    expect(got[0].args.slice(0, 4)).toEqual(['--task=slug', '--n=2', '--timeout=60', `--out=${join(benchDir, file)}`])
+    expect(got[0].args.slice(0, 4)).toEqual([`--out=${join(benchDir, file)}`, '--task=slug', '--n=2', '--timeout=60'])
     expect(got[0].configs).toEqual([config()])
     // one at a time: the first one still runs
     expect((await postJson(`${u}/api/bench/again`, { file: 'b1.json' })).status).toBe(409)
@@ -674,16 +674,16 @@ test('POST /api/bench/new validates and passes only what it checked', async () =
     const r = await post({ harnesses: ['tuned', 'tuned'], evil: '--yes', backend: { ...form, extra: '--out=/x' } })
     expect(r.status).toBe(201)
     const { file } = await r.json()
-    expect(b.got).toEqual([['--task=slug', '--n=2', '--model=m', '--base-url=http://127.0.0.1:9/v1', '--kind=openai', `--out=${join(b.runs, file)}`, join(b.hdir, 'tuned.json')]])
+    expect(b.got).toEqual([[`--out=${join(b.runs, file)}`, '--task=slug', '--n=2', '--model=m', '--base-url=http://127.0.0.1:9/v1', '--kind=openai', join(b.hdir, 'tuned.json')]])
     await exited(b.children[0])
     // the form's key overrides the file's (--api-key-env), whether the file has none or another
     expect((await post({ task: 'pool', size: 3, backend: { ...form, apiKeyEnv: 'LHB_NEW_SET_API_KEY' } })).status).toBe(201)
     await exited(b.children[1])
     expect((await post({ harnesses: ['keyed'], backend: { ...form, apiKeyEnv: 'LHB_NEW_SET_API_KEY' } })).status).toBe(201)
-    expect(b.got[1].slice(0, 7)).toEqual(['--task=pool', '--size=3', '--n=2', '--model=m', '--base-url=http://127.0.0.1:9/v1', '--kind=openai', '--api-key-env=LHB_NEW_SET_API_KEY'])
+    expect(b.got[1].slice(1, 8)).toEqual(['--task=pool', '--size=3', '--n=2', '--model=m', '--base-url=http://127.0.0.1:9/v1', '--kind=openai', '--api-key-env=LHB_NEW_SET_API_KEY'])
     await exited(b.children[2])
     expect((await post({ task: 'polyglot', size: 5 })).status).toBe(201)
-    expect(b.got[3].slice(0, 2)).toEqual(['--task=polyglot', '--size=5'])
+    expect(b.got[3].slice(1, 3)).toEqual(['--task=polyglot', '--size=5'])
     await exited(b.children[3])
     const headers = { host: `localhost:${b.s.port}`, origin: 'http://evil.example', 'content-type': 'text/plain' }
     expect(await rawReq('POST', '/api/bench/new', headers, JSON.stringify(ok), b.s.port)).toBe(403)

@@ -1,4 +1,4 @@
-import { NO_THINK_LINE, apiKey, listsModelsByItself, type HarnessConfig, type RunParams } from './config.js'
+import { NO_THINK_LINE, listsModelsByItself, type HarnessConfig, type RunParams } from './config.js'
 import { mcpApprovalName, UNTIL_BASH, type Ev, type HarnessEvent, type ToolCall, type DoneReason } from './events.js'
 import { createBackend, sendRetrying, isStop, BackendError, type Backend, type ChatMessage, type ChatRequest, type Delta, type NormalizedResponse, type Usage } from './backends/index.js'
 import { TOOL_SCHEMAS, READ_FILE_RANGES, runTool } from './tools/index.js'
@@ -10,7 +10,7 @@ import { parsePrompted, parseHermes } from './parse.js'
 import { applyBudget } from './tokens.js'
 import { normPath } from './analyze.js'
 import { startServers, type McpSession } from './mcp.js'
-import { redactor } from './redact.js'
+import { keyRedactor } from './redact.js'
 import { costOf } from './cost.js'
 import { notesBlock } from './notes.js'
 import { knobsOff } from './knobs.js'
@@ -46,7 +46,7 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
   // is cleaned before the history takes it, every event is a cleaned copy, and what goes to the server or to a tool is
   // left as it is.
   const keyName = config.backend.apiKeyEnv
-  const redact = redactor(keyName === undefined ? undefined : apiKey(config.backend, process.env), keyName ?? '')
+  const redact = keyRedactor(config.backend)
   const prompted = config.toolCalls.mode === 'prompted'
   const hermes = prompted && config.toolCalls.format === 'hermes'
 

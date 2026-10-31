@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { configDiff, lineDiff, skeleton, turnsOf, type DiffSide } from '../../src/core/diff'
+import { configDiff, lineDiff, skeleton, text, turnsOf, type DiffSide } from '../../src/core/diff'
 import { mmss } from '../../src/core/bench'
 import Trace from './Trace.vue'
 import { t, tn, T } from './i18n'
@@ -17,8 +17,6 @@ const names = computed(() => {
 })
 /** Leaves are JSON text, so a multi-line string shows up as a literal \n escape inside it. */
 const lines = (r: { a: string; b: string }) => r.a.includes('\\n') || r.b.includes('\\n')
-/** A key missing on one side is the literal 'undefined', which JSON.parse would throw on. */
-const text = (v: string) => (v === 'undefined' ? '' : String(JSON.parse(v)))
 const onlyIn = (r: { a: string; b: string }) => lineDiff(text(r.a), text(r.b))
 const sides = computed(() => [{ tag: 'A', s: props.a }, { tag: 'B', s: props.b }])
 
