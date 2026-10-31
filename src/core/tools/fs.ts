@@ -39,10 +39,8 @@ const lineNo = (v: unknown): number | undefined => typeof v === 'number' && Numb
 async function head(file: string, limit: number): Promise<{ text: string; size: number }> {
   const fh = await open(file, 'r')
   try {
-    const size = (await fh.stat()).size
-    const n = Math.min(size, limit)
-    const buf = Buffer.alloc(n)
-    const { bytesRead } = await fh.read(buf, 0, n, 0)
+    const { size } = await fh.stat(), buf = Buffer.alloc(Math.min(size, limit))
+    const { bytesRead } = await fh.read(buf, 0, buf.length, 0)
     return { text: buf.subarray(0, bytesRead).toString('utf8'), size }
   } finally { await fh.close() }
 }

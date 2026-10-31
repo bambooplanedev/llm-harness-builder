@@ -91,9 +91,7 @@ export class OpenAIBackend implements Backend {
   private openRouter: boolean
   constructor(private baseUrl: string, private fetchFn: FetchLike = defaultFetch, private key?: string) { this.baseUrl = baseUrl.replace(/\/+$/, ''); this.openRouter = new URL(this.baseUrl).hostname === 'openrouter.ai' }
 
-  /** llama-server's own routes live at the server root, not under /v1. */
   private get root(): string { return this.baseUrl.replace(/\/v1$/, '') }
-
   private keyed(init: NonNullable<Parameters<FetchLike>[1]> = {}) {
     return this.key ? { ...init, headers: { ...init.headers, authorization: `Bearer ${this.key}` }, redirect: 'manual' as const } : init
   }
