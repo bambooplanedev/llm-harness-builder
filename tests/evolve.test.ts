@@ -63,27 +63,50 @@ describe('evolve decide: repeats, the one PASS test, the cost gates', () => {
     const orig = T.map((t, i) => run(t, i < 2, 100))
     expect(dec(cur, T.map((t, i) => run(t, i < 5, 300)), orig, gate, strict)).toMatchObject({ accepted: false, reason: expect.stringMatching(/^costs \d+% more tokens per success than the original$/) })
   })
-  it('under 5 shared tasks the all-tokens gate alone decides: turns x10 does not refuse', () => {
-    const cur = [run('a', false), run('b', false), run('c', false)]
-    const cand = ['a', 'b', 'c'].map((t): RunLite => ({ ...run(t, true), turns: 30 }))
-    expect(dec(cur, cand, cur, [], ref)).toMatchObject({ accepted: true })
+  it('under 5 shared tasks the all-tokens gate alone decides: 4 shared passes, turns over tolerance within the cap, accepted', () => {
+    const ts = ['a', 'b', 'c', 'd']
+    const cur = ts.map(t => run(t, false)), orig = ts.map(t => run(t, true))
+    const cand = ts.map((t): RunLite => ({ ...run(t, true), turns: 6 })) // 3 -> 6: past +1, inside the cap of 10
+    expect(dec(cur, cand, orig, [], ref)).toMatchObject({ accepted: true })
+    // one more shared task and the same turns are refused: the skip is the MIN_SHARED rule, not a blind spot
+    const five = [...ts, 'e']
+    expect(dec(five.map(t => run(t, false)), five.map((t): RunLite => ({ ...run(t, true), turns: 6 })), five.map(t => run(t, true)), [], ref).reason).toMatch(/^turns /)
   })
   it('a 0-PASS original and a 5-PASS candidate can be accepted', () => {
     const cur = T.map(t => run(t, false))
     expect(dec(cur, T.map((t, i) => run(t, i < 5)), cur, gate, strict)).toMatchObject({ accepted: true })
   })
-  it('turns and tokens against the original, time against the current: new reasons, each its own kind', () => {
+  it('turns and tokens against the original, time against the current: cur and orig differ in all three, so a swapped base flips each refusal', () => {
     const R: Mode = { strict: false, trainGate: 16, test: 8 }
-    const mk = (n: number, o: Partial<RunLite> = {}) => T.map((t, i) => ({ ...run(t, i < n), modelMs: 1000, ...o }))
-    const cur = mk(10), orig = T.map((t, i) => ({ ...run(t, i < 10, i < 10 ? 100 : 1000), modelMs: 1000 })) // dear failures keep tokens per success high
-    const all = (o: Partial<RunLite>) => mk(16, o)
-    expect(dec(cur, all({}), orig, gate, R).accepted).toBe(true)
-    const turns = dec(cur, all({ turns: 6 }), orig, gate, R)
+    // orig: turns 3, 100 tokens, 5 s; cur: turns 8, 400 tokens, 1 s. The dear original failures keep its tokens per success high.
+    const orig = T.map((t, i) => ({ ...run(t, i < 10, i < 10 ? 100 : 1000), modelMs: 5000 }))
+    const cur = T.map((t, i) => ({ ...run(t, i < 10, 400), turns: 8, modelMs: 1000 }))
+    const cand = (o: Partial<RunLite>) => T.map(t => ({ ...run(t, true), modelMs: 1000, ...o }))
+    expect(dec(cur, cand({}), orig, gate, R).accepted).toBe(true)
+    const turns = dec(cur, cand({ turns: 6 }), orig, gate, R) // 6 against the original's 3; against the current's 8 it would be fine
     expect(turns.reason).toBe('turns 3.0 → 6.0, allowed up to 4.0 (p=0.00)'); expect(reasonKind(turns.reason)).toBe('over tolerance: turns')
-    const tokens = dec(cur, all({ tokens: 200 }), orig, gate, R)
+    const tokens = dec(cur, cand({ tokens: 200 }), orig, gate, R) // 200 against 100; against 400 it would be fine
     expect(tokens.reason).toBe('tokens 100 → 200, allowed up to 110 (p=0.00)'); expect(reasonKind(tokens.reason)).toBe('over tolerance: tokens')
-    const time = dec(cur, all({ modelMs: 2000 }), orig, gate, R)
+    const time = dec(cur, cand({ modelMs: 2000 }), orig, gate, R) // 2 s against the current's 1 s; against the original's 5 s it would be fine
     expect(time.reason).toBe('time 1.0s → 2.0s, allowed up to 1.1s (p=0.00)'); expect(reasonKind(time.reason)).toBe('over tolerance: time')
+  })
+  it('candidate passes past origMaxTurns on shared tasks are a new win, not a dearer harness: accepted through decide', () => {
+    const orig = T.map(t => run(t, true)), cur = T.map((t, i) => run(t, i < 10))
+    const cand = T.map((t): RunLite => ({ ...run(t, true), turns: 20 }))
+    expect(decide({ cur, cand, orig, gateNames: gate, mode: ref, origMaxTurns: 10 }).accepted).toBe(true)
+    expect(decide({ cur, cand, orig, gateNames: gate, mode: ref, origMaxTurns: 30 }).reason).toBe('turns 3.0 → 20.0, allowed up to 4.0 (p=0.00)')
+  })
+  it('strict: 5 tasks up and 3 down is within noise on the p, though improved reaches the 5', () => {
+    const cur = T.map((t, i) => run(t, i >= 5 && i < 8)), cand = T.map((t, i) => run(t, i < 5))
+    expect(passGain(cur, cand).improved).toBe(5)
+    expect(dec(cur, cand, cur, gate, strict)).toMatchObject({ accepted: false, reason: expect.stringMatching(/^within noise \(p=0\.\d\d\)$/) })
+    expect(passGain(cur, cand).p).toBeGreaterThan(ALPHA)
+  })
+  it('first request not measured counts tasks, not runs, over repeats', () => {
+    const o = ['a', 'b', 'c'].flatMap(t => rep(t, [false, false], { firstPromptTokens: 50 }))
+    const noReply = (t: string) => rep(t, [false, false], { tokens: 0, firstPromptTokens: undefined })
+    const cand = [...noReply('a'), ...noReply('b'), ...rep('c', [true, true], { firstPromptTokens: 50 })]
+    expect(dec(o, cand, o, [], ref).reason).toBe('first request not measured on 2 tasks')
   })
   it('first request pairs per-task means over repeats', () => {
     const o = [...rep('a', [false, false], { firstPromptTokens: 50 }), ...rep('b', [false], { firstPromptTokens: 50 })]
@@ -387,6 +410,17 @@ describe('evolve journal', () => {
   it('a start line without notes is refused', () => {
     const { notes: _, ...noNotes } = start
     expect(parseJournal(jsonl(noNotes))).toEqual({ error: 'line 1: missing notes' })
+  })
+
+  it('replay holds the journal to the original\'s loop.maxTurns: an accepted line whose verdict depends on the cap replays', () => {
+    const big = { train: ['t0', 't1', 't2', 't3', 't4'], gate: ['t5', 't6'], test: ['t7'] }
+    const st = { ...start, sets: big }
+    const base = ['t0', 't1', 't2', 't3', 't4', 't5', 't6'].map((t, i) => run(t, i > 0)) // 6 PASS at 3 turns
+    // all 7 PASS at 8 turns: past +1 on the 6 shared, but 8 > the cap of 5 (harness()), so not compared and accepted
+    const dear = base.map((r): RunLite => ({ ...r, verdict: 'PASS', turns: 8 }))
+    const c = { ...a1, runs: dear }
+    const r = replay([st, { ...cur, runs: base }, c] as any, harness(), { binding: [], sets: big }) as any
+    expect(r.error).toBeUndefined(); expect(r.version).toBe(1)
   })
 
   it('a final line is kept only as the journal\'s last line, for the replayed version, on the test tasks', () => {
