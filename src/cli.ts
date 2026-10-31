@@ -14,7 +14,7 @@ import { killTracked } from './core/procs.js'
 import { withNotes, type NotesStore } from './core/notes-run.js'
 import { notesKey, notesPath, readNotes, scrubText, stateDir } from './core/notes.js'
 import { smallestGain } from './core/stats.js'
-import { ALLOWED, CANDIDATES, MODES, ROUNDS, numbersOf, runCount, splitSets, splitOf, referenceLabel, neededFlips, usable, decideRound, sweptCands, applyEdit, bindingTokens, checkEdit, failureGroups, signatureOf, proposerInput, proposerRequest, parseProposal, parseJournal, replay, type Edit, type JournalLine, type RunLite, type SetName } from './core/evolve.js'
+import { ALLOWED, CANDIDATES, type EvolveMode, MODES, ROUNDS, numbersOf, runCount, splitSets, splitOf, referenceLabel, neededFlips, usable, decideRound, sweptCands, applyEdit, bindingTokens, checkEdit, failureGroups, signatureOf, proposerInput, proposerRequest, parseProposal, parseJournal, replay, type Edit, type JournalLine, type RunLite, type SetName } from './core/evolve.js'
 import { evolveReport } from './core/evolve-report.js'
 import { loadRepoTasks, hostOf, consentText, hasConsent, saveConsent, git, TASKS_FILE, type RepoTasks, type EvolveConsent } from './core/repo-tasks.js'
 import { cloneAt, linkNodeModules, protectedChanged, runCheck, finishRun, removeAllClonesSync, prepareModules, modulesManifest, modulesTampered, type Clone } from './core/repo-clone.js'
@@ -610,10 +610,9 @@ async function cmdEvolve(argv: string[]) {
   const named = values.mode as keyof typeof MODES | undefined, custom = values.size !== undefined || values.rounds !== undefined
   if (named !== undefined && !Object.hasOwn(MODES, named)) argError('evolve', '--mode must be hours, night or days')
   if (named && custom) argError('evolve', '--mode cannot go with --size or --rounds')
-  // No default: a default would silently buy a night of runs. The report reads all of it from the start line.
-  if (!named && !custom && !values.report) argError('evolve', 'evolve needs --mode hours, night or days (--rounds, and --size on polyglot, for an orientation run of your own)')
   const size0 = named ? MODES[named].size : Number(values.size)
-  if (poly && !named && !values.report && !(INT.test(values.size ?? '') && size0 >= 3 && size0 <= POLYGLOT_MAX)) argError('evolve', `--size must be an integer from 3 to ${POLYGLOT_MAX} for evolve --task polyglot`)
+  const sizeError = `--size must be an integer from 3 to ${POLYGLOT_MAX} for evolve --task polyglot`
+  if (poly && values.size !== undefined && !values.report && !(INT.test(values.size) && size0 >= 3 && size0 <= POLYGLOT_MAX)) argError('evolve', sizeError)
   if (values.rounds !== undefined && !INT.test(values.rounds)) argError('evolve', '--rounds must be a positive integer')
   if (!INT.test(values.timeout)) argError('evolve', '--timeout must be a positive integer')
   const timeoutS = Number(values.timeout)
@@ -650,7 +649,16 @@ async function cmdEvolve(argv: string[]) {
   }
   // Everything below reads only the source: what the tasks are, where they come from, how they run.
   const first = lines[0]?.type === 'start' ? lines[0] : undefined
-  if (values.report && !first) die(start('cannot resume: the journal does not begin with a start line'))
+  if (resuming && !first) die(start('cannot resume: the journal does not begin with a start line'))
+  const ranWith = (m: EvolveMode, n: number, r: number) => m === 'custom' ? `${poly ? `--size ${n} ` : ''}--rounds ${r}` : `--mode ${m}`
+  // A stopped evolve holds paid runs: the flags that fit it are the journal's to name, and nothing here advises deleting it.
+  if (first && !values.report) {
+    const ran = ranWith(first.mode, first.sets.train.length + first.sets.gate.length + first.sets.test.length, first.rounds)
+    if (!(named || custom) || ran !== ranWith(named ?? 'custom', size0, Number(values.rounds ?? ROUNDS))) die(`this journal ran ${ran}; run the same command with it`)
+  }
+  // No default: a default would silently buy a night of runs. The report reads all of it from the start line.
+  if (!resuming && !named && !custom) argError('evolve', 'evolve needs --mode hours, night or days (--rounds, and --size on polyglot, for an orientation run of your own)')
+  if (!resuming && poly && !named && values.size === undefined) argError('evolve', sizeError)
   const { mode, repeats, rounds } = values.report ? first! : named ? { mode: named, ...MODES[named] } : { mode: 'custom' as const, repeats: 1, rounds: Number(values.rounds ?? ROUNDS) }
   const size = values.report ? first!.sets.train.length + first!.sets.gate.length + first!.sets.test.length : size0
   // What the runs depend on besides the tasks: a resume with another harness or other flags would mix two evolves.
@@ -662,7 +670,6 @@ async function cmdEvolve(argv: string[]) {
   console.error(src.describe)
   console.error(split.declarable ? `a winner can be declared: a candidate needs at least ${neededFlips()} tasks FAIL → PASS on train + gate (more if any go PASS → FAIL)` : referenceLabel(split))
   const count = runCount(sets, repeats, rounds)
-  if (!values.report) console.error(`mode ${mode}: up to ${count.all} runs: ${count.probe} probe, ${count.sweeps} sweeps, ${count.test} test`)
   const binding = bindingTokens({ names: src.names, words: src.words, paths: src.paths, prompts: src.prompts })
   const rebuilt = (): EvolveState => {
     const r = replay(lines, raw, { binding, sets })
@@ -699,6 +706,7 @@ async function cmdEvolve(argv: string[]) {
     console.log(report())
     return
   }
+  console.error(`mode ${mode}: up to ${count.all} runs: ${count.probe} probe, ${count.sweeps} sweeps, ${count.test} test`)
   console.error(autoApproves('evolve'))
   await src.consent(values.yes, proposer.backend.baseUrl)
   // A torn last line goes, or the next line would be appended onto it; only after consent, and only on the run path.
@@ -772,11 +780,11 @@ async function cmdEvolve(argv: string[]) {
     if (!trace || !TRACE_ID.test(trace)) return []
     try { return (await readTraceFile(path.join('runs', `${trace}.jsonl`))).events } catch { return [] }
   }
-  /** The rest of the upper count at the probe's pace. The gates ask for neededFlips whatever the variance says, so a declarable mode never promises less. */
+  /** The rest of the upper count at the probe's pace. A probe of all PASS or all FAIL has no variance: neededFlips is the floor, so the line never promises +1. */
   const estimate = (probe: RunLite[], msPerRun: number): string => {
     const rest = count.all - count.probe, priced = probe.flatMap(r => r.costUsd === undefined ? [] : [r.costUsd])
     const money = priced.length ? `, about $${(rest * priced.reduce((a, c) => a + c, 0) / priced.length).toFixed(2)}` : ''
-    const g = smallestGain(numbersOf(probe).pass / probe.length, repeats, split.trainGate), k = split.declarable ? Math.max(g.tasks, neededFlips()) : g.tasks
+    const g = smallestGain(numbersOf(probe).pass / probe.length, repeats, split.trainGate), k = Math.max(g.tasks, neededFlips())
     return `estimate: up to ${rest} more runs, about ${(rest * msPerRun / 3.6e6).toFixed(1)} h${money}; the smallest gain told from noise: ${g.bound ? 'at most ' : ''}+${k} tasks of ${split.trainGate}${g.bound ? ' (upper bound at 1 repeat)' : ''}`
   }
   const pBackend = (await fakeBackendFromEnv()) ?? createBackend(pb)

@@ -402,8 +402,8 @@ Only `night` and `days` declare a winner, and only with at least 16 train + gate
 other result is labelled "orientation, not proof" and says why. On `--tasks` the repo sets the task
 count and the mode sets repeats and rounds. evolve prints the mode's run count at the start. After the
 first step it prints the time for the rest at that pace, the money when the harness has a price, and
-the smallest gain the mode can tell from noise on this model (`at most`, an upper bound, at one
-repeat). These are upper counts: the test runs only if a version is found. The mode, its repeats and
+the smallest gain the mode can tell from noise on this model (`at most` at one repeat: one repeat
+gives no within-task variance, so it is an upper bound). These are upper counts: the test runs only if a version is found. The mode, its repeats and
 its rounds are pinned: another mode or `--rounds` refuses a resume, and `--report` reads them from the
 journal.
 
@@ -441,7 +441,7 @@ in the repo or a changed notes snapshot is refused, and the message says how to 
 the journal and move away `harnesses/<name>.v*.json`; for a finished evolve whose journal is intact it
 points at `--report` and says to move the journal away, not to delete it. A resumed evolve continues at the step it
 stopped on. `--report` prints the report of a finished evolve from the journal alone, with no run and no API key
-(give it the same options): it reads the tasks at the commit the journal started at, so it prints
+(the mode, the size and the rounds come from the journal; give only the backend overrides, `--proposer` and `--timeout` the run had): it reads the tasks at the commit the journal started at, so it prints
 even after new commits or a deleted notes snapshot, and it says when `vN.json` on disk differs from
 the version that was measured. To use `vN`, point at it; copying it over the original file changes
 the harness the journal was pinned to, and a later `--report` refuses.
@@ -450,7 +450,7 @@ Exit codes: 0 with a report; 1 when the model changed the linked `node_modules` 
 bad argument, or a server that does not answer or lacks the model; 130 for Ctrl-C, after which the journal holds every finished step.
 
 Measured on 28–29 October 2026 (`qwen/qwen3-coder-30b-a3b-instruct` on OpenRouter, `tuned-qwen-coder`,
-`--task polyglot --size 47 --rounds 3`, one repeat under the rule `night` now applies, about 8.5 hours of runs; $0.14 measured for two steps of
+`--task polyglot --size 47 --rounds 3`, one repeat, its verdicts under the strict gate of that time, not `night`, about 8.5 hours of runs; $0.14 measured for two steps of
 32 runs, so about $0.65 for all nine):
 
 | Step | Edit | PASS of 32 (train + gate) | Verdict |

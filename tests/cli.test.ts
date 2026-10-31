@@ -1779,7 +1779,7 @@ test('evolve: reference mode on 1+1+1 says \u041e\u0420\u0406\u0404\u041d\u0422\
 }, 120_000)
 
 test('evolve --mode: neither a mode nor flags refuses, naming the three; a mode with --size or --rounds refuses; an unknown mode refuses', () => {
-  const bad = (args: string[], re: RegExp) => { const r = cli(['evolve', 'h.json', ...args]); expect(r.status).toBe(2); expect(r.stderr).toMatch(re) }
+  const bad = (args: string[], re: RegExp) => { const r = cli(['evolve', harness('bare'), ...args]); expect(r.status).toBe(2); expect(r.stderr).toMatch(re) }
   bad(['--tasks', 'x'], /^error: evolve needs --mode hours, night or days/m)
   bad(['--task', 'polyglot'], /^error: evolve needs --mode hours, night or days/m)
   bad(['--tasks', 'x', '--mode', 'night', '--rounds', '1'], /^error: --mode cannot go with --size or --rounds$/m)
@@ -1815,12 +1815,14 @@ test('evolve --mode night on too few tasks: it runs three repeats, labels orient
   const before = evRaw(cwd)
   const d = cli(['evolve', h, '--tasks', repo, '--mode', 'days', '--yes'], env, cwd)
   expect(d.status).toBe(2)
-  expect(d.stderr).toContain('the harness or its options changed since this evolve started')
+  expect(d.stderr).toContain('this journal ran --mode night; run the same command with it')
   expect(evRaw(cwd)).toBe(before)
   // The same command prints the journal's report: repeats and rounds came from its start line.
   const same = cli(['evolve', h, '--tasks', repo, '--mode', 'night', '--yes'], env, cwd)
   expect(same.status, same.stderr).toBe(0)
   expect(same.stdout).toBe(r.stdout)
+  // Nothing runs, so no run count.
+  expect(same.stderr).not.toContain('up to 25 runs')
   // --report needs neither a mode nor flags.
   expect(cli(['evolve', h, '--tasks', repo, '--report'], env, cwd).stdout).toBe(r.stdout)
 }, 120_000)
@@ -1832,7 +1834,8 @@ test('evolve --mode: after the probe, what the rest costs and the smallest gain;
   const r = cli(['evolve', evHarness(cwd), '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
   expect(r.status, r.stderr).toBe(0)
   expect(r.stderr).toMatch(/^mode custom: up to 9 runs: 1 probe, 6 sweeps, 2 test$/m)
-  expect(r.stderr).toMatch(/^estimate: up to 8 more runs, about \d+\.\d h; the smallest gain told from noise: at most \+\d+ tasks of 2 \(upper bound at 1 repeat\)$/m)
+  // A probe of all FAIL has no variance; the gate's own flips are the floor in every mode.
+  expect(r.stderr).toMatch(/^estimate: up to 8 more runs, about \d+\.\d h; the smallest gain told from noise: at most \+5 tasks of 2 \(upper bound at 1 repeat\)$/m)
   const cwd2 = await tmp('lhb-cwd-'), h = evHarness(cwd2), c = JSON.parse(readFileSync(h, 'utf8'))
   writeFileSync(h, JSON.stringify({ ...c, backend: { ...c.backend, pricePerMTok: { input: 1, output: 2 } } }))
   const p = cli(['evolve', h, '--tasks', repo, '--mode', 'night', '--yes'], env, cwd2)
@@ -1840,12 +1843,61 @@ test('evolve --mode: after the probe, what the rest costs and the smallest gain;
   expect(p.stderr).toMatch(/^estimate: up to 24 more runs, about \d+\.\d h, about \$0\.\d\d; the smallest gain told from noise: \+\d+ tasks of 2$/m)
 }, 120_000)
 
-test('evolve --rounds 6 on a finished journal refuses and points at --report: rounds are pinned', async () => {
+test('evolve: a resume with no flags or the wrong ones is told how the journal ran, never to delete it', async () => {
+  const { repo, env, cwd, h } = await evFirst(['--mode', 'night'])
+  writeJournal(cwd, journal(cwd).filter(l => l.type !== 'final'))
+  const before = evRaw(cwd)
+  for (const flags of [[], ['--mode', 'days'], ['--rounds', '1']]) {
+    const r = cli(['evolve', h, '--tasks', repo, ...flags, '--yes'], env, cwd)
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain('this journal ran --mode night; run the same command with it')
+    expect(r.stderr).not.toContain('delete')
+  }
+  expect(evRaw(cwd)).toBe(before)
+  // A corrupt journal keeps its own error, flags or none.
+  writeFileSync(join(cwd, 'harnesses', 'h.evolve.jsonl'), 'nope\n')
+  const c = cli(['evolve', h, '--tasks', repo, '--yes'], env, cwd)
+  expect(c.status).toBe(2)
+  expect(c.stderr).toContain('line 1: not JSON')
+  // So does a journal with no start line.
+  writeFileSync(join(cwd, 'harnesses', 'h.evolve.jsonl'), '')
+  expect(cli(['evolve', h, '--tasks', repo, '--yes'], env, cwd).stderr).toContain('does not begin with a start line')
+}, 120_000)
+
+test('evolve --task polyglot: a stopped custom journal names its --size and --rounds', async () => {
+  const { LHB_FAKE_BACKEND: _, ...env } = await tasksEnv([])
+  const cwd = await tmp('lhb-cwd-'), h = evHarness(cwd), url = ['--base-url', 'http://127.0.0.1:1']
+  // Nothing listens on port 1: the start line is written and preflight stops it.
+  expect(cli(['evolve', h, '--task', 'polyglot', '--size', '3', '--rounds', '2', ...url], env, cwd).stderr).toContain('preflight:')
+  for (const flags of [[], ['--mode', 'night'], ['--size', '6', '--rounds', '2']]) {
+    const r = cli(['evolve', h, '--task', 'polyglot', ...flags, ...url], env, cwd)
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain('this journal ran --size 3 --rounds 2; run the same command with it')
+  }
+}, 60_000)
+
+for (const [what, edit] of [['mode', { mode: 'days' }], ['repeats', { repeats: 2 }], ['rounds', { rounds: 2 }]] as const)
+  test(`evolve: a start line with its ${what} edited by hand is refused, on a run and under --report`, async () => {
+    const { repo, env, cwd, h } = await evFirst(['--mode', 'night'])
+    const lines = journal(cwd)
+    writeJournal(cwd, [{ ...lines[0], ...edit }, ...lines.slice(1)])
+    const before = evRaw(cwd)
+    const run = cli(['evolve', h, '--tasks', repo, '--mode', 'night', '--yes'], env, cwd)
+    expect(run.status).toBe(2)
+    expect(run.stderr).toMatch(what === 'mode' ? /this journal ran --mode days/ : /the harness or its options changed since this evolve started/)
+    const rep = cli(['evolve', h, '--tasks', repo, '--report'], env, cwd)
+    expect(rep.status).toBe(2)
+    expect(rep.stderr).toContain('the harness or its options changed since this evolve started')
+    expect(rep.stdout).toBe('')
+    expect(evRaw(cwd)).toBe(before)
+  }, 120_000)
+
+test('evolve --rounds 6 on a finished journal refuses and names how it ran: rounds are pinned', async () => {
   const { repo, env, cwd, h } = await evFirst()
   const before = evRaw(cwd)
   const r = cli(['evolve', h, '--tasks', repo, '--rounds', '6', '--yes'], env, cwd)
   expect(r.status).toBe(2)
-  expect(r.stderr).toContain('the harness or its options changed since this evolve started; this evolve has finished: see its results with --report')
+  expect(r.stderr).toContain('this journal ran --rounds 1; run the same command with it')
   expect(evRaw(cwd)).toBe(before)
 }, 120_000)
 
@@ -2027,7 +2079,7 @@ test('evolve: a new commit in the repo refuses to resume', async () => {
   const { repo, env, cwd, h } = await evFirst()
   await writeFile(join(repo, 'other.txt'), 'x'); await gitCommit(repo)
   const before = evRaw(cwd)
-  const r = cli(['evolve', h, '--tasks', repo, '--rounds', '2', '--yes'], env, cwd)
+  const r = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
   expect(r.status).toBe(2)
   expect(r.stderr).toContain('the repo has a new commit since this evolve started')
   expect(evRaw(cwd)).toBe(before)
@@ -2052,11 +2104,11 @@ test('evolve: a server that gives no usage stops after the original\'s runs, bef
 test('evolve: an edited harness or another --model refuses to resume', async () => {
   const { repo, env, cwd, h } = await evFirst()
   const before = evRaw(cwd)
-  const m = cli(['evolve', h, '--tasks', repo, '--rounds', '2', '--yes', '--model', 'other'], env, cwd)
+  const m = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes', '--model', 'other'], env, cwd)
   expect(m.status).toBe(2)
   expect(m.stderr).toContain(`the harness or its options changed since this evolve started; this evolve has finished: see its results with --report and the harness and options it ran with, or move away ${join('harnesses', 'h.evolve.jsonl')} and ${join('harnesses', 'h.v*.json')} to start over`)
   writeFileSync(h, readFileSync(h, 'utf8') + '\n')
-  const e = cli(['evolve', h, '--tasks', repo, '--rounds', '2', '--yes'], env, cwd)
+  const e = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
   expect(e.status).toBe(2)
   expect(e.stderr).toContain('the harness or its options changed since this evolve started')
   expect(evRaw(cwd)).toBe(before)
@@ -2180,7 +2232,7 @@ for (const [what, change] of [
   expect(r.status, r.stderr).toBe(0)
   expect(r.stdout).toBe(first.stdout)
   // A resume still refuses: its runs would mix two commits or two snapshots.
-  expect(cli(['evolve', h, '--tasks', repo, '--rounds', '2', '--yes'], env, cwd).status).toBe(2)
+  expect(cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes'], env, cwd).status).toBe(2)
   expect(clonesIn(env)).toEqual([])
 }, 120_000)
 
@@ -2199,7 +2251,7 @@ test('evolve: the start-over hint names the version files', async () => {
   const { repo, env, cwd, h } = await evFirst()
   // Unfinished: the final test is not in the journal.
   writeFileSync(join(cwd, 'harnesses', 'h.evolve.jsonl'), journal(cwd).filter(l => l.type !== 'final').map(l => JSON.stringify(l)).join('\n') + '\n')
-  const m = cli(['evolve', h, '--tasks', repo, '--rounds', '2', '--yes', '--model', 'other'], env, cwd)
+  const m = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes', '--model', 'other'], env, cwd)
   expect(m.status).toBe(2)
   expect(m.stderr).toContain(`; delete ${join('harnesses', 'h.evolve.jsonl')} and move away ${join('harnesses', 'h.v*.json')} to start over`)
 }, 120_000)
@@ -2522,7 +2574,7 @@ test('evolve: a proposal cut in round 2 refuses --rounds 1, and --rounds 2 resum
   const before = evRaw(cwd)
   const r = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
   expect(r.status).toBe(2)
-  expect(r.stderr).toContain('the harness or its options changed since this evolve started')
+  expect(r.stderr).toContain('this journal ran --rounds 2; run the same command with it')
   expect(evRaw(cwd)).toBe(before)
   writeFileSync(env.LHB_FAKE_BACKEND, JSON.stringify([a, d]))
   const again = cli(['evolve', h, '--tasks', repo, '--rounds', '2', '--yes'], env, cwd)
