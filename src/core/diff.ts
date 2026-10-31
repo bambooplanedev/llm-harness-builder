@@ -71,6 +71,9 @@ function leaves(v: unknown, prefix = ''): [string, string][] {
   return [[prefix, JSON.stringify(v) ?? 'undefined']]
 }
 
+/** A leaf's text; a key missing on one side is the literal 'undefined', which JSON.parse would throw on. */
+export const text = (v: string) => (v === 'undefined' ? '' : String(JSON.parse(v)))
+
 const LABELS = ['name', 'description']
 
 /**
