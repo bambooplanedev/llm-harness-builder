@@ -2,7 +2,7 @@
 // src/cli.ts
 import { parseArgs } from 'node:util'
 import { readFile, writeFile, cp, mkdir } from 'node:fs/promises'
-import { existsSync, readFileSync, writeFileSync, renameSync, appendFileSync, lstatSync, truncateSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync, renameSync, appendFileSync, lstatSync, statSync, truncateSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { createInterface } from 'node:readline/promises'
@@ -15,7 +15,7 @@ import { withNotes, type NotesStore } from './core/notes-run.js'
 import { notesKey, notesPath, readNotes, scrubText, stateDir } from './core/notes.js'
 import { smallestGain } from './core/stats.js'
 import { costOf } from './core/cost.js'
-import { ALLOWED, CANDIDATES, type EvolveMode, MODES, ROUNDS, numbersOf, runCount, splitSets, splitOf, referenceLabel, neededFlips, usable, decideRound, sweptCands, applyEdit, bindingTokens, checkEdit, failureGroups, signatureOf, proposerInput, proposerRequest, parseProposal, parseJournal, replay, spent, type Edit, type JournalLine, type RunLite, type SetName } from './core/evolve.js'
+import { ALLOWED, CANDIDATES, type EvolveMode, MODES, ROUNDS, numbersOf, runCount, splitSets, splitOf, referenceLabel, neededFlips, usable, decideRound, sweptCands, applyEdit, bindingTokens, checkEdit, failureGroups, signatureOf, proposerInput, proposerRequest, parseProposal, parseJournal, replay, spent, canonical, type Edit, type JournalLine, type RunLite, type SetName } from './core/evolve.js'
 import { evolveReport } from './core/evolve-report.js'
 import { loadRepoTasks, hostOf, consentText, hasConsent, saveConsent, git, TASKS_FILE, type RepoTasks, type EvolveConsent } from './core/repo-tasks.js'
 import { cloneAt, linkNodeModules, protectedChanged, runCheck, finishRun, removeAllClonesSync, prepareModules, modulesManifest, modulesTampered, type Clone } from './core/repo-clone.js'
@@ -410,7 +410,8 @@ function dropWork(w: { live: Map<string, Clone> }): void {
 /** Where evolve's tasks come from: everything the loop reads about them, and nothing it has to know about a repo.
  *  `moved`: why the journal's start line no longer fits these tasks, in the source's own words. */
 type EvolveSource = {
-  work: Work; id: string; names: string[]; words?: string[]; paths: string[]; prompts: string[]; notesFile: string
+  /** `defs` is what the tasks say, whatever commit holds them; `modulesDir` the repo's own node_modules, absent when setup installs them anew. */
+  work: Work; id: string; defs: string; modulesDir?: string; names: string[]; words?: string[]; paths: string[]; prompts: string[]; notesFile: string
   sets: Record<SetName, string[]>; describe: string; moved?: string; consent(yes: boolean, ev: EvolveConsent): Promise<void>
 }
 type StartLine = Extract<JournalLine, { type: 'start' }>
@@ -422,7 +423,8 @@ async function repoSource(dir: string, first: StartLine | undefined, report: boo
   try { repo = await loadRepoTasks(dir, at) } catch (e) { refuse((e as Error).message, at !== undefined) }
   const sets = splitSets(repo.tasks)
   return {
-    work: repoWork(repo), id: repo.sha, sets,
+    work: repoWork(repo), id: repo.sha, sets, defs: JSON.stringify({ tasks: repo.tasks.map(t => [t.name, t.prompt, t.check]).sort(), setup: repo.setup ?? null }),
+    ...repo.setup ? {} : { modulesDir: path.join(repo.repo, 'node_modules') },
     names: repo.tasks.map(t => t.name), prompts: repo.tasks.map(t => t.prompt),
     paths: (await git(['ls-tree', '-r', '-z', '--name-only', repo.sha], repo.repo)).split('\0').filter(Boolean),
     notesFile: notesPath(await notesKey(repo.repo)),
@@ -443,16 +445,16 @@ function polyglotSource(size: number, first: StartLine | undefined, report: bool
   const tasks = polyglotTasks(p, size)
   const sets = report && first ? first.sets : splitSets(tasks.map((t, i) => ({ name: t.name!, set: SET_OF[i % 3] })))
   return {
-    work: { tasks, live: new Map(), async ready() {} }, id, sets,
+    work: { tasks, live: new Map(), async ready() {} }, id, defs: id, sets,
     ...polyglotBinding(p, [...sets.train, ...sets.gate, ...sets.test]),
     notesFile: notesPath('task-polyglot'),
     describe: `exercises: the first ${size} of ${POLYGLOT_MAX} polyglot exercises: train ${sets.train.length}, gate ${sets.gate.length}, test ${sets.test.length}`,
     ...(!report && first && first.sha !== id ? { moved: 'the exercise set or --size changed since this evolve started' } : {}),
-    async consent(yes, { proposer }) {
+    async consent(yes, { proposer, mode, runs }) {
       const host = hostOf(proposer)
       // The harness's own server already gets everything the runs send; the proposer gets less.
       if (host === hostOf(harnessUrl)) return void console.error(`proposer: ${host}, the harness's own server`)
-      const text = ["mode: evolve on polyglot — the model's own prompts run unreviewed while Evolve measures them", `proposer: ${host}`,
+      const text = ["mode: evolve on polyglot — the model's own prompts run unreviewed while Evolve measures them", `proposer: ${host}`, `run limit: mode ${mode}, up to ${runs} runs`,
         'it receives how the runs failed (fixed-word signatures) and the current values of these fields, and proposes an edit to one of them', `fields: ${ALLOWED.join(', ')}`].join('\n')
       const file = path.join(stateDir(), 'consent', 'task-polyglot.evolve.json'), hash = createHash('sha256').update(text).digest('hex')
       let has = false
@@ -721,19 +723,36 @@ async function cmdEvolve(argv: string[]) {
   // The report reads only the journal, after replay re-checked it: a finished evolve started again prints it as it was, without a clone or a request.
   // vN is what the user is told to use: it has to be the text evolve wrote for the version the numbers are about.
   const changed = (): boolean => { const p = vf(state.version); try { return isLink(p) || readFileSync(p, 'utf8') !== versionText(base, state.version, state.current) } catch { return true } }
-  const report = (): string => evolveReport({ lines, attempt: (lines[0] as StartLine).attempt ?? 'unknown', state: { ...state, final: state.final! }, original: raw, split, sets, harness: path.basename(file!), versionFile: state.version ? vf(state.version) : '', changed: !!state.version && changed() })
+  // On what the tasks and the harness say, not on a commit or a file's bytes: a restart to re-roll the result counts on past either.
+  const attemptKey = sha256(`${canonical(raw)}\0${src.defs}\0${mode}`)
+  const attemptOf = () => (lines[0] as StartLine).attempt
+  const testsFile = (n: number) => path.join(stateDir(), 'evolve-attempts', `${attemptKey}.${n}.tests`)
+  // One byte per test sweep started, and only ever printed: a test cut and rolled again shows here, the journal cannot hold it.
+  const testStarts = (): number | undefined => { try { return attemptOf() ? statSync(testsFile(attemptOf()!)).size : undefined } catch { return undefined } }
+  const report = (): string => evolveReport({ lines, attempt: attemptOf() ?? 'unknown', testStarts: testStarts(), state: { ...state, final: state.final! }, original: raw, split, sets, harness: path.basename(file!), versionFile: state.version ? vf(state.version) : '', changed: !!state.version && changed() })
   if (values.report || (resuming && all && state.final)) {
     if (!state.final) die(`evolve has not finished: no final test in ${jf}; run evolve again to finish`)
     console.log(report())
     return
   }
+  // A repo's own node_modules stays as the runs left it: another one under the rest of the runs would mix two measurements. A setup repo installs anew.
+  const modules = src.modulesDir === undefined ? undefined : await modulesManifest(src.modulesDir)
+  if (resuming && modules !== undefined && first!.modules !== modules) die(start(`the installed packages in ${src.modulesDir} changed since this evolve started`))
   if (limit !== undefined && !proposer.backend.pricePerMTok) console.error('the proposer has no price: its calls are not counted against --max-usd')
-  // The sweep or proposer call in flight is not journaled yet and a stop drops it, so it counts here: else a stop would let one more sweep through. Not in `pin`: a higher limit is how a stopped evolve resumes.
+  // What the cut sweep or proposal has cost so far is not journaled yet: it counts here, else a stop would let one more sweep through. Not in `pin`: a higher limit is how a stopped evolve resumes.
   let unsaved = 0
+  // Every stop that drops it keeps the money in a line of its own, written before the exit. Only a kill -9 leaves it out.
+  const cutNow = (): void => {
+    if (unsaved <= 0) return
+    const l: JournalLine = { v: 2, type: 'cut', costUsd: unsaved }
+    appendFileSync(jf, JSON.stringify(l) + '\n'); lines.push(l); unsaved = 0
+  }
   const overStop = (): void => {
-    if (limit === undefined || spent(lines) + unsaved < limit) return
+    const total = spent(lines) + unsaved
+    if (limit === undefined || total < limit) return
+    cutNow()
     dropWork(work)
-    console.error(`evolve stopped: spent $${(spent(lines) + unsaved).toFixed(4)} of $${limit}; the cut sweep's runs are not in the journal, so the real total may be one sweep higher; run again with a higher --max-usd to continue`)
+    console.error(`evolve stopped: spent $${total.toFixed(4)} of $${limit}; the cut sweep's money is in the journal, its runs are not; run again with a higher --max-usd to continue`)
     process.exit(1)
   }
   overStop()
@@ -748,15 +767,18 @@ async function cmdEvolve(argv: string[]) {
   if (existsSync(next)) die(`${next} already exists and the journal has no line for it; move it away first — evolve never overwrites a version`)
   // One whole line per write: a Ctrl-C leaves the journal at a completed step.
   const append = (l: JournalLine) => { appendFileSync(jf, JSON.stringify(l) + '\n'); lines.push(l); state = rebuilt() }
+  // Before the attempt and the start line: a typo in --base-url costs neither.
+  const no = await preflightAll([{ name: config.name, config }, { name: 'proposer', config: proposer }], work.tasks[0])
+  if (no) { dropWork(work); die(no) }
   if (!resuming) {
     if (!existsSync(dir)) await mkdir(dir)
     const host = hostOf(proposer.backend.baseUrl)
     // Every version reads this frozen copy: a note written during evolve would make one version's runs depend on another's.
     // Before the start line: a journal is never without its snapshot.
     writeFileSync(snap, existsSync(src.notesFile) ? readFileSync(src.notesFile) : '')
-    // Counted per harness bytes + source, on a new journal only; the journal keeps its own number, so a later attempt never relabels it.
+    // Counted per harness, tasks and mode, on a new journal only; the journal keeps its own number, so a later attempt never relabels it.
     // An unreadable counter is left as it is and the start line says nothing: the report prints `attempt unknown`, never a made-up number.
-    const cf = path.join(stateDir(), 'evolve-attempts', `${sha256(Buffer.concat([bytes, Buffer.from(`${src.id}:${mode}`)]))}.txt`)
+    const cf = path.join(stateDir(), 'evolve-attempts', `${attemptKey}.txt`)
     let attempt: number | undefined
     try {
       const t = existsSync(cf) ? readFileSync(cf, 'utf8').trim() : '0'
@@ -768,24 +790,23 @@ async function cmdEvolve(argv: string[]) {
         attempt = n
       }
     } catch { console.error(`the attempt count cannot be read or written at ${shortHome(cf)}; this journal starts without one`) }
-    append({ v: 2, type: 'start', base, sha: src.id, pin, sets, declarable: split.declarable, mode, proposer: host, notes: sha256(readFileSync(snap)), repeats, rounds, ...(attempt ? { attempt } : {}) })
+    append({ v: 2, type: 'start', base, sha: src.id, pin, sets, declarable: split.declarable, mode, proposer: host, notes: sha256(readFileSync(snap)), repeats, rounds, ...(attempt ? { attempt } : {}), ...(modules === undefined ? {} : { modules }) })
   }
   const byName = new Map(work.tasks.map(t => [t.name!, t]))
-  const no = await preflightAll([{ name: config.name, config }, { name: 'proposer', config: proposer }], work.tasks[0])
-  if (no) { dropWork(work); die(no) }
   try { await work.ready(childEnv(config.tools.bashEnv ?? [])) } catch (e) { die((e as Error).message) }
   await killTracked()
-  process.once('SIGINT', () => { dropWork(work); process.exit(130) })
+  process.once('SIGINT', () => { cutNow(); dropWork(work); process.exit(130) })
   const modulesDir = work.modules && path.join(work.modules, 'node_modules')
-  const modules0 = modulesDir && await modulesManifest(modulesDir)
+  const modules0 = modules ?? (modulesDir && await modulesManifest(modulesDir))
   const out = path.join('runs', `evolve-${base}.json`), notes: NotesStore = { file: snap, write: false }
-  const stop = () => { dropWork(work); console.error(`the model changed the installed packages in ${modulesDir}; stopping`); process.exitCode = 1 }
+  const stop = () => { dropWork(work); console.error(`the model changed the installed packages in ${modulesDir}; stopping; ${modules === undefined ? 'run the same command to resume: setup installs them again' : `a resume refuses other packages: restore them, then ${then}`}`); process.exitCode = 1 }
   const pb = proposer.backend
   const pRedact = redactor(apiKey(pb, process.env), pb.apiKeyEnv ?? '')
   const hRedact = redactor(apiKey(config.backend, process.env), config.backend.apiKeyEnv ?? '')
   // Not a FAIL: the server refused the key, has no credits, or kept limiting. The cut step's runs are not journaled (its proposal may be).
   const WHY: Record<number, string> = { 401: 'the key was refused', 402: 'no credits left', 403: 'the request was refused', 429: 'rate limited, still after 3 retries' }
   const halt = (who: 'harness' | 'proposer', b: HarnessConfig['backend'], status: number, redact: ReturnType<typeof redactor>, midReply?: boolean): never => {
+    cutNow()
     dropWork(work)
     const why = midReply && status === 429 ? '429 mid-reply, not retried' : WHY[status]
     console.error(showable(redact.text(`evolve stopped: the ${who} backend (${hostOf(b.baseUrl)}) answered ${status}: ${why}; the cut step's runs are not in the journal; run the same command again to resume from the journal`)))
@@ -798,13 +819,13 @@ async function cmdEvolve(argv: string[]) {
     try { for (const n of names) for (const [i, c] of cs.entries()) {
       overStop()
       const r = await benchOnce(c, sweep, timeoutS, out, byName.get(n)!, notes)
-      if (r.stop !== undefined) halt('harness', c.backend, r.stop, hRedact, r.stopMidReply)
       unsaved += r.costUsd ?? 0
+      if (r.stop !== undefined) halt('harness', c.backend, r.stop, hRedact, r.stopMidReply)
       const lite: RunLite = { task: n, verdict: r.verdict, tokens: r.tokens, firstPromptTokens: r.firstPromptTokens, turns: r.turns, modelMs: r.modelMs ?? 0, costUsd: r.costUsd, repeat: sweep, trace: r.trace, reason: r.reason, lastError: r.lastError }
       // Signed now, while the trace is here: the report groups failures by it without reading a trace again.
       runs[i]!.push(lite.verdict === 'FAIL' ? { ...lite, sig: signatureOf(lite, await eventsOf(r.trace)) } : lite)
       // As in bench: a run that changed the linked node_modules changed every run after it.
-      if (modulesDir && await modulesManifest(modulesDir) !== modules0) return undefined
+      if (modulesDir && await modulesManifest(modulesDir) !== modules0) { cutNow(); return undefined }
     }
     return runs } finally { unsaved = 0 }
   }
@@ -843,7 +864,7 @@ async function cmdEvolve(argv: string[]) {
       // Not a rejection: a journaled one would never be asked again, and the next evolve continues at this candidate.
       } catch (e) {
         if (e instanceof BackendError && isStop(e)) return halt('proposer', pb, e.status!, pRedact, e.midReply)
-        dropWork(work); return die(`proposer failed: ${showable(pRedact.text((e as Error).message))}`) }
+        cutNow(); dropWork(work); return die(`proposer failed: ${showable(pRedact.text((e as Error).message))}`) }
       try { return { edit: parseProposal(content) } } catch { return { reason: cut ? 'reply cut at maxTokens' : 'no edit in the reply' } }
     }
     // The line that follows holds the cost, so the in-flight copy goes the moment it is written (no check comes between).
@@ -862,8 +883,14 @@ async function cmdEvolve(argv: string[]) {
     try { writeFileSync(p, text, { flag: 'wx' }) } catch { die(`${p} already exists; move it away first — evolve never overwrites a version`) }
   }
   const trainGate = [...sets.train, ...sets.gate]
-  // Every gate divides by the original's tokens: without them each sweep would be spent for a sure refusal.
-  const usage = () => { if (state.baseline && !usable(state.baseline)) { dropWork(work); die(`the server gave no usage for the original's runs; evolve needs a server that reports token usage; delete ${jf} to start over`) } }
+  // Every gate divides by the original's tokens: without them each sweep would be spent for a sure refusal. The probe is the first look, before a proposal is paid for.
+  const usage = () => {
+    const probe = lines.flatMap(l => l.type === 'probe' ? [l.runs] : [])[0]
+    // A probe where no run got a reply (0 tokens: a moderated task, say) says nothing of the server's usage; the first sweep will.
+    if (state.baseline ? usable(state.baseline) : !probe || usable(probe) || numbersOf(probe).tokens === 0) return
+    dropWork(work)
+    die(`the server gave no usage for the original's runs; evolve needs a server that reports token usage; delete ${jf} to start over`)
+  }
   for (let round = 1; round <= rounds; round++) {
     snapCheck()
     // Nothing left to propose: on to the final test; the report says why.
@@ -877,6 +904,7 @@ async function cmdEvolve(argv: string[]) {
       // Not a repeat of anything: a probe run is no sweep's.
       append({ v: 2, type: 'probe', round, runs: runs[0]!.map(({ repeat: _, ...r }) => r) })
     }
+    usage()
     // Both on one current; a proposal journaled before a stop stays as it was: asking again would let a stop re-roll it.
     for (let index = 1; index <= CANDIDATES; index++) {
       if (state.pending.some(p => p.round === round && p.index === index) || lines.some(l => l.type === 'candidate' && l.round === round && l.index === index)) continue
@@ -922,6 +950,7 @@ async function cmdEvolve(argv: string[]) {
   if (!state.final) {
     snapCheck()
     for (let sweep = state.tested + 1; state.version && sweep <= repeats; sweep++) {
+      try { if (attemptOf()) appendFileSync(testsFile(attemptOf()!), '1') } catch {}
       const runs = await sweepOn([{ cfg: raw, name: `${base}.orig` }, { cfg: state.current, name: `${base}.v${state.version}` }], sets.test, sweep)
       if (!runs) return stop()
       append({ v: 2, type: 'testsweep', sweep, orig: runs[0]!, last: runs[1]! })
