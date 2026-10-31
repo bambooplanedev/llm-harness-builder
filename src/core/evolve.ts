@@ -15,14 +15,16 @@ export { ALLOWED }
 
 export const ROUNDS = 3
 export const CANDIDATES = 2
-/** Sweeps per round and per final test; the journal's start line holds it, and everything reads it there. */
-export const REPEATS = 1
 export const TOLERANCE = 0.10
 export const CEILING = 0.25
 export const MIN_TRAIN_GATE = 16
 export const MIN_TEST = 8
 export const ALPHA = 0.05
 export const PARA_MAX = 600
+/** Polyglot's size, the sweeps per round and per final test, the rounds; on --tasks the repo sets the size. The start line holds all of it. */
+export const MODES = { hours: { size: 24, repeats: 1, rounds: 1 }, night: { size: 47, repeats: 3, rounds: 1 }, days: { size: 47, repeats: 5, rounds: 2 } } as const satisfies Record<string, { size: number; repeats: number; rounds: number }>
+/** `custom` is --size or --rounds: one repeat, and never a declared winner. */
+export type EvolveMode = keyof typeof MODES | 'custom'
 
 export type SetName = 'train' | 'gate' | 'test'
 
@@ -36,22 +38,35 @@ export function splitSets(tasks: Pick<RepoTask, 'name' | 'set'>[]): Record<SetNa
   return out
 }
 
-/** `polyglot`: the tasks are the first N Exercism exercises, and more of them is a larger --size, not more tasks to write. */
-export type Mode = { strict: boolean; trainGate: number; test: number; polyglot?: true }
+/** `polyglot`: the tasks are the first N Exercism exercises, and a mode picks how many, not a list of tasks to write. */
+export type Split = { declarable: boolean; mode: EvolveMode; trainGate: number; test: number; polyglot?: true }
 
-export function modeOf(sets: Record<SetName, string[]>, polyglot = false): Mode | string {
+export function splitOf(sets: Record<SetName, string[]>, polyglot: boolean, mode: EvolveMode): Split | string {
   const [t, g, x] = [sets.train.length, sets.gate.length, sets.test.length]
   if (!t || !g || !x) return `evolve needs at least one task in each of train, gate and test (have ${t}/${g}/${x})`
-  return { strict: t + g >= MIN_TRAIN_GATE && x >= MIN_TEST, trainGate: t + g, test: x, ...(polyglot ? { polyglot: true as const } : {}) }
+  return { declarable: (mode === 'night' || mode === 'days') && t + g >= MIN_TRAIN_GATE && x >= MIN_TEST, mode, trainGate: t + g, test: x, ...(polyglot ? { polyglot: true as const } : {}) }
 }
 
-/** The label a reference-mode result carries: too few tasks to tell a gain from luck. */
-export const referenceLabel = (m: Mode): string =>
-  `\u041e\u0420\u0406\u0404\u041d\u0422\u0418\u0420, \u041d\u0415 \u0414\u041e\u041a\u0410\u0417 \u2014 too few ${m.polyglot ? 'exercises' : 'tasks'} (${m.trainGate + m.test} of ${MIN_TRAIN_GATE + MIN_TEST}) for a statistical conclusion; ` +
-  (m.polyglot ? `raise --size to ${STRICT_SIZE}` : `add ${Math.max(0, MIN_TRAIN_GATE - m.trainGate) + Math.max(0, MIN_TEST - m.test)} more tasks`)
+/** What a run may cost at most: every sweep has both candidates, and a version is found for the test. */
+export function runCount(sets: Record<SetName, string[]>, repeats: number, rounds: number) {
+  const probe = sets.train.length
+  const sweeps = rounds * repeats * (1 + CANDIDATES) * (sets.train.length + sets.gate.length), test = repeats * 2 * sets.test.length
+  return { probe, sweeps, test, all: probe + sweeps + test }
+}
 
-/** The smallest polyglot --size whose split (i % 3) gives strict mode: 8 train, 8 gate, 8 test. */
-export const STRICT_SIZE = 24
+/** A mode that can never declare a winner, in the words of the flags that chose it; undefined for night and days. */
+export const orientationOnly = (m: EvolveMode): string | undefined => m === 'custom' ? '--size and --rounds are orientation only' : m === 'hours' ? '--mode hours is orientation only' : undefined
+export const WINNER_MODES = '--mode night or days declares a winner'
+/** Tasks short of a declarable split, train + gate and test; polyglot's come with the mode. */
+export const shortOf = (m: Split): [number, number] => m.polyglot ? [0, 0] : [Math.max(0, MIN_TRAIN_GATE - m.trainGate), Math.max(0, MIN_TEST - m.test)]
+
+/** The label an orientation result carries, and why it is one: the mode, too few tasks, or both. */
+export const referenceLabel = (m: Split): string => {
+  const only = orientationOnly(m.mode), few = m.trainGate < MIN_TRAIN_GATE || m.test < MIN_TEST, [a, b] = shortOf(m)
+  const why = [...only ? [only] : [], ...few ? [`too few ${m.polyglot ? 'exercises' : 'tasks'} (${m.trainGate + m.test} of ${MIN_TRAIN_GATE + MIN_TEST}) for a statistical conclusion`] : []]
+  const fix = [...a + b ? [`add ${a + b} more tasks`] : [], ...only ? [WINNER_MODES] : []]
+  return `\u041e\u0420\u0406\u0404\u041d\u0422\u0418\u0420, \u041d\u0415 \u0414\u041e\u041a\u0410\u0417 — ${[...why, ...fix].join('; ')}`
+}
 
 /** One-sided exact sign test: P(X >= b) for X ~ Binomial(b + c, 1/2). */
 export function signP(b: number, c: number): number {
@@ -64,7 +79,7 @@ export function signP(b: number, c: number): number {
   return p / 2 ** n
 }
 
-/** Flips in one direction and none back that the strict gate needs. */
+/** Flips in one direction and none back that the declarable gate needs. */
 export function neededFlips(): number {
   let b = 0
   while (signP(b, 0) >= ALPHA) b++
@@ -123,8 +138,8 @@ function costGate(orig: RunLite[], cand: RunLite[], timeBase: RunLite[], origMax
 }
 
 /** cur = the current version's runs, cand = the candidate's, orig = the original's, all on train + gate; any number of repeats per task. */
-export function decide(i: { cur: RunLite[]; cand: RunLite[]; orig: RunLite[]; gateNames: string[]; mode: Mode; origMaxTurns: number }): { accepted: boolean; reason: string; numbers: Numbers } {
-  const { cur, cand, orig, gateNames, mode, origMaxTurns } = i
+export function decide(i: { cur: RunLite[]; cand: RunLite[]; orig: RunLite[]; gateNames: string[]; split: Split; origMaxTurns: number }): { accepted: boolean; reason: string; numbers: Numbers } {
+  const { cur, cand, orig, gateNames, split, origMaxTurns } = i
   const numbers = numbersOf(cand)
   const no = (reason: string) => ({ accepted: false, reason, numbers })
   const o = numbersOf(orig)
@@ -132,7 +147,7 @@ export function decide(i: { cur: RunLite[]; cand: RunLite[]; orig: RunLite[]; ga
   if (!usable(cand) || !usable(orig)) return no('the server gave no usage')
   if (!numbers.pass) return no('0 PASS')
   const c = numbersOf(cur)
-  if (mode.strict) {
+  if (split.declarable) {
     const { p, improved } = passGain(cur, cand)
     // The p alone could be one task at 4/4 against 0/4; the flips needed are the sign test's own floor.
     if (!(p < ALPHA && improved >= neededFlips())) return no(`within noise (p=${p.toFixed(2)})`)
@@ -165,7 +180,7 @@ export function pickWinner<T extends { index: number; runs: RunLite[] }>(a: T, b
 }
 
 /** A round's verdicts: each candidate by `decide` against the round's cur, and at most one accepted. The run loop and `replay` both come here, so a journal cannot claim another winner. */
-export function decideRound(i: { cur: RunLite[]; cands: { index: number; runs: RunLite[] }[]; orig: RunLite[]; gateNames: string[]; mode: Mode; origMaxTurns: number }) {
+export function decideRound(i: { cur: RunLite[]; cands: { index: number; runs: RunLite[] }[]; orig: RunLite[]; gateNames: string[]; split: Split; origMaxTurns: number }) {
   const { cands, ...rest } = i
   const ds = cands.map(c => ({ ...c, ...decide({ ...rest, cand: c.runs }) }))
   const yes = ds.filter(d => d.accepted)
@@ -346,7 +361,7 @@ type Proposal = { round: number; index: number; input: string; edit: Edit }
 type SweepLine = { v: 2; type: 'sweep'; round: number; sweep: number; cur: RunLite[]; cands: { index: number; runs: RunLite[] }[] }
 type TestSweep = { v: 2; type: 'testsweep'; sweep: number; orig: RunLite[]; last: RunLite[] }
 export type JournalLine =
-  | { v: 2; type: 'start'; base: string; sha: string; pin: string; notes: string; sets: Record<SetName, string[]>; strict: boolean; proposer: string; repeats: number; rounds: number; attempt?: number }
+  | { v: 2; type: 'start'; base: string; sha: string; pin: string; notes: string; sets: Record<SetName, string[]>; declarable: boolean; mode: EvolveMode; proposer: string; repeats: number; rounds: number; attempt?: number }
   | { v: 2; type: 'probe'; round: number; runs: RunLite[] }
   | ({ v: 2; type: 'proposal' } & Proposal)
   | SweepLine
@@ -381,7 +396,8 @@ const EDIT = shape({ field: str, value: x => typeof x === 'string' || (typeof x 
 const sha256: Check = x => typeof x === 'string' && /^[0-9a-f]{64}$/.test(x) ? undefined : 'not a sha256'
 const v2: Check = x => x === 2 ? undefined : 'not 2'
 const LINE: Record<string, Check> = {
-  start: shape({ v: v2, type: str, base: str, sha: str, pin: sha256, notes: sha256, sets: shape({ train: arr(name), gate: arr(name), test: arr(name) }), strict: bool, proposer: str, repeats: pos, rounds: pos }, { attempt: pos }),
+  start: shape({ v: v2, type: str, base: str, sha: str, pin: sha256, notes: sha256, sets: shape({ train: arr(name), gate: arr(name), test: arr(name) }), declarable: bool, mode: x => x === 'custom' || (typeof x === 'string' && Object.hasOwn(MODES, x)) ? undefined : 'not a mode', proposer: str,
+    repeats: x => Number.isInteger(x) && (x as number) >= 1 && (x as number) <= 20 ? undefined : 'not an integer from 1 to 20', rounds: pos }, { attempt: pos }),
   // The current version on train, the proposer's first input; never in a decision.
   probe: shape({ v: v2, type: str, round: pos, runs: arr(RUN) }),
   candidate: shape({ v: v2, type: str, round: pos, index: pos, input: str, accepted: bool, reason: str },
@@ -450,7 +466,7 @@ export function replay(lines: JournalLine[], original: object, ctx: { binding: s
     if (index > CANDIDATES || s !== taken + 1) return 'out of order'
     taken = s
   }
-  const mode = modeOf(ctx.sets)
+  const split = splitOf(ctx.sets, false, first.mode)
   const trainGate = [...ctx.sets.train, ...ctx.sets.gate]
   const whole = (rs: RunLite[], names: string[], sweep?: number) => rs.map(r => r.task).sort().join('\n') === [...names].sort().join('\n') && rs.every(r => r.repeat === sweep)
   const onTrain = (rs: RunLite[]) => rs.filter(r => ctx.sets.train.includes(r.task))
@@ -505,9 +521,9 @@ export function replay(lines: JournalLine[], original: object, ctx: { binding: s
     if (p) {
       if (sweeps.length !== first.repeats) return no(`${slot}: decided before its sweeps`)
       if (l.input !== p.input || JSON.stringify(l.edit) !== JSON.stringify(p.edit)) return no(`${slot}: its edit or input is not the one proposed`)
-      if (typeof mode === 'string') return no(mode)
+      if (typeof split === 'string') return no(split)
       // decideRound is pure and every input is in the journal: the line's verdict must be what its sweeps give.
-      const d = decideRound({ cur: sweeps.flatMap(s => s.cur), cands: sweptCands(sweeps), orig: baseline!, gateNames: ctx.sets.gate, mode, origMaxTurns: (original as any).loop?.maxTurns ?? Infinity }).find(x => x.index === l.index)!
+      const d = decideRound({ cur: sweeps.flatMap(s => s.cur), cands: sweptCands(sweeps), orig: baseline!, gateNames: ctx.sets.gate, split, origMaxTurns: (original as any).loop?.maxTurns ?? Infinity }).find(x => x.index === l.index)!
       if (d.accepted !== l.accepted) return no(`${slot}: its runs do not give ${l.accepted ? 'an acceptance' : 'a refusal'}`)
       pending = pending.filter(x => x !== p)
     } else {
@@ -543,23 +559,23 @@ export function replay(lines: JournalLine[], original: object, ctx: { binding: s
 const PRINCIPLE = 'how far this is a principle rather than a fit depends on how unlike the training tasks the test tasks are'
 
 /** The original against the last version on the test tasks, repeats and costs included (time against the original: both ran in one sweep). Only ever about this repo's tasks.
- *  `better` is the claim: more PASS (strict: p < ALPHA with the flips the sign test needs) and costs within the decide gates. */
-export function verdict(orig: RunLite[], last: RunLite[], mode: Mode, origMaxTurns: number): { better: boolean; lines: string[] } {
-  const SEEN = mode.polyglot ? 'on the exercises Evolve did not see' : 'on the tasks of this repo Evolve did not see'
+ *  `better` is the claim: more PASS (declarable: p < ALPHA with the flips the sign test needs) and costs within the decide gates. */
+export function verdict(orig: RunLite[], last: RunLite[], split: Split, origMaxTurns: number): { better: boolean; lines: string[] } {
+  const SEEN = split.polyglot ? 'on the exercises Evolve did not see' : 'on the tasks of this repo Evolve did not see'
   const rate = (rs: RunLite[]) => rs.length ? numbersOf(rs).pass / rs.length : 0
   const win = (a: RunLite[], b: RunLite[]) => { const { p, improved } = passGain(a, b); return p < ALPHA && improved >= neededFlips() }
   let better = false, lines: string[]
-  if (mode.strict) {
+  if (split.declarable) {
     if (win(orig, last)) better = true
     lines = [better ? `better ${SEEN}` : win(last, orig) ? `worse ${SEEN}` : `not told apart from noise ${SEEN}`]
   } else {
     const [po, pl] = [rate(orig), rate(last)]
     better = pl > po
-    lines = [referenceLabel(mode), pl > po ? 'more PASS' : pl < po ? 'fewer PASS' : 'not told apart']
+    lines = [referenceLabel(split), pl > po ? 'more PASS' : pl < po ? 'fewer PASS' : 'not told apart']
   }
   if (better) {
     const over = !usable(orig) || !usable(last) ? 'the server gave no usage' : costGate(orig, last, orig, origMaxTurns)
-    if (over) { better = false; lines = [mode.strict ? `more PASS ${SEEN}, but not better: ${over}` : `${lines.join('; ')}, but not better: ${over}`] }
+    if (over) { better = false; lines = [split.declarable ? `more PASS ${SEEN}, but not better: ${over}` : `${lines.join('; ')}, but not better: ${over}`] }
   }
   return { better, lines: [...lines, PRINCIPLE] }
 }

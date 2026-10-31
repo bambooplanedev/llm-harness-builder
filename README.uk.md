@@ -235,7 +235,7 @@ Ollama думає, якщо їй не сказати інакше, витрач�
     llm-harness-builder run <harness.json> "task" [--workdir <dir>] [--yes] [--json] [--answer-schema <file.json>] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
     llm-harness-builder demo [--json] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
     llm-harness-builder bench [harness.json ...] [--n <n>] [--timeout <s>] [--out <file>] [--task <name>] [--size <N>] [--tasks <repo>] [--only <a,b>] [--yes] [--max-turns <N>] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
-    llm-harness-builder evolve <harness.json> [--tasks <repo>] [--task polyglot] [--size <N>] [--rounds <N>] [--proposer <harness.json>] [--timeout <s>] [--yes] [--report] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
+    llm-harness-builder evolve <harness.json> [--tasks <repo>] [--task polyglot] [--mode <m>] [--size <N>] [--rounds <N>] [--proposer <harness.json>] [--timeout <s>] [--yes] [--report] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
     llm-harness-builder replay <run-id | trace.jsonl> [--turn <N>] [--n <n>] [--temperature <t>] [--max-tokens <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>] [--json]
     llm-harness-builder analyze <bench.json | run-id | trace.jsonl> ... [--json]
     llm-harness-builder proxy [--upstream <url>] [--port <n>] [--name <label>]
@@ -394,8 +394,24 @@ FAIL. Перед першим прогоном `bench` показує всі к�
 оригіналом на test. Файл харнесу, який ви дали, не змінюється ніколи.
 
 ```bash
-llm-harness-builder evolve harnesses/tuned-nothink.json --tasks ../myrepo
+llm-harness-builder evolve harnesses/tuned-nothink.json --tasks ../myrepo --mode night
 ```
+
+`--mode` не має умовчання: умовчання мовчки купувало б ніч прогонів.
+
+| Режим | Повтори, раунди | Що обіцяє | `--task polyglot` |
+|---|---|---|---|
+| `hours` | 1, 1 | орієнтир, ніколи не переможець | 24 вправи, до 72 прогонів |
+| `night` | 3, 1 | лише великий виграш | 47 вправ, до 394 прогонів, близько 11–13 год на моделі із заміру нижче |
+| `days` | 5, 2 | виграш від +5 задач із 32 | 47 вправ, до 1126 прогонів |
+
+Переможця оголошують лише `night` і `days`, і лише коли є щонайменше 16 задач train + gate і 8 test;
+будь-який інший результат позначено «орієнтир, не доказ» із поясненням чому. На `--tasks` кількість
+задач задає репо, а режим задає повтори й раунди. На старті evolve друкує кількість прогонів режиму.
+Після першого кроку він друкує час на решту в цьому темпі, гроші, коли харнес має ціну, і найменший
+виграш, який режим здатен відрізнити від шуму на цій моделі (`at most`, верхня межа, при одному
+повторі). Це верхні оцінки: test запускається, лише якщо версію знайдено. Режим, його повтори й раунди
+закріплено: інший режим або `--rounds` відхиляє відновлення, а `--report` читає їх із журналу.
 
 Пише він у `./harnesses`: `<name>.evolve.jsonl` (журнал), `<name>.evolve.notes.jsonl` (заморожена
 копія нотаток репо, щоб кожна версія читала те саме) і `<name>.v1.json`, `v2.json`… для кожної лишеної
@@ -407,10 +423,10 @@ llm-harness-builder evolve harnesses/tuned-nothink.json --tasks ../myrepo
 розширень). Жодних файлів репо, шляхів чи назв задач. `--proposer` вказує
 інший харнес для бекенду, що пропонує.
 
-Немає власного репо? `--task polyglot --size N` (від 3 до 47, обов'язковий, не разом із `--tasks`)
-тренує evolve на наборі Exercism: вправа `i` потрапляє в train, gate чи test за `i % 3`.
-`--size 6 --rounds 1` — швидка оцінка, «орієнтир, не доказ»; вердикти суворі від `--size 24`,
-`--size 47` — повний набір. Пропонувальник ніколи не отримує назв вправ, назв тестів чи шляхів.
+Немає власного репо? `--task polyglot` тренує evolve на наборі Exercism: вправа `i` потрапляє в train,
+gate чи test за `i % 3`. `--rounds N`, а на polyglot і `--size N` (від 3 до 47, не разом із `--tasks`),
+замінюють `--mode` для власного швидкого погляду: один повтор, завжди орієнтир. `--size 6 --rounds 1`
+— найшвидший. Пропонувальник ніколи не отримує назв вправ, назв тестів чи шляхів.
 Журнал прив'язано до завантаженого набору й розміру: змінений набір відхиляє відновлення, а `--report`
 усе одно друкує. Про пропонувальника питають, лише коли його хост відрізняється від хоста харнесу
 (`--yes` погоджує); на тому самому хості друкується рядок-повідомлення.
@@ -440,7 +456,7 @@ llm-harness-builder evolve harnesses/tuned-nothink.json --tasks ../myrepo
 відмови, поганого аргументу або сервера, що не відповідає чи не має моделі; 130 для Ctrl-C, після чого журнал містить кожен завершений крок.
 
 Заміряно 28–29 жовтня 2026 (`qwen/qwen3-coder-30b-a3b-instruct` на OpenRouter, `tuned-qwen-coder`,
-`--task polyglot --size 47 --rounds 3`, суворий режим, близько 8,5 години прогонів; $0.14 виміряно за
+`--task polyglot --size 47 --rounds 3`, один повтор за правилом, яке тепер застосовує `night`, близько 8,5 години прогонів; $0.14 виміряно за
 два кроки по 32 прогони, тобто близько $0.65 за всі дев'ять):
 
 | Крок | Правка | PASS з 32 (train + gate) | Вердикт |

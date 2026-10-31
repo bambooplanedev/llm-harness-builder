@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ALPHA, boundBy, applyEdit, numbersOf, pickWinner, usable, parseJournal, replay, verdict, bindingTokens, checkEdit, decide, passGain, failureGroups, reasonKind, signatureOf, SIG, modeOf, neededFlips, parseProposal, proposerInput, proposerRequest, proposalSchema, exhausted, ALLOWED, referenceLabel, signP, splitSets, PROPOSAL_SCHEMA, type Edit, type Mode, type RunLite } from '../src/core/evolve.js'
+import { MODES, runCount, splitOf, type Split, ALPHA, boundBy, applyEdit, numbersOf, pickWinner, usable, parseJournal, replay, verdict, bindingTokens, checkEdit, decide, passGain, failureGroups, reasonKind, signatureOf, SIG, neededFlips, parseProposal, proposerInput, proposerRequest, proposalSchema, exhausted, ALLOWED, referenceLabel, signP, splitSets, PROPOSAL_SCHEMA, type Edit, type RunLite } from '../src/core/evolve.js'
 import type { HarnessEvent } from '../src/core/events.js'
 import { harness } from './helpers.js'
 import type { RepoTask } from '../src/core/repo-tasks.js'
@@ -8,13 +8,46 @@ import { loadPolyglot, polyglotBinding } from '../src/core/polyglot.js'
 const task = (name: string, set?: RepoTask['set']): RepoTask => ({ name, prompt: 'p', check: 'c', set, checkTimeoutS: 60 })
 const run = (t: string, ok: boolean, tokens = 100, fp = 10): RunLite => ({ task: t, verdict: ok ? 'PASS' : 'FAIL', tokens, firstPromptTokens: fp, turns: 3, modelMs: 40 })
 const names = (n: number) => Array.from({ length: n }, (_, i) => `t${i}`)
-const strict: Mode = { strict: true, trainGate: 16, test: 8 }
-const ref: Mode = { strict: false, trainGate: 2, test: 1 }
-const dec = (cur: RunLite[], cand: RunLite[], orig: RunLite[], gateNames: string[], mode: Mode, origMaxTurns = 10) => decide({ cur, cand, orig, gateNames, mode, origMaxTurns })
+const strict: Split = { declarable: true, mode: 'night', trainGate: 16, test: 8 }
+const ref: Split = { declarable: false, mode: 'custom', trainGate: 2, test: 1 }
+const dec = (cur: RunLite[], cand: RunLite[], orig: RunLite[], gateNames: string[], split: Split, origMaxTurns = 10) => decide({ cur, cand, orig, gateNames, split, origMaxTurns })
 /** A journal's sweep line: runs carry their sweep's number, as the run loop stamps them. */
 const stamp = (rs: RunLite[], sweep: number) => rs.map(r => ({ ...r, repeat: sweep }))
 const sweepLine = (round: number, sweep: number, cur: RunLite[], cands: Record<number, RunLite[]>) =>
   ({ v: 2, type: 'sweep', round, sweep, cur: stamp(cur, sweep), cands: Object.entries(cands).map(([i, rs]) => ({ index: Number(i), runs: stamp(rs, sweep) })) })
+
+describe('modes', () => {
+  const sets = (t: number, g: number, x: number) => ({ train: Array.from({ length: t }, (_, i) => `t${i}`), gate: Array.from({ length: g }, (_, i) => `g${i}`), test: Array.from({ length: x }, (_, i) => `x${i}`) })
+  it('MODES hold the agreed numbers', () => {
+    expect(MODES).toEqual({ hours: { size: 24, repeats: 1, rounds: 1 }, night: { size: 47, repeats: 3, rounds: 1 }, days: { size: 47, repeats: 5, rounds: 2 } })
+  })
+  it('declarable needs night or days and enough tasks', () => {
+    for (const [mode, yes] of [['hours', false], ['night', true], ['days', true], ['custom', false]] as const)
+      expect((splitOf(sets(10, 6, 8), false, mode) as Split).declarable).toBe(yes)
+    expect((splitOf(sets(10, 6, 7), false, 'night') as Split).declarable).toBe(false)
+  })
+  it('the label says why: the mode, too few tasks, or both; polyglot is pointed at a mode, not at --size', () => {
+    expect(referenceLabel(splitOf(sets(10, 6, 8), false, 'hours') as Split)).toContain('--mode hours is orientation only; --mode night or days declares a winner')
+    expect(referenceLabel(splitOf(sets(1, 1, 1), false, 'night') as Split)).toContain('too few tasks (3 of 24) for a statistical conclusion; add 21 more tasks')
+    const both = referenceLabel(splitOf(sets(1, 1, 1), false, 'custom') as Split)
+    expect(both).toContain('--size and --rounds are orientation only')
+    expect(both).toContain('too few tasks (3 of 24)')
+    expect(referenceLabel(splitOf(sets(2, 2, 2), true, 'custom') as Split)).not.toContain('raise --size')
+  })
+  it('runCount is the upper count: probe + sweeps + test sweeps, 394 on the night of polyglot 47', () => {
+    expect(runCount(sets(16, 16, 15), MODES.night.repeats, MODES.night.rounds)).toEqual({ probe: 16, sweeps: 288, test: 90, all: 394 })
+    expect(runCount(sets(16, 16, 15), MODES.days.repeats, MODES.days.rounds).all).toBe(1126)
+    expect(runCount(sets(8, 8, 8), MODES.hours.repeats, MODES.hours.rounds).all).toBe(72)
+  })
+  it('a start line: repeats 1 to 20, a known mode', () => {
+    const line = { v: 2, type: 'start', base: 'h', sha: 'a', pin: 'a'.repeat(64), notes: 'b'.repeat(64), sets: sets(1, 1, 1), declarable: false, mode: 'night', proposer: 'p', repeats: 3, rounds: 1 }
+    const j = (o: object) => JSON.stringify(o) + '\n'
+    expect(parseJournal(j(line))).toHaveProperty('lines')
+    expect(parseJournal(j({ ...line, repeats: 20 }))).toHaveProperty('lines')
+    expect(parseJournal(j({ ...line, repeats: 21 }))).toEqual({ error: 'line 1: repeats: not an integer from 1 to 20' })
+    expect(parseJournal(j({ ...line, mode: 'week' }))).toEqual({ error: 'line 1: mode: not a mode' })
+  })
+})
 
 describe('evolve sets and tests', () => {
   it('splitSets: set in the file wins, the rest by sha1 of the name, stable', () => {
@@ -25,14 +58,14 @@ describe('evolve sets and tests', () => {
     expect(splitSets(ts)).toEqual({ train: ['zeta'], gate: ['alpha', 'beta'], test: ['eps', 'gamma', 'delta'] })
   })
 
-  it('modeOf: 16+8 strict, 1+1+1 reference with N and M in the label, an empty set refused', () => {
+  it('splitOf: 16+8 on a night declares, 1+1+1 is orientation with N and M in the label, an empty set refused', () => {
     const sets = (t: number, g: number, x: number) => ({ train: names(t), gate: names(g), test: names(x) })
-    expect(modeOf(sets(10, 6, 8))).toEqual({ strict: true, trainGate: 16, test: 8 })
-    expect(modeOf(sets(10, 6, 7))).toMatchObject({ strict: false })
-    const m = modeOf(sets(1, 1, 1)) as Mode
-    expect(m.strict).toBe(false)
+    expect(splitOf(sets(10, 6, 8), false, 'night')).toEqual({ declarable: true, mode: 'night', trainGate: 16, test: 8 })
+    expect(splitOf(sets(10, 6, 7), false, 'night')).toMatchObject({ declarable: false })
+    const m = splitOf(sets(1, 1, 1), false, 'night') as Split
+    expect(m.declarable).toBe(false)
     expect(referenceLabel(m)).toBe('\u041e\u0420\u0406\u0404\u041d\u0422\u0418\u0420, \u041d\u0415 \u0414\u041e\u041a\u0410\u0417 \u2014 too few tasks (3 of 24) for a statistical conclusion; add 21 more tasks')
-    expect(modeOf(sets(0, 3, 3))).toBe('evolve needs at least one task in each of train, gate and test (have 0/3/3)')
+    expect(splitOf(sets(0, 3, 3), false, 'night')).toBe('evolve needs at least one task in each of train, gate and test (have 0/3/3)')
   })
 
   it('signP: (5,0) < 0.05, (4,0) = 0.0625, (5,1) > 0.05, (0,0) = 1', () => {
@@ -81,7 +114,7 @@ describe('evolve decide: repeats, the one PASS test, the cost gates', () => {
     expect(dec(cur, T.map((t, i) => run(t, i < 5)), cur, gate, strict)).toMatchObject({ accepted: true })
   })
   it('turns and tokens against the original, time against the current: cur and orig differ in all three, so a swapped base flips each refusal', () => {
-    const R: Mode = { strict: false, trainGate: 16, test: 8 }
+    const R: Split = { declarable: false, mode: 'custom', trainGate: 16, test: 8 }
     // orig: turns 3, 100 tokens, 5 s; cur: turns 8, 400 tokens, 1 s. The dear original failures keep its tokens per success high.
     const orig = T.map((t, i) => ({ ...run(t, i < 10, i < 10 ? 100 : 1000), modelMs: 5000 }))
     const cur = T.map((t, i) => ({ ...run(t, i < 10, 400), turns: 8, modelMs: 1000 }))
@@ -97,8 +130,8 @@ describe('evolve decide: repeats, the one PASS test, the cost gates', () => {
   it('candidate passes past origMaxTurns on shared tasks are a new win, not a dearer harness: accepted through decide', () => {
     const orig = T.map(t => run(t, true)), cur = T.map((t, i) => run(t, i < 10))
     const cand = T.map((t): RunLite => ({ ...run(t, true), turns: 20 }))
-    expect(decide({ cur, cand, orig, gateNames: gate, mode: ref, origMaxTurns: 10 }).accepted).toBe(true)
-    expect(decide({ cur, cand, orig, gateNames: gate, mode: ref, origMaxTurns: 30 }).reason).toBe('turns 3.0 → 20.0, allowed up to 4.0 (p=0.00)')
+    expect(decide({ cur, cand, orig, gateNames: gate, split: ref, origMaxTurns: 10 }).accepted).toBe(true)
+    expect(decide({ cur, cand, orig, gateNames: gate, split: ref, origMaxTurns: 30 }).reason).toBe('turns 3.0 → 20.0, allowed up to 4.0 (p=0.00)')
   })
   it('strict: 5 tasks up and 3 down is within noise on the p, though improved reaches the 5', () => {
     const cur = T.map((t, i) => run(t, i >= 5 && i < 8)), cand = T.map((t, i) => run(t, i < 5))
@@ -373,7 +406,7 @@ describe('evolve signals', () => {
 
 describe('evolve journal', () => {
   const sets = { train: ['t0', 't1'], gate: ['t2'], test: ['t3'] }
-  const start = { v: 2, type: 'start', base: 'h', sha: 'abc', pin: 'a'.repeat(64), notes: 'b'.repeat(64), sets, strict: false, proposer: 'http://p/v1', repeats: 1, rounds: 1 }
+  const start = { v: 2, type: 'start', base: 'h', sha: 'abc', pin: 'a'.repeat(64), notes: 'b'.repeat(64), sets, declarable: false, mode: 'custom', proposer: 'http://p/v1', repeats: 1, rounds: 1 }
   const cur = { v: 2, type: 'probe', round: 1, runs: [run('t0', false), run('t1', true)] }
   const base = [run('t0', false), run('t1', true), run('t2', true)]
   // An accepted candidate's runs beat the current's, as decide would have it; a refused one's do not.
@@ -552,8 +585,8 @@ describe('evolve journal', () => {
     const P = 'how far this is a principle rather than a fit depends on how unlike the training tasks the test tasks are'
     const T = names(8)
     const all = (ok: boolean) => T.map(t => run(t, ok))
-    const v = (o: RunLite[], l: RunLite[], m: Mode) => verdict(o, l, m, 10)
-    const text = (o: RunLite[], l: RunLite[], m: Mode) => v(o, l, m).lines.join('\n')
+    const v = (o: RunLite[], l: RunLite[], m: Split) => verdict(o, l, m, 10)
+    const text = (o: RunLite[], l: RunLite[], m: Split) => v(o, l, m).lines.join('\n')
     expect(v(all(false), all(true), strict)).toEqual({ better: true, lines: ['better on the tasks of this repo Evolve did not see', P] })
     expect(text(all(true), all(false), strict)).toBe(`worse on the tasks of this repo Evolve did not see\n${P}`)
     expect(v(all(true), all(false), strict).better).toBe(false)
@@ -591,7 +624,7 @@ describe('evolve journal', () => {
 describe('evolve sweeps', () => {
   const sets = { train: ['t0', 't1'], gate: ['t2'], test: ['t3'] }
   const ctx = { binding: [], sets }
-  const start = (repeats = 1) => ({ v: 2, type: 'start', base: 'h', sha: 'abc', pin: 'a'.repeat(64), notes: 'b'.repeat(64), sets, strict: false, proposer: 'p', repeats, rounds: 3 })
+  const start = (repeats = 1) => ({ v: 2, type: 'start', base: 'h', sha: 'abc', pin: 'a'.repeat(64), notes: 'b'.repeat(64), sets, declarable: false, mode: 'custom', proposer: 'p', repeats, rounds: 3 })
   const probe = { v: 2, type: 'probe', round: 1, runs: [run('t0', false), run('t1', true)] }
   const base = [run('t0', false), run('t1', true), run('t2', true)]
   const win = [run('t0', true), run('t1', true), run('t2', true)]
@@ -821,7 +854,7 @@ describe('evolve on polyglot', () => {
   it('a short repo task name binds nothing: an accepted paragraph using it still replays', () => {
     const binding = bindingTokens({ names: ['test', 'fix'], paths: [], prompts: [] })
     expect(binding).toEqual([])
-    const start = { v: 2, type: 'start', base: 'h', sha: 'abc', pin: 'a'.repeat(64), notes: 'b'.repeat(64), sets: { train: ['test'], gate: ['fix'], test: ['c'] }, strict: false, proposer: 'p', repeats: 1, rounds: 1 }
+    const start = { v: 2, type: 'start', base: 'h', sha: 'abc', pin: 'a'.repeat(64), notes: 'b'.repeat(64), sets: { train: ['test'], gate: ['fix'], test: ['c'] }, declarable: false, mode: 'custom', proposer: 'p', repeats: 1, rounds: 1 }
     const cur = [run('test', false), run('fix', false)]
     const won = [run('test', true), run('fix', true)]
     const a = { v: 2, type: 'candidate', round: 1, index: 1, input: '{}', edit: { field: 'systemPrompt', value: 'run the test first, then fix it' }, accepted: true, reason: 'accepted', numbers: { pass: 2, tokens: 200, tokensPerSuccess: 100, weight: 20 }, version: 1 }
@@ -832,7 +865,7 @@ describe('evolve on polyglot', () => {
   })
 
   it('replay drops a refused value bound by a short name, by word boundary', () => {
-    const start = { v: 2, type: 'start', base: 'h', sha: 'polyglot:x:3', pin: 'a'.repeat(64), notes: 'b'.repeat(64), sets, strict: false, proposer: 'p', repeats: 1, rounds: 1 }
+    const start = { v: 2, type: 'start', base: 'h', sha: 'polyglot:x:3', pin: 'a'.repeat(64), notes: 'b'.repeat(64), sets, declarable: false, mode: 'custom', proposer: 'p', repeats: 1, rounds: 1 }
     const cur = { v: 2, type: 'probe', round: 1, runs: sets.train.map(t => run(t, false)) }
     const c = (index: number, value: string) => ({ v: 2, type: 'candidate', round: 1, index, input: '{}', edit: { field: 'systemPrompt', value }, accepted: false, reason: 'no edit in the reply' })
     const r = replay([start, cur, c(1, 'think of poker'), c(2, 'write short essays')] as any, harness(), { binding: ['poker', 'say'], sets })
@@ -848,10 +881,10 @@ describe('evolve on polyglot', () => {
     for (const s of ['-|test|-|-', 'final|unexpected|many|-', 'final|check_failed|many|-']) expect(SIG.test(s)).toBe(true)
   })
 
-  it('reference mode on polyglot advises --size 24, and the verdict speaks of exercises', () => {
-    const m = modeOf(sets, true) as Mode
-    expect(m).toEqual({ strict: false, trainGate: 2, test: 1, polyglot: true })
-    expect(referenceLabel(m)).toBe('\u041e\u0420\u0406\u0404\u041d\u0422\u0418\u0420, \u041d\u0415 \u0414\u041e\u041a\u0410\u0417 — too few exercises (3 of 24) for a statistical conclusion; raise --size to 24')
+  it('orientation on polyglot points at a mode, and the verdict speaks of exercises', () => {
+    const m = splitOf(sets, true, 'custom') as Split
+    expect(m).toEqual({ declarable: false, mode: 'custom', trainGate: 2, test: 1, polyglot: true })
+    expect(referenceLabel(m)).toBe('\u041e\u0420\u0406\u0404\u041d\u0422\u0418\u0420, \u041d\u0415 \u0414\u041e\u041a\u0410\u0417 — --size and --rounds are orientation only; too few exercises (3 of 24) for a statistical conclusion; --mode night or days declares a winner')
     const T = names(8), all = (ok: boolean) => T.map(t => run(t, ok))
     expect(verdict(all(false), all(true), { ...strict, polyglot: true }, 10).lines[0]).toBe('better on the exercises Evolve did not see')
   })

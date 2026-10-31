@@ -80,3 +80,12 @@ export function signFlipP(diffs: number[], seed = SEED): number {
   }
   return (hits + 1) / (PERMS + 1)
 }
+
+const Z = 1.644854 + 0.841621 // one-sided ALPHA 0.05 (evolve's), power 0.8
+
+/** The smallest gain in tasks a mode tells from noise, by normal approximation: two arms of N tasks × R repeats, each run of variance p(1−p).
+ *  At R = 1 the sign test pairs the arms by task, which this ignores: an upper bound. */
+export function smallestGain(probe: number, repeats: number, tasks: number): { tasks: number; bound: boolean } {
+  const rate = Z * Math.sqrt(2 * probe * (1 - probe) / (tasks * repeats))
+  return { tasks: Math.max(1, Math.ceil(rate * tasks)), bound: repeats === 1 }
+}

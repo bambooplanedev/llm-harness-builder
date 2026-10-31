@@ -17,7 +17,7 @@ export type EvolveStatus = {
 /** The 409 of an evolve start that needs the user's yes first. */
 export type EvolveConsent = {
   consent: { text: string; hash: string }; sets: { train: number; gate: number; test: number }
-  strict: boolean; needed?: number; reference?: string; uncommitted: boolean
+  declarable: boolean; needed?: number; reference?: string; uncommitted: boolean
 }
 
 async function send(url: string, init?: RequestInit) {

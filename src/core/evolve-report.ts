@@ -3,14 +3,14 @@
 // Every line is a fixed template filled with numbers and fixed words (verdicts, `sig`, `reasonKind`, ALLOWED fields);
 // the only free text is the accepted systemPrompt paragraphs, labelled as the proposer's. Never task names, paths,
 // lastError, trace, why or a run's reason.
-import { ALLOWED, exhausted, MIN_TEST, MIN_TRAIN_GATE, numbersOf, reasonKind, referenceLabel, STRICT_SIZE, verdict, type JournalLine, type Mode, type RunLite, type SetName } from './evolve.js'
+import { ALLOWED, exhausted, numbersOf, orientationOnly, reasonKind, referenceLabel, shortOf, verdict, WINNER_MODES, type JournalLine, type RunLite, type SetName, type Split } from './evolve.js'
 import { showableText } from './events.js'
 
 export type ReportInput = {
   lines: JournalLine[]
   state: { current: object; version: number; final: { orig: RunLite[]; last: RunLite[] } | 'none' }
   original: object
-  mode: Mode
+  split: Split
   sets: Record<SetName, string[]>
   harness: string
   versionFile: string
@@ -42,7 +42,7 @@ const KNOB: Record<string, string> = {
 }
 
 export function evolveReport(r: ReportInput): string {
-  const { lines, state, mode, sets, harness, versionFile } = r
+  const { lines, state, split, sets, harness, versionFile } = r
   const version = state.version
   const cands = lines.flatMap(l => l.type === 'candidate' ? [l] : [])
   const accepted = cands.filter(l => l.accepted)
@@ -54,23 +54,22 @@ export function evolveReport(r: ReportInput): string {
   const after = version ? fails(onGate(sweeps.filter(s => s.round === kept?.round).flatMap(s => s.cands.filter(c => c.index === kept?.index).flatMap(c => c.runs)))) : undefined
   const prompts = accepted.filter(l => l.edit?.field === 'systemPrompt')
   const final = state.final === 'none' ? undefined : state.final
-  const told = final ? verdict(final.orig, final.last, mode, (r.original as any).loop?.maxTurns ?? Infinity) : { better: false, lines: [] }
+  const told = final ? verdict(final.orig, final.last, split, (r.original as any).loop?.maxTurns ?? Infinity) : { better: false, lines: [] }
   // For polyglot the size is the journal's: train + gate + test.
-  const bench = mode.polyglot ? `--task polyglot --size ${mode.trainGate + mode.test}` : '--tasks <repo>'
+  const bench = split.polyglot ? `--task polyglot --size ${split.trainGate + split.test}` : '--tasks <repo>'
 
   const conclusion: string[] = []
-  const strictLine = `strict mode: ${mode.trainGate} train + gate tasks, ${mode.test} test tasks`
+  const declared = `mode ${split.mode}, a winner can be declared: ${split.trainGate} train + gate tasks, ${split.test} test tasks`
   if (version && final) {
     const nums = (label: string, rs: RunLite[]) => {
       const n = numbersOf(rs)
       return `${label}: PASS ${n.pass}/${rs.length}, tokens per success ${n.tokensPerSuccess === undefined ? '—' : Math.round(n.tokensPerSuccess)}, first requests ${n.weight ?? '—'} tok`
     }
     conclusion.push(`${versionFile} against ${harness} on the ${sets.test.length} test tasks:`, nums('original', final.orig), nums(`v${version}`, final.last), ...told.lines)
-    if (mode.strict) conclusion.splice(1, 0, strictLine)
+    if (split.declarable) conclusion.splice(1, 0, declared)
   } else {
     conclusion.push('no version beat the original')
-    if (mode.strict) conclusion.push(strictLine)
-    if (!mode.strict) conclusion.push(referenceLabel(mode))
+    conclusion.push(split.declarable ? declared : referenceLabel(split))
   }
 
   const why: string[] = []
@@ -85,12 +84,12 @@ export function evolveReport(r: ReportInput): string {
   } else why.push('refused:', ...bySize(refused).map(([k, n]) => `  ${k}: ${n}`))
 
   const advice: string[] = []
-  if (!mode.strict && mode.polyglot) advice.push(`raise --size to ${STRICT_SIZE} for a strict verdict`)
-  else if (!mode.strict) {
-    const a = Math.max(0, MIN_TRAIN_GATE - mode.trainGate), b = Math.max(0, MIN_TEST - mode.test)
-    if (a && b) advice.push(`add ${a} tasks to train + gate and ${b} to test for a strict verdict`)
-    else if (a) advice.push(`add ${a} tasks to train + gate for a strict verdict`)
-    else if (b) advice.push(`add ${b} tasks to test for a strict verdict`)
+  if (!split.declarable) {
+    const [a, b] = shortOf(split)
+    if (a && b) advice.push(`add ${a} tasks to train + gate and ${b} to test to declare a winner`)
+    else if (a) advice.push(`add ${a} tasks to train + gate to declare a winner`)
+    else if (b) advice.push(`add ${b} tasks to test to declare a winner`)
+    if (orientationOnly(split.mode)) advice.push(WINNER_MODES)
   }
   if (cands.some(l => l.reason === 'the server gave no usage'))
     advice.push('the server gave no usage (token counts) for some runs, so those candidates could not pass the gates: use a server that reports them')
@@ -103,7 +102,7 @@ export function evolveReport(r: ReportInput): string {
     const hint = reason === 'max_turns' ? (mt(state.current) >= 2 * mt(r.original) ? 'loop.maxTurns is at its ceiling of 2× the original' : undefined) : KNOB[reason!] ?? KNOB[check!]
     if (hint) advice.push(`${sig} is still the biggest failure on the gate tasks (${n} of ${gateCount}): ${hint}`)
     if ((r.original as any).notes?.enabled !== true && n * 2 >= gateCount)
-      advice.push(`the same failure (${sig}) recurs on ${n} of ${gateCount} gate tasks and Notes is off: Notes carry what one run learned into the next; compare with bench ${mode.polyglot ? '--task polyglot' : '--tasks'}, Notes on and off`)
+      advice.push(`the same failure (${sig}) recurs on ${n} of ${gateCount} gate tasks and Notes is off: Notes carry what one run learned into the next; compare with bench ${split.polyglot ? '--task polyglot' : '--tasks'}, Notes on and off`)
   }
   if (exhausted(lines).length === ALLOWED.length) advice.push('every field is exhausted')
   if (!advice.length) advice.push('none from these numbers')
@@ -112,7 +111,7 @@ export function evolveReport(r: ReportInput): string {
   if (!version) apply.push(`Keep ${harness}.`)
   else if (r.changed) apply.push(`Keep ${harness}: ${versionFile} on disk is not the version measured; it changed after evolve wrote it.`)
   else {
-    if (told.better) apply.push(mode.strict ? `Use ${versionFile} in place of ${harness}.` : `Try ${versionFile} in place of ${harness}: a pointer, not proof (too few tasks).`)
+    if (told.better) apply.push(split.declarable ? `Use ${versionFile} in place of ${harness}.` : `Try ${versionFile} in place of ${harness}: a pointer, not proof.`)
     // Accepted on train + gate, not better on test: a candidate.
     else apply.push(`Keep ${harness}; ${versionFile} is a candidate, kept for reference.`)
     apply.push(`Check it yourself: llm-harness-builder bench ${versionFile} ${bench}`)

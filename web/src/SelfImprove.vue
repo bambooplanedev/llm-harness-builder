@@ -128,7 +128,7 @@ const clearNotes = () => { if (confirm(t('evolve.clearConfirm'))) void loadNotes
         <li><b>{{ consent.sets.gate }}</b> {{ t('evolve.gate') }}</li>
         <li><b>{{ consent.sets.test }}</b> {{ t('evolve.test') }}</li>
       </ul>
-      <p v-if="consent.strict">{{ t('evolve.strict', { needed: consent.needed ?? '' }) }}</p>
+      <p v-if="consent.declarable">{{ t('evolve.strict', { needed: consent.needed ?? '' }) }}</p>
       <div v-else class="warn block">{{ consent.reference }}</div>
       <p v-if="consent.uncommitted" class="warn">{{ t('evolve.uncommitted') }}</p>
       <div class="warn block">{{ t('evolve.warning') }}</div>

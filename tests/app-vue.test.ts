@@ -235,7 +235,7 @@ test('evolve running on another harness than the form: the button names its roun
 })
 
 test('Start without consent shows the sets and the commands; Start waits for the checkbox and then sends the hash', async () => {
-  const consent = { consent: { text: 'CONSENT TEXT', hash: 'h1' }, sets: { train: 5, gate: 4, test: 3 }, strict: true, needed: 6, uncommitted: true }
+  const consent = { consent: { text: 'CONSENT TEXT', hash: 'h1' }, sets: { train: 5, gate: 4, test: 3 }, declarable: true, needed: 6, uncommitted: true }
   const app = await mount({ ...base, '/api/harnesses': [{ name: 'tuned' }],
     '/api/evolve/start': (b: any) => b.accept ? new Response('{}', { status: 201 }) : new Response(JSON.stringify(consent), { status: 409 }) })
   await openWindow(app)
@@ -254,7 +254,7 @@ test('Start without consent shows the sets and the commands; Start waits for the
 })
 
 test('a non-strict consent shows the reference line as a warning', async () => {
-  const consent = { consent: { text: 'C', hash: 'h' }, sets: { train: 1, gate: 1, test: 1 }, strict: false, reference: 'too few tasks (3 of 24)', uncommitted: false }
+  const consent = { consent: { text: 'C', hash: 'h' }, sets: { train: 1, gate: 1, test: 1 }, declarable: false, reference: 'too few tasks (3 of 24)', uncommitted: false }
   const app = await mount({ ...base, '/api/harnesses': [{ name: 'tuned' }], '/api/evolve/start': () => new Response(JSON.stringify(consent), { status: 409 }) })
   await openWindow(app)
   button(app.root, 'Start')!.props.onClick(); await settle()
@@ -489,7 +489,7 @@ test('once a job is gone the status is asked once more, for the report\'s tail a
 
 test('a Start with a yes that comes back with consent again says the commands changed', async () => {
   let n = 0
-  const consent = () => ({ consent: { text: `COMMANDS ${++n}`, hash: `h${n}` }, sets: { train: 1, gate: 1, test: 1 }, strict: true, needed: 1, uncommitted: false })
+  const consent = () => ({ consent: { text: `COMMANDS ${++n}`, hash: `h${n}` }, sets: { train: 1, gate: 1, test: 1 }, declarable: true, needed: 1, uncommitted: false })
   const app = await mount({ ...base, '/api/harnesses': [{ name: 'tuned' }], '/api/evolve/start': () => new Response(JSON.stringify(consent()), { status: 409 }) })
   await openWindow(app)
   const said = 'The commands changed since you accepted them; read them again.'

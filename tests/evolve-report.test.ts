@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { evolveReport, type ReportInput } from '../src/core/evolve-report.js'
-import { ALLOWED, applyEdit, referenceLabel, type Edit, type JournalLine, type Mode, type RunLite, type SetName } from '../src/core/evolve.js'
+import { ALLOWED, applyEdit, referenceLabel, type Edit, type JournalLine, type Split, type RunLite, type SetName } from '../src/core/evolve.js'
 
 const fail = (task: string, sig: string, tokens = 110, fp = 100): RunLite => ({ task, verdict: 'FAIL', tokens, firstPromptTokens: fp, turns: 3, modelMs: 40, sig })
 const pass = (task: string, tokens = 110, fp = 100): RunLite => ({ task, verdict: 'PASS', tokens, firstPromptTokens: fp, turns: 3, modelMs: 40 })
@@ -11,24 +11,24 @@ const cand = (index: number, edit: Edit, accepted: boolean, reason: string, runs
   ({ v: 2, type: 'candidate', round: 1, index, input: '{}', edit, accepted, reason, ...(runs ? { runs } : {}), ...(version ? { version } : {}) })
 
 /** The journal as lines, and what replay would have made of them. */
-function journalOf(o: { sets: Record<SetName, string[]>; mode: Mode; original: object; current: RunLite[]; cands: Said[]; final?: { orig: RunLite[]; last: RunLite[] } }): ReportInput {
+function journalOf(o: { sets: Record<SetName, string[]>; split: Split; original: object; current: RunLite[]; cands: Said[]; final?: { orig: RunLite[]; last: RunLite[] } }): ReportInput {
   let current = o.original, version = 0
   for (const l of o.cands) if (l.type === 'candidate' && l.accepted) { current = applyEdit(current, l.edit!); version++ }
   const lines: JournalLine[] = [
-    { v: 2, type: 'start', base: 'h', sha: 's', pin: '0'.repeat(64), notes: '0'.repeat(64), sets: o.sets, strict: o.mode.strict, proposer: 'p', repeats: 1, rounds: 1 },
+    { v: 2, type: 'start', base: 'h', sha: 's', pin: '0'.repeat(64), notes: '0'.repeat(64), sets: o.sets, declarable: o.split.declarable, mode: o.split.mode, proposer: 'p', repeats: 1, rounds: 1 },
     { v: 2, type: 'sweep', round: 1, sweep: 1, cur: o.current, cands: o.cands.flatMap(c => c.type === 'candidate' && c.runs ? [{ index: c.index, runs: c.runs }] : []) },
     ...o.cands.map(({ runs: _, ...c }: any) => c as JournalLine),
     { v: 2, type: 'testsweep', sweep: 1, ...(version ? o.final! : { orig: [], last: [] }) },
     { v: 2, type: 'final', version },
   ]
-  return { lines, state: { current, version, final: version ? o.final! : 'none' }, original: o.original, mode: o.mode, sets: o.sets, harness: 'h.json', versionFile: version ? `harnesses/h.v${version}.json` : '' }
+  return { lines, state: { current, version, final: version ? o.final! : 'none' }, original: o.original, split: o.split, sets: o.sets, harness: 'h.json', versionFile: version ? `harnesses/h.v${version}.json` : '' }
 }
 
 const EDIT: Edit = { field: 'systemPrompt', value: 'Make the file first.' }
-function golden(over: { accepted?: Said; refused?: Said[]; afterGate?: RunLite[]; original?: object; mode?: Mode } = {}): ReportInput {
+function golden(over: { accepted?: Said; refused?: Said[]; afterGate?: RunLite[]; original?: object; split?: Split } = {}): ReportInput {
   return journalOf({
     sets: { train: ['t1', 't2'], gate: ['g1', 'g2'], test: ['x1', 'x2'] },
-    mode: over.mode ?? { strict: false, trainGate: 4, test: 2 },
+    split: over.split ?? { declarable: false, mode: 'custom', trainGate: 4, test: 2 },
     original: over.original ?? { systemPrompt: 'S', loop: { maxTurns: 1 } },
     current: [fail('t1', 'max_turns|-|-|-'), fail('t2', 'max_turns|-|-|-'), fail('g1', CF), fail('g2', CF)],
     cands: [over.accepted ?? cand(1, EDIT, true, 'accepted', [pass('t1'), pass('t2'), ...(over.afterGate ?? [pass('g1'), fail('g2', CF)])], 1),
@@ -42,7 +42,7 @@ const GOLDEN = `== Conclusion
 harnesses/h.v1.json against h.json on the 2 test tasks:
 original: PASS 1/2, tokens per success 220, first requests 200 tok
 v1: PASS 2/2, tokens per success 120, first requests 210 tok
-${referenceLabel({ strict: false, trainGate: 4, test: 2 })}
+${referenceLabel({ declarable: false, mode: 'custom', trainGate: 4, test: 2 })}
 more PASS
 how far this is a principle rather than a fit depends on how unlike the training tasks the test tasks are
 
@@ -53,10 +53,11 @@ failures on the gate tasks, round 1 → v1:
   final|check_failed|-|-: 2 → 1
 
 == Advice
-- add 12 tasks to train + gate and 6 to test for a strict verdict
+- add 12 tasks to train + gate and 6 to test to declare a winner
+- --mode night or days declares a winner
 
 == How to apply
-1. Try harnesses/h.v1.json in place of h.json: a pointer, not proof (too few tasks).
+1. Try harnesses/h.v1.json in place of h.json: a pointer, not proof.
 2. Check it yourself: llm-harness-builder bench harnesses/h.v1.json --tasks <repo>
 3. Read the systemPrompt paragraph above before you use it.`
 
@@ -65,7 +66,7 @@ function strictOf(better: boolean): ReportInput {
   const n = (p: string, k: number) => Array.from({ length: k }, (_, i) => `${p}${i}`)
   const sets = { train: n('t', 8), gate: n('g', 8), test: n('x', 8) }
   return journalOf({
-    sets, mode: { strict: true, trainGate: 16, test: 8 }, original: {},
+    sets, split: { declarable: true, mode: 'night', trainGate: 16, test: 8 }, original: {},
     current: [...sets.train, ...sets.gate].map(t => fail(t, CF)),
     cands: [cand(1, { field: 'loop.maxRepeats', value: 3 }, true, 'accepted', [...sets.train, ...sets.gate].map(t => pass(t)), 1)],
     final: { orig: sets.test.map(t => fail(t, CF)), last: sets.test.map(t => better ? pass(t) : fail(t, CF)) },
@@ -91,6 +92,16 @@ describe('evolve report', () => {
   it('rule few tasks: absent in strict mode', () => {
     expect(evolveReport(golden())).toContain('- add 12 tasks')
     expect(evolveReport(strictOf(true))).not.toContain('- add ')
+  })
+
+  it('advice names the mode that declares; hours with enough tasks never says Use', () => {
+    const hours = { ...strictOf(true), split: { declarable: false, mode: 'hours', trainGate: 16, test: 8 } as const }
+    const t = evolveReport(hours)
+    expect(t).toContain('- --mode night or days declares a winner\n')
+    expect(t).not.toContain('- add ')
+    expect(t).toContain('1. Try harnesses/h.v1.json in place of h.json: a pointer, not proof.')
+    expect(t).not.toContain('raise --size')
+    expect(evolveReport({ ...hours, split: { declarable: false, mode: 'custom', trainGate: 2, test: 1, polyglot: true } })).not.toContain('- add ')
   })
 
   it("rule no usage: fires on a 'the server gave no usage' candidate, absent otherwise", () => {
@@ -160,11 +171,11 @@ describe('evolve report', () => {
     expect(evolveReport({ ...strictOf(true), changed: false })).toBe(evolveReport(strictOf(true)))
   })
 
-  it('strict mode is named in the Conclusion, right after the against line or the no-version line', () => {
-    expect(evolveReport(strictOf(true))).toContain('test tasks:\nstrict mode: 16 train + gate tasks, 8 test tasks\noriginal: ')
-    const t = evolveReport(golden({ accepted: cand(1, EDIT, false, 'within noise (p=0.25)'), mode: { strict: true, trainGate: 4, test: 2 } }))
-    expect(t).toContain('no version beat the original\nstrict mode: 4 train + gate tasks, 2 test tasks\n')
-    expect(evolveReport(golden())).not.toContain('strict mode:')
+  it('a declarable mode is named in the Conclusion, right after the against line or the no-version line', () => {
+    expect(evolveReport(strictOf(true))).toContain('test tasks:\nmode night, a winner can be declared: 16 train + gate tasks, 8 test tasks\noriginal: ')
+    const t = evolveReport(golden({ accepted: cand(1, EDIT, false, 'within noise (p=0.25)'), split: { declarable: true, mode: 'night', trainGate: 4, test: 2 } }))
+    expect(t).toContain('no version beat the original\nmode night, a winner can be declared: 4 train + gate tasks, 2 test tasks\n')
+    expect(evolveReport(golden())).not.toContain('a winner can be declared')
   })
 
   it('nothing but the labelled paragraph leaks', () => {
@@ -193,8 +204,8 @@ describe('evolve report', () => {
   })
 
   it('rule few tasks: only train + gate short, only test short', () => {
-    expect(evolveReport(golden({ mode: { strict: false, trainGate: 4, test: 8 } }))).toContain('- add 12 tasks to train + gate for a strict verdict\n')
-    expect(evolveReport(golden({ mode: { strict: false, trainGate: 16, test: 2 } }))).toContain('- add 6 tasks to test for a strict verdict\n')
+    expect(evolveReport(golden({ split: { declarable: false, mode: 'night', trainGate: 4, test: 8 } }))).toContain('- add 12 tasks to train + gate to declare a winner\n')
+    expect(evolveReport(golden({ split: { declarable: false, mode: 'night', trainGate: 16, test: 2 } }))).toContain('- add 6 tasks to test to declare a winner\n')
   })
 
   it('rule knob outside evolve: fires on the check part', () => {
@@ -208,7 +219,7 @@ describe('evolve report', () => {
     const gate = (n: number, failing: number) => {
       const g = Array.from({ length: n }, (_, i) => `g${i}`)
       return evolveReport(journalOf({
-        sets: { train: ['t1'], gate: g, test: ['x1'] }, mode: { strict: false, trainGate: n + 1, test: 1 }, original: {},
+        sets: { train: ['t1'], gate: g, test: ['x1'] }, split: { declarable: false, mode: 'night', trainGate: n + 1, test: 1 }, original: {},
         current: [pass('t1'), ...g.map((t, i) => i < failing ? fail(t, CF) : pass(t))],
         cands: [cand(1, EDIT, false, 'no more PASS than current')],
       }))

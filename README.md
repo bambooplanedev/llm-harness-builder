@@ -228,7 +228,7 @@ directory to browse them, and reload the list after a CLI run. On every start `s
     llm-harness-builder run <harness.json> "task" [--workdir <dir>] [--yes] [--json] [--answer-schema <file.json>] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
     llm-harness-builder demo [--json] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
     llm-harness-builder bench [harness.json ...] [--n <n>] [--timeout <s>] [--out <file>] [--task <name>] [--size <N>] [--tasks <repo>] [--only <a,b>] [--yes] [--max-turns <N>] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
-    llm-harness-builder evolve <harness.json> [--tasks <repo>] [--task polyglot] [--size <N>] [--rounds <N>] [--proposer <harness.json>] [--timeout <s>] [--yes] [--report] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
+    llm-harness-builder evolve <harness.json> [--tasks <repo>] [--task polyglot] [--mode <m>] [--size <N>] [--rounds <N>] [--proposer <harness.json>] [--timeout <s>] [--yes] [--report] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
     llm-harness-builder replay <run-id | trace.jsonl> [--turn <N>] [--n <n>] [--temperature <t>] [--max-tokens <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>] [--json]
     llm-harness-builder analyze <bench.json | run-id | trace.jsonl> ... [--json]
     llm-harness-builder proxy [--upstream <url>] [--port <n>] [--name <label>]
@@ -387,8 +387,25 @@ tasks the proposer never saw; the last kept version is then measured against the
 The harness file you give is never written.
 
 ```bash
-llm-harness-builder evolve harnesses/tuned-nothink.json --tasks ../myrepo
+llm-harness-builder evolve harnesses/tuned-nothink.json --tasks ../myrepo --mode night
 ```
+
+`--mode` has no default: a default would silently buy a night of runs.
+
+| Mode | Repeats, rounds | What it promises | `--task polyglot` |
+|---|---|---|---|
+| `hours` | 1, 1 | orientation, never a winner | 24 exercises, up to 72 runs |
+| `night` | 3, 1 | a large gain only | 47 exercises, up to 394 runs, about 11–13 h on the model measured below |
+| `days` | 5, 2 | a gain from +5 tasks of 32 | 47 exercises, up to 1126 runs |
+
+Only `night` and `days` declare a winner, and only with at least 16 train + gate and 8 test tasks; any
+other result is labelled "orientation, not proof" and says why. On `--tasks` the repo sets the task
+count and the mode sets repeats and rounds. evolve prints the mode's run count at the start. After the
+first step it prints the time for the rest at that pace, the money when the harness has a price, and
+the smallest gain the mode can tell from noise on this model (`at most`, an upper bound, at one
+repeat). These are upper counts: the test runs only if a version is found. The mode, its repeats and
+its rounds are pinned: another mode or `--rounds` refuses a resume, and `--report` reads them from the
+journal.
 
 It writes to `./harnesses`: `<name>.evolve.jsonl` (the journal), `<name>.evolve.notes.jsonl` (a frozen
 copy of the repo's notes, so every version reads the same) and `<name>.v1.json`, `v2.json`… for each
@@ -400,9 +417,10 @@ names it called, which file types it edited (from a fixed list of extensions). N
 paths or task names. `--proposer` picks another harness
 for the proposing backend.
 
-No repo of your own? `--task polyglot --size N` (3 to 47, required, not with `--tasks`) practises evolve on
-the Exercism set: exercise `i` goes to train, gate or test by `i % 3`. `--size 6 --rounds 1` is a quick
-estimate, "orientation, not proof"; verdicts are strict from `--size 24`, `--size 47` is the full set.
+No repo of your own? `--task polyglot` practises evolve on the Exercism set: exercise `i` goes to train,
+gate or test by `i % 3`. `--rounds N`, and on polyglot `--size N` (3 to 47, not with `--tasks`), replace
+`--mode` for a quick look of your own: one repeat, always orientation. `--size 6 --rounds 1` is the
+quickest.
 The proposer never gets exercise names, test names or paths. The journal is bound to the loaded set and
 the size: a changed set refuses a resume, `--report` still prints. The proposer is asked about only when
 its host differs from the harness's (`--yes` accepts); the same host gets a notice line.
@@ -432,7 +450,7 @@ Exit codes: 0 with a report; 1 when the model changed the linked `node_modules` 
 bad argument, or a server that does not answer or lacks the model; 130 for Ctrl-C, after which the journal holds every finished step.
 
 Measured on 28–29 October 2026 (`qwen/qwen3-coder-30b-a3b-instruct` on OpenRouter, `tuned-qwen-coder`,
-`--task polyglot --size 47 --rounds 3`, strict mode, about 8.5 hours of runs; $0.14 measured for two steps of
+`--task polyglot --size 47 --rounds 3`, one repeat under the rule `night` now applies, about 8.5 hours of runs; $0.14 measured for two steps of
 32 runs, so about $0.65 for all nine):
 
 | Step | Edit | PASS of 32 (train + gate) | Verdict |

@@ -16,7 +16,7 @@ import { TASKS, checkSlug } from '../core/tasks.js'
 import { childEnv } from '../core/tools/env.js'
 import { loadRepoTasks, consentText, consentHash, hasConsent, saveConsent } from '../core/repo-tasks.js'
 import { readNotes, removeNotes, notesPath, notesKey } from '../core/notes.js'
-import { splitSets, modeOf, neededFlips, referenceLabel, ALLOWED } from '../core/evolve.js'
+import { splitSets, splitOf, neededFlips, referenceLabel, ALLOWED } from '../core/evolve.js'
 
 /** `cli` starts `llm-harness-builder <args>` (args[0] is `bench` or `evolve`) with stdout and stderr piped; without it the page cannot start a job.
  *  `examplesDir`: recorded runs the three GET routes read with `?example=1`; nothing ever writes there. */
@@ -257,17 +257,18 @@ export async function startServer(opts: ServerOpts) {
         if (w) return bad(w)
         let t
         try { t = await loadRepoTasks(body.repo as string) } catch (e) { return bad((e as Error).message) }
-        const sets = splitSets(t.tasks), mode = modeOf(sets)
-        if (typeof mode === 'string') return bad(mode)
+        // Custom until the page picks a mode: the same three rounds it always ran.
+        const sets = splitSets(t.tasks), split = splitOf(sets, false, 'custom')
+        if (typeof split === 'string') return bad(split)
         const ev = { proposer: config.backend.baseUrl, fields: ALLOWED }
         if (!(await hasConsent(t, ev))) {
           if (body.accept !== consentHash(t, ev)) return json(res, 409, {
             consent: { text: consentText(t, ev), hash: consentHash(t, ev) }, sets: { train: sets.train.length, gate: sets.gate.length, test: sets.test.length },
-            strict: mode.strict, ...mode.strict ? { needed: neededFlips() } : { reference: referenceLabel(mode) }, uncommitted: t.uncommitted })
+            declarable: split.declarable, ...split.declarable ? { needed: neededFlips() } : { reference: referenceLabel(split) }, uncommitted: t.uncommitted })
           await saveConsent(t, ev)
         }
         if (busy()) return json(res, 409, { error: busy() })
-        const child = opts.cli(['evolve', file, `--tasks=${t.repo}`])
+        const child = opts.cli(['evolve', file, `--tasks=${t.repo}`, '--rounds=3'])
         const j = job = { kind: 'evolve' as const, child, harness: body.harness, err: '' }
         let out = ''
         let ended: typeof lastEvolve
