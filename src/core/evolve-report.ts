@@ -47,8 +47,10 @@ export function evolveReport(r: ReportInput): string {
   const accepted = cands.filter(l => l.accepted)
   const refused = count(cands.filter(l => !l.accepted).map(l => reasonKind(l.reason)))
   const onGate = (rs: RunLite[]) => rs.filter(x => sets.gate.includes(x.task))
-  const before = fails(onGate(lines.flatMap(l => l.type === 'current' && l.round === 1 ? l.runs : [])))
-  const after = version ? fails(onGate(accepted[accepted.length - 1]?.runs ?? [])) : undefined
+  const sweeps = lines.flatMap(l => l.type === 'sweep' ? [l] : [])
+  const before = fails(onGate(sweeps.filter(s => s.round === sweeps[0]!.round).flatMap(s => s.cur)))
+  const kept = accepted[accepted.length - 1]
+  const after = version ? fails(onGate(sweeps.filter(s => s.round === kept?.round).flatMap(s => s.cands.filter(c => c.index === kept?.index).flatMap(c => c.runs)))) : undefined
   const prompts = accepted.filter(l => l.edit?.field === 'systemPrompt')
   const final = state.final === 'none' ? undefined : state.final
   const told = final ? verdict(final.orig, final.last, mode, (r.original as any).loop?.maxTurns ?? Infinity) : { better: false, lines: [] }

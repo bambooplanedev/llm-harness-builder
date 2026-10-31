@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ALPHA, boundBy, applyEdit, numbersOf, usable, parseJournal, replay, verdict, bindingTokens, checkEdit, decide, passGain, failureGroups, reasonKind, signatureOf, SIG, modeOf, neededFlips, parseProposal, proposerInput, proposerRequest, referenceLabel, signP, splitSets, PROPOSAL_SCHEMA, type Edit, type Mode, type RunLite } from '../src/core/evolve.js'
+import { ALPHA, boundBy, applyEdit, numbersOf, pickWinner, usable, parseJournal, replay, verdict, bindingTokens, checkEdit, decide, passGain, failureGroups, reasonKind, signatureOf, SIG, modeOf, neededFlips, parseProposal, proposerInput, proposerRequest, referenceLabel, signP, splitSets, PROPOSAL_SCHEMA, type Edit, type Mode, type RunLite } from '../src/core/evolve.js'
 import type { HarnessEvent } from '../src/core/events.js'
 import { harness } from './helpers.js'
 import type { RepoTask } from '../src/core/repo-tasks.js'
@@ -11,6 +11,10 @@ const names = (n: number) => Array.from({ length: n }, (_, i) => `t${i}`)
 const strict: Mode = { strict: true, trainGate: 16, test: 8 }
 const ref: Mode = { strict: false, trainGate: 2, test: 1 }
 const dec = (cur: RunLite[], cand: RunLite[], orig: RunLite[], gateNames: string[], mode: Mode, origMaxTurns = 10) => decide({ cur, cand, orig, gateNames, mode, origMaxTurns })
+/** A journal's sweep line: runs carry their sweep's number, as the run loop stamps them. */
+const stamp = (rs: RunLite[], sweep: number) => rs.map(r => ({ ...r, repeat: sweep }))
+const sweepLine = (round: number, sweep: number, cur: RunLite[], cands: Record<number, RunLite[]>) =>
+  ({ v: 2, type: 'sweep', round, sweep, cur: stamp(cur, sweep), cands: Object.entries(cands).map(([i, rs]) => ({ index: Number(i), runs: stamp(rs, sweep) })) })
 
 describe('evolve sets and tests', () => {
   it('splitSets: set in the file wins, the rest by sha1 of the name, stable', () => {
@@ -359,16 +363,16 @@ describe('evolve signals', () => {
 
 describe('evolve journal', () => {
   const sets = { train: ['t0', 't1'], gate: ['t2'], test: ['t3'] }
-  const start = { v: 2, type: 'start', base: 'h', sha: 'abc', pin: 'a'.repeat(64), notes: 'b'.repeat(64), sets, strict: false, proposer: 'http://p/v1' }
-  const cur = { v: 2, type: 'current', round: 1, runs: [run('t0', false), run('t1', true), run('t2', true)] }
+  const start = { v: 2, type: 'start', base: 'h', sha: 'abc', pin: 'a'.repeat(64), notes: 'b'.repeat(64), sets, strict: false, proposer: 'http://p/v1', repeats: 1, rounds: 1 }
+  const cur = { v: 2, type: 'probe', round: 1, runs: [run('t0', false), run('t1', true)] }
+  const base = [run('t0', false), run('t1', true), run('t2', true)]
   // An accepted candidate's runs beat the current's, as decide would have it; a refused one's do not.
   const win = [run('t0', true), run('t1', true), run('t2', true)]
   const cand = (index: number, edit: Edit, accepted: boolean, reason: string, round = 1) =>
-    ({ v: 2, type: 'candidate', round, index, input: '{}', edit, accepted, reason, numbers: { pass: 3, tokens: 300, tokensPerSuccess: 100, weight: 30 }, runs: accepted ? win : cur.runs, ...(accepted ? { version: 1 } : {}) })
+    ({ v: 2, type: 'candidate', round, index, input: '{}', edit, accepted, reason, numbers: { pass: 3, tokens: 300, tokensPerSuccess: 100, weight: 30 }, ...(accepted ? { version: 1 } : {}) })
   const a1 = cand(1, { field: 'systemPrompt', value: 'plan first', why: 'w' }, true, 'accepted')
   const r2 = cand(2, { field: 'systemPrompt', value: 'mind t0_file' }, false, 'tied to a task')
   const r3 = { ...cand(1, { field: 'loop.maxRepeats', value: 3 }, false, 'within noise (p=0.50)', 2), numbers: undefined }
-  const cur2 = { ...cur, round: 2 }
   const jsonl = (...ls: object[]) => ls.map(l => JSON.stringify(l) + '\n').join('')
   const ctx = { binding: ['t0_file'], sets }
 
@@ -399,8 +403,8 @@ describe('evolve journal', () => {
     expect(parseJournal(jsonl({ ...start, pin: 'x' }))).toEqual({ error: expect.stringMatching(/^line 1: pin: /) })
   })
 
-  const tr = (ok = true) => [run('t3', ok)]
-  const fin = (o: object = {}) => ({ v: 2, type: 'final', version: 1, orig: tr(false), last: tr(true), ...o })
+  // The proposal goes in before its runs: a stop between them cannot re-roll it.
+  const prop = (c: { round: number; index: number; input: string; edit?: Edit }) => ({ v: 2, type: 'proposal', round: c.round, index: c.index, input: c.input, edit: c.edit })
 
   it('a run with a sig outside the vocabulary is refused', () => {
     expect(parseJournal(jsonl(start, { ...cur, runs: [{ ...run('t0', false), sig: 'x ; rm' }] }))).toEqual({ error: expect.stringMatching(/^line 2: .*sig/) })
@@ -415,34 +419,12 @@ describe('evolve journal', () => {
   it('replay holds the journal to the original\'s loop.maxTurns: an accepted line whose verdict depends on the cap replays', () => {
     const big = { train: ['t0', 't1', 't2', 't3', 't4'], gate: ['t5', 't6'], test: ['t7'] }
     const st = { ...start, sets: big }
-    const base = ['t0', 't1', 't2', 't3', 't4', 't5', 't6'].map((t, i) => run(t, i > 0)) // 6 PASS at 3 turns
+    const seven = ['t0', 't1', 't2', 't3', 't4', 't5', 't6'].map((t, i) => run(t, i > 0)) // 6 PASS at 3 turns
     // all 7 PASS at 8 turns: past +1 on the 6 shared, but 8 > the cap of 5 (harness()), so not compared and accepted
-    const dear = base.map((r): RunLite => ({ ...r, verdict: 'PASS', turns: 8 }))
-    const c = { ...a1, runs: dear }
-    const r = replay([st, { ...cur, runs: base }, c] as any, harness(), { binding: [], sets: big }) as any
+    const dear = seven.map((r): RunLite => ({ ...r, verdict: 'PASS', turns: 8 }))
+    const c = a1, r9 = cand(2, { field: 'loop.maxRepeats', value: 3 }, false, 'x')
+    const r = replay([st, { ...cur, runs: seven.slice(0, 5) }, prop(a1), r9, sweepLine(1, 1, seven, { 1: dear }), c] as any, harness(), { binding: [], sets: big }) as any
     expect(r.error).toBeUndefined(); expect(r.version).toBe(1)
-  })
-
-  it('a final line is kept only as the journal\'s last line, for the replayed version, on the test tasks', () => {
-    const lines = (...ls: object[]) => (parseJournal(jsonl(...ls)) as any).lines
-    const ok = replay(lines(start, cur, a1, fin()), harness(), ctx) as any
-    expect(ok.final).toEqual({ orig: tr(false), last: tr(true) })
-    expect((replay(lines(start, cur, a1, fin(), { ...cur, round: 2 }), harness(), ctx) as any).final).toBeUndefined()
-    expect(replay(lines(start, cur, a1, fin({ version: 2 })), harness(), ctx)).toEqual({ error: expect.stringContaining('final') })
-    expect(replay(lines(start, cur, a1, fin({ orig: [run('t0', false)] })), harness(), ctx)).toEqual({ error: expect.stringContaining('final') })
-    const two = { ...ctx, sets: { ...sets, test: ['t3', 't4'] } }
-    const s2 = { ...start, sets: two.sets }
-    const both = [run('t4', true), run('t3', true)]
-    // Order does not matter; a name repeated in place of another does.
-    expect((replay(lines(s2, cur, a1, fin({ orig: both, last: both })), harness(), two) as any).final).toEqual({ orig: both, last: both })
-    expect(replay(lines(s2, cur, a1, fin({ orig: [run('t3', false), run('t3', false)], last: both })), harness(), two)).toEqual({ error: expect.stringContaining('final') })
-    expect(replay(lines(start, cur, a1, { v: 2, type: 'final', version: 1, orig: tr() }), harness(), ctx)).toEqual({ error: expect.stringContaining('final') })
-  })
-
-  it('a final line for version 0 has no runs', () => {
-    const lines = (...ls: object[]) => (parseJournal(jsonl(...ls)) as any).lines
-    expect((replay(lines(start, cur, { v: 2, type: 'final', version: 0 }), harness(), ctx) as any).final).toBe('none')
-    expect(replay(lines(start, cur, { v: 2, type: 'final', version: 0, orig: tr() }), harness(), ctx)).toEqual({ error: expect.stringContaining('final') })
   })
 
   it('parseJournal: an inherited or prototype key is refused with its line number, never a throw', () => {
@@ -455,101 +437,66 @@ describe('evolve journal', () => {
   })
 
   it('replay: a reason the harness does not write reaches the proposer as other; a value holding a binding token goes without its value', () => {
+    const r1 = cand(1, { field: 'systemPrompt', value: 'plan first' }, false, 'tied to a task')
     const odd = cand(2, { field: 'loop.maxRepeats', value: 4 }, false, 'see src/secret-name.ts')
     const leak = cand(1, { field: 'systemPrompt', value: 'mind t0_file' }, false, '0 PASS', 2)
     const ok = cand(2, { field: 'loop.maxRepeats', value: 5 }, false, 'costs 12% more tokens per success than the original', 2)
-    const cfg = cand(3, { field: 'src/t0_file.ts', value: 1 }, false, 'invalid config: t0_file is bad', 2)
-    const r = replay([start, cur, a1, odd, cur2, leak, ok, cfg] as any, harness(), ctx) as any
-    expect(r.rejected).toEqual([{ field: 'loop.maxRepeats', value: 4, reason: 'other' }, { field: 'systemPrompt', reason: '0 PASS' },
+    const cfg = cand(1, { field: 'src/t0_file.ts', value: 1 }, false, 'invalid config: t0_file is bad', 3)
+    const r = replay([start, cur, r1, odd, leak, ok, cfg] as any, harness(), ctx) as any
+    expect(r.rejected).toEqual([{ field: 'systemPrompt', reason: 'tied to a task' }, { field: 'loop.maxRepeats', value: 4, reason: 'other' }, { field: 'systemPrompt', reason: '0 PASS' },
       { field: 'loop.maxRepeats', value: 5, reason: 'costs 12% more tokens per success than the original' }, { field: 'other', value: 1, reason: 'other' }])
   })
 
-  it('replay rebuilds the current from the original and the accepted edits', () => {
-    const lines = (parseJournal(jsonl(start, cur, a1, r2, cur2, JSON.parse(JSON.stringify(r3)))) as any).lines
-    const r = replay(lines, harness(), ctx) as any
-    expect(r.error).toBeUndefined()
-    expect(r.current).toEqual(applyEdit(harness(), { field: 'systemPrompt', value: 'plan first' }))
-    expect(r.version).toBe(1)
-    expect(r.baseline).toEqual(cur.runs)
-    expect(r.done).toEqual([{ round: 1, index: 0 }, { round: 1, index: 1 }, { round: 1, index: 2 }, { round: 2, index: 0 }, { round: 2, index: 1 }])
-    expect(r.tried).toEqual([a1.edit, r2.edit, r3.edit])
-    expect(r.rejected).toEqual([{ field: 'systemPrompt', reason: 'tied to a task' }, { field: 'loop.maxRepeats', value: 3, reason: 'within noise (p=0.50)' }])
-  })
-
-  it('refuses an accepted edit outside ALLOWED written into the journal', () => {
-    const bad = cand(2, { field: 'loop.untilBash', value: 'rm -rf x' }, true, 'accepted')
-    expect(replay([start, cur, a1, bad] as any, harness(), ctx)).toEqual({ error: 'cannot resume: round 1 candidate 2: accepted edit 2: field not allowed' })
-    const dup = cand(2, a1.edit, true, 'accepted')
-    expect(replay([start, cur, a1, dup] as any, harness(), ctx)).toEqual({ error: 'cannot resume: round 1 candidate 2: accepted edit 2: already tried' })
+  it('refuses a proposed edit outside ALLOWED or already tried, before anything is measured', () => {
+    expect(replay([start, cur, prop({ ...a1, edit: { field: 'loop.untilBash', value: 'rm -rf x' } })] as any, harness(), ctx)).toEqual({ error: 'cannot resume: round 1 candidate 1: proposed edit: field not allowed' })
+    const refused = cand(1, a1.edit, false, 'bad value')
+    expect(replay([start, cur, refused, prop({ ...r2, edit: a1.edit })] as any, harness(), ctx)).toEqual({ error: 'cannot resume: round 1 candidate 2: proposed edit: already tried' })
     expect(replay([cur] as any, harness(), ctx)).toEqual({ error: expect.stringMatching(/^cannot resume: /) })
-    // No round 1 current first: there is no baseline to compare with.
-    expect(replay([start, a1] as any, harness(), ctx)).toEqual({ error: expect.stringMatching(/^cannot resume: .*round 1/) })
-    expect(replay([start, { ...cur, round: 2 }] as any, harness(), ctx)).toEqual({ error: expect.stringMatching(/^cannot resume: .*round 1/) })
     expect(replay([start] as any, harness(), ctx)).toMatchObject({ version: 0, baseline: undefined })
   })
 
-  // The proposal goes in before its runs: a stop between them cannot re-roll it.
-  const prop = (c: { round: number; index: number; input: string; edit?: Edit }) => ({ v: 2, type: 'proposal', round: c.round, index: c.index, input: c.input, edit: c.edit })
   it('a proposal line parses; one without an edit or with an extra key is refused', () => {
-    expect(parseJournal(jsonl(start, cur, prop(a1), a1))).toEqual({ lines: [start, cur, prop(a1), a1] })
+    expect(parseJournal(jsonl(start, cur, prop(a1)))).toEqual({ lines: [start, cur, prop(a1)] })
     expect(parseJournal(jsonl(start, cur, { ...prop(a1), edit: undefined }))).toEqual({ error: 'line 3: missing edit' })
     expect(parseJournal(jsonl(start, cur, { ...prop(a1), extra: 1 }))).toEqual({ error: expect.stringMatching(/^line 3: /) })
   })
 
-  it('replay: a proposal followed by its candidate is not a second line and adds nothing; one without its candidate is pending', () => {
-    const lines = (...ls: object[]) => (parseJournal(jsonl(...ls)) as any).lines
-    // Refused by decide, so it passed the edit checks: the only kind with a proposal.
-    const n2 = cand(2, { field: 'loop.maxRepeats', value: 4 }, false, 'no more PASS than current')
-    const old = replay(lines(start, cur, a1, n2), harness(), ctx) as any
-    const r = replay(lines(start, cur, prop(a1), a1, prop(n2), n2), harness(), ctx) as any
-    expect(r).toEqual(old)
-    expect(old.pending).toBeUndefined()
-    const p = replay(lines(start, cur, a1, prop(n2)), harness(), ctx) as any
-    expect(p.pending).toEqual({ round: 1, index: 2, input: '{}', edit: n2.edit })
-    expect(p.tried).toEqual([a1.edit])
-    expect(p.done).toEqual(old.done.slice(0, 2))
-  })
+  const refusal = cand(2, { field: 'loop.maxRepeats', value: 4 }, false, 'no more PASS than current')
+  const swept = (c1: RunLite[] = win) => [start, cur, prop(a1), refusal, sweepLine(1, 1, base, { 1: c1 })]
 
-  it('replay refuses a candidate whose edit differs from its proposal, a proposal not followed by its candidate, one for a done slot, and one that fails the edit checks', () => {
-    const other = { ...a1, edit: { field: 'systemPrompt', value: 'other' } }
-    expect(replay([start, cur, prop(a1), other] as any, harness(), ctx)).toEqual({ error: 'cannot resume: round 1 candidate 1: its edit or input is not the one proposed' })
-    expect(replay([start, cur, prop(a1), { ...a1, input: '{"other":1}' }] as any, harness(), ctx)).toEqual({ error: 'cannot resume: round 1 candidate 1: its edit or input is not the one proposed' })
-    expect(replay([start, cur, prop(a1), r2] as any, harness(), ctx)).toEqual({ error: 'cannot resume: round 1 candidate 1: a proposal without its candidate' })
-    expect(replay([start, cur, prop(a1), prop(a1)] as any, harness(), ctx)).toEqual({ error: 'cannot resume: round 1 candidate 1: a proposal without its candidate' })
-    expect(replay([start, cur, prop(a1), fin()] as any, harness(), ctx)).toEqual({ error: 'cannot resume: round 1 candidate 1: a proposal without its candidate' })
-    expect(replay([start, cur, a1, prop(a1)] as any, harness(), ctx)).toEqual({ error: 'cannot resume: round 1 candidate 1: a second line for it' })
-    expect(replay([start, cur, a1, prop({ ...r2, edit: a1.edit })] as any, harness(), ctx)).toEqual({ error: 'cannot resume: round 1 candidate 2: proposed edit: already tried' })
-    expect(replay([start, cur, prop({ ...r2, edit: { field: 'loop.untilBash', value: 'x' } })] as any, harness(), ctx)).toEqual({ error: 'cannot resume: round 1 candidate 2: proposed edit: field not allowed' })
+  it('replay refuses a candidate whose edit or input differs from its proposal', () => {
+    const other = { ...a1, edit: { field: 'systemPrompt', value: 'another' } }
+    expect(replay([...swept(), other] as any, harness(), ctx)).toEqual({ error: 'cannot resume: round 1 candidate 1: its edit or input is not the one proposed' })
+    expect(replay([...swept(), { ...a1, input: '{"other":1}' }] as any, harness(), ctx)).toEqual({ error: 'cannot resume: round 1 candidate 1: its edit or input is not the one proposed' })
+    expect(replay([start, cur, prop(a1), prop(a1)] as any, harness(), ctx)).toEqual({ error: 'cannot resume: round 1 candidate 1: a second line for it' })
+    expect(replay([...swept(), a1, prop(a1)] as any, harness(), ctx)).toEqual({ error: 'cannot resume: round 1 candidate 1: a second line for it' })
+    expect(replay([start, cur, prop(a1), { v: 2, type: 'final', version: 0 }] as any, harness(), ctx)).toEqual({ error: 'cannot resume: round 1 candidate 1: a proposal without its candidate' })
   })
 
   // The journal is checked, not trusted: a decision its own numbers do not support is refused, naming its slot.
   it('replay refuses an accepted line the journal\'s numbers do not support', () => {
-    const lost = cand(1, { field: 'loop.maxRepeats', value: 3 }, false, '0 PASS')
-    lost.runs = [run('t0', false), run('t1', false), run('t2', false)]
-    expect((replay([start, cur, lost] as any, harness(), ctx) as any).error).toBeUndefined()
-    // The flip alone, and the flip with a forged reason: decide on the line's own runs says no.
-    for (const forged of [{ ...lost, accepted: true, version: 1 }, { ...lost, accepted: true, version: 1, reason: 'accepted' }])
-      expect(replay([start, cur, forged] as any, harness(), ctx)).toEqual({ error: expect.stringMatching(/^cannot resume: round 1 candidate 1: /) })
+    const lost = [run('t0', false), run('t1', false), run('t2', false)]
+    const no = cand(1, a1.edit, false, '0 PASS')
+    expect((replay([...swept(lost), { ...no, input: a1.input }] as any, harness(), ctx) as any).error).toBeUndefined()
+    // The flip alone, and the flip with a forged reason: decide on the sweep's own runs says no.
+    for (const forged of [{ ...no, accepted: true, version: 1 }, { ...no, accepted: true, version: 1, reason: 'accepted' }])
+      expect(replay([...swept(lost), forged] as any, harness(), ctx)).toEqual({ error: expect.stringMatching(/^cannot resume: round 1 candidate 1: /) })
     // The other way: a win written as a refusal.
-    expect(replay([start, cur, { ...a1, accepted: false, reason: 'worse on gate', version: undefined }] as any, harness(), ctx)).toEqual({ error: expect.stringMatching(/^cannot resume: round 1 candidate 1: /) })
-    // An accepted line without runs has nothing to check against.
-    expect(replay([start, cur, { ...a1, runs: undefined }] as any, harness(), ctx)).toEqual({ error: expect.stringMatching(/^cannot resume: round 1 candidate 1: /) })
-    // A candidate is compared with the candidate kept before it in its round, as the run loop does: a1's runs, not cur's.
-    const same = { ...cand(2, { field: 'loop.maxRepeats', value: 3 }, true, 'accepted'), version: 2 }
-    expect(replay([start, cur, a1, same] as any, harness(), ctx)).toEqual({ error: expect.stringMatching(/^cannot resume: round 1 candidate 2: /) })
-    // A round's candidate with runs before that round's current runs has nothing to be compared with.
-    expect(replay([start, cur, { ...a1, round: 2 }] as any, harness(), ctx)).toEqual({ error: expect.stringMatching(/^cannot resume: round 2 candidate 1: /) })
+    expect(replay([...swept(), { ...a1, accepted: false, reason: 'worse on gate', version: undefined }] as any, harness(), ctx)).toEqual({ error: expect.stringMatching(/^cannot resume: round 1 candidate 1: /) })
+    // A later round weighs against its own cur, the kept version's, not round 1's.
+    const e = { field: 'loop.maxRepeats', value: 5 }
+    const next = [prop({ ...cand(1, e, true, 'accepted', 2) }), cand(2, { field: 'loop.maxRepeats', value: 6 }, false, 'bad value', 2), sweepLine(2, 1, win, { 1: win })]
+    expect(replay([...swept(), a1, ...next, { ...cand(1, e, true, 'accepted', 2), version: 2 }] as any, harness(), ctx)).toEqual({ error: expect.stringMatching(/^cannot resume: round 2 candidate 1: /) })
   })
 
   it('replay refuses a second line for the same slot', () => {
     const again = cand(1, { field: 'loop.freshContext', value: 2 }, false, '0 PASS')
-    expect(replay([start, cur, a1, again] as any, harness(), ctx)).toEqual({ error: expect.stringMatching(/^cannot resume: round 1 candidate 1: /) })
-    expect(replay([start, cur, cur] as any, harness(), ctx)).toEqual({ error: expect.stringMatching(/^cannot resume: round 1 current runs: /) })
+    expect(replay([...swept(), a1, again] as any, harness(), ctx)).toEqual({ error: expect.stringMatching(/^cannot resume: round 1 candidate 1: /) })
   })
 
   it('replay refuses an accepted line whose version is not the next one', () => {
     for (const version of [7, 2, undefined])
-      expect(replay([start, cur, { ...a1, version }] as any, harness(), ctx)).toEqual({ error: expect.stringMatching(/^cannot resume: round 1 candidate 1: /) })
+      expect(replay([...swept(), { ...a1, version }] as any, harness(), ctx)).toEqual({ error: expect.stringMatching(/^cannot resume: round 1 candidate 1: /) })
   })
 
   it('refuses sets that differ from the file\'s', () => {
@@ -596,6 +543,208 @@ describe('evolve journal', () => {
   })
 })
 
+describe('evolve sweeps', () => {
+  const sets = { train: ['t0', 't1'], gate: ['t2'], test: ['t3'] }
+  const ctx = { binding: [], sets }
+  const start = (repeats = 1) => ({ v: 2, type: 'start', base: 'h', sha: 'abc', pin: 'a'.repeat(64), notes: 'b'.repeat(64), sets, strict: false, proposer: 'p', repeats, rounds: 3 })
+  const probe = { v: 2, type: 'probe', round: 1, runs: [run('t0', false), run('t1', true)] }
+  const base = [run('t0', false), run('t1', true), run('t2', true)]
+  const win = [run('t0', true), run('t1', true), run('t2', true)]
+  const e1: Edit = { field: 'loop.maxRepeats', value: 3 }, e2: Edit = { field: 'loop.maxRepeats', value: 4 }
+  const prop = (index: number, edit: Edit, round = 1) => ({ v: 2, type: 'proposal', round, index, input: `{"i":${index}}`, edit })
+  const said = (index: number, edit: Edit, accepted: boolean, reason: string, o: object = {}) => ({ v: 2, type: 'candidate', round: 1, index, input: `{"i":${index}}`, edit, accepted, reason, ...o })
+  const yes = (index: number, edit: Edit, version = 1, round = 1) => said(index, edit, true, 'accepted', { version, round })
+  const test1 = (sweep: number) => ({ v: 2, type: 'testsweep', sweep, orig: stamp([run('t3', false)], sweep), last: stamp([run('t3', true)], sweep) })
+  const final = (version: number) => ({ v: 2, type: 'final', version })
+  const go = (...ls: object[]) => replay(ls as any, harness(), ctx) as any
+  const refused = (...ls: object[]) => expect(go(...ls).error)
+  const round1 = [start(), probe, prop(1, e1), prop(2, e2), sweepLine(1, 1, base, { 1: win, 2: base })]
+
+  it('pickWinner: more PASS wins, whatever it costs', () => {
+    const a = { index: 1, runs: [run('t0', true, 900), run('t1', false, 900)] }, b = { index: 2, runs: [run('t0', true, 10), run('t1', true, 10)] }
+    expect(pickWinner(a, b)).toBe(b); expect(pickWinner(b, a)).toBe(b)
+  })
+
+  it('pickWinner: on equal PASS the one lower on tokens and time wins; a mixed pair goes by the product; a full tie to the lower index', () => {
+    const c = (index: number, tokens: number, modelMs: number) => ({ index, runs: [{ ...run('t0', true, tokens), modelMs }, { ...run('t1', false, tokens), modelMs }] })
+    expect(pickWinner(c(1, 200, 80), c(2, 100, 40)).index).toBe(2)
+    // Tokens per success 400 × 200 ms = 80000 against 200 × 300 ms = 60000: the dearer in time wins by the product.
+    expect(pickWinner(c(1, 200, 100), c(2, 100, 150)).index).toBe(2)
+    expect(pickWinner(c(1, 100, 150), c(2, 200, 100)).index).toBe(1)
+    expect(pickWinner(c(1, 100, 40), c(2, 100, 40)).index).toBe(1)
+    expect(pickWinner(c(2, 100, 40), c(1, 100, 40)).index).toBe(1)
+  })
+
+  it('replay rebuilds runs from sweeps: the edit, the baseline, what the proposer reads next', () => {
+    const r = go(...round1, yes(1, e1), said(2, e2, false, 'no more PASS than current'))
+    expect(r.error).toBeUndefined()
+    expect(r.version).toBe(1)
+    expect(r.current).toEqual(applyEdit(harness(), e1))
+    expect(r.baseline).toEqual(stamp(base, 1))
+    expect(r.feed).toEqual(stamp(win, 1).slice(0, 2))
+    expect(r.pending).toEqual([])
+    expect(r.rejected).toEqual([{ field: 'loop.maxRepeats', value: 4, reason: 'no more PASS than current' }])
+    // None kept: the next round reads cur's last sweep.
+    const none = go(...round1.slice(0, -1), sweepLine(1, 1, base, { 1: base, 2: base }), said(1, e1, false, 'no more PASS than current'), said(2, e2, false, 'no more PASS than current'))
+    expect(none.feed).toEqual(stamp(base, 1).slice(0, 2))
+  })
+
+  it('replay: the baseline is the first sweeps\' cur, in the first round that swept; both refused before the runs takes no sweep', () => {
+    const no = (i: number, v: number) => said(i, { field: 'loop.maxRepeats', value: v }, false, 'bad value')
+    const r = go(start(), probe, no(1, 1), no(2, 2))
+    expect(r.error).toBeUndefined()
+    expect(r.baseline).toBeUndefined()
+    expect(r.feed).toEqual(probe.runs)
+    const later = go(start(), probe, no(1, 1), no(2, 2), prop(1, e1, 2), prop(2, e2, 2), sweepLine(2, 1, base, { 1: base, 2: base }))
+    expect(later.error).toBeUndefined()
+    expect(later.baseline).toEqual(stamp(base, 1))
+    expect(later.pending.map((p: any) => p.index)).toEqual([1, 2])
+  })
+
+  it('replay: a proposal refused before the runs takes no sweep slot', () => {
+    const lines = [start(), probe, said(1, e2, false, 'bad value'), prop(2, e1), sweepLine(1, 1, base, { 2: win })]
+    const r = go(...lines, yes(2, e1))
+    expect(r.error).toBeUndefined()
+    expect(r.current).toEqual(applyEdit(harness(), e1))
+    refused(...lines.slice(0, -1), sweepLine(1, 1, base, { 1: win, 2: win })).toMatch(/^cannot resume: round 1 sweep 1: /)
+  })
+
+  it('replay: both proposals of a round stand on one current, and a stop keeps both', () => {
+    const r = go(start(), probe, prop(1, e1), prop(2, e2))
+    expect(r.pending).toEqual([{ round: 1, index: 1, input: '{"i":1}', edit: e1 }, { round: 1, index: 2, input: '{"i":2}', edit: e2 }])
+    expect(r.current).toEqual(harness())
+    // Candidate 2 is checked against candidate 1's edit, though no candidate line exists yet.
+    expect(go(start(), probe, prop(1, e1)).tried).toEqual([e1])
+    refused(start(), probe, prop(1, e1), prop(2, e1)).toMatch(/^cannot resume: round 1 candidate 2: proposed edit: already tried/)
+  })
+
+  it('replay refuses a sweep with a task missing, in cur or in a candidate', () => {
+    const [a, b] = [base.slice(0, 2), win.slice(0, 2)]
+    refused(...round1.slice(0, -1), sweepLine(1, 1, a, { 1: win, 2: base })).toMatch(/^cannot resume: round 1 sweep 1: /)
+    refused(...round1.slice(0, -1), sweepLine(1, 1, base, { 1: b, 2: base })).toMatch(/^cannot resume: round 1 sweep 1: /)
+    refused(...round1.slice(0, -1), sweepLine(1, 1, [...a, run('t0', true)], { 1: win, 2: base })).toMatch(/^cannot resume: round 1 sweep 1: /)
+  })
+
+  it('replay refuses a run whose repeat is not its sweep', () => {
+    const s = sweepLine(1, 1, base, { 1: win, 2: base })
+    refused(...round1.slice(0, -1), { ...s, cur: stamp(base, 2) }).toMatch(/^cannot resume: round 1 sweep 1: /)
+  })
+
+  it('replay refuses a second line for a sweep, a sweep out of order, a sweep past the repeats, one before the proposals are in', () => {
+    const s = (n: number) => sweepLine(1, n, base, { 1: win, 2: base })
+    refused(start(2), ...round1.slice(1), s(1)).toMatch(/^cannot resume: round 1 sweep 1: a second line/)
+    refused(start(3), ...round1.slice(1, -1), s(2)).toMatch(/^cannot resume: round 1 sweep 2: /)
+    refused(...round1, s(2)).toMatch(/^cannot resume: round 1 sweep 2: /)
+    refused(start(), probe, prop(1, e1), sweepLine(1, 1, base, { 1: win })).toMatch(/^cannot resume: round 1 sweep 1: /)
+    refused(start(), probe, sweepLine(1, 1, base, {})).toMatch(/^cannot resume: round 1 sweep 1: /)
+  })
+
+  it('replay refuses a candidate line before its sweeps are done, and a final over open proposals', () => {
+    refused(start(2), ...round1.slice(1), yes(1, e1)).toMatch(/^cannot resume: round 1 candidate 1: /)
+    refused(start(), probe, prop(1, e1), prop(2, e2), yes(1, e1)).toMatch(/^cannot resume: round 1 candidate 1: /)
+    refused(...round1, final(0)).toMatch(/a proposal without its candidate/)
+  })
+
+  it('replay refuses an `accepted` that decide does not give, either way, and one with no proposal', () => {
+    const flat = sweepLine(1, 1, base, { 1: base, 2: base })
+    refused(...round1.slice(0, -1), flat, yes(1, e1)).toMatch(/^cannot resume: round 1 candidate 1: its runs do not give an acceptance/)
+    refused(...round1, said(1, e1, false, 'worse on gate')).toMatch(/^cannot resume: round 1 candidate 1: its runs do not give a refusal/)
+    refused(start(), probe, yes(1, e1)).toMatch(/^cannot resume: round 1 candidate 1: /)
+  })
+
+  it('replay: both accepted, only pickWinner\'s stands; the journal claiming the other is refused', () => {
+    // Both win; candidate 2 has fewer tokens at the same time, so it keeps its place.
+    const lean = win.map(r => ({ ...r, tokens: 90 }))
+    const both = [...round1.slice(0, -1), sweepLine(1, 1, base, { 1: win, 2: lean })]
+    const lost = said(1, e1, false, 'lost to the other candidate')
+    const r = go(...both, lost, yes(2, e2))
+    expect(r.error).toBeUndefined()
+    expect(r.current).toEqual(applyEdit(harness(), e2))
+    expect(r.rejected).toEqual([{ field: 'loop.maxRepeats', value: 3, reason: 'lost to the other candidate' }])
+    expect(r.feed).toEqual(stamp(lean, 1).slice(0, 2))
+    refused(...both, yes(1, e1), said(2, e2, false, 'lost to the other candidate')).toMatch(/^cannot resume: round 1 candidate 1: /)
+    refused(...both, lost, said(2, e2, false, 'lost to the other candidate')).toMatch(/^cannot resume: round 1 candidate 2: /)
+  })
+
+  it('replay refuses a slot out of order', () => {
+    refused(start(), probe, prop(2, e1)).toMatch(/^cannot resume: round 1 candidate 2: /)
+    refused(start(), probe, said(1, e1, false, 'bad value', { round: 2 })).toMatch(/^cannot resume: round 2 candidate 1: /)
+    refused(start(), probe, prop(3, e1)).toMatch(/^cannot resume: round 1 candidate 3: /)
+  })
+
+  it('replay refuses a journal that does not go on with the probe, and a probe with a task missing or a gate task', () => {
+    refused(start(), prop(1, e1)).toMatch(/^cannot resume: .*probe/)
+    refused(start(), { ...probe, round: 2 }).toMatch(/^cannot resume: .*probe/)
+    refused(start(), probe, probe).toMatch(/^cannot resume: .*probe/)
+    refused(start(), { ...probe, runs: [run('t0', true)] }).toMatch(/^cannot resume: .*probe/)
+    refused(start(), { ...probe, runs: base }).toMatch(/^cannot resume: .*probe/)
+    expect(go(start()).feed).toBeUndefined()
+  })
+
+  it('replay: test sweeps are counted, and the final holds each test task R times', () => {
+    const won = [...round1, yes(1, e1), said(2, e2, false, 'no more PASS than current')]
+    expect(go(...won).tested).toBe(0)
+    const r = go(...won, test1(1), final(1))
+    expect(r.final).toEqual({ orig: test1(1).orig, last: test1(1).last })
+    expect(r.tested).toBe(1)
+    const two = [start(2), ...round1.slice(1), sweepLine(1, 2, base, { 1: win, 2: base }), yes(1, e1), said(2, e2, false, 'no more PASS than current')]
+    expect(go(...two, test1(1)).tested).toBe(1)
+    expect(go(...two, test1(1), test1(2), final(1)).final.orig).toEqual([...test1(1).orig, ...test1(2).orig])
+    // One sweep short of R, one more than R, a second line, a task missing, an empty journal of them.
+    refused(...two, test1(1), final(1)).toContain('final')
+    refused(...won, final(1)).toContain('final')
+    refused(...won, test1(1), test1(2)).toMatch(/^cannot resume: test sweep 2: /)
+    refused(...two, test1(1), test1(1)).toMatch(/^cannot resume: test sweep 1: a second line/)
+    refused(...two, test1(2)).toMatch(/^cannot resume: test sweep 2: /)
+    refused(...won, { ...test1(1), orig: [] }).toMatch(/^cannot resume: test sweep 1: /)
+  })
+
+  it('replay: version 0 ends with a final and no test sweeps', () => {
+    const none = [start(), probe, said(1, e1, false, 'bad value'), said(2, e2, false, 'bad value')]
+    expect(go(...none, final(0)).final).toBe('none')
+    refused(...none, test1(1)).toMatch(/^cannot resume: test sweep 1: /)
+  })
+
+  it('replay: a kept version after test sweeps leaves them stale; a later final with none is refused', () => {
+    const won = [...round1, yes(1, e1), said(2, e2, false, 'no more PASS than current'), test1(1), final(1)]
+    const e3: Edit = { field: 'loop.maxRepeats', value: 5 }, e4: Edit = { field: 'loop.maxRepeats', value: 6 }
+    // No new version in round 2: the old test sweep still measures the last one.
+    const r2 = [prop(1, e3, 2), prop(2, e4, 2), sweepLine(2, 1, win, { 1: win, 2: win }), { ...said(1, e3, false, 'no more PASS than current'), round: 2 }, { ...said(2, e4, false, 'no more PASS than current'), round: 2 }]
+    const kept = go(...won, ...r2, final(1))
+    expect(kept.error).toBeUndefined()
+    expect(kept.tested).toBe(1)
+    // A kept version throws the test sweeps out: they were for the one before it.
+    const worse = [run('t0', false), run('t1', false), run('t2', true)]
+    const r2b = [prop(1, e3, 2), prop(2, e4, 2), sweepLine(2, 1, worse, { 1: win, 2: worse }), yes(1, e3, 2, 2), { ...said(2, e4, false, 'no more PASS than current'), round: 2 }]
+    const moved = go(...won, ...r2b)
+    expect(moved.error).toBeUndefined()
+    expect(moved.tested).toBe(0)
+    refused(...won, ...r2b, final(2)).toContain('final')
+  })
+
+  it('parseJournal: the new lines are typed; the old ones and hand-added keys are refused', () => {
+    const jsonl = (...ls: object[]) => ls.map(l => JSON.stringify(l) + '\n').join('')
+    expect(parseJournal(jsonl(...round1, test1(1), final(1)))).toHaveProperty('lines')
+    const s = sweepLine(1, 1, base, { 1: win })
+    expect(parseJournal(jsonl({ ...s, extra: 1 }))).toEqual({ error: expect.stringMatching(/^line 1: /) })
+    expect(parseJournal(jsonl({ ...s, cands: [{ index: 1, runs: win, extra: 1 }] }))).toEqual({ error: expect.stringMatching(/^line 1: /) })
+    expect(parseJournal(jsonl({ ...s, sweep: 0 }))).toEqual({ error: expect.stringMatching(/^line 1: /) })
+    expect(parseJournal(jsonl({ ...probe, cur: [] }))).toEqual({ error: expect.stringMatching(/^line 1: /) })
+    expect(parseJournal(jsonl({ ...test1(1), runs: [] }))).toEqual({ error: expect.stringMatching(/^line 1: /) })
+    expect(parseJournal(jsonl({ ...final(1), orig: [] }))).toEqual({ error: expect.stringMatching(/^line 1: /) })
+    expect(parseJournal(jsonl({ ...said(1, e1, false, 'x'), runs: [] }))).toEqual({ error: expect.stringMatching(/^line 1: /) })
+    expect(parseJournal(jsonl({ v: 2, type: 'current', round: 1, runs: [] }))).toEqual({ error: expect.stringMatching(/^line 1: /) })
+    const { repeats: _, ...noRepeats } = start()
+    expect(parseJournal(jsonl(noRepeats))).toEqual({ error: 'line 1: missing repeats' })
+    const { rounds: __, ...noRounds } = start()
+    expect(parseJournal(jsonl(noRounds))).toEqual({ error: 'line 1: missing rounds' })
+  })
+
+  it('the lost reason is a fixed one: it reaches the proposer as it is', () => {
+    expect(reasonKind('lost to the other candidate')).toBe('lost to the other candidate')
+  })
+})
+
 describe('evolve on polyglot', () => {
   const p = loadPolyglot()
   const sets = { train: ['a'], gate: ['b'], test: ['c'] }
@@ -626,17 +775,19 @@ describe('evolve on polyglot', () => {
   it('a short repo task name binds nothing: an accepted paragraph using it still replays', () => {
     const binding = bindingTokens({ names: ['test', 'fix'], paths: [], prompts: [] })
     expect(binding).toEqual([])
-    const start = { v: 2, type: 'start', base: 'h', sha: 'abc', pin: 'a'.repeat(64), notes: 'b'.repeat(64), sets: { train: ['test'], gate: ['fix'], test: ['c'] }, strict: false, proposer: 'p' }
-    const cur = { v: 2, type: 'current', round: 1, runs: [run('test', false), run('fix', false)] }
+    const start = { v: 2, type: 'start', base: 'h', sha: 'abc', pin: 'a'.repeat(64), notes: 'b'.repeat(64), sets: { train: ['test'], gate: ['fix'], test: ['c'] }, strict: false, proposer: 'p', repeats: 1, rounds: 1 }
+    const cur = [run('test', false), run('fix', false)]
     const won = [run('test', true), run('fix', true)]
-    const a = { v: 2, type: 'candidate', round: 1, index: 1, input: '{}', edit: { field: 'systemPrompt', value: 'run the test first, then fix it' }, accepted: true, reason: 'accepted', numbers: { pass: 2, tokens: 200, tokensPerSuccess: 100, weight: 20 }, runs: won, version: 1 }
-    const r = replay([start, cur, a] as any, harness(), { binding, sets: start.sets })
+    const a = { v: 2, type: 'candidate', round: 1, index: 1, input: '{}', edit: { field: 'systemPrompt', value: 'run the test first, then fix it' }, accepted: true, reason: 'accepted', numbers: { pass: 2, tokens: 200, tokensPerSuccess: 100, weight: 20 }, version: 1 }
+    const { accepted: _a, reason: _r, numbers: _n, version: _v, ...prop } = a
+    const none = { v: 2, type: 'candidate', round: 1, index: 2, input: '{}', accepted: false, reason: 'no edit in the reply' }
+    const r = replay([start, { v: 2, type: 'probe', round: 1, runs: cur.slice(0, 1) }, { ...prop, type: 'proposal' }, none, sweepLine(1, 1, cur, { 1: won }), a] as any, harness(), { binding, sets: start.sets })
     expect('error' in r ? r.error : r.version).toBe(1)
   })
 
   it('replay drops a refused value bound by a short name, by word boundary', () => {
-    const start = { v: 2, type: 'start', base: 'h', sha: 'polyglot:x:3', pin: 'a'.repeat(64), notes: 'b'.repeat(64), sets, strict: false, proposer: 'p' }
-    const cur = { v: 2, type: 'current', round: 1, runs: [run('a', false), run('b', false)] }
+    const start = { v: 2, type: 'start', base: 'h', sha: 'polyglot:x:3', pin: 'a'.repeat(64), notes: 'b'.repeat(64), sets, strict: false, proposer: 'p', repeats: 1, rounds: 1 }
+    const cur = { v: 2, type: 'probe', round: 1, runs: sets.train.map(t => run(t, false)) }
     const c = (index: number, value: string) => ({ v: 2, type: 'candidate', round: 1, index, input: '{}', edit: { field: 'systemPrompt', value }, accepted: false, reason: 'no edit in the reply' })
     const r = replay([start, cur, c(1, 'think of poker'), c(2, 'write short essays')] as any, harness(), { binding: ['poker', 'say'], sets })
     expect('error' in r ? r : r.rejected).toEqual([{ field: 'systemPrompt', reason: 'no edit in the reply' }, { field: 'systemPrompt', value: 'write short essays', reason: 'no edit in the reply' }])

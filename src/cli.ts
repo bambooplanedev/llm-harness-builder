@@ -13,7 +13,7 @@ import { mayAsk, type RunOpts } from './core/run.js'
 import { killTracked } from './core/procs.js'
 import { withNotes, type NotesStore } from './core/notes-run.js'
 import { notesKey, notesPath, readNotes, scrubText, stateDir } from './core/notes.js'
-import { ALLOWED, CANDIDATES, splitSets, modeOf, referenceLabel, neededFlips, usable, decide, applyEdit, bindingTokens, checkEdit, failureGroups, signatureOf, proposerInput, proposerRequest, parseProposal, parseJournal, replay, type Edit, type JournalLine, type RunLite, type SetName } from './core/evolve.js'
+import { ALLOWED, CANDIDATES, REPEATS, splitSets, modeOf, referenceLabel, neededFlips, usable, decideRound, sweptCands, applyEdit, bindingTokens, checkEdit, failureGroups, signatureOf, proposerInput, proposerRequest, parseProposal, parseJournal, replay, type Edit, type JournalLine, type RunLite, type SetName } from './core/evolve.js'
 import { evolveReport } from './core/evolve-report.js'
 import { loadRepoTasks, hostOf, consentText, hasConsent, saveConsent, git, TASKS_FILE, type RepoTasks, type EvolveConsent } from './core/repo-tasks.js'
 import { cloneAt, linkNodeModules, protectedChanged, runCheck, finishRun, removeAllClonesSync, prepareModules, modulesManifest, modulesTampered, type Clone } from './core/repo-clone.js'
@@ -591,9 +591,9 @@ const TRACE_ID = /^[A-Za-z0-9_-]{1,64}$/
 const versionText = (base: string, n: number, cfg: object): string => JSON.stringify({ ...cfg, name: `${base}.v${n}` }, null, 2) + '\n'
 type EvolveState = Exclude<ReturnType<typeof replay>, { error: string }>
 
-/** Proposes one edit at a time, runs it on train + gate, keeps it only past the gates, and measures the last kept
- *  version against the original on test. Every completed step is a journal line, and the state is always the journal
- *  replayed: a resumed evolve and an uninterrupted one start each candidate from the same state. */
+/** Proposes two edits per round, sweeps them with the current version on train + gate, keeps at most one past the gates, and
+ *  measures the last kept version against the original on test. Every completed step is a journal line, one per sweep, and the
+ *  state is always the journal replayed: a resumed evolve and an uninterrupted one go on from the same state. */
 async function cmdEvolve(argv: string[]) {
   // Before parseArgs, whose "Unknown option" would only advise a `--`.
   if (argv.some(a => a === '--only' || a.startsWith('--only='))) argError('evolve', '--only is for bench: evolve splits all the tasks of the repo into train, gate and test')
@@ -673,9 +673,10 @@ async function cmdEvolve(argv: string[]) {
   // The snapshot is what the next runs read; the report runs nothing.
   if (resuming && !values.report) snapCheck()
   // Fewer rounds would never reach the cut slot, and a final line after its proposal leaves a journal no resume accepts.
-  if (resuming && !values.report && state.pending && state.pending.round > rounds)
-    die(`${jf} ends on round ${state.pending.round}'s candidate ${state.pending.index}, cut before its runs; run evolve again with --rounds ${state.pending.round} or more to finish it`)
-  const all = Array.from({ length: rounds }, (_, i) => i + 1).every(round => lines.some(l => l.type === 'current' && l.round === round) &&
+  const cut = resuming && !values.report ? state.pending[0] : undefined
+  if (cut && cut.round > rounds)
+    die(`${jf} ends on round ${cut.round}'s candidate ${cut.index}, cut before its runs; run evolve again with --rounds ${cut.round} or more to finish it`)
+  const all = Array.from({ length: rounds }, (_, i) => i + 1).every(round =>
     Array.from({ length: CANDIDATES }, (_, i) => i + 1).every(index => lines.some(l => l.type === 'candidate' && l.round === round && l.index === index)))
   if (resuming && all && !values.report) console.error(`all rounds are in the journal${state.version ? '; measuring the final test' : ''}`)
   // The report reads only the journal, after replay re-checked it: a finished evolve started again prints it as it was, without a clone or a request.
@@ -703,7 +704,7 @@ async function cmdEvolve(argv: string[]) {
     // Every version reads this frozen copy: a note written during evolve would make one version's runs depend on another's.
     // Before the start line: a journal is never without its snapshot.
     writeFileSync(snap, existsSync(src.notesFile) ? readFileSync(src.notesFile) : '')
-    append({ v: 2, type: 'start', base, sha: src.id, pin, sets, strict: mode.strict, proposer: host, notes: sha256(readFileSync(snap)) })
+    append({ v: 2, type: 'start', base, sha: src.id, pin, sets, strict: mode.strict, proposer: host, notes: sha256(readFileSync(snap)), repeats: REPEATS, rounds })
   }
   const byName = new Map(work.tasks.map(t => [t.name!, t]))
   const no = await preflightAll([{ name: config.name, config }, { name: 'proposer', config: proposer }], work.tasks[0])
@@ -714,7 +715,6 @@ async function cmdEvolve(argv: string[]) {
   const modulesDir = work.modules && path.join(work.modules, 'node_modules')
   const modules0 = modulesDir && await modulesManifest(modulesDir)
   const out = path.join('runs', `evolve-${base}.json`), notes: NotesStore = { file: snap, write: false }
-  let stopped = false
   const stop = () => { dropWork(work); console.error(`the model changed the installed packages in ${modulesDir}; stopping`); process.exitCode = 1 }
   const pb = proposer.backend
   const pRedact = redactor(apiKey(pb, process.env), pb.apiKeyEnv ?? '')
@@ -727,19 +727,20 @@ async function cmdEvolve(argv: string[]) {
     console.error(showable(redact.text(`evolve stopped: the ${who} backend (${hostOf(b.baseUrl)}) answered ${status}: ${why}; the cut step's runs are not in the journal; run the same command again to resume from the journal`)))
     return process.exit(1)
   }
-  const runOn = async (cfg: object, name: string, names: string[], round: number): Promise<RunLite[]> => {
-    const c = overridden({ ...cfg, name }, over, file!)
-    const rs: RunLite[] = []
-    for (const n of names) {
-      const r = await benchOnce(c, round, timeoutS, out, byName.get(n)!, notes)
+  /** One sweep: per task every arm in turn, so the server's drift over a night falls on all of them. Runs by arm; undefined = stopped. */
+  const sweepOn = async (arms: { cfg: object; name: string }[], names: string[], sweep: number): Promise<RunLite[][] | undefined> => {
+    const cs = arms.map(a => overridden({ ...a.cfg, name: a.name }, over, file!))
+    const runs: RunLite[][] = arms.map(() => [])
+    for (const n of names) for (const [i, c] of cs.entries()) {
+      const r = await benchOnce(c, sweep, timeoutS, out, byName.get(n)!, notes)
       if (r.stop !== undefined) halt('harness', c.backend, r.stop, hRedact, r.stopMidReply)
-      const lite: RunLite = { task: n, verdict: r.verdict, tokens: r.tokens, firstPromptTokens: r.firstPromptTokens, turns: r.turns, modelMs: r.modelMs ?? 0, costUsd: r.costUsd, trace: r.trace, reason: r.reason, lastError: r.lastError }
+      const lite: RunLite = { task: n, verdict: r.verdict, tokens: r.tokens, firstPromptTokens: r.firstPromptTokens, turns: r.turns, modelMs: r.modelMs ?? 0, costUsd: r.costUsd, repeat: sweep, trace: r.trace, reason: r.reason, lastError: r.lastError }
       // Signed now, while the trace is here: the report groups failures by it without reading a trace again.
-      rs.push(lite.verdict === 'FAIL' ? { ...lite, sig: signatureOf(lite, await eventsOf(r.trace)) } : lite)
+      runs[i]!.push(lite.verdict === 'FAIL' ? { ...lite, sig: signatureOf(lite, await eventsOf(r.trace)) } : lite)
       // As in bench: a run that changed the linked node_modules changed every run after it.
-      if (modulesDir && await modulesManifest(modulesDir) !== modules0) { stopped = true; break }
+      if (modulesDir && await modulesManifest(modulesDir) !== modules0) return undefined
     }
-    return rs
+    return runs
   }
   // A trace id from the journal is a path only when it looks like one of ours.
   const eventsOf = async (trace?: string): Promise<HarnessEvent[]> => {
@@ -774,59 +775,60 @@ async function cmdEvolve(argv: string[]) {
     try { writeFileSync(p, text, { flag: 'wx' }) } catch { die(`${p} already exists; move it away first — evolve never overwrites a version`) }
   }
   const trainGate = [...sets.train, ...sets.gate]
+  const repeats = (lines[0] as Extract<JournalLine, { type: 'start' }>).repeats
+  // Every gate divides by the original's tokens: without them each sweep would be spent for a sure refusal.
+  const usage = () => { if (state.baseline && !usable(state.baseline)) { dropWork(work); die(`the server gave no usage for the original's runs; evolve needs a server that reports token usage; delete ${jf} to start over`) } }
   for (let round = 1; round <= rounds; round++) {
     snapCheck()
     console.error(`--- round ${round}/${rounds}`)
-    const cur = lines.find(l => l.type === 'current' && l.round === round) as Extract<JournalLine, { type: 'current' }> | undefined
-    // What the next candidate is compared with: this round's run of the current version, or the candidate kept since.
-    let cmp = cur?.runs
-    if (!cmp) {
-      cmp = await runOn(state.current, `${base}.cur`, trainGate, round)
-      if (stopped) return stop()
-      append({ v: 2, type: 'current', round, runs: cmp })
+    if (!state.feed) {
+      const runs = await sweepOn([{ cfg: state.current, name: `${base}.cur` }], sets.train, 1)
+      if (!runs) return stop()
+      // Not a repeat of anything: a probe run is no sweep's.
+      append({ v: 2, type: 'probe', round, runs: runs[0]!.map(({ repeat: _, ...r }) => r) })
     }
-    // Every gate divides by the original's tokens: without them each candidate's runs would be spent for a sure refusal.
-    if (!usable(state.baseline!)) { dropWork(work); die(`the server gave no usage for the original's runs; evolve needs a server that reports token usage; delete ${jf} to start over`) }
+    // Both on one current; a proposal journaled before a stop stays as it was: asking again would let a stop re-roll it.
     for (let index = 1; index <= CANDIDATES; index++) {
-      const done = lines.find(l => l.type === 'candidate' && l.round === round && l.index === index) as Extract<JournalLine, { type: 'candidate' }> | undefined
-      if (done) { if (done.accepted && done.runs) cmp = done.runs; continue }
-      // A proposal journaled before a stop is measured as it was: asking again would let a stop re-roll it.
-      const pend = state.pending?.round === round && state.pending.index === index ? state.pending : undefined
-      let input: string, edit: Edit
-      if (pend) ({ input, edit } = pend)
-      else {
-        const train = await Promise.all(cmp.filter(r => sets.train.includes(r.task)).map(async run => ({ run, events: await eventsOf(run.trace) })))
-        input = proposerInput(state.current, failureGroups(train), state.rejected, clean)
-        const p = await propose(input)
-        const why = p.reason ?? checkEdit(p.edit!, { current: state.current, original: raw, tried: state.tried, binding })
-        if (why) {
-          console.error(`candidate ${round}.${index}: ${showable(why)}`)
-          append({ v: 2, type: 'candidate', round, index, input, ...(p.edit ? { edit: p.edit } : {}), accepted: false, reason: why })
-          continue
-        }
-        edit = p.edit!
-        append({ v: 2, type: 'proposal', round, index, input, edit })
-      }
-      const cand = applyEdit(state.current, edit)
-      const runs = await runOn(cand, `${base}.r${round}c${index}`, trainGate, round)
-      if (stopped) return stop()
-      const d = decide({ cur: cmp, cand: runs, orig: state.baseline!, gateNames: sets.gate, mode, origMaxTurns: (raw as any).loop?.maxTurns ?? Infinity })
+      if (state.pending.some(p => p.round === round && p.index === index) || lines.some(l => l.type === 'candidate' && l.round === round && l.index === index)) continue
+      const train = await Promise.all(state.feed!.map(async run => ({ run, events: await eventsOf(run.trace) })))
+      const input = proposerInput(state.current, failureGroups(train), state.rejected, clean)
+      const p = await propose(input)
+      const why = p.reason ?? checkEdit(p.edit!, { current: state.current, original: raw, tried: state.tried, binding })
+      if (why) {
+        console.error(`candidate ${round}.${index}: ${showable(why)}`)
+        append({ v: 2, type: 'candidate', round, index, input, ...(p.edit ? { edit: p.edit } : {}), accepted: false, reason: why })
+      } else append({ v: 2, type: 'proposal', round, index, input, edit: p.edit! })
+    }
+    const open = state.pending.filter(p => p.round === round)
+    if (!open.length) continue
+    const swept = () => lines.flatMap(l => l.type === 'sweep' && l.round === round ? [l] : [])
+    const arms = [{ cfg: state.current, name: `${base}.cur` }, ...open.map(p => ({ cfg: applyEdit(state.current, p.edit), name: `${base}.r${round}c${p.index}` }))]
+    for (let sweep = swept().length + 1; sweep <= repeats; sweep++) {
+      usage()
+      const runs = await sweepOn(arms, trainGate, sweep)
+      if (!runs) return stop()
+      const [cur, ...cands] = runs
+      append({ v: 2, type: 'sweep', round, sweep, cur: cur!, cands: open.map((p, i) => ({ index: p.index, runs: cands[i]! })) })
+    }
+    usage()
+    const verdicts = decideRound({ cur: swept().flatMap(s => s.cur), cands: sweptCands(swept()), orig: state.baseline!, gateNames: sets.gate, mode, origMaxTurns: (raw as any).loop?.maxTurns ?? Infinity })
+    for (const { round: _, ...p } of open) {
+      const d = verdicts.find(v => v.index === p.index)!
       const version = d.accepted ? state.version + 1 : undefined
-      if (version) { writeVersion(version, cand); cmp = runs }
-      append({ v: 2, type: 'candidate', round, index, input, edit, accepted: d.accepted, reason: d.reason, numbers: d.numbers, runs, ...(version ? { version } : {}) })
-      console.error(`candidate ${round}.${index}: ${d.reason}${version ? ` — wrote ${vf(version)}` : ''}`)
+      if (version) writeVersion(version, applyEdit(state.current, p.edit))
+      append({ v: 2, type: 'candidate', round, ...p, accepted: d.accepted, reason: d.reason, numbers: d.numbers, ...(version ? { version } : {}) })
+      console.error(`candidate ${round}.${p.index}: ${d.reason}${version ? ` — wrote ${vf(version)}` : ''}`)
     }
   }
   // Measured once: a final line in the journal is the test, and a restart reads it instead of running it again.
   if (!state.final) {
     snapCheck()
-    if (state.version) {
-      const orig = await runOn(raw, `${base}.orig`, sets.test, 1)
-      if (stopped) return stop()
-      const last = await runOn(state.current, `${base}.v${state.version}`, sets.test, 1)
-      if (stopped) return stop()
-      append({ v: 2, type: 'final', version: state.version, orig, last })
-    } else append({ v: 2, type: 'final', version: 0 })
+    for (let sweep = state.tested + 1; state.version && sweep <= repeats; sweep++) {
+      const runs = await sweepOn([{ cfg: raw, name: `${base}.orig` }, { cfg: state.current, name: `${base}.v${state.version}` }], sets.test, sweep)
+      if (!runs) return stop()
+      append({ v: 2, type: 'testsweep', sweep, orig: runs[0]!, last: runs[1]! })
+    }
+    append({ v: 2, type: 'final', version: state.version })
   }
   // Per session, so not in the report: the same journal gives the same report.
   console.error(`proposer: ${proposerTokens} tokens in this session (not in the gates)`)

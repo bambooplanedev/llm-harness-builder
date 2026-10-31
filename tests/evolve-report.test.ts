@@ -5,23 +5,27 @@ import { applyEdit, referenceLabel, type Edit, type JournalLine, type Mode, type
 const fail = (task: string, sig: string, tokens = 110, fp = 100): RunLite => ({ task, verdict: 'FAIL', tokens, firstPromptTokens: fp, turns: 3, modelMs: 40, sig })
 const pass = (task: string, tokens = 110, fp = 100): RunLite => ({ task, verdict: 'PASS', tokens, firstPromptTokens: fp, turns: 3, modelMs: 40 })
 const CF = 'final|check_failed|-|-'
-const cand = (index: number, edit: Edit, accepted: boolean, reason: string, runs?: RunLite[], version?: number): JournalLine =>
+type Said = JournalLine & { runs?: RunLite[] }
+/** `runs` go into the sweep line journalOf writes; the candidate line itself holds none. */
+const cand = (index: number, edit: Edit, accepted: boolean, reason: string, runs?: RunLite[], version?: number): Said =>
   ({ v: 2, type: 'candidate', round: 1, index, input: '{}', edit, accepted, reason, ...(runs ? { runs } : {}), ...(version ? { version } : {}) })
 
 /** The journal as lines, and what replay would have made of them. */
-function journalOf(o: { sets: Record<SetName, string[]>; mode: Mode; original: object; current: RunLite[]; cands: JournalLine[]; final?: { orig: RunLite[]; last: RunLite[] } }): ReportInput {
+function journalOf(o: { sets: Record<SetName, string[]>; mode: Mode; original: object; current: RunLite[]; cands: Said[]; final?: { orig: RunLite[]; last: RunLite[] } }): ReportInput {
   let current = o.original, version = 0
   for (const l of o.cands) if (l.type === 'candidate' && l.accepted) { current = applyEdit(current, l.edit!); version++ }
   const lines: JournalLine[] = [
-    { v: 2, type: 'start', base: 'h', sha: 's', pin: '0'.repeat(64), notes: '0'.repeat(64), sets: o.sets, strict: o.mode.strict, proposer: 'p' },
-    { v: 2, type: 'current', round: 1, runs: o.current }, ...o.cands,
-    { v: 2, type: 'final', version, ...(version ? o.final : {}) },
+    { v: 2, type: 'start', base: 'h', sha: 's', pin: '0'.repeat(64), notes: '0'.repeat(64), sets: o.sets, strict: o.mode.strict, proposer: 'p', repeats: 1, rounds: 1 },
+    { v: 2, type: 'sweep', round: 1, sweep: 1, cur: o.current, cands: o.cands.flatMap(c => c.type === 'candidate' && c.runs ? [{ index: c.index, runs: c.runs }] : []) },
+    ...o.cands.map(({ runs: _, ...c }: any) => c as JournalLine),
+    { v: 2, type: 'testsweep', sweep: 1, ...(version ? o.final! : { orig: [], last: [] }) },
+    { v: 2, type: 'final', version },
   ]
   return { lines, state: { current, version, final: version ? o.final! : 'none' }, original: o.original, mode: o.mode, sets: o.sets, harness: 'h.json', versionFile: version ? `harnesses/h.v${version}.json` : '' }
 }
 
 const EDIT: Edit = { field: 'systemPrompt', value: 'Make the file first.' }
-function golden(over: { accepted?: JournalLine; refused?: JournalLine[]; afterGate?: RunLite[]; original?: object; mode?: Mode } = {}): ReportInput {
+function golden(over: { accepted?: Said; refused?: Said[]; afterGate?: RunLite[]; original?: object; mode?: Mode } = {}): ReportInput {
   return journalOf({
     sets: { train: ['t1', 't2'], gate: ['g1', 'g2'], test: ['x1', 'x2'] },
     mode: over.mode ?? { strict: false, trainGate: 4, test: 2 },
@@ -32,7 +36,7 @@ function golden(over: { accepted?: JournalLine; refused?: JournalLine[]; afterGa
     final: { orig: [fail('x1', CF), pass('x2')], last: [pass('x1', 120, 105), pass('x2', 120, 105)] },
   })
 }
-const v0 = (refused?: JournalLine[]) => golden({ accepted: cand(1, EDIT, false, 'within noise (p=0.25)'), refused })
+const v0 = (refused?: Said[]) => golden({ accepted: cand(1, EDIT, false, 'within noise (p=0.25)'), refused })
 
 const GOLDEN = `== Conclusion
 harnesses/h.v1.json against h.json on the 2 test tasks:
@@ -161,7 +165,7 @@ describe('evolve report', () => {
     const mark = (x: ReportInput) => {
       const to: Record<string, string> = { t1: 'MARKtrain', g1: 'MARKgate', x1: 'MARKtest' }
       for (const s of Object.values(x.sets)) for (const [i, t] of s.entries()) s[i] = to[t] ?? t
-      for (const l of x.lines) for (const r of l.type === 'current' || l.type === 'candidate' ? l.runs ?? [] : l.type === 'final' ? [...l.orig ?? [], ...l.last ?? []] : []) {
+      for (const l of x.lines) for (const r of l.type === 'sweep' ? [...l.cur, ...l.cands.flatMap(c => c.runs)] : l.type === 'testsweep' ? [...l.orig, ...l.last] : []) {
         r.task = to[r.task] ?? r.task
         Object.assign(r, { lastError: 'MARK', trace: 'MARK', reason: 'MARK' })
       }

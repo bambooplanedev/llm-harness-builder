@@ -15,6 +15,8 @@ export { ALLOWED }
 
 export const ROUNDS = 3
 export const CANDIDATES = 2
+/** Sweeps per round and per final test; the journal's start line holds it, and everything reads it there. */
+export const REPEATS = 1
 export const TOLERANCE = 0.10
 export const CEILING = 0.25
 export const MIN_TRAIN_GATE = 16
@@ -149,6 +151,27 @@ export function decide(i: { cur: RunLite[]; cand: RunLite[]; orig: RunLite[]; ga
   const wr = both.reduce((a, [, v]) => a + mean(v), 0) / ow
   if (wr > 1 + CEILING) return no(`first request ${pct(wr)}% heavier than the original`)
   return { accepted: true, reason: 'accepted', numbers }
+}
+
+const LOST = 'lost to the other candidate'
+
+/** Of two accepted candidates, the one to keep: more PASS, then the lower tokens per success × total model time, then the lower index. */
+export function pickWinner<T extends { index: number; runs: RunLite[] }>(a: T, b: T): T {
+  const [x, y] = [numbersOf(a.runs), numbersOf(b.runs)]
+  if (x.pass !== y.pass) return x.pass > y.pass ? a : b
+  const price = (c: T, n: Numbers) => n.tokensPerSuccess! * c.runs.reduce((t, r) => t + r.modelMs!, 0)
+  const [pa, pb] = [price(a, x), price(b, y)]
+  return pa !== pb ? (pa < pb ? a : b) : a.index < b.index ? a : b
+}
+
+/** A round's verdicts: each candidate by `decide` against the round's cur, and at most one accepted. The run loop and `replay` both come here, so a journal cannot claim another winner. */
+export function decideRound(i: { cur: RunLite[]; cands: { index: number; runs: RunLite[] }[]; orig: RunLite[]; gateNames: string[]; mode: Mode; origMaxTurns: number }) {
+  const { cands, ...rest } = i
+  const ds = cands.map(c => ({ ...c, ...decide({ ...rest, cand: c.runs }) }))
+  const yes = ds.filter(d => d.accepted)
+  if (yes.length < 2) return ds
+  const won = yes.reduce((a, b) => pickWinner(a, b))
+  return ds.map(d => d.accepted && d !== won ? { ...d, accepted: false, reason: LOST } : d)
 }
 
 export type Edit = { field: string; value: string | number; why?: string }
@@ -300,12 +323,17 @@ export function parseProposal(content: string): Edit {
   throw new Error('no edit in the reply')
 }
 
+type Proposal = { round: number; index: number; input: string; edit: Edit }
+type SweepLine = { v: 2; type: 'sweep'; round: number; sweep: number; cur: RunLite[]; cands: { index: number; runs: RunLite[] }[] }
+type TestSweep = { v: 2; type: 'testsweep'; sweep: number; orig: RunLite[]; last: RunLite[] }
 export type JournalLine =
-  | { v: 2; type: 'start'; base: string; sha: string; pin: string; notes: string; sets: Record<SetName, string[]>; strict: boolean; proposer: string }
-  | { v: 2; type: 'current'; round: number; runs: RunLite[] }
-  | { v: 2; type: 'candidate'; round: number; index: number; input: string; edit?: Edit; accepted: boolean; reason: string; numbers?: Numbers; runs?: RunLite[]; version?: number }
-  | { v: 2; type: 'proposal'; round: number; index: number; input: string; edit: Edit }
-  | { v: 2; type: 'final'; version: number; orig?: RunLite[]; last?: RunLite[] }
+  | { v: 2; type: 'start'; base: string; sha: string; pin: string; notes: string; sets: Record<SetName, string[]>; strict: boolean; proposer: string; repeats: number; rounds: number }
+  | { v: 2; type: 'probe'; round: number; runs: RunLite[] }
+  | ({ v: 2; type: 'proposal' } & Proposal)
+  | SweepLine
+  | { v: 2; type: 'candidate'; round: number; index: number; input: string; edit?: Edit; accepted: boolean; reason: string; numbers?: Numbers; version?: number }
+  | TestSweep
+  | { v: 2; type: 'final'; version: number }
 
 // A field's check: undefined = fine, else why not. The journal sits in the user's cwd, where the model's bash can
 // rewrite it, so every key is known and every value typed.
@@ -334,13 +362,17 @@ const EDIT = shape({ field: str, value: x => typeof x === 'string' || (typeof x 
 const sha256: Check = x => typeof x === 'string' && /^[0-9a-f]{64}$/.test(x) ? undefined : 'not a sha256'
 const v2: Check = x => x === 2 ? undefined : 'not 2'
 const LINE: Record<string, Check> = {
-  start: shape({ v: v2, type: str, base: str, sha: str, pin: sha256, notes: sha256, sets: shape({ train: arr(name), gate: arr(name), test: arr(name) }), strict: bool, proposer: str }),
-  current: shape({ v: v2, type: str, round: pos, runs: arr(RUN) }),
+  start: shape({ v: v2, type: str, base: str, sha: str, pin: sha256, notes: sha256, sets: shape({ train: arr(name), gate: arr(name), test: arr(name) }), strict: bool, proposer: str, repeats: pos, rounds: pos }),
+  // The current version on train, the proposer's first input; never in a decision.
+  probe: shape({ v: v2, type: str, round: pos, runs: arr(RUN) }),
   candidate: shape({ v: v2, type: str, round: pos, index: pos, input: str, accepted: bool, reason: str },
-    { edit: EDIT, numbers: shape({ pass: num }, { tokensPerSuccess: num, tokens: num, weight: num }), runs: arr(RUN), version: pos }),
+    { edit: EDIT, numbers: shape({ pass: num }, { tokensPerSuccess: num, tokens: num, weight: num }), version: pos }),
   // Written before the candidate's runs: a stop during them resumes with this edit, not a new roll of the proposer.
   proposal: shape({ v: v2, type: str, round: pos, index: pos, input: str, edit: EDIT }),
-  final: shape({ v: v2, type: str, version: x => Number.isInteger(x) && (x as number) >= 0 ? undefined : 'not a non-negative integer' }, { orig: arr(RUN), last: arr(RUN) }),
+  // One line per sweep: a stop loses at most the sweep it cut.
+  sweep: shape({ v: v2, type: str, round: pos, sweep: pos, cur: arr(RUN), cands: arr(shape({ index: pos, runs: arr(RUN) })) }),
+  testsweep: shape({ v: v2, type: str, sweep: pos, orig: arr(RUN), last: arr(RUN) }),
+  final: shape({ v: v2, type: str, version: x => Number.isInteger(x) && (x as number) >= 0 ? undefined : 'not a non-negative integer' }),
 }
 
 /** The journal's lines, each checked. A last line without its newline is a torn write and dropped, even if it parses. */
@@ -363,7 +395,7 @@ export function parseJournal(text: string): { lines: JournalLine[] } | { error: 
 
 // The reasons the edit checks and `decide` write. Rejected edits reach the proposer, maybe in the cloud, and the
 // journal is bash-writable: anything else is passed on as `other`.
-const FIXED = /^(?:field not allowed|bad value|looks like a command or an address|tied to a task|already tried|changes more than one field|the server gave no usage|0 PASS|no more PASS than current|worse on gate|no edit in the reply|reply cut at maxTokens)$/
+const FIXED = /^(?:field not allowed|bad value|looks like a command or an address|tied to a task|already tried|changes more than one field|the server gave no usage|0 PASS|no more PASS than current|worse on gate|no edit in the reply|reply cut at maxTokens|lost to the other candidate)$/
 const PATTERNED: [RegExp, string][] = [
   [/^within noise \(p=\d\.\d\d\)$/, 'within noise'], [/^costs \d+% more tokens(?: per success)? than the original$/, 'costs more tokens'],
   [/^first request \d+% heavier than the original$/, 'first request heavier'], [/^first request not measured on \d+ tasks$/, 'first request not measured'], [/^invalid config: /, 'invalid config'],
@@ -375,63 +407,99 @@ const REASON_RE = [FIXED, ...PATTERNED.map(p => p[0])]
 /** The fixed kind of a refusal reason (the numbers and config text dropped); `other` for what the harness does not write. */
 export const reasonKind = (reason: string): string => FIXED.test(reason) ? reason : PATTERNED.find(([re]) => re.test(reason))?.[1] ?? 'other'
 
-/** The current version rebuilt from the original and the journal, each accepted edit checked again as if new:
- *  a vN file or a hand-written line is never what the next round starts from. */
+/** A round's candidates with their runs of every sweep. */
+export const sweptCands = (sweeps: Pick<SweepLine, 'cands'>[]) => sweeps[0]!.cands.map(({ index }) => ({ index, runs: sweeps.flatMap(s => s.cands.find(c => c.index === index)!.runs) }))
+
+/** The current version rebuilt from the original and the journal, every proposal checked again as if new and every verdict
+ *  worked out again from its sweeps: a vN file or a hand-written line is never what the next round starts from.
+ *  `feed` is what the proposer reads, `pending` the proposals with no candidate line yet, `tested` the test sweeps of the last version. */
 export function replay(lines: JournalLine[], original: object, ctx: { binding: string[]; sets: Record<SetName, string[]> }):
-  { current: object; version: number; baseline?: RunLite[]; done: { round: number; index: number }[]; tried: Edit[]; rejected: Rejected[]; final?: { orig: RunLite[]; last: RunLite[] } | 'none'
-    pending?: { round: number; index: number; input: string; edit: Edit } } | { error: string } {
+  { current: object; version: number; baseline?: RunLite[]; feed?: RunLite[]; tried: Edit[]; rejected: Rejected[]; pending: Proposal[]; tested: number; final?: { orig: RunLite[]; last: RunLite[] } | 'none' } | { error: string } {
   const [first, ...rest] = lines
   if (first?.type !== 'start') return { error: 'cannot resume: the journal does not begin with a start line' }
   if (JSON.stringify(first.sets) !== JSON.stringify(ctx.sets)) return { error: 'cannot resume: the sets differ from the tasks file' }
-  let current = original, version = 0, baseline: RunLite[] | undefined
-  const done: { round: number; index: number }[] = [], tried: Edit[] = [], rejected: Rejected[] = []
-  // What each round's next candidate was compared with, as the run loop has it: the round's current runs, then each kept candidate's.
-  const cmp = new Map<number, RunLite[]>()
-  // The proposal whose candidate line has not come yet: the next line is that candidate, or the journal ends.
-  let pending: { round: number; index: number; input: string; edit: Edit } | undefined
+  const no = (why: string) => ({ error: `cannot resume: ${why}` })
+  let current = original, version = 0, baseline: RunLite[] | undefined, feed: RunLite[] | undefined, firstSwept: number | undefined
+  const tried: Edit[] = [], rejected: Rejected[] = []
+  // The open round's proposals and sweeps, and the last version's test sweeps.
+  let pending: Proposal[] = [], sweeps: SweepLine[] = [], tests: TestSweep[] = []
+  // Slots go in order, (round, index): a proposal or a refusal before the runs takes the next one.
+  let taken = 0
+  const claim = (round: number, index: number) => {
+    const s = (round - 1) * CANDIDATES + index
+    if (s <= taken) return 'a second line for it'
+    if (index > CANDIDATES || s !== taken + 1) return 'out of order'
+    taken = s
+  }
   const mode = modeOf(ctx.sets)
-  // Every candidate is weighed against round 1's current runs: a journal that does not go on with them has no baseline.
-  if (rest.length && !(rest[0]!.type === 'current' && rest[0]!.round === 1)) return { error: 'cannot resume: the line after the start line is not round 1\'s current runs' }
-  for (const l of rest) {
-    if (l.type === 'start') return { error: 'cannot resume: a second start line' }
-    if (pending && !(l.type === 'candidate' && l.round === pending.round && l.index === pending.index))
-      return { error: `cannot resume: round ${pending.round} candidate ${pending.index}: a proposal without its candidate` }
-    if (l.type === 'final') continue // not the last line: a later round makes it stale
-    const index = l.type === 'current' ? 0 : l.index
-    const slot = `round ${l.round} ${index ? `candidate ${index}` : 'current runs'}`
-    if (done.some(d => d.round === l.round && d.index === index)) return { error: `cannot resume: ${slot}: a second line for it` }
-    // Checked as the run loop checked it, against what was tried before it; never itself in `tried` or `rejected`.
-    if (l.type === 'proposal') {
-      const why = checkEdit(l.edit, { current, original, tried, binding: ctx.binding })
-      if (why) return { error: `cannot resume: ${slot}: proposed edit: ${why}` }
-      pending = { round: l.round, index: l.index, input: l.input, edit: l.edit }
+  const trainGate = [...ctx.sets.train, ...ctx.sets.gate]
+  const whole = (rs: RunLite[], names: string[], sweep?: number) => rs.map(r => r.task).sort().join('\n') === [...names].sort().join('\n') && rs.every(r => r.repeat === sweep)
+  const onTrain = (rs: RunLite[]) => rs.filter(r => ctx.sets.train.includes(r.task))
+  // Nothing goes on without a look at the train tasks: the proposer reads them.
+  if (rest.length && !(rest[0]!.type === 'probe' && rest[0]!.round === 1)) return no('the line after the start line is not round 1\'s probe')
+  for (const [i, l] of rest.entries()) {
+    if (l.type === 'start') return no('a second start line')
+    if (l.type === 'probe') {
+      if (i) return no('round 1 probe: a second line for it')
+      if (!whole(l.runs, ctx.sets.train)) return no('round 1 probe: not the train tasks')
+      feed = l.runs
       continue
     }
-    if (pending && !(l.type === 'candidate' && l.input === pending.input && JSON.stringify(l.edit) === JSON.stringify(pending.edit)))
-      return { error: `cannot resume: ${slot}: its edit or input is not the one proposed` }
-    pending = undefined
-    done.push({ round: l.round, index })
-    if (l.type === 'current') {
-      if (l.round === 1) baseline ??= l.runs
-      cmp.set(l.round, l.runs)
+    if (pending.length && (l.type === 'final' || l.type === 'testsweep' || l.round !== pending[0]!.round))
+      return no(`round ${pending[0]!.round} candidate ${pending[0]!.index}: a proposal without its candidate`)
+    if (l.type === 'final') continue // not the last line: a later round makes it stale
+    if (l.type === 'testsweep') {
+      const slot = `test sweep ${l.sweep}`
+      if (!version) return no(`${slot}: no version to measure`)
+      if (l.sweep <= tests.length) return no(`${slot}: a second line for it`)
+      if (l.sweep !== tests.length + 1 || l.sweep > first.repeats) return no(`${slot}: out of order`)
+      if (!whole(l.orig, ctx.sets.test, l.sweep) || !whole(l.last, ctx.sets.test, l.sweep)) return no(`${slot}: not one run per test task`)
+      tests.push(l)
       continue
+    }
+    if (l.type === 'sweep') {
+      const slot = `round ${l.round} sweep ${l.sweep}`
+      if (!pending.length) return no(`${slot}: no proposal to measure`)
+      if (l.sweep <= sweeps.length) return no(`${slot}: a second line for it`)
+      if (taken !== l.round * CANDIDATES || l.sweep !== sweeps.length + 1 || l.sweep > first.repeats) return no(`${slot}: out of order`)
+      if (l.cands.map(c => c.index).join() !== pending.map(p => p.index).join()) return no(`${slot}: not the round's proposals`)
+      if (![l.cur, ...l.cands.map(c => c.runs)].every(rs => whole(rs, trainGate, l.sweep))) return no(`${slot}: not one run per task`)
+      sweeps.push(l)
+      // While no version is kept cur is the original, and none can come before the first sweeps.
+      if ((firstSwept ??= l.round) === l.round) baseline = [...baseline ?? [], ...l.cur]
+      feed = onTrain(l.cur)
+      continue
+    }
+    const slot = `round ${l.round} candidate ${l.index}`
+    if (l.type === 'proposal') {
+      const out = claim(l.round, l.index)
+      if (out) return no(`${slot}: ${out}`)
+      // Both candidates of a round stand on one current, and candidate 2 hears of candidate 1's edit as tried.
+      const why = checkEdit(l.edit, { current, original, tried: [...tried, ...pending.map(p => p.edit)], binding: ctx.binding })
+      if (why) return no(`${slot}: proposed edit: ${why}`)
+      pending.push({ round: l.round, index: l.index, input: l.input, edit: l.edit })
+      continue
+    }
+    const p = pending.find(x => x.round === l.round && x.index === l.index)
+    if (p) {
+      if (sweeps.length !== first.repeats) return no(`${slot}: decided before its sweeps`)
+      if (l.input !== p.input || JSON.stringify(l.edit) !== JSON.stringify(p.edit)) return no(`${slot}: its edit or input is not the one proposed`)
+      if (typeof mode === 'string') return no(mode)
+      // decideRound is pure and every input is in the journal: the line's verdict must be what its sweeps give.
+      const d = decideRound({ cur: sweeps.flatMap(s => s.cur), cands: sweptCands(sweeps), orig: baseline!, gateNames: ctx.sets.gate, mode, origMaxTurns: (original as any).loop?.maxTurns ?? Infinity }).find(x => x.index === l.index)!
+      if (d.accepted !== l.accepted) return no(`${slot}: its runs do not give ${l.accepted ? 'an acceptance' : 'a refusal'}`)
+      pending = pending.filter(x => x !== p)
+    } else {
+      const why = claim(l.round, l.index)
+      if (why) return no(`${slot}: ${why}`)
+      if (l.accepted) return no(`${slot}: accepted, but no proposal of it was measured`)
     }
     if (l.accepted) {
       version++
-      const why = l.edit ? checkEdit(l.edit, { current, original, tried, binding: ctx.binding }) : 'no edit'
-      if (why) return { error: `cannot resume: ${slot}: accepted edit ${version}: ${why}` }
-      if (l.reason !== 'accepted' || l.version !== version || !l.runs) return { error: `cannot resume: ${slot}: accepted, but not written as version ${version} with its runs` }
-    }
-    // decide is pure and every input is in the journal: the line's verdict must be what its own numbers give.
-    if (l.runs) {
-      const was = cmp.get(l.round)
-      if (typeof mode === 'string') return { error: `cannot resume: ${mode}` }
-      if (!was) return { error: `cannot resume: ${slot}: no current runs of its round to compare with` }
-      if (decide({ cur: was, cand: l.runs, orig: baseline!, gateNames: ctx.sets.gate, mode, origMaxTurns: (original as any).loop?.maxTurns ?? Infinity }).accepted !== l.accepted) return { error: `cannot resume: ${slot}: its runs do not give ${l.accepted ? 'an acceptance' : 'a refusal'}` }
-    }
-    if (l.accepted) {
+      if (l.reason !== 'accepted' || l.version !== version) return no(`${slot}: accepted, but not written as version ${version}`)
       current = applyEdit(current, l.edit!)
-      cmp.set(l.round, l.runs!)
+      feed = onTrain(sweeps.at(-1)!.cands.find(c => c.index === l.index)!.runs)
+      tests = [] // they measured the version before this one
     } else if (l.edit) {
       const bound = (x: unknown) => boundBy(x, ctx.binding)
       const reason = REASON_RE.some(re => re.test(l.reason)) && !bound(l.reason) ? l.reason : 'other'
@@ -440,18 +508,15 @@ export function replay(lines: JournalLine[], original: object, ctx: { binding: s
       rejected.push({ field: ALLOWED.includes(l.edit.field) ? l.edit.field : 'other', ...(tied ? {} : { value: v }), reason })
     }
     if (l.edit) tried.push(l.edit)
+    if (!pending.length) sweeps = []
   }
   const end = lines[lines.length - 1]
   let final: { orig: RunLite[]; last: RunLite[] } | 'none' | undefined
   if (end?.type === 'final') {
-    const names = (rs: RunLite[]) => rs.map(r => r.task).sort().join('\n'), test = [...ctx.sets.test].sort().join('\n')
-    const ok = end.version === version && (version === 0
-      ? !end.orig && !end.last
-      : !!end.orig && !!end.last && names(end.orig) === test && names(end.last) === test)
-    if (!ok) return { error: 'cannot resume: the final line does not match the journal' }
-    final = version ? { orig: end.orig!, last: end.last! } : 'none'
+    if (end.version !== version || tests.length !== (version ? first.repeats : 0)) return no('the final line does not match the journal')
+    final = version ? { orig: tests.flatMap(t => t.orig), last: tests.flatMap(t => t.last) } : 'none'
   }
-  return { current, version, baseline, done, tried, rejected, final, ...(pending ? { pending } : {}) }
+  return { current, version, baseline, feed, tried: [...tried, ...pending.map(p => p.edit)], rejected, pending, tested: tests.length, final }
 }
 
 const PRINCIPLE = 'how far this is a principle rather than a fit depends on how unlike the training tasks the test tasks are'
