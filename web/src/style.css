@@ -179,10 +179,8 @@ button.link:hover:not(:disabled) { background: none; }
 :root[data-film] body { zoom: 1.25; }
 :root[data-film] .app { height: 80vh; } /* 100vh / zoom */
 :root[data-film] .film-hide { display: none; }
-.evolve-open { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; margin-top: 16px; padding: 8px 12px; }
-.evolve-open .muted { font: 12px var(--mono); }
-dialog.evolve { width: min(760px, calc(100vw - 64px)); max-height: calc(100vh - 64px); }
-.evolve-head { display: flex; justify-content: space-between; align-items: center; } .evolve-head h3 { margin: 0; }
+.evolve { overflow: auto; min-height: 0; padding: 16px max(20px, calc((100% - 760px) / 2)); } /* the page scrolls, its column stays readable */ .evolve h3 { display: flex; gap: 8px; align-items: center; }
+.tabs .chip { margin-left: 6px; }
 .evolve pre { max-height: 260px; overflow: auto; background: var(--sunk); padding: 10px 12px; border-radius: 6px; font-size: 12px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
 .evolve .block { padding: 8px 10px; border-radius: 6px; margin: 8px 0; } .evolve .warn.block { background: var(--warn-bg); } .evolve .err.block { background: var(--err-bg); }
 .evolve .row > label { margin: 0; min-width: 5em; }

@@ -15,10 +15,11 @@ export type EvolveStatus = {
   last?: { harness: string; code: number | null; signal: string | null; err: string; out: string }
 }
 /** The 409 of an evolve start that needs the user's yes first. */
-export type EvolveConsent = {
-  consent: { text: string; hash: string }; sets: { train: number; gate: number; test: number }
-  strict: boolean; needed?: number; reference?: string; uncommitted: boolean
+export type EvolveCheck = {
+  mode: string; sets: { train: number; gate: number; test: number }
+  declarable: boolean; runs: number; priced: boolean; needed?: number; reference?: string
 }
+export type EvolveConsent = EvolveCheck & { consent: { text: string; hash: string }; uncommitted: boolean }
 
 async function send(url: string, init?: RequestInit) {
   const r = await fetch(url, { headers: { 'content-type': 'application/json' }, ...init })
@@ -50,11 +51,13 @@ export const api = {
   benchStop: () => j<{ ok: true }>('/api/bench/stop', { method: 'POST' }),
   evolveStatus: () => j<EvolveStatus>('/api/evolve'),
   /** undefined: started. A consent: nothing started, the user has to say yes to it first. */
-  evolveStart: async (body: { harness: string; repo: string; accept?: string }): Promise<EvolveConsent | undefined> => {
+  evolveStart: async (body: { harness: string; repo: string; mode: string; maxUsd?: number; accept?: string }): Promise<EvolveConsent | undefined> => {
     const { r, body: b } = await send('/api/evolve/start', { method: 'POST', body: JSON.stringify(body) })
     if (r.status === 409 && b.consent) return b as EvolveConsent
     if (!r.ok) throw failed(r, b)
   },
+  /** Read-only: the run count and the orientation reason for this harness, repo and mode. */
+  evolveCheck: (body: { harness: string; repo: string; mode: string }) => j<EvolveCheck>('/api/evolve/check', { method: 'POST', body: JSON.stringify(body) }),
   evolveStop: () => j<{ ok: true }>('/api/evolve/stop', { method: 'POST' }),
   /** POST, not GET: the server lists and deletes behind the same check. */
   notes: (repo: string, del?: string) => j<{ notes: Note[]; removed?: number }>('/api/notes', { method: 'POST', body: JSON.stringify({ repo, ...del === undefined ? {} : { delete: del } }) }),

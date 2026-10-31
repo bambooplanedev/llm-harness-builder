@@ -13,7 +13,7 @@ export function parseCalls(calls: AccCall[]): NormalizedToolCall[] {
   })
 }
 
-const usageOf = (u: any) => u && typeof u === 'object' ? usageFrom(u.prompt_tokens, u.completion_tokens, u.prompt_tokens_details?.cached_tokens) : undefined
+const usageOf = (u: any) => u && typeof u === 'object' ? usageFrom(u.prompt_tokens, u.completion_tokens, u.prompt_tokens_details?.cached_tokens, undefined, u.completion_tokens_details?.reasoning_tokens) : undefined
 
 /** A stream that failed after its 200, OpenRouter's way: a chunk whose finish_reason is "error", the error beside the
  *  choices. jsonChunks' rule (an error and no choices) does not see it, and the reply would read as an empty one. */

@@ -1,23 +1,32 @@
 <script setup lang="ts">
-import { ref, computed, watch, nextTick } from 'vue'
-import { api, type EvolveConsent, type EvolveStatus, type Note } from './api'
-import { t, lang } from './i18n'
+import { ref, computed, watch, nextTick, onMounted } from 'vue'
+import { api, type EvolveCheck, type EvolveConsent, type EvolveStatus, type Note } from './api'
+import { t, lang, type Key } from './i18n'
 import { configDiff, lineDiff } from '../../src/core/diff'
-import { FIELD_LABEL, flagLines } from '../../src/core/evolve-labels'
+import { FIELD_LABEL, flagLines, outcomeOf } from '../../src/core/evolve-labels'
 
 const props = defineProps<{ harnessNames: string[]; current: string; workdir: string; notesOn: boolean; status: EvolveStatus }>()
-/** `poll`: ask App for the status now (opened, started, stopped); App keeps polling while a job runs.
+/** `poll`: ask App for the status now (shown, started, stopped); App keeps polling while a job runs, tab open or not.
  *  `use`: `keepBackend` when the version's backend differs from the original's: the form keeps its own, as the diff says. */
 const emit = defineEmits<{ use: [name: string, keepBackend: boolean]; poll: [] }>()
 
-const dlg = ref<HTMLDialogElement | null>(null)
 const harness = ref(''); const repo = ref(props.workdir)
 watch(() => props.workdir, w => { repo.value = w })
+/** No mode is preselected: Start waits for a pick, so no promise is taken by default. */
+const mode = ref(''); const maxUsd = ref('')
+const MODES = ['hours', 'night', 'days'] as const
+/** What /api/evolve/check says of this harness, repo and mode: the run count and the orientation, before any Start. */
+const plan = ref<EvolveCheck>(); let checkAsk = 0
 const consent = ref<EvolveConsent>(); const accepted = ref(false); const error = ref('')
 /** A yes was sent and the server asked again: the commands changed since they were read. */
 const changed = ref(false)
 // A yes is to one harness and one repo: another pick asks again, and an error about the old pick is gone.
-watch([harness, repo], () => { consent.value = undefined; accepted.value = false; changed.value = false; error.value = '' })
+watch([harness, repo, mode], () => {
+  consent.value = undefined; accepted.value = false; changed.value = false; error.value = ''; plan.value = undefined
+  const ask = ++checkAsk // a later pick overtakes an earlier answer
+  if (!harness.value || !repo.value || !mode.value) return
+  api.evolveCheck({ harness: harness.value, repo: repo.value, mode: mode.value }).then(p => { if (ask === checkAsk) plan.value = p }, e => { if (ask === checkAsk) error.value = e.message })
+})
 /** A failed Start asks for the status; that answer is not news about the error, so it keeps it. */
 let keepError = false
 // Every other status that arrived is news: an error from an earlier Start no longer holds.
@@ -35,7 +44,10 @@ const failed = computed(() => !!last.value && last.value.code !== 0 && !stopped.
 /** Stop pressed, the job not gone yet: SIGINT can take a while to end the run. */
 const stopping = ref(false)
 watch(running, r => { if (!r) stopping.value = false })
-const canStart = computed(() => !running.value && !!harness.value && !!repo.value && (!consent.value || accepted.value))
+/** A priced harness needs a ceiling: the server refuses a start without one. */
+const usd = computed(() => +maxUsd.value)
+const needsUsd = computed(() => !!plan.value?.priced)
+const canStart = computed(() => !running.value && !!plan.value && (!needsUsd.value || usd.value > 0) && (!consent.value || accepted.value))
 
 const tail = ref<HTMLElement | null>(null)
 /** The newest log line is the one that says what is going on. */
@@ -46,18 +58,17 @@ watch(() => running.value?.err ?? last.value?.err, () => {
   if (!el || el.scrollHeight - el.scrollTop - el.clientHeight <= 40) void toEnd()
 })
 
-function open() {
-  // The form's harness each time, unless a yes is half given or a job runs: those are about the harness picked here.
-  if ((!consent.value && !running.value) || !props.harnessNames.includes(harness.value))
-    harness.value = props.harnessNames.includes(props.current) ? props.current : props.harnessNames[0] ?? ''
-  dlg.value?.showModal()
-  emit('poll'); void loadNotes(); void toEnd()
-}
+// The page is built when its tab opens: the form's harness, a fresh status and the notes.
+const pick = () => { if (!props.harnessNames.includes(harness.value)) harness.value = props.harnessNames.includes(props.current) ? props.current : props.harnessNames[0] ?? '' }
+watch(() => props.harnessNames, pick)
+onMounted(() => {
+  pick(); emit('poll'); void loadNotes(); void toEnd()
+})
 async function start() {
   error.value = ''
   try {
     const accept = consent.value && accepted.value ? consent.value.consent.hash : undefined
-    const c = await api.evolveStart({ harness: harness.value, repo: repo.value, ...accept ? { accept } : {} })
+    const c = await api.evolveStart({ harness: harness.value, repo: repo.value, mode: mode.value, ...needsUsd.value ? { maxUsd: usd.value } : {}, ...accept ? { accept } : {} })
     consent.value = c; accepted.value = false; changed.value = !!(c && accept)
     if (!c) emit('poll')
   } catch (e) { error.value = (e as Error).message; keepError = true; emit('poll') } // e.g. a job another tab started: show it
@@ -74,11 +85,13 @@ const newest = computed(() => {
   const ns = props.harnessNames.filter(n => n.startsWith(p) && /^\d+$/.test(n.slice(p.length))).map(n => +n.slice(p.length))
   return ns.length ? `${p}${Math.max(...ns)}` : undefined
 })
+/** The button the report allows: a declared winner to use, a pointer to review; the original kept, none. */
+const action = computed(() => ({ use: 'Use', try: 'Review', keep: undefined })[outcomeOf(last.value?.out ?? '') ?? 'keep'])
 const KNOWN: Record<string, string> = { name: 'name', ...FIELD_LABEL }
 /** A leaf is JSON text; a key missing on one side is the literal 'undefined'. */
 const text = (v: string) => (v === 'undefined' ? '' : String(JSON.parse(v)))
 type Change = { path: string; label?: string; a: string; b: string; added?: ReturnType<typeof flagLines>; removed?: string[] }
-/** What Use vN shows: every differing leaf, the system prompt line by line. Nothing in the form changes until Load. */
+/** What Use vN and Review vN show: every differing leaf, the system prompt line by line. Nothing in the form changes until Load. */
 const review = ref<{ name: string; changes: Change[] }>()
 watch(last, () => { review.value = undefined })
 async function use(name: string) {
@@ -95,7 +108,7 @@ async function use(name: string) {
 }
 function load(name: string) {
   const keepBackend = !!review.value?.changes.some(c => c.path.startsWith('backend.'))
-  review.value = undefined; dlg.value?.close(); emit('use', name, keepBackend)
+  review.value = undefined; emit('use', name, keepBackend)
 }
 
 async function loadNotes(del?: string) {
@@ -107,29 +120,33 @@ const clearNotes = () => { if (confirm(t('evolve.clearConfirm'))) void loadNotes
 </script>
 
 <template>
-  <button class="evolve-open" @click="open">Self-improvement…<span class="muted">Evolve: {{ state }} · Notes {{ notesOn ? 'on' : 'off' }}</span></button>
-  <!-- Esc and × only hide it: the job lives in serve, not in this window. -->
-  <dialog ref="dlg" class="evolve" aria-labelledby="evolve-title">
-    <div class="evolve-head"><h3 id="evolve-title">Self-improvement</h3><button aria-label="Close" @click="dlg?.close()">×</button></div>
+  <!-- Leaving the tab only hides this page: the job lives in serve, not here. -->
+  <div class="evolve">
+    <h3>Evolve <span class="chip">{{ state }}</span></h3>
     <p class="muted">{{ t('evolve.lede') }}</p>
     <div class="row"><label for="evolve-harness">Harness</label><select id="evolve-harness" :value="running?.harness ?? harness" :disabled="!!running" @change="harness = ($event.target as HTMLSelectElement).value"><option v-for="n in harnessNames" :key="n" :value="n">{{ n }}</option><option v-if="running && !harnessNames.includes(running.harness)" :value="running.harness">{{ running.harness }}</option></select></div>
     <div class="hint">{{ t('evolve.saved') }}</div>
     <div class="row"><label for="evolve-repo">Repo</label><input id="evolve-repo" type="text" v-model="repo" placeholder="/path/to/repo" :disabled="!!running" @change="loadNotes()"></div>
     <div class="hint">{{ t('evolve.repo') }}</div>
+    <div class="row"><label for="evolve-mode">Mode</label><select id="evolve-mode" :value="mode" :disabled="!!running" @change="mode = ($event.target as HTMLSelectElement).value"><option value="" disabled>choose a mode</option><option v-for="m in MODES" :key="m" :value="m">{{ m }}</option></select><span class="muted">{{ mode ? t(`evolve.mode.${mode}` as Key) : '' }}</span></div>
+    <div v-if="needsUsd" class="row"><label for="evolve-usd">Max $</label><input id="evolve-usd" type="number" min="0" step="any" v-model="maxUsd" :disabled="!!running" required><span class="muted">{{ t('evolve.usd') }}</span></div>
+    <section v-if="plan && !running">
+      <p><b>{{ plan.runs }}</b> {{ t('evolve.runs') }}</p>
+      <label :title="t('h.evolveSets')">Tasks</label>
+      <ul class="sets">
+        <li><b>{{ plan.sets.train }}</b> {{ t('evolve.train') }}</li>
+        <li><b>{{ plan.sets.gate }}</b> {{ t('evolve.gate') }}</li>
+        <li><b>{{ plan.sets.test }}</b> {{ t('evolve.test') }}</li>
+      </ul>
+      <p v-if="plan.declarable">{{ t('evolve.strict', { needed: plan.needed ?? '' }) }}</p>
+      <div v-else class="warn block">{{ plan.reference }}</div>
+    </section>
     <div class="row">
       <button :disabled="!canStart" @click="start">Start</button>
       <span class="err">{{ error }}</span>
     </div>
 
     <section v-if="consent && !running">
-      <label :title="t('h.evolveSets')">Tasks</label>
-      <ul class="sets">
-        <li><b>{{ consent.sets.train }}</b> {{ t('evolve.train') }}</li>
-        <li><b>{{ consent.sets.gate }}</b> {{ t('evolve.gate') }}</li>
-        <li><b>{{ consent.sets.test }}</b> {{ t('evolve.test') }}</li>
-      </ul>
-      <p v-if="consent.strict">{{ t('evolve.strict', { needed: consent.needed ?? '' }) }}</p>
-      <div v-else class="warn block">{{ consent.reference }}</div>
       <p v-if="consent.uncommitted" class="warn">{{ t('evolve.uncommitted') }}</p>
       <div class="warn block">{{ t('evolve.warning') }}</div>
       <p v-if="changed" class="warn">{{ t('evolve.changed') }}</p>
@@ -165,7 +182,7 @@ const clearNotes = () => { if (confirm(t('evolve.clearConfirm'))) void loadNotes
         <template v-else>
           <label :title="t('h.evolveReport')">Report</label>
           <pre>{{ last.out }}</pre>
-          <div class="row"><button v-if="newest" @click="use(newest)">Use {{ newest.slice(last.harness.length + 1) }}</button><button @click="dlg?.close()">Keep original</button></div>
+          <div class="row"><button v-if="newest && action" @click="use(newest)">{{ action }} {{ newest.slice(last.harness.length + 1) }}</button></div>
         </template>
       </template>
       <p v-else-if="stopped">{{ t('evolve.stopped', { harness: last.harness }) }}</p>
@@ -188,5 +205,5 @@ const clearNotes = () => { if (confirm(t('evolve.clearConfirm'))) void loadNotes
       </li>
     </ul>
     <div class="row"><button :disabled="!notes.length" @click="clearNotes">Clear notes</button></div>
-  </dialog>
+  </div>
 </template>

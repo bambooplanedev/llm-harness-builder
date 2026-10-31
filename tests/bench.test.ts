@@ -130,3 +130,117 @@ test('defaultSize: polyglot starts at 5, the rest at their largest', () => {
   expect(defaultSize('pool')).toBe(10)
   expect(defaultSize('slug')).toBe(0)
 })
+
+// Pinned before --wide existed: the plain table is byte for byte what it was.
+const gold = (name: string, runs: Partial<BenchRun>[], tests?: { passed: number; total: number }): BenchHarness =>
+  ({ name, config: { backend: { model: 'm' }, loop: { maxTurns: 10 } } as BenchHarness['config'], pass: runs.filter(r => r.verdict === 'PASS').length, reasons: { final: 2, max_turns: 1 }, median: { turns: 4, toolCalls: 3, ms: 61000 }, tests,
+    runs: runs.map((r, i) => ({ round: i + 1, verdict: 'FAIL', reason: 'final', turns: 4, toolCalls: 3, parseErrors: 0, ms: 61000, workdir: '/w', ...r })) as BenchRun[] })
+test('formatTable: the plain table is unchanged by --wide existing (golden)', () => {
+  const hs = [
+    gold('bare', [{ verdict: 'PASS', costUsd: 0.012, toolChars: 900, toolErrors: 1, guardBlocks: 2, editMiss: 1 }, { costUsd: 0.02, toolErrors: 0, guardBlocks: 0, editMiss: 0 }, { verdict: 'PASS', costUsd: 0.5, toolErrors: 3, guardBlocks: 1, editMiss: 2 }], { passed: 7, total: 9 }),
+    gold('tuned', [{ verdict: 'PASS', toolErrors: 0 }, { verdict: 'PASS' }, { verdict: 'PASS' }]),
+  ]
+  expect(formatTable(hs)).toMatchInlineSnapshot(`
+    "harness  PASS  95% CI     reasons              med turns  med s  toolChars  med errs  med $  guard  editMiss  tests
+    bare     2/3   0.21–0.94  final×2 max_turns×1  4          61     900        1         0.02   3      3         7/9
+    tuned    3/3   0.44–1.00  final×2 max_turns×1  4          61     -          0         -      -      0         -
+    medians over all runs incl. failures; s = wall-clock per run
+    95% CI = Wilson interval of the PASS rate; two harnesses whose intervals overlap are not told apart by this bench
+    tests = green tests over all runs; no interval: the tests of one exercise are not independent"
+  `)
+})
+
+const five = (over: Partial<BenchRun>, extra: Partial<BenchRun> = {}) => ['a', 'b', 'c', 'd', 'e'].map(t => ({ task: t, verdict: 'PASS' as const, turns: 4, tokens: 1000, modelMs: 2000, ...over, ...extra }))
+test('formatTable --wide: tool use columns, "-" for missing, 0 stays 0', () => {
+  const hs = [gold('x', [{ toolCounts: { bash: 2, read_file: 4 }, outputLines: 10, reasoningTokens: 0 }, { toolCounts: {}, outputLines: 0 }, {}])]
+  const [head, row] = formatTable(hs, { wide: true }).split('\n')
+  expect(head).toMatch(/turns\/ok\s+tok\/ok\s+model s\/ok\s+\$\/ok\s+tools\s+out lines\s+reason tok\s+p PASS\s+p turns\s+p s\s+p tok\s+p calls\s+p lines\s+p reason$/)
+  expect(row).toMatch(/\s-\s+-\s+-\s+-\s+bash 1 read_file 2\s+5\s+0(\s+-){7}$/)
+  expect(formatTable(hs, { wide: true }).split('\n')[0]).toContain('med turns')
+})
+test('formatTable --wide: per-success costs on shared successes; over tolerance gets "!", nothing is refused', () => {
+  const hs = [gold('base', five({}, { costUsd: 0.01 })), gold('dear', five({ turns: 8, tokens: 1000, modelMs: 2000 }, { costUsd: 0.03 }))]
+  const [, base, dear] = formatTable(hs, { wide: true }).split('\n')
+  expect(base).toMatch(/\s4\.0\s+1000\s+2\.0\s+0\.01\s/)
+  expect(dear).toMatch(/\s8\.0!\s+1000\s+2\.0\s+0\.03\s/)
+  expect(base).not.toContain('!')
+})
+test('formatTable --wide: under five shared tasks the cost cells are "-"; time falls back to ms', () => {
+  const few = gold('base', five({}).slice(0, 4))
+  expect(formatTable([few], { wide: true }).split('\n')[1]).toMatch(/\s4\.0\s+1000\s+2\.0\s+-\s+-\s+-\s+-(\s+-){7}$/)
+  expect(formatTable([gold('none', [{}])], { wide: true }).split('\n')[1]).toMatch(/\s-\s+-\s+-\s+-\s+-\s+-\s+-(\s+-){7}$/)
+  const old = gold('base', five({ modelMs: undefined, ms: 3000 }))
+  expect(formatTable([old], { wide: true }).split('\n')[1]).toMatch(/\s3\.0\s/)
+})
+test('formatTable --wide: evolve\'s all-tokens gate marks tok/ok, whatever the shared tasks; failures are not free', () => {
+  // Passes as cheap as the base's, but failures burn tokens: only the all-tokens gate sees it.
+  const fails = ['f', 'g', 'h'].map(task => ({ task, tokens: 9000 }))
+  const base = gold('base', five({})), dear = gold('dear', [...five({}), ...fails])
+  expect(formatTable([base, dear], { wide: true }).split('\n')[2]).toMatch(/\s4\.0\s+1000!\s+2\.0\s/)
+  // Under 5 shared tasks: the plain mean, marked.
+  const few = gold('few', five({}).slice(0, 4)), few2 = gold('few2', [...five({}).slice(0, 4), ...fails])
+  expect(formatTable([few, few2], { wide: true }).split('\n')[2]).toMatch(/\s4\.0\s+1000!\s+2\.0\s/)
+  // Within +10% over all tokens, a missing token count, and a base with no tokens at all: no mark.
+  expect(formatTable([base, gold('near', [...five({ tokens: 1100 })])], { wide: true }).split('\n')[2]).not.toContain('!')
+  expect(formatTable([base, gold('old', [...five({}), { task: 'f' }])], { wide: true }).split('\n')[2]).not.toContain('!')
+  expect(formatTable([gold('none', [{ task: 'f', tokens: 0 }]), gold('x', five({}))], { wide: true }).split('\n')[2]).not.toContain('!')
+  // The base is never marked, and a 0-PASS base is judged on all tokens.
+  expect(formatTable([gold('b', [{ task: 'a', tokens: 100 }]), gold('c', [{ task: 'a', verdict: 'PASS', tokens: 500 }])], { wide: true }).split('\n').slice(1, 3).map(l => l.includes('!'))).toEqual([false, true])
+  expect(formatTable([base, dear], { wide: true })).toContain('tok/ok also takes ! on any number of tasks')
+})
+test('formatTable --wide: the base is the first harness on the same model; another model has its own', () => {
+  const m = (name: string, model: string, over: Partial<BenchRun>) => ({ ...gold(name, five(over)), config: { backend: { model }, loop: { maxTurns: 10 } } as BenchHarness['config'] })
+  const t = formatTable([m('a1', 'A', {}), m('b1', 'B', { turns: 8 }), m('a2', 'A', { turns: 8 })], { wide: true }).split('\n')
+  expect(t[2]).not.toContain('!')
+  expect(t[3]).toContain('8.0!')
+})
+
+test('formatTable --wide: an old JSON with a bare config renders without throwing', () => {
+  const h = { ...gold('old', [{ verdict: 'PASS', ms: 5000 }]), config: {} as BenchHarness['config'] }
+  expect(formatTable([h], { wide: true }).split('\n')[1]).toMatch(/\s4\.0\s+-\s+5\.0\s/)
+})
+
+// p-values: a table cell is "p (permutations)"; split on the two-space padding.
+const cols = (line: string) => line.split(/ {2,}/)
+const pcols = (hs: BenchHarness[]) => { const t = formatTable(hs, { wide: true }).split('\n'); const i = cols(t[0]).indexOf('p PASS'); return t.slice(1, 1 + hs.length).map(l => cols(l).slice(i, i + 7)) }
+const three = (over: Partial<BenchRun>) => [1, 2, 3].map(() => over)
+test('formatTable --wide: p against the first harness of the model, two-sided, on PASS too, with the permutation count', () => {
+  const [a, b] = pcols([gold('a', three({ verdict: 'FAIL', turns: 4 })), gold('b', three({ verdict: 'PASS', turns: 8 }))])
+  expect(a).toEqual(['-', '-', '-', '-', '-', '-', '-'])
+  // 3 v 3 in one task is C(6,3) = 20 labellings; the extreme two of them are as far out as the real one
+  expect(b.slice(0, 2)).toEqual(['0.100 (20)', '0.100 (20)'])
+  // the same 61 s on both sides: every labelling gives the same statistic
+  expect(b[2]).toBe('1.000 (1)')
+})
+test('formatTable --wide: seconds are model time, ms in an old JSON; a number a run lacks leaves that run out', () => {
+  const hs = [gold('a', three({ ms: 1000, modelMs: 1000 })), gold('b', three({ ms: 1000, modelMs: 5000 })), gold('c', three({ ms: 9000, modelMs: undefined }))]
+  const p = pcols(hs)
+  expect(p[1][2]).toBe('0.100 (20)'); expect(p[2][2]).toBe('0.100 (20)')
+  // no tokens, no tool counts, no output lines, no reasoning tokens anywhere: nothing to test
+  expect(p[1].slice(3)).toEqual(['-', '-', '-', '-'])
+  const q = pcols([gold('a', three({ toolCounts: { bash: 1 }, outputLines: 1, reasoningTokens: 1, tokens: 1 })), gold('b', [{ toolCounts: { bash: 5, read_file: 5 }, outputLines: 9, reasoningTokens: 9, tokens: 9 }, { toolCounts: { bash: 5, read_file: 5 }, outputLines: 9, reasoningTokens: 9, tokens: 9 }, { toolCounts: { bash: 5, read_file: 5 }, outputLines: 9, reasoningTokens: 9, tokens: 9 }])])
+  expect(q[1].slice(3)).toEqual(Array(4).fill('0.100 (20)'))
+})
+test('formatTable --wide: runs are shuffled inside their task; the count is the product, and past 20000 it is 20000', () => {
+  const two = (over: Partial<BenchRun>) => ['x', 'y'].flatMap(task => three({ ...over, task }))
+  expect(pcols([gold('a', two({ turns: 4 })), gold('b', two({ turns: 8 }))])[1][1]).toMatch(/ \(400\)$/)
+  const five6 = (over: Partial<BenchRun>) => ['a', 'b', 'c', 'd', 'e'].flatMap(task => three({ ...over, task }))
+  expect(pcols([gold('a', five6({ turns: 4 })), gold('b', five6({ turns: 8 }))])[1][1]).toMatch(/ \(20000\)$/)
+})
+test('formatTable --wide: a harness alone on its model has no p, and a bare old config renders', () => {
+  const m = (name: string, model: string) => ({ ...gold(name, three({})), config: { backend: { model } } as BenchHarness['config'] })
+  expect(pcols([m('a', 'A'), m('b', 'B')]).flat().every(c => c === '-')).toBe(true)
+  const old = { ...gold('old', three({})), config: {} as BenchHarness['config'] }
+  expect(() => formatTable([old, { ...old, name: 'old2' }], { wide: true })).not.toThrow()
+})
+test('formatTable --wide: the caption says what p is and that chance hits happen; plain stays without it', () => {
+  const hs = [gold('a', three({})), gold('b', three({}))]
+  expect(formatTable(hs, { wide: true })).toMatch(/p = two-sided permutation test/)
+  expect(formatTable(hs)).not.toMatch(/permutation/)
+})
+test('formatTable: with more than one model a row is "harness · model", through showable; with one it is the name', () => {
+  const m = (name: string, model: string) => ({ ...gold(name, three({})), config: { backend: { model } } as BenchHarness['config'] })
+  const t = formatTable([m('a', 'A'), m('a', 'B\u001b[2J')]).split('\n')
+  expect(t[1]).toMatch(/^a · A /); expect(t[2]).toMatch(/^a · B\\u001b\[2J /)
+  expect(formatTable([m('a', 'A'), m('b', 'A')]).split('\n')[1]).toMatch(/^a {2}/)
+})

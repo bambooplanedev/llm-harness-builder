@@ -210,53 +210,63 @@ test('a Claude Code session is one group: main first, subagents indented under i
   expect(cards.filter(c => /session/.test(String(c.props.class)))).toHaveLength(6)
 })
 
-// The Self-improvement window. Its dialog is in the tree while closed, so what it says is readable without opening it.
+// The Evolve tab: a page, built when the tab opens.
 const button = (root: N, label: string) => all(root).find(n => n.tag === 'button' && textOf(n) === label)
-const dialogOf = (root: N) => all(root).find(n => n.tag === 'dialog' && n.props['aria-labelledby'] === 'evolve-title')!
+const dialogOf = (root: N) => all(root).find(n => n.props.class === 'evolve')!
+const tabButton = (root: N) => all(root).find(n => n.tag === 'button' && textOf(n).startsWith('Evolve'))!
+const workbench = (root: N) => all(root).find(n => n.tag === 'button' && textOf(n) === 'Workbench')!
+/** Types the workdir on the Workbench, then opens the tab; the tab is rebuilt each time, the mode starts unpicked. */
 async function openWindow(app: Awaited<ReturnType<typeof mount>>, workdir = '/tmp/repo') {
+  if (!all(app.root).some(n => n.props.placeholder === '/path/to/project')) { workbench(app.root).props.onClick(); await settle() }
   const box = all(app.root).find(n => n.props.placeholder === '/path/to/project')!
   box.value = workdir; box.on.input?.forEach(f => f({ target: box })); await settle()
-  all(app.root).find(n => n.tag === 'button' && textOf(n).startsWith('Self-improvement…'))!.props.onClick(); await settle()
-  expect(dialogOf(app.root).open).toBe(true)
+  tabButton(app.root).props.onClick(); await settle()
+  expect(dialogOf(app.root)).toBeDefined()
 }
-const base = { '/api/runs': [], '/api/models': [], '/api/notes': { notes: [] } }
+/** Picks a mode: the select is v-model, so its change event carries the value. */
+const pickMode = async (root: N, m: string) => { const sel = all(root).find(n => n.tag === 'select' && n.props.id === 'evolve-mode')!; sel.props.onChange({ target: { value: m } }); await settle() }
+const planOf = (over: object = {}) => ({ mode: 'hours', sets: { train: 5, gate: 4, test: 3 }, declarable: true, needed: 6, runs: 9, priced: false, ...over })
+const base = { '/api/runs': [], '/api/models': [], '/api/notes': { notes: [] }, '/api/evolve/check': planOf() }
 
 test('evolve running on another harness than the form: the button names its round', async () => {
   const app = await mount({ ...base, '/api/harnesses': [{ name: 'bare' }, { name: 'tuned' }], '/api/harnesses/bare': harness({ name: 'bare' }),
     '/api/evolve': { running: { harness: 'tuned', round: [2, 3], err: '--- round 2/3\nproposing' }, last: { harness: 'old', code: 0, signal: null, err: '', out: 'STALE REPORT' } } })
   await app.load('bare')
-  const open = all(app.root).find(n => n.tag === 'button' && textOf(n).startsWith('Self-improvement…'))!
-  expect(textOf(open)).toContain('Evolve: round 2/3')
-  expect(textOf(open)).toContain('Notes off')
+  expect(textOf(tabButton(app.root))).toContain('running') // the chip on the tab, before the tab is open
+  await openWindow(app)
   const d = textOf(dialogOf(app.root))
+  expect(d).toContain('Notes are off in bare')
   expect(d).toContain('round 2 of 3'); expect(d).toContain('tuned'); expect(d).toContain('proposing')
   expect(d).not.toContain('STALE REPORT') // the previous job's result, while a new one runs
   expect(button(app.root, 'Start')!.props.disabled).toBe(true)
 })
 
 test('Start without consent shows the sets and the commands; Start waits for the checkbox and then sends the hash', async () => {
-  const consent = { consent: { text: 'CONSENT TEXT', hash: 'h1' }, sets: { train: 5, gate: 4, test: 3 }, strict: true, needed: 6, uncommitted: true }
+  const consent = { consent: { text: 'CONSENT TEXT', hash: 'h1' }, sets: { train: 5, gate: 4, test: 3 }, declarable: true, needed: 6, uncommitted: true }
   const app = await mount({ ...base, '/api/harnesses': [{ name: 'tuned' }],
     '/api/evolve/start': (b: any) => b.accept ? new Response('{}', { status: 201 }) : new Response(JSON.stringify(consent), { status: 409 }) })
   await openWindow(app)
+  expect(button(app.root, 'Start')!.props.disabled).toBe(true) // no mode picked, no winner preselected
+  await pickMode(app.root, 'hours')
   button(app.root, 'Start')!.props.onClick(); await settle()
   const d = textOf(dialogOf(app.root))
-  for (const s of ['5 tasks it learns from', '4 check tasks Evolve never sees', '3 final test', 'CONSENT TEXT', 'at least 6 tasks go FAIL → PASS', 'uncommitted changes are not in the clones', 'for hours without asking'])
+  for (const s of ['9', 'orientation, never a winner', '5 tasks it learns from', '4 check tasks Evolve never sees', '3 final test', 'CONSENT TEXT', 'at least 6 tasks better', 'uncommitted changes are not in the clones', 'for hours without asking'])
     expect(d).toContain(s)
-  expect(app.calls.find(c => c.url === '/api/evolve/start')!.body).toEqual({ harness: 'tuned', repo: '/tmp/repo' })
+  expect(app.calls.find(c => c.url === '/api/evolve/start')!.body).toEqual({ harness: 'tuned', repo: '/tmp/repo', mode: 'hours' })
   expect(button(app.root, 'Start')!.props.disabled).toBe(true)
   const box = all(dialogOf(app.root)).find(n => n.tag === 'input' && n.props.type === 'checkbox')!
   box.props.onChange({ target: { checked: true } }); await settle()
   expect(button(app.root, 'Start')!.props.disabled).toBe(false)
   button(app.root, 'Start')!.props.onClick(); await settle()
-  expect(app.calls.filter(c => c.url === '/api/evolve/start').at(-1)!.body).toEqual({ harness: 'tuned', repo: '/tmp/repo', accept: 'h1' })
+  expect(app.calls.filter(c => c.url === '/api/evolve/start').at(-1)!.body).toEqual({ harness: 'tuned', repo: '/tmp/repo', mode: 'hours', accept: 'h1' })
   expect(app.calls.at(-1)!.url).toBe('/api/evolve') // the status, asked again once the start went through
 })
 
 test('a non-strict consent shows the reference line as a warning', async () => {
-  const consent = { consent: { text: 'C', hash: 'h' }, sets: { train: 1, gate: 1, test: 1 }, strict: false, reference: 'too few tasks (3 of 24)', uncommitted: false }
-  const app = await mount({ ...base, '/api/harnesses': [{ name: 'tuned' }], '/api/evolve/start': () => new Response(JSON.stringify(consent), { status: 409 }) })
+  const consent = { consent: { text: 'C', hash: 'h' }, sets: { train: 1, gate: 1, test: 1 }, declarable: false, reference: 'too few tasks (3 of 24)', uncommitted: false }
+  const app = await mount({ ...base, '/api/evolve/check': planOf({ declarable: false, needed: undefined, reference: 'too few tasks (3 of 24)' }), '/api/harnesses': [{ name: 'tuned' }], '/api/evolve/start': () => new Response(JSON.stringify(consent), { status: 409 }) })
   await openWindow(app)
+  await pickMode(app.root, 'hours')
   button(app.root, 'Start')!.props.onClick(); await settle()
   expect(all(dialogOf(app.root)).find(n => String(n.props.class).includes('warn') && textOf(n) === 'too few tasks (3 of 24)')).toBeDefined()
   expect(textOf(dialogOf(app.root))).not.toContain('uncommitted changes')
@@ -264,12 +274,11 @@ test('a non-strict consent shows the reference line as a warning', async () => {
 
 test('a finished evolve shows its report; one that failed shows why', async () => {
   const ok = await mount({ ...base, '/api/harnesses': [], '/api/evolve': { last: { harness: 'tuned', code: 0, signal: null, err: '', out: 'REPORT' } } })
-  expect(textOf(dialogOf(ok.root))).toContain('REPORT')
-  expect(textOf(all(ok.root).find(n => n.tag === 'button' && textOf(n).startsWith('Self-improvement…'))!)).toContain('Evolve: idle')
   await openWindow(ok)
-  button(ok.root, 'Keep original')!.props.onClick(); await settle()
-  expect(dialogOf(ok.root).open).toBe(false)
+  expect(textOf(dialogOf(ok.root))).toContain('REPORT')
+  expect(textOf(tabButton(ok.root))).not.toContain('running')
   const bad = await mount({ ...base, '/api/harnesses': [], '/api/evolve': { last: { harness: 'tuned', code: 2, signal: null, err: 'error: cannot reach', out: '' } } })
+  await openWindow(bad)
   expect(textOf(dialogOf(bad.root))).toContain('cannot reach')
   expect(textOf(dialogOf(bad.root))).toContain('code 2')
 })
@@ -296,19 +305,21 @@ test('notes: × deletes one, Clear notes asks first and posts nothing on no', as
 test('under uk the lede is Ukrainian, the buttons stay English', async () => {
   lang.value = 'uk'
   const app = await mount({ ...base, '/api/harnesses': [] })
+  await openWindow(app)
   expect(textOf(dialogOf(app.root))).toContain(uk['evolve.lede'])
+  await pickMode(app.root, 'night')
+  expect(textOf(dialogOf(app.root))).toContain(uk['evolve.mode.night'])
   for (const b of ['Start', 'Clear notes']) expect(button(app.root, b)).toBeDefined()
-  expect(all(app.root).find(n => n.tag === 'button' && textOf(n).startsWith('Self-improvement…'))).toBeDefined()
 })
 
-test('Esc and × only hide the window: nothing goes to /api/evolve/stop', async () => {
+test('leaving the tab does not stop the job: the chip stays and nothing goes to /api/evolve/stop', async () => {
   const app = await mount({ ...base, '/api/harnesses': [{ name: 'tuned' }], '/api/evolve': { running: { harness: 'tuned', err: '' } } })
   await openWindow(app)
-  const d = dialogOf(app.root)
-  // Esc is the native dialog's own cancel: no listener of ours, so only × is pressed here.
-  all(d).find(n => n.tag === 'button' && n.props['aria-label'] === 'Close')!.props.onClick(); await settle()
-  expect(d.open).toBe(false)
+  workbench(app.root).props.onClick(); await settle()
+  expect(dialogOf(app.root)).toBeUndefined()
+  expect(textOf(tabButton(app.root))).toContain('running')
   expect(app.calls.some(c => c.url === '/api/evolve/stop')).toBe(false)
+  tabButton(app.root).props.onClick(); await settle()
   expect(button(app.root, 'Stop — resume later')).toBeDefined()
 })
 
@@ -329,7 +340,7 @@ test('Stop says it is stopping and stays disabled until the job is gone', async 
   expect(textOf(dialogOf(app.root))).toContain('stopping…: Evolve ends the current run, this can take up to a minute')
   answers['/api/evolve'] = { last: { harness: 'tuned', code: 130, signal: null, err: '', out: '' } }
   await openWindow(app)
-  expect(textOf(dialogOf(app.root))).toContain('Evolve on tuned was stopped. Start with the same harness and repo to go on.')
+  expect(textOf(dialogOf(app.root))).toContain('Evolve on tuned was stopped. Start with the same harness, repo and mode to go on.')
   answers['/api/evolve'] = { running: { harness: 'tuned', err: '' } }
   await openWindow(app)
   expect(button(app.root, 'Stop — resume later')!.props.disabled).toBe(false)
@@ -340,18 +351,38 @@ test('each open picks the harness the form holds again', async () => {
     '/api/evolve/start': () => new Response('{}', { status: 201 }) })
   await app.load('a')
   await openWindow(app)
+  await pickMode(app.root, 'hours')
   button(app.root, 'Start')!.props.onClick(); await settle()
   expect(app.calls.filter(c => c.url === '/api/evolve/start').at(-1)!.body.harness).toBe('a')
-  all(dialogOf(app.root)).find(n => n.props['aria-label'] === 'Close')!.props.onClick()
+  workbench(app.root).props.onClick(); await settle()
   await app.load('b')
   await openWindow(app)
+  await pickMode(app.root, 'hours')
   button(app.root, 'Start')!.props.onClick(); await settle()
   expect(app.calls.filter(c => c.url === '/api/evolve/start').at(-1)!.body.harness).toBe('b')
+  expect(app.calls.filter(c => c.url === '/api/evolve/check').at(-1)!.body).toEqual({ harness: 'b', repo: '/tmp/repo', mode: 'hours' })
+})
+
+test('Start waits for a mode; a priced harness also waits for Max $ and sends it', async () => {
+  const answers: Record<string, unknown> = { ...base, '/api/harnesses': [{ name: 'tuned' }], '/api/evolve/check': planOf({ priced: true }), '/api/evolve/start': () => new Response('{}', { status: 201 }) }
+  const app = await mount(answers)
+  await openWindow(app)
+  expect(app.calls.some(c => c.url === '/api/evolve/check')).toBe(false) // nothing to ask before a pick
+  expect(all(dialogOf(app.root)).some(n => n.props.id === 'evolve-usd')).toBe(false)
+  await pickMode(app.root, 'night')
+  expect(textOf(dialogOf(app.root))).toContain('a large gain only, about 11-13 h on the measured model')
+  expect(button(app.root, 'Start')!.props.disabled).toBe(true) // priced: no ceiling yet
+  const usd = all(dialogOf(app.root)).find(n => n.props.id === 'evolve-usd')!
+  usd.value = '2.5'; usd.on.input?.forEach(f => f({ target: usd })); await settle()
+  expect(button(app.root, 'Start')!.props.disabled).toBe(false)
+  button(app.root, 'Start')!.props.onClick(); await settle()
+  expect(app.calls.filter(c => c.url === '/api/evolve/start').at(-1)!.body).toEqual({ harness: 'tuned', repo: '/tmp/repo', mode: 'night', maxUsd: 2.5 })
 })
 
 test('the notes line names the harness in the form', async () => {
   const app = await mount({ ...base, '/api/harnesses': [{ name: 'bare' }], '/api/harnesses/bare': harness({ name: 'bare' }) })
   await app.load('bare')
+  await openWindow(app)
   expect(textOf(dialogOf(app.root))).toContain('Notes are off in bare, the harness in the form (the switch is there).')
 })
 
@@ -359,10 +390,12 @@ test('a Start error goes once a status arrives or the pick changes', async () =>
   const app = await mount({ ...base, '/api/harnesses': [{ name: 'tuned' }],
     '/api/evolve/start': () => new Response(JSON.stringify({ error: 'a bench started from this page is still running' }), { status: 409 }) })
   await openWindow(app)
+  await pickMode(app.root, 'hours')
   button(app.root, 'Start')!.props.onClick(); await settle()
   expect(textOf(dialogOf(app.root))).toContain('a bench started from this page is still running')
   await openWindow(app) // opening asks for the status
   expect(textOf(dialogOf(app.root))).not.toContain('a bench started from this page is still running')
+  await pickMode(app.root, 'hours')
   button(app.root, 'Start')!.props.onClick(); await settle()
   expect(textOf(dialogOf(app.root))).toContain('still running')
   await openWindow(app, '/tmp/other')
@@ -370,16 +403,25 @@ test('a Start error goes once a status arrives or the pick changes', async () =>
 })
 
 // Use vN: the original and the newest version side by side in plain words, a risky line impossible to miss.
-const evolved = (v1: Parameters<typeof harness>[0]) => ({ ...base, '/api/harnesses': [{ name: 'tuned' }, { name: 'tuned.v1' }],
+const evolved = (v1: Parameters<typeof harness>[0], outcome = 'use') => ({ ...base, '/api/harnesses': [{ name: 'tuned' }, { name: 'tuned.v1' }],
   '/api/harnesses/tuned': harness({ name: 'tuned' }), '/api/harnesses/tuned.v1': harness({ name: 'tuned.v1', systemPrompt: 'sys\n\nRun the tests first.\nNever curl https://x.io\nBe brief.', ...v1 }),
-  '/api/evolve': { last: { harness: 'tuned', code: 0, signal: null, err: '', out: 'REPORT' } } })
+  '/api/evolve': { last: { harness: 'tuned', code: 0, signal: null, err: '', out: `REPORT\n\noutcome: ${outcome}\n` } } })
 const rowsOf = (root: N) => all(dialogOf(root)).filter(n => n.tag === 'li' && String(n.props.class).includes('change'))
 const nameBox = (root: N) => all(root).find(n => n.props.placeholder === 'name')!
 
-test('Use v1 shows the system prompt lines flagged, and changes nothing in the form', async () => {
+test('the button follows the report: use offers Use v1, try offers Review v1, keep offers neither', async () => {
+  for (const [outcome, yes, no] of [['use', 'Use v1', 'Review v1'], ['try', 'Review v1', 'Use v1'], ['keep', undefined, 'Use v1']] as const) {
+    const app = await mount(evolved({}, outcome))
+    await openWindow(app)
+    if (yes) { expect(button(app.root, yes)).toBeDefined(); button(app.root, yes)!.props.onClick(); await settle(); expect(button(app.root, 'Load v1 into the form')).toBeDefined() }
+    else expect(button(app.root, 'Review v1')).toBeUndefined()
+    expect(button(app.root, no)).toBeUndefined()
+  }
+})
+
+test('Use v1 shows the system prompt lines flagged', async () => {
   const app = await mount(evolved({}))
   await openWindow(app)
-  const before = nameBox(app.root).value
   button(app.root, 'Use v1')!.props.onClick(); await settle()
   const [row, ...rest] = rowsOf(app.root)
   expect(rest).toEqual([])
@@ -388,7 +430,6 @@ test('Use v1 shows the system prompt lines flagged, and changes nothing in the f
   const lines = all(row).filter(n => String(n.props.class).includes('line'))
   expect(lines.map(l => textOf(l).trim())).toEqual(['mentions tests or checks Run the tests first.', 'address or command Never curl https://x.io', 'Be brief.'])
   expect(String(lines[1].props.class)).toContain('warn')
-  expect(nameBox(app.root).value).toBe(before)
   expect(button(app.root, 'Back')).toBeDefined()
 })
 
@@ -397,8 +438,8 @@ test('Load v1 into the form puts tuned.v1 in the form on the Workbench tab', asy
   await openWindow(app)
   button(app.root, 'Use v1')!.props.onClick(); await settle()
   button(app.root, 'Load v1 into the form')!.props.onClick(); await settle()
-  expect(nameBox(app.root).value).toBe('tuned.v1') // the tab is not checked: this dialog renders only on Workbench
-  expect(dialogOf(app.root).open).toBe(false)
+  expect(nameBox(app.root).value).toBe('tuned.v1') // Use v1 goes back to the Workbench tab
+  expect(dialogOf(app.root)).toBeUndefined()
 })
 
 test('a change outside the allowed fields is flagged', async () => {
@@ -424,9 +465,9 @@ test('a system prompt changed only in blank lines or order says so instead of an
 const urlBox = (root: N) => all(root).find(n => n.tag === 'input' && !!n.parent?.children.some(c => c.tag === 'select' && textOf(c).includes('openai-compatible')))!
 test('Load v1 with a rewritten backend keeps the form\'s backend even on a fresh page, as its note says', async () => {
   const app = await mount(evolved({ backend: { kind: 'openai', baseUrl: 'http://evil/v1', model: 'fake-model', temperature: 0 } }))
-  await openWindow(app)
   const before = urlBox(app.root).value
   expect(before).not.toBe('http://evil/v1')
+  await openWindow(app)
   button(app.root, 'Use v1')!.props.onClick(); await settle()
   button(app.root, 'Load v1 into the form')!.props.onClick(); await settle()
   expect(nameBox(app.root).value).toBe('tuned.v1')
@@ -465,6 +506,7 @@ test('a Start refused because another tab started a job asks for the status: the
     '/api/evolve/start': () => new Response(JSON.stringify({ error: 'an evolve started from this page is still running' }), { status: 409 }) }
   const app = await mount(answers)
   await openWindow(app)
+  await pickMode(app.root, 'hours')
   answers['/api/evolve'] = { running: { harness: 'tuned', err: '' } } // the other tab's job
   button(app.root, 'Start')!.props.onClick(); await settle()
   const d = textOf(dialogOf(app.root))
@@ -489,10 +531,11 @@ test('once a job is gone the status is asked once more, for the report\'s tail a
 
 test('a Start with a yes that comes back with consent again says the commands changed', async () => {
   let n = 0
-  const consent = () => ({ consent: { text: `COMMANDS ${++n}`, hash: `h${n}` }, sets: { train: 1, gate: 1, test: 1 }, strict: true, needed: 1, uncommitted: false })
+  const consent = () => ({ consent: { text: `COMMANDS ${++n}`, hash: `h${n}` }, sets: { train: 1, gate: 1, test: 1 }, declarable: true, needed: 1, uncommitted: false })
   const app = await mount({ ...base, '/api/harnesses': [{ name: 'tuned' }], '/api/evolve/start': () => new Response(JSON.stringify(consent()), { status: 409 }) })
   await openWindow(app)
   const said = 'The commands changed since you accepted them; read them again.'
+  await pickMode(app.root, 'hours')
   button(app.root, 'Start')!.props.onClick(); await settle()
   expect(textOf(dialogOf(app.root))).not.toContain(said)
   all(dialogOf(app.root)).find(n => n.tag === 'input' && n.props.type === 'checkbox')!.props.onChange({ target: { checked: true } }); await settle()

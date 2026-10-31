@@ -1065,6 +1065,15 @@ test('a 429 is retried and the run goes on as if nothing happened', async () => 
   expect(last(ev)).toMatchObject({ reason: 'final', text: 'fin' })
 })
 
+test('sendRetrying reports each 429 pause, and the response latency leaves the pauses out', async () => {
+  const waits: number[] = []
+  const be = scripted([r429(), { content: 'fin' }])
+  expect((await sendRetrying(be as any, {}, undefined, undefined, 1, ms => waits.push(ms))).content).toBe('fin')
+  expect(waits).toHaveLength(1)
+  const ev = await collect({ config: base(), task: 'do', workdir: await wd() }, { backend: scripted([r429(), { content: 'fin' }]) as any, retryMs: 150 })
+  expect((ev.find(e => e.type === 'llm_response') as any).latencyMs).toBeLessThan(100)
+})
+
 test('four 429s end the run as backend_error with status 429', async () => {
   const be = scripted([r429(), r429(), r429(), r429(), { content: 'never' }])
   const ev = await collect({ config: base(), task: 'do', workdir: await wd() }, { backend: be as any, retryMs: 10 })

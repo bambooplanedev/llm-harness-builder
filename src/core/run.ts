@@ -180,9 +180,10 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
       yield ev({ type: 'llm_request', payload })
 
       const t0 = Date.now()
+      let waited = 0 // 429 pauses are the server's rate limit, not the model's time
       let res: NormalizedResponse
       try {
-        res = await sendRetrying(backend, payload, opts.signal, opts.onDelta, opts.retryMs)
+        res = await sendRetrying(backend, payload, opts.signal, opts.onDelta, opts.retryMs, ms => { waited += ms })
       } catch (e) {
         // A stop thrown back by a wait the timeout cut short is that stop, not an abort.
         if (opts.signal?.aborted && !(e instanceof BackendError && isStop(e))) { yield done('aborted'); return }
@@ -194,7 +195,7 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
       }
       lastUsage = res.usage
       const cost = costOf(res.usage, config.backend.pricePerMTok)
-      yield ev({ type: 'llm_response', raw: res.raw, content: res.content, reasoning: res.reasoning, usage: res.usage, ...cost === undefined ? {} : { costUsd: cost }, latencyMs: Date.now() - t0 })
+      yield ev({ type: 'llm_response', raw: res.raw, content: res.content, reasoning: res.reasoning, usage: res.usage, ...cost === undefined ? {} : { costUsd: cost }, latencyMs: Math.max(0, Date.now() - t0 - waited) })
 
       // ---- parse -------------------------------------------------------------
       let calls: { name: string; args: Record<string, unknown>; backendId?: string; argsError?: string }[] = []

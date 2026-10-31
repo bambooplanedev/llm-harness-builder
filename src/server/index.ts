@@ -16,7 +16,7 @@ import { TASKS, checkSlug } from '../core/tasks.js'
 import { childEnv } from '../core/tools/env.js'
 import { loadRepoTasks, consentText, consentHash, hasConsent, saveConsent } from '../core/repo-tasks.js'
 import { readNotes, removeNotes, notesPath, notesKey } from '../core/notes.js'
-import { splitSets, modeOf, neededFlips, referenceLabel, ALLOWED } from '../core/evolve.js'
+import { splitSets, splitOf, runCount, MODES, neededFlips, referenceLabel, ALLOWED } from '../core/evolve.js'
 
 /** `cli` starts `llm-harness-builder <args>` (args[0] is `bench` or `evolve`) with stdout and stderr piped; without it the page cannot start a job.
  *  `examplesDir`: recorded runs the three GET routes read with `?example=1`; nothing ever writes there. */
@@ -240,11 +240,13 @@ export async function startServer(opts: ServerOpts) {
         job!.child.kill('SIGINT')
         return json(res, 200, { ok: true })
       }
-      if (opts.cli && m('POST', /^\/api\/evolve\/start$/)) {
+      if (opts.cli && m('POST', /^\/api\/evolve\/(start|check)$/)) {
         // A harness name and a repo, never a flag: argv is built here. Nothing runs before the repo's tasks are accepted (hash of what will run).
-        const body = await readBody(req) as { harness?: unknown; repo?: unknown; accept?: unknown }
+        // `check` is the same validation up to the run count and starts or saves nothing: the tab asks it before every Start.
+        const check = req.url!.endsWith('/check')
+        const body = await readBody(req) as { harness?: unknown; repo?: unknown; accept?: unknown; mode?: unknown; maxUsd?: unknown }
         const bad = (...errors: string[]) => json(res, 400, { errors })
-        if (busy()) return json(res, 409, { error: busy() }) // before the consent question: nobody accepts while the slot is taken
+        if (!check && busy()) return json(res, 409, { error: busy() }) // before the consent question: nobody accepts while the slot is taken
         if (typeof body.harness !== 'string' || !safeName(body.harness) || body.harness.includes('..')) return bad('harness: not a plain file name')
         const file = path.resolve(opts.harnessesDir, `${body.harness}.json`)
         let config: HarnessConfig
@@ -257,17 +259,29 @@ export async function startServer(opts: ServerOpts) {
         if (w) return bad(w)
         let t
         try { t = await loadRepoTasks(body.repo as string) } catch (e) { return bad((e as Error).message) }
-        const sets = splitSets(t.tasks), mode = modeOf(sets)
-        if (typeof mode === 'string') return bad(mode)
-        const ev = { proposer: config.backend.baseUrl, fields: ALLOWED }
+        // Both are the page's to choose and argv's to carry: a mode from the table, a ceiling only where there is a price to count against.
+        const mode = body.mode
+        if (typeof mode !== 'string' || !Object.hasOwn(MODES, mode)) return bad(`mode: one of ${Object.keys(MODES).join(', ')}`)
+        const priced = !!config.backend.pricePerMTok, usd = body.maxUsd
+        if (!check) {
+          if (usd !== undefined && !(typeof usd === 'number' && Number.isFinite(usd) && usd > 0)) return bad('maxUsd: a positive number')
+          if (usd !== undefined && !priced) return bad('maxUsd: this harness has no backend.pricePerMTok to count against')
+          if (usd === undefined && priced) return bad('maxUsd: this harness is priced; say the most it may spend')
+        }
+        const sets = splitSets(t.tasks), split = splitOf(sets, false, mode as keyof typeof MODES)
+        if (typeof split === 'string') return bad(split)
+        const lim = MODES[mode as keyof typeof MODES], runs = runCount(sets, lim.repeats, lim.rounds).all
+        const ev = { proposer: config.backend.baseUrl, fields: ALLOWED, mode, runs }
+        const setSizes = { train: sets.train.length, gate: sets.gate.length, test: sets.test.length }
+        const facts = { sets: setSizes, declarable: split.declarable, runs, priced, ...split.declarable ? { needed: neededFlips() } : { reference: referenceLabel(split) } }
+        if (check) return json(res, 200, { mode, ...facts })
         if (!(await hasConsent(t, ev))) {
           if (body.accept !== consentHash(t, ev)) return json(res, 409, {
-            consent: { text: consentText(t, ev), hash: consentHash(t, ev) }, sets: { train: sets.train.length, gate: sets.gate.length, test: sets.test.length },
-            strict: mode.strict, ...mode.strict ? { needed: neededFlips() } : { reference: referenceLabel(mode) }, uncommitted: t.uncommitted })
+            consent: { text: consentText(t, ev), hash: consentHash(t, ev) }, ...facts, uncommitted: t.uncommitted })
           await saveConsent(t, ev)
         }
         if (busy()) return json(res, 409, { error: busy() })
-        const child = opts.cli(['evolve', file, `--tasks=${t.repo}`])
+        const child = opts.cli(['evolve', file, `--tasks=${t.repo}`, `--mode=${mode}`, ...usd !== undefined ? [`--max-usd=${usd}`] : []])
         const j = job = { kind: 'evolve' as const, child, harness: body.harness, err: '' }
         let out = ''
         let ended: typeof lastEvolve

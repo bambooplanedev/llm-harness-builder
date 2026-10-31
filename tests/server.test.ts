@@ -332,7 +332,7 @@ test('GET /api/bench lists bench files newest first and skips everything else', 
   expect(r.status).toBe(200)
   const { files } = await r.json()
   expect(files.map((f: any) => f.file)).toEqual(['b3.json', 'b2.json', 'b1.json'])
-  expect(files[1]).toEqual({ file: 'b2.json', date: '2026-09-13T11:00:00.000Z', model: 'fake-model', complete: true })
+  expect(files[1]).toEqual({ file: 'b2.json', date: '2026-09-13T11:00:00.000Z', model: ['fake-model'], complete: true })
 })
 
 test('GET /api/bench?file= on a version:1 file whose harness has no config is a 404, not a listed file', async () => {
@@ -841,14 +841,14 @@ async function evolveServer() {
   await writeFile(join(hdir, 'tuned.json'), JSON.stringify(config({ name: 'tuned' })))
   const repo = await gitRepo({ 'lhb-tasks.json': TASKS3 })
   const u = `http://127.0.0.1:${s.port}`
-  const start = (over: object = {}) => postJson(`${u}/api/evolve/start`, { harness: 'tuned', repo, ...over })
+  const start = (over: object = {}) => postJson(`${u}/api/evolve/start`, { harness: 'tuned', repo, mode: 'hours', ...over })
   return { s, u, hdir, got, kids, repo, start, status: async () => (await fetch(`${u}/api/evolve`)).json() }
 }
 
 test('bench and evolve share one job slot', async () => {
   const e = await evolveServer()
   try {
-    const t = await loadRepoTasks(e.repo), ev = { proposer: config().backend.baseUrl, fields: ALLOWED }
+    const t = await loadRepoTasks(e.repo), ev = { proposer: config().backend.baseUrl, fields: ALLOWED, mode: 'hours', runs: 9 }
     const first = await e.start({ accept: consentHash(t, ev) })
     expect(first.status).toBe(201)
     const nb = await postJson(`${e.u}/api/bench/new`, { harnesses: ['tuned'], task: 'slug', n: 1, backend: form })
@@ -875,7 +875,7 @@ test('the first evolve start asks for consent and spawns nothing', async () => {
     expect(r.status).toBe(409)
     const b = await r.json()
     expect(b.sets).toEqual({ train: 1, gate: 1, test: 1 })
-    expect(b.strict).toBe(false)
+    expect(b.declarable).toBe(false)
     expect(typeof b.reference).toBe('string')
     expect(b.uncommitted).toBe(false)
     expect(b.consent.text).toContain('repo:')
@@ -893,8 +893,8 @@ test('an accepted start saves consent and spawns evolve; a changed task asks aga
     expect(e.got).toEqual([])
     expect((await e.start({ accept: hash })).status).toBe(201)
     const real = await realpath(e.repo)
-    expect(e.got).toEqual([['evolve', join(e.hdir, 'tuned.json'), `--tasks=${real}`]])
-    expect(await hasConsent(await loadRepoTasks(e.repo), { proposer: config().backend.baseUrl, fields: ALLOWED })).toBe(true)
+    expect(e.got).toEqual([['evolve', join(e.hdir, 'tuned.json'), `--tasks=${real}`, '--mode=hours']])
+    expect(await hasConsent(await loadRepoTasks(e.repo), { proposer: config().backend.baseUrl, fields: ALLOWED, mode: 'hours', runs: 9 })).toBe(true)
     finish(e.kids[0], 0)
     await writeFile(join(e.repo, 'lhb-tasks.json'), TASKS3.replace('node a.js', 'node a2.js'))
     await gitCommit(e.repo)
@@ -902,6 +902,47 @@ test('an accepted start saves consent and spawns evolve; a changed task asks aga
     expect(again.status).toBe(409)
     expect((await again.json()).consent.hash).not.toBe(hash)
     expect(e.got).toHaveLength(1)
+  } finally { await e.s.close() }
+})
+
+test('evolve start: the mode is required and from the table; maxUsd is positive, finite, and only for a priced harness', async () => {
+  const e = await evolveServer()
+  try {
+    const err = async (over: object) => { const r = await e.start(over); expect(r.status).toBe(400); return (await r.json()).errors[0] as string }
+    expect(await err({ mode: undefined })).toMatch(/^mode:/)
+    expect(await err({ mode: 'custom' })).toMatch(/^mode:/)
+    expect(await err({ mode: '__proto__' })).toMatch(/^mode:/)
+    expect(await err({ maxUsd: 2 })).toMatch(/no backend.pricePerMTok/)
+    await writeFile(join(e.hdir, 'tuned.json'), JSON.stringify(config({ name: 'tuned', backend: { ...config().backend, pricePerMTok: { input: 1, output: 2 } } })))
+    expect(await err({})).toMatch(/is priced/)
+    for (const maxUsd of [0, -1, '2', null]) expect(await err({ maxUsd })).toMatch(/positive number/)
+    expect(e.got).toEqual([])
+    const r = await e.start({ mode: 'night', maxUsd: 2.5 })
+    expect(r.status).toBe(409)
+    const b = await r.json()
+    expect([b.runs, b.priced, b.declarable]).toEqual([25, true, false]) // 1/1/1 tasks: night's runs, but too few to declare
+    expect(b.consent.text).toContain('run limit: mode night, up to 25 runs')
+    expect((await e.start({ mode: 'night', maxUsd: 2.5, accept: b.consent.hash })).status).toBe(201)
+    expect(e.got[0].slice(-2)).toEqual(['--mode=night', '--max-usd=2.5'])
+    finish(e.kids[0], 0)
+    // one yes covers one mode: hours asks again
+    const h = await (await e.start({ mode: 'hours', maxUsd: 2.5 })).json()
+    expect([h.runs, h.consent.hash === b.consent.hash]).toEqual([9, false])
+  } finally { await e.s.close() }
+})
+
+test('evolve check answers the run count and the orientation without starting or saving anything', async () => {
+  const e = await evolveServer()
+  try {
+    const chk = (over: object = {}) => postJson(`${e.u}/api/evolve/check`, { harness: 'tuned', repo: e.repo, mode: 'night', ...over })
+    const r = await chk()
+    expect(r.status).toBe(200)
+    expect(await r.json()).toMatchObject({ mode: 'night', runs: 25, declarable: false, priced: false, sets: { train: 1, gate: 1, test: 1 } })
+    expect((await chk({ mode: 'custom' })).status).toBe(400) // the same validation as start
+    expect((await chk({ harness: '../x' })).status).toBe(400)
+    expect((await chk({ maxUsd: 1 })).status).toBe(200) // a ceiling is start's business
+    expect(e.got).toEqual([])
+    expect((await e.start({ mode: 'night' })).status).toBe(409) // nothing was saved: still asks for consent
   } finally { await e.s.close() }
 })
 

@@ -15,7 +15,7 @@ const patient = new Agent({ headersTimeout: 0, bodyTimeout: 0 })
 export const defaultFetch: FetchLike = (url, init) => undiciFetch(url, { ...init, dispatcher: patient })
 
 /** promptTokens is the whole prompt; the cache counts are the parts of it served from or written to the cache. */
-export type Usage = { promptTokens: number; completionTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number }
+export type Usage = { promptTokens: number; completionTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number; reasoningTokens?: number }
 
 /** A count as a server sent it: absent is 0, as it always was; anything but a finite non-negative number is not one. */
 export const tokenCount = (x: unknown): number | undefined =>
@@ -23,13 +23,13 @@ export const tokenCount = (x: unknown): number | undefined =>
 
 /** Usage from the two counts a server sent, or none at all: a server's text must never reach the terminal as a count,
  *  two lines above an approval question. */
-export function usageFrom(prompt: unknown, completion: unknown, cacheRead?: unknown, cacheWrite?: unknown): Usage | undefined {
+export function usageFrom(prompt: unknown, completion: unknown, cacheRead?: unknown, cacheWrite?: unknown, reasoning?: unknown): Usage | undefined {
   const p = tokenCount(prompt), c = tokenCount(completion)
   if (p === undefined || c === undefined) return undefined
   // Unlike the two counts, an absent or bad cache count is no field at all: 0 would claim the server said "no hit".
   const count = (x: unknown) => typeof x === 'number' && Number.isFinite(x) && x >= 0 ? x : undefined
-  const r = count(cacheRead), w = count(cacheWrite)
-  return { promptTokens: p, completionTokens: c, ...(r === undefined ? {} : { cacheReadTokens: r }), ...(w === undefined ? {} : { cacheWriteTokens: w }) }
+  const r = count(cacheRead), w = count(cacheWrite), t = count(reasoning)
+  return { promptTokens: p, completionTokens: c, ...(t === undefined ? {} : { reasoningTokens: t }), ...(r === undefined ? {} : { cacheReadTokens: r }), ...(w === undefined ? {} : { cacheWriteTokens: w }) }
 }
 
 /** Text a server sent, only when it is text: a number, an array or an object in its place is dropped, not printed. */
@@ -204,9 +204,9 @@ const pause = (ms: number, signal?: AbortSignal): Promise<boolean> => new Promis
   signal?.addEventListener('abort', on, { once: true })
 })
 
-/** backend.send, with a 429 tried again up to 3 times after Retry-After (at most 300 s; else 60 s; `waitMs` overrides both). Not after
+/** backend.send, with a 429 tried again up to 3 times after Retry-After (at most 300 s; else 60 s; `waitMs` overrides both; `onWait` hears each pause, to keep it out of a timing). Not after
  *  a delta: the caller has shown it. An abort during a wait throws the 429 itself, so the run ends as the stop. */
-export async function sendRetrying(backend: Backend, payload: unknown, signal?: AbortSignal, onDelta?: (d: Delta) => void, waitMs?: number): Promise<NormalizedResponse> {
+export async function sendRetrying(backend: Backend, payload: unknown, signal?: AbortSignal, onDelta?: (d: Delta) => void, waitMs?: number, onWait?: (ms: number) => void): Promise<NormalizedResponse> {
   for (let retries = 0; ; retries++) {
     let streamed = false
     try {
@@ -214,7 +214,10 @@ export async function sendRetrying(backend: Backend, payload: unknown, signal?: 
     } catch (e) {
       if (e instanceof BackendError && streamed) e.midReply = true
       if (!(e instanceof BackendError) || e.status !== 429 || streamed || retries === 3 || signal?.aborted) throw e
-      if (!await pause(waitMs ?? Math.min(e.retryAfter ?? 60, 300) * 1000, signal)) throw e
+      const t = Date.now()
+      const ok = await pause(waitMs ?? Math.min(e.retryAfter ?? 60, 300) * 1000, signal)
+      onWait?.(Date.now() - t)
+      if (!ok) throw e
     }
   }
 }
