@@ -35,32 +35,37 @@ const MAX_READ_BYTES = 4 << 20
 /** A non-negative-integer number or digit string, else undefined. */
 const lineNo = (v: unknown): number | undefined => typeof v === 'number' && Number.isInteger(v) && v >= 0 ? v : typeof v === 'string' && /^\d+$/.test(v) ? Number(v) : undefined
 
-async function readRange(args: Args, ctx: ToolCtx): Promise<string> {
-  const file = await resolveInside(ctx.workdir, str(args, 'path'))
+/** The first `limit` bytes of a file, decoded, and its whole size in bytes. */
+async function head(file: string, limit: number): Promise<{ text: string; size: number }> {
   const fh = await open(file, 'r')
   try {
-    const limit = ctx.readMaxBytes ?? MAX_READ_BYTES
     const size = (await fh.stat()).size
     const n = Math.min(size, limit)
     const buf = Buffer.alloc(n)
     const { bytesRead } = await fh.read(buf, 0, n, 0)
-    const text = buf.subarray(0, bytesRead).toString('utf8')
-    const capped = size > limit ? limit : undefined
-    const lines = text === '' ? [] : text.split('\n')
-    if (text.endsWith('\n')) lines.pop()
-    const total = lines.length
-    const start = args.start === undefined ? 1 : lineNo(args.start), end = args.end === undefined ? Infinity : lineNo(args.end)
-    if (start === undefined || end === undefined || start < 1 || end < start) throw new Error('start and end must be line numbers from 1, with end not before start')
-    if (ctx.reads) {
-      ctx.reads.add(file)
-      // Part only when the selection leaves lines out: {start: 1} on a whole file is a whole read.
-      if (start > 1 || end < total || capped) ctx.partReads?.add(file); else ctx.partReads?.delete(file)
-    }
-    if (total === 0) return '[no lines: the file is empty]'
-    if (start > total) return capped ? `[no lines: the first ${capped} bytes hold ${total} lines; read the rest with bash]` : `[no lines: the file has ${total}]`
-    ctx.lastRead = { file, first: start, total, capped }
-    return lines.slice(start - 1, end).join('\n') + (capped && end >= total ? `\n[truncated at ${capped} bytes]` : '')
+    return { text: buf.subarray(0, bytesRead).toString('utf8'), size }
   } finally { await fh.close() }
+}
+
+async function readRange(args: Args, ctx: ToolCtx): Promise<string> {
+  const file = await resolveInside(ctx.workdir, str(args, 'path'))
+  const limit = ctx.readMaxBytes ?? MAX_READ_BYTES
+  const { text, size } = await head(file, limit)
+  const capped = size > limit ? limit : undefined
+  const lines = text === '' ? [] : text.split('\n')
+  if (text.endsWith('\n')) lines.pop()
+  const total = lines.length
+  const start = args.start === undefined ? 1 : lineNo(args.start), end = args.end === undefined ? Infinity : lineNo(args.end)
+  if (start === undefined || end === undefined || start < 1 || end < start) throw new Error('start and end must be line numbers from 1, with end not before start')
+  if (ctx.reads) {
+    ctx.reads.add(file)
+    // Part only when the selection leaves lines out: {start: 1} on a whole file is a whole read.
+    if (start > 1 || end < total || capped) ctx.partReads?.add(file); else ctx.partReads?.delete(file)
+  }
+  if (total === 0) return '[no lines: the file is empty]'
+  if (start > total) return capped ? `[no lines: the first ${capped} bytes hold ${total} lines; read the rest with bash]` : `[no lines: the file has ${total}]`
+  ctx.lastRead = { file, first: start, total, capped }
+  return lines.slice(start - 1, end).join('\n') + (capped && end >= total ? `\n[truncated at ${capped} bytes]` : '')
 }
 
 /** Cuts at whole lines and says which were shown; undefined when not even one fits, then the caller cuts by characters. */
@@ -80,17 +85,11 @@ export function cutLines(text: string, max: number, r: { first: number; total: n
 export async function readFile(args: Args, ctx: ToolCtx): Promise<string> {
   if (ctx.readRanges) return readRange(args, ctx)
   const file = await resolveInside(ctx.workdir, str(args, 'path'))
-  const fh = await open(file, 'r')
-  try {
-    const limit = ctx.readMaxBytes ?? MAX_READ_BYTES
-    const size = (await fh.stat()).size
-    const n = Math.min(size, limit)
-    const buf = Buffer.alloc(n)
-    const { bytesRead } = await fh.read(buf, 0, n, 0)
-    ctx.reads?.add(file)
-    // The model must know it saw only the head.
-    return buf.subarray(0, bytesRead).toString('utf8') + (size > limit ? `\n[truncated at ${limit} bytes]` : '')
-  } finally { await fh.close() }
+  const limit = ctx.readMaxBytes ?? MAX_READ_BYTES
+  const { text, size } = await head(file, limit)
+  ctx.reads?.add(file)
+  // The model must know it saw only the head.
+  return text + (size > limit ? `\n[truncated at ${limit} bytes]` : '')
 }
 
 export async function writeFile(args: Args, ctx: ToolCtx): Promise<string> {
