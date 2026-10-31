@@ -375,13 +375,13 @@ function repoWork(repo: RepoTasks): Work {
   w.tasks = repo.tasks.map(rt => ({
     name: rt.name, prompt: rt.prompt,
     async prepare() { const c = await cloneAt(repo); live.set(c.dir, c); await linkNodeModules(c, w.modules!); return c.dir },
-    async check(dir, _size, _answer, env) {
+    async check(dir, _size, answer, env) {
       const c = live.get(dir)!
       const changed = await protectedChanged(c, repo)
       if (changed.length) return { pass: false, reason: `changed a protected file: ${changed[0]}` }
       // The test runner's own files: a node_modules of the model's would let its .bin/vitest decide the verdict.
       if (await modulesTampered(c)) return { pass: false, reason: 'changed a protected file: node_modules' }
-      return runCheck(c, rt, env ?? childEnv())
+      return runCheck(c, rt, env ?? childEnv(), answer)
     },
     async dispose(dir, traceId) {
       const c = live.get(dir)

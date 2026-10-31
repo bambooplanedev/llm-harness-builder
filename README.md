@@ -350,6 +350,18 @@ llm-harness-builder bench --tasks ../myrepo --n 3
 llm-harness-builder bench --tasks ../myrepo --only a2   # just these tasks, by name; the JSON records "only"
 ```
 
+A task can be a question. Its `check` reads the run's final answer from the file `$LHB_FINAL_FILE`:
+
+```json
+{ "name": "where", "prompt": "Which file parses ISO weeks? Answer with the path.",
+  "check": "test -s \"$LHB_FINAL_FILE\" && grep -q 'src/dates.js' \"$LHB_FINAL_FILE\"" }
+```
+
+The file is in a temp directory outside the clone, so `git status` does not see it, and it is removed
+after the check. It exists for every check and is empty when the run ended with no final answer, so
+test `-s` first: `! grep -q wrong "$LHB_FINAL_FILE"` passes an empty file. This is not a boundary: the
+check runs code the run could have changed, and that code can read the file, as can anything else running as you.
+
 Only the last commit is read: uncommitted changes, `lhb-tasks.json` included, are not in the runs,
 and `bench` says so. Each run is a `git clone --shared` in the OS temp dir, at that commit, with no
 remote, deleted after its check; the harness reads what a run changed through a git dir of its own,

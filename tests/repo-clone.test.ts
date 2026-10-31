@@ -116,6 +116,27 @@ test('runCheck: exit code, 0 tests, timeout, a long output still ends in its sum
   })
 })
 
+test('runCheck: $LHB_FINAL_FILE holds the final answer, outside the workdir, empty with none, gone after, gone on an exit cleanup', async () => {
+  await withClone({}, async c => {
+    const env = childEnv()
+    const seen = join(c.dir, '..', `seen-${basename(c.dir)}`)
+    expect(await runCheck(c, task({ check: `case "$LHB_FINAL_FILE" in "${c.dir}"*) exit 3;; esac; grep -q 42 "$LHB_FINAL_FILE" && echo "$LHB_FINAL_FILE" > ${seen}` }), env, 'it is 42')).toEqual({ pass: true })
+    const p = readFileSync(seen, 'utf8').trim()
+    expect(existsSync(p)).toBe(false)
+    expect(env.LHB_FINAL_FILE).toBeUndefined()
+    expect(await runCheck(c, task({ check: 'test -f "$LHB_FINAL_FILE" && ! test -s "$LHB_FINAL_FILE"' }), env, undefined)).toEqual({ pass: true })
+    // Ctrl-C mid-check: the exit hook's cleanup takes the file with the clone.
+    const mid = runCheck(c, task({ check: `echo "$LHB_FINAL_FILE" > ${seen}; sleep 2` }), env, 'x')
+    await new Promise(r => setTimeout(r, 700))
+    const q = readFileSync(seen, 'utf8').trim()
+    expect(existsSync(q)).toBe(true)
+    removeAllClonesSync()
+    expect(existsSync(q)).toBe(false)
+    await mid
+    await rm(seen, { force: true })
+  })
+})
+
 test('patchOf: changes and new files in, secret-looking files out, capped at 1 MiB', async () => {
   await withClone({}, async c => {
     await writeFile(join(c.dir, 'src/a.js'), 'changed\n')

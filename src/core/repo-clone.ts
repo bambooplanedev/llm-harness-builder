@@ -2,7 +2,7 @@
 // The model can rewrite the clone's .git (a gitfile to the user's repo, core.worktree, a clean filter, replace refs, an
 // index entry marked unchanged); the probe has none of that, so what the harness sees of a run is the work tree itself.
 import { createHash, randomBytes } from 'node:crypto'
-import { appendFile, lstat, readdir, readlink, rm, stat, unlink, writeFile } from 'node:fs/promises'
+import { appendFile, lstat, mkdtemp, readdir, readlink, rm, stat, unlink, writeFile } from 'node:fs/promises'
 import { lstatSync, rmSync, unlinkSync, existsSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -18,10 +18,13 @@ export type Clone = { dir: string; probe: string; sha: string
 // Every clone not yet removed: an exit for any reason (Ctrl-C during setup, a die(), the process registry's own exit)
 // takes them with it.
 const LIVE = new Set<Clone>()
+// The directories of $LHB_FINAL_FILE not yet removed: the same exit takes them (Ctrl-C mid-check).
+const FINALS = new Set<string>()
 let hooked = false
 
 /** Each clone that is still there, removed now; one that cannot be removed is said, not thrown. */
 export function removeAllClonesSync(): void {
+  for (const d of [...FINALS]) { rmSync(d, { recursive: true, force: true }); FINALS.delete(d) }
   for (const c of [...LIVE]) try { removeCloneSync(c) } catch (e) { console.error(`cannot remove ${c.dir}: ${(e as Error).message}`) }
 }
 
@@ -93,7 +96,20 @@ export const protectedChanged = (c: Clone, t: RepoTasks): Promise<string[]> => c
 
 const NO_TESTS = /^(?:#|ℹ) tests 0$/m
 
-export async function runCheck(c: Clone, task: RepoTask, env: NodeJS.ProcessEnv): Promise<{ pass: boolean; reason?: string }> {
+/** The run's final text is in a file whose path is `$LHB_FINAL_FILE` (empty when the run had no final), outside the clone so
+ *  `git status` does not see it, removed after the check. Not a boundary: the check runs code the model could have changed. */
+export async function runCheck(c: Clone, task: RepoTask, env: NodeJS.ProcessEnv, final?: string): Promise<{ pass: boolean; reason?: string }> {
+  // Never through c.probe: that is the model's tree; mkdtemp is 0700 and `wx` refuses a file already there.
+  const dir = await mkdtemp(path.join(tmpdir(), 'lhb-final-'))
+  FINALS.add(dir)
+  try {
+    const file = path.join(dir, 'final.txt')
+    await writeFile(file, final ?? '', { flag: 'wx' })
+    return await check(c, task, { ...env, LHB_FINAL_FILE: file })
+  } finally { await rm(dir, { recursive: true, force: true }); FINALS.delete(dir) }
+}
+
+async function check(c: Clone, task: RepoTask, env: NodeJS.ProcessEnv): Promise<{ pass: boolean; reason?: string }> {
   const r = await runShell(task.check, { cwd: c.dir, env, timeoutMs: task.checkTimeoutS * 1000, maxBuffer: 1 << 20, keep: 'tail' })
   if (r.spawnError !== undefined) return { pass: false, reason: `check did not start: ${r.spawnError}` }
   if (r.killed) return { pass: false, reason: `check timed out after ${task.checkTimeoutS}s` }
