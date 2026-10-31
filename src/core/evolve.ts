@@ -10,7 +10,7 @@ import type { DoneReason, HarnessEvent } from './events.js'
 import type { ChatRequest } from './backends/types.js'
 import { ALLOWED, DANGER } from './evolve-labels.js'
 import { costCheck, costReason, numbersOf, pct, tokensGate, type Numbers } from './evolve-cost.js'
-import { permP } from './stats.js'
+import { groupBy, mean, permP } from './stats.js'
 export { ALLOWED, numbersOf, type Numbers }
 
 export const ROUNDS = 3
@@ -78,12 +78,7 @@ export type RunLite = { task: string; verdict: 'PASS' | 'FAIL'; tokens?: number;
 /** Runs the gates can divide by: token counts on every run, and some of them, and some first request. */
 export const usable = (runs: RunLite[]): boolean => { const n = numbersOf(runs); return !!n.tokens && !!n.weight }
 
-const mean = (xs: number[]) => xs.reduce((a, x) => a + x, 0) / xs.length
-const byTask = <T>(runs: RunLite[], f: (r: RunLite) => T | undefined) => {
-  const m = new Map<string, T[]>()
-  for (const r of runs) { const v = f(r); if (v !== undefined) m.set(r.task, [...(m.get(r.task) ?? []), v]) }
-  return m
-}
+const byTask = <T>(runs: RunLite[], f: (r: RunLite) => T | undefined) => groupBy(runs, r => r.task, f)
 
 /** One test for any number of repeats: tasks are the strata, runs inside a task are exchangeable. `improved` = tasks whose pass rate rose. */
 export function passGain(cur: RunLite[], cand: RunLite[]): { p: number; improved: number } {
