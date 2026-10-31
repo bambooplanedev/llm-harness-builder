@@ -6,6 +6,7 @@ import { OllamaBackend } from '../src/core/backends/ollama.js'
 import { AnthropicBackend } from '../src/core/backends/anthropic.js'
 import { BackendError, defaultFetch, jsonChunks, type ChatRequest, type Delta, type FetchLike } from '../src/core/backends/types.js'
 import { createBackend } from '../src/core/backends/index.js'
+import { listen } from './helpers.js'
 
 const fx = (n: string) => JSON.parse(readFileSync(new URL(`./fixtures/${n}.json`, import.meta.url), 'utf8'))
 const fakeFetch = (status: number, body: unknown) => (async (_url: string, init?: RequestInit) => {
@@ -120,8 +121,7 @@ test('defaultFetch reaches a local server that delays its headers, and honours a
     if (req.url === '/slow') return void setTimeout(() => { res.setHeader('content-type', 'application/json'); res.end('{"ok":1}') }, 100)
     setTimeout(() => res.end('{}'), 5000) // /hang: never answers in time
   })
-  await new Promise<void>(r => srv.listen(0, '127.0.0.1', r))
-  const port = (srv.address() as { port: number }).port
+  const port = await listen(srv)
   try {
     const r = await defaultFetch(`http://127.0.0.1:${port}/slow`, { method: 'POST', body: '{}', headers: { 'content-type': 'application/json' } })
     expect(r.ok).toBe(true); expect(JSON.parse(await r.text())).toEqual({ ok: 1 })
@@ -361,7 +361,6 @@ const modelsBody = { data: [
 ], total_count: 3 }
 const jsonRes = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status, headers: { 'content-type': 'application/json' } })
 const sseRes = (chunks: unknown[]) => new Response(sseBody(chunks), { status: 200, headers: { 'content-type': 'text/event-stream' } })
-const listen = async (s: ReturnType<typeof createServer>) => { await new Promise<void>(r => s.listen(0, '127.0.0.1', r)); return (s.address() as { port: number }).port }
 
 test('with a key: the bearer token and no redirects on /models and /chat/completions, and nothing else is asked', async () => {
   const rec = recorder(url => url.endsWith('/models') ? jsonRes(modelsBody) : sseRes([{ choices: [{ index: 0, delta: { content: 'hi' }, finish_reason: 'stop' }] }]))

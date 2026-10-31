@@ -1,25 +1,20 @@
-import { test, expect, vi } from 'vitest'
-import { spawn, spawnSync, execSync } from 'node:child_process'
-import { pathToFileURL } from 'node:url'
+import { test, expect } from 'vitest'
+import { spawnSync, execSync } from 'node:child_process'
 import { writeFile, readFile, readdir, stat, cp } from 'node:fs/promises'
-import { chmodSync, copyFileSync, mkdtempSync, existsSync, writeFileSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { chmodSync, existsSync, writeFileSync, mkdirSync, readFileSync, readdirSync, realpathSync } from 'node:fs'
 import { join } from 'node:path'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { tmp, gitRepo, gitCommit } from './helpers.js'
-import { SIG } from '../src/core/evolve.js'
+import { harnessFile as harness, ROOT, listen, cli, cliAsync, tmp, tmpSync, fakeFile, spawnCli, spawnCliSync, tasksRepo, tasksEnv, clonesIn, bashCall, TWO, gitRepo, gitCommit } from './helpers.js'
 import { fakeOpenAI, toolTurn, textTurn } from './fake-openai.js'
 import { fakeAnthropic, toolReply, textReply } from './fake-anthropic.js'
 import { RunStore } from '../src/server/runs'
 import { loadPolyglot } from '../src/core/polyglot.js'
 import { notesKey, readNotes } from '../src/core/notes.js'
 
-const ROOT = process.cwd()
-const harness = (name: string) => join(ROOT, 'harnesses', `${name}.json`)
-// Fresh cwd per spawn: the CLI writes runs/ into cwd, which must not be the repo. tsx by absolute path: npx from a tmp cwd does not resolve it.
-const cli = (args: string[], env: Record<string, string> = {}, cwd = mkdtempSync(join(tmpdir(), 'lhb-cwd-'))) =>
-  Object.assign(spawnSync(join(ROOT, 'node_modules', '.bin', 'tsx'), [join(ROOT, 'src', 'cli.ts'), ...args], { cwd, encoding: 'utf8', env: { ...process.env, ...env } }), { cwd })
+const TUNED_EDIT = '{"calls":[{"name":"edit_file","args":{"path":"src/slugify.js","old":"replace(/[^a-z0-9]+/g, \'-\')","new":"replace(/[^a-z0-9]+/g, \'-\').replace(/^-+|-+$/g, \'\')"}}],"final":null}'
+const TUNED_FINAL = '{"calls":[],"final":"Fixed."}'
+const HERMES_EDIT = '<tool_call>\n{"name":"edit_file","arguments":{"path":"src/slugify.js","old":"replace(/[^a-z0-9]+/g, \'-\')","new":"replace(/[^a-z0-9]+/g, \'-\').replace(/^-+|-+$/g, \'\')"}}\n</tool_call>'
 
 test('run --json prints jsonl and exits 0 on final', async () => {
   const wd = await tmp('lhb-cli-')
@@ -45,8 +40,7 @@ test('run --json prints jsonl and exits 0 on final', async () => {
 
 test('run exits 1 on parse_failed', async () => {
   const wd = await tmp('lhb-cli-')
-  const fake = join(wd, 'fake.json')
-  await writeFile(fake, JSON.stringify([{ content: '' }, { content: '' }]))
+  const fake = fakeFile(wd, [{ content: '' }, { content: '' }])
   const r = cli(['run', harness('bare'), '--workdir', wd, '--yes', 'x'], { LHB_FAKE_BACKEND: fake })
   expect(r.status).toBe(1)
 }, 30_000)
@@ -56,9 +50,9 @@ test('demo prints PASS/FAIL per harness', async () => {
   // bare: model answers without doing anything -> check.sh fails. tuned: fixes the bug via edit_file.
   await writeFile(fake, JSON.stringify([
     { content: 'Done.' },
-    { content: '{"calls":[{"name":"edit_file","args":{"path":"src/slugify.js","old":"replace(/[^a-z0-9]+/g, \'-\')","new":"replace(/[^a-z0-9]+/g, \'-\').replace(/^-+|-+$/g, \'\')"}}],"final":null}' },
-    { content: '{"calls":[],"final":"Fixed."}' },
-    { content: '<tool_call>\n{"name":"edit_file","arguments":{"path":"src/slugify.js","old":"replace(/[^a-z0-9]+/g, \'-\')","new":"replace(/[^a-z0-9]+/g, \'-\').replace(/^-+|-+$/g, \'\')"}}\n</tool_call>' },
+    { content: TUNED_EDIT },
+    { content: TUNED_FINAL },
+    { content: HERMES_EDIT },
     { content: 'Fixed.' },
   ]))
   const r = cli(['demo'], { LHB_FAKE_BACKEND: fake })
@@ -71,8 +65,7 @@ test('demo prints PASS/FAIL per harness', async () => {
 }, 60_000)
 
 test('demo runs tuned-nothink, or tuned on a hosted API where backend.think is refused', async () => {
-  const fake = join(await tmp('lhb-cli-'), 'fake.json')
-  await writeFile(fake, JSON.stringify(Array(8).fill({ content: 'Done.' })))
+  const fake = fakeFile(await tmp('lhb-cli-'), Array(8).fill({ content: 'Done.' }))
   const local = cli(['demo'], { LHB_FAKE_BACKEND: fake })
   expect(local.stderr).toContain('=== tuned-nothink')
   const hosted = cli(['demo', '--kind', 'openai', '--base-url', 'https://api.example.com/v1', '--api-key-env', 'X_API_KEY'], { LHB_FAKE_BACKEND: fake, X_API_KEY: 'k' })
@@ -82,14 +75,13 @@ test('demo runs tuned-nothink, or tuned on a hosted API where backend.think is r
 }, 60_000)
 
 test('demo --json keeps stdout pure JSONL and prints the summary on stderr', async () => {
-  const fake = join(await tmp('lhb-cli-'), 'fake.json')
-  await writeFile(fake, JSON.stringify([
+  const fake = fakeFile(await tmp('lhb-cli-'), [
     { content: 'Done.' },
-    { content: '{"calls":[{"name":"edit_file","args":{"path":"src/slugify.js","old":"replace(/[^a-z0-9]+/g, \'-\')","new":"replace(/[^a-z0-9]+/g, \'-\').replace(/^-+|-+$/g, \'\')"}}],"final":null}' },
-    { content: '{"calls":[],"final":"Fixed."}' },
-    { content: '<tool_call>\n{"name":"edit_file","arguments":{"path":"src/slugify.js","old":"replace(/[^a-z0-9]+/g, \'-\')","new":"replace(/[^a-z0-9]+/g, \'-\').replace(/^-+|-+$/g, \'\')"}}\n</tool_call>' },
+    { content: TUNED_EDIT },
+    { content: TUNED_FINAL },
+    { content: HERMES_EDIT },
     { content: 'Fixed.' },
-  ]))
+  ])
   const r = cli(['demo', '--json'], { LHB_FAKE_BACKEND: fake })
   expect(r.status).toBe(0)
   const lines = r.stdout.trim().split('\n')
@@ -104,8 +96,7 @@ test('demo --json keeps stdout pure JSONL and prints the summary on stderr', asy
 
 test('run flags a final answer with zero tool calls', async () => {
   const wd = await tmp('lhb-cli-')
-  const fake = join(wd, 'fake.json')
-  await writeFile(fake, JSON.stringify([{ content: 'Let me look at that first.' }]))
+  const fake = fakeFile(wd, [{ content: 'Let me look at that first.' }])
   const r = cli(['run', harness('tuned-hermes'), '--workdir', wd, '--yes', 'x'], { LHB_FAKE_BACKEND: fake })
   expect(r.status).toBe(0)
   expect(r.stderr).toMatch(/! final after 0 tool calls/)
@@ -113,12 +104,11 @@ test('run flags a final answer with zero tool calls', async () => {
 
 test('the tool_call line shows control and format characters of the arguments escaped, so a command cannot redraw the terminal', async () => {
   const wd = await tmp('lhb-cli-')
-  const fake = join(wd, 'fake.json')
-  await writeFile(fake, JSON.stringify([
+  const fake = fakeFile(wd, [
     { toolCalls: [{ name: 'bash', args: { command: 'true \u009b1G \u202e \u007f' } }] },
     { toolCalls: [{ name: 'bash', args: { command: 'true ' + '\u009b'.repeat(100) } }] }, // 114 characters raw, 614 escaped
     { content: 'fin' },
-  ]))
+  ])
   const r = cli(['run', harness('bare'), '--workdir', wd, '--yes', 'x'], { LHB_FAKE_BACKEND: fake })
   expect(r.status).toBe(0)
   expect(r.stderr).toContain('[t1] tool_call bash {"command":"true \\u009b1G \\u202e \\u007f"}')
@@ -167,13 +157,13 @@ test('the output and the command of a failed loop.untilBash check reach stderr e
 }, 30_000)
 
 test('a backend error shows its message on one line and its body with the lines kept, both escaped: a server cannot rewrite the terminal either', async () => {
-  const wd = await tmp('lhb-cli-'), cwd = mkdtempSync(join(tmpdir(), 'lhb-cwd-'))
+  const wd = await tmp('lhb-cli-'), cwd = tmpSync('lhb-cwd-')
   const up = http.createServer((req, res) => { req.resume(); res.statusCode = 500; res.end('oops\u001b[2K\u202e\nsecond line\ttab\u009b1G') })
-  await new Promise<void>(done => up.listen(0, '127.0.0.1', done))
+  await listen(up)
   try {
     const url = `http://127.0.0.1:${(up.address() as AddressInfo).port}/v1`
     // spawn, not spawnSync: this process has to answer while the CLI runs
-    const p = spawn(join(ROOT, 'node_modules', '.bin', 'tsx'), [join(ROOT, 'src', 'cli.ts'), 'run', harness('bare'), '--workdir', wd, '--yes', '--kind', 'openai', '--base-url', url, 'x'], { cwd })
+    const p = spawnCli(['run', harness('bare'), '--workdir', wd, '--yes', '--kind', 'openai', '--base-url', url, 'x'], { cwd })
     let stderr = ''
     p.stderr.on('data', (b: Buffer) => { stderr += b })
     const status = await new Promise<number | null>(done => p.on('close', done))
@@ -192,9 +182,6 @@ test('run dies with a clear message when the harness has no backend object and a
   expect(r.stderr).toMatch(/invalid harness .*backend must be an object/s)
 }, 30_000)
 
-const TUNED_EDIT = '{"calls":[{"name":"edit_file","args":{"path":"src/slugify.js","old":"replace(/[^a-z0-9]+/g, \'-\')","new":"replace(/[^a-z0-9]+/g, \'-\').replace(/^-+|-+$/g, \'\')"}}],"final":null}'
-const TUNED_FINAL = '{"calls":[],"final":"Fixed."}'
-const HERMES_EDIT = '<tool_call>\n{"name":"edit_file","arguments":{"path":"src/slugify.js","old":"replace(/[^a-z0-9]+/g, \'-\')","new":"replace(/[^a-z0-9]+/g, \'-\').replace(/^-+|-+$/g, \'\')"}}\n</tool_call>'
 
 test('bench --n 2 on one harness: table, JSON with per-run reason/parseErrors/workdir', async () => {
   const wd = await tmp('lhb-cli-')
@@ -268,7 +255,7 @@ test('serve adds the shipped harnesses that are missing and keeps an edited copy
   mkdirSync(join(wd, 'harnesses'))
   const edited = JSON.stringify({ ...JSON.parse(await readFile(harness('bare'), 'utf8')), description: 'mine' })
   await writeFile(join(wd, 'harnesses', 'bare.json'), edited)
-  const p = spawn(join(ROOT, 'node_modules', '.bin', 'tsx'), [join(ROOT, 'src', 'cli.ts'), 'serve', '--port', '0', '--no-open'], { cwd: wd, stdio: ['ignore', 'ignore', 'pipe'] })
+  const p = spawnCli(['serve', '--port', '0', '--no-open'], { cwd: wd, stdio: ['ignore', 'ignore', 'pipe'] })
   try {
     await new Promise<void>(res => p.stderr!.on('data', d => String(d).includes('serving on') && res()))
     expect(readdirSync(join(wd, 'harnesses')).sort()).toEqual(readdirSync(join(ROOT, 'harnesses')).sort())
@@ -306,8 +293,8 @@ test('Ctrl-C during run keeps the trace instead of an invisible .part', async ()
   const fake = join(wd, 'fake.json')
   // --yes and a slow command: the SIGINT lands while bash runs, mid-run
   await writeFile(fake, JSON.stringify([{ toolCalls: [{ name: 'bash', args: { command: 'sleep 5' } }] }]))
-  const cwd = mkdtempSync(join(tmpdir(), 'lhb-cwd-'))
-  const p = spawn(join(ROOT, 'node_modules', '.bin', 'tsx'), [join(ROOT, 'src', 'cli.ts'), 'run', harness('bare'), '--workdir', wd, '--yes', 'x'],
+  const cwd = tmpSync('lhb-cwd-')
+  const p = spawnCli(['run', harness('bare'), '--workdir', wd, '--yes', 'x'],
     { cwd, env: { ...process.env, LHB_FAKE_BACKEND: fake } })
   await new Promise<void>(done => p.stderr.on('data', (b: Buffer) => { if (b.toString().includes('tool_call bash')) done() }))
   const code = await new Promise(done => { p.on('exit', done); p.kill('SIGINT') })
@@ -328,8 +315,7 @@ test('run dies with a clear message, not a stack, when the harness file is missi
 
 test('run starts an mcp server and reports its counts on stderr', async () => {
   const wd = await tmp('lhb-cli-')
-  const fake = join(wd, 'fake.json')
-  await writeFile(fake, JSON.stringify([{ content: 'fin' }]))
+  const fake = fakeFile(wd, [{ content: 'fin' }])
   const mcpFixture = join(ROOT, 'tests', 'fixtures', 'mcp-server.mjs')
   const harnessFile = join(wd, 'mcp-harness.json')
   await writeFile(harnessFile, JSON.stringify({
@@ -354,8 +340,8 @@ test('run starts an mcp server and reports its counts on stderr', async () => {
 // test in tests/mcp.test.ts, so this test does not see fixtures other test files start in parallel.
 test('Ctrl-C during bench with a live mcp server leaves the PASS table intact and no process behind', async () => {
   const wd = await tmp('lhb-cli-')
-  const fake = join(wd, 'fake.json'); const out = join(wd, 'b.json')
-  await writeFile(fake, JSON.stringify([{ toolCalls: [{ name: 'stall', args: {} }] }]))
+  const out = join(wd, 'b.json')
+  const fake = fakeFile(wd, [{ toolCalls: [{ name: 'stall', args: {} }] }])
   const mcpFixture = join(ROOT, 'tests', 'fixtures', 'mcp-server.mjs')
   const marker = `lhb-bench-mcp-${process.pid}-${Date.now()}`
   const harnessFile = join(wd, 'mcp-harness.json')
@@ -372,10 +358,9 @@ test('Ctrl-C during bench with a live mcp server leaves the PASS table intact an
   // No shell: a `sh -c` around pgrep carries the marker in its own command line, and Linux's pgrep,
   // unlike macOS's, does not leave its ancestors out — it would count that shell.
   const count = () => spawnSync('pgrep', ['-f', marker]).stdout.toString().split('\n').filter(Boolean).length
-  const cwd = mkdtempSync(join(tmpdir(), 'lhb-cwd-'))
+  const cwd = tmpSync('lhb-cwd-')
   // Piped stdout (not inherited) so the async-flush path in bench's finish() is the one under test.
-  const p = spawn(join(ROOT, 'node_modules', '.bin', 'tsx'),
-    [join(ROOT, 'src', 'cli.ts'), 'bench', '--n', '1', '--out', out, harnessFile],
+  const p = spawnCli(['bench', '--n', '1', '--out', out, harnessFile],
     { cwd, env: { ...process.env, LHB_FAKE_BACKEND: fake }, stdio: ['ignore', 'pipe', 'pipe'] })
   // If an assertion below throws, or the stderr wait never resolves and vitest's timeout fires,
   // this must still not leak: kill the spawned tsx process, and the marked mcp child directly
@@ -418,8 +403,8 @@ test('SIGINT to bench takes a long command the model started with it', async () 
     context: { maxToolOutputChars: 1000, budgetTokens: 0 }, loop: { maxTurns: 5 },
   }))
   const count = () => spawnSync('pgrep', ['-f', `sleep ${secs}`]).stdout.toString().split('\n').filter(Boolean).length
-  const p = spawn(join(ROOT, 'node_modules', '.bin', 'tsx'), [join(ROOT, 'src', 'cli.ts'), 'bench', '--n', '1', '--out', out, harnessFile],
-    { cwd: mkdtempSync(join(tmpdir(), 'lhb-cwd-')), env: { ...process.env, LHB_FAKE_BACKEND: fake }, stdio: ['ignore', 'pipe', 'pipe'] })
+  const p = spawnCli(['bench', '--n', '1', '--out', out, harnessFile],
+    { cwd: tmpSync('lhb-cwd-'), env: { ...process.env, LHB_FAKE_BACKEND: fake }, stdio: ['ignore', 'pipe', 'pipe'] })
   try {
     p.stdout.resume(); p.stderr.resume()
     const deadline1 = Date.now() + 10_000
@@ -440,8 +425,8 @@ test('SIGINT to bench takes a long command the model started with it', async () 
 // model, and how many tool results came back as errors. Measured on a real server child, not a mock.
 test('bench with an mcp server records toolChars/toolErrors and prints the tool columns', async () => {
   const wd = await tmp('lhb-cli-')
-  const fake = join(wd, 'fake.json'); const out = join(wd, 'b.json')
-  await writeFile(fake, JSON.stringify([{ toolCalls: [{ name: 'boom', args: {} }] }, { content: 'Done.' }]))
+  const out = join(wd, 'b.json')
+  const fake = fakeFile(wd, [{ toolCalls: [{ name: 'boom', args: {} }] }, { content: 'Done.' }])
   const harnessFile = join(wd, 'mcp-harness.json')
   await writeFile(harnessFile, JSON.stringify({
     name: 'mcp-bench',
@@ -466,8 +451,8 @@ test('bench with an mcp server records toolChars/toolErrors and prints the tool 
 
 test('bench --task pool --size 2 --max-turns 7: a pool workdir, the verdict on it, and all three in the JSON', async () => {
   const wd = await tmp('lhb-cli-')
-  const fake = join(wd, 'fake.json'); const out = join(wd, 'p.json')
-  await writeFile(fake, JSON.stringify([{ content: '{"calls":[],"final":"nothing fixed"}' }]))
+  const out = join(wd, 'p.json')
+  const fake = fakeFile(wd, [{ content: '{"calls":[],"final":"nothing fixed"}' }])
   const r = cli(['bench', '--n', '1', '--task', 'pool', '--size', '2', '--max-turns', '7', '--out', out, harness('tuned')], { LHB_FAKE_BACKEND: fake })
   expect(r.status).toBe(0)
   const j = JSON.parse(await readFile(out, 'utf8'))
@@ -520,8 +505,8 @@ test('bench --task polyglot: a model that writes the proof gets PASS and all its
 
 test.skipIf(process.getuid?.() === 0)('bench --task polyglot: a run that throws before its check still carries tests {passed: 0, total}', async () => {
   const wd = await tmp('lhb-cli-')
-  const fake = join(wd, 'fake.json'); const out = join(wd, 't.json')
-  await writeFile(fake, JSON.stringify([]))
+  const out = join(wd, 't.json')
+  const fake = fakeFile(wd, [])
   // prepare makes its workdir in the temp dir: one that cannot be written to makes prepare throw (tsx keeps its own cache dir in it, made first).
   const ro = join(wd, 'ro'); mkdirSync(join(ro, `tsx-${process.getuid?.()}`), { recursive: true }); chmodSync(ro, 0o500)
   const r = cli(['bench', '--n', '1', '--task', 'polyglot', '--size', '1', '--out', out, harness('tuned')], { LHB_FAKE_BACKEND: fake, TMPDIR: ro })
@@ -535,8 +520,8 @@ test.skipIf(process.getuid?.() === 0)('bench --task polyglot: a run that throws 
 
 test('bench without --task is the slug task, and says so', async () => {
   const wd = await tmp('lhb-cli-')
-  const fake = join(wd, 'fake.json'); const out = join(wd, 's.json')
-  await writeFile(fake, JSON.stringify([{ content: '{"calls":[],"final":"nothing fixed"}' }]))
+  const out = join(wd, 's.json')
+  const fake = fakeFile(wd, [{ content: '{"calls":[],"final":"nothing fixed"}' }])
   const r = cli(['bench', '--n', '1', '--out', out, harness('tuned')], { LHB_FAKE_BACKEND: fake })
   expect(r.status).toBe(0)
   const j = JSON.parse(await readFile(out, 'utf8'))
@@ -589,8 +574,8 @@ test('demo: the check runs with the base environment, not ours', async () => {
 }, 60_000)
 
 test('a harness with tools.bashEnv says on stderr which names bash gets, never the values', async () => {
-  const wd = await tmp('lhb-cli-'), fake = join(wd, 'fake.json')
-  await writeFile(fake, JSON.stringify([{ content: 'fin' }]))
+  const wd = await tmp('lhb-cli-')
+  const fake = fakeFile(wd, [{ content: 'fin' }])
   const plain = JSON.parse(await readFile(harness('bare'), 'utf8'))
   const file = join(wd, 'env.json')
   await writeFile(file, JSON.stringify({ ...plain, tools: { ...plain.tools, bashEnv: ['LHB_NOTE_SET', 'LHB_NOTE_UNSET'] } }))
@@ -612,7 +597,7 @@ test('bench rejects a task/size/max-turns combination that means nothing, with u
 }, 60_000)
 
 test('replay sends the recorded request of one turn --n times and counts the distinct replies against the recorded one', async () => {
-  const cwd = mkdtempSync(join(tmpdir(), 'lhb-cwd-'))
+  const cwd = tmpSync('lhb-cwd-')
   const raw = (content: string) => ({ choices: [{ message: { content } }] })
   execSync('mkdir runs', { cwd })
   await writeFile(join(cwd, 'runs', 'abc12345.jsonl'), [
@@ -620,8 +605,7 @@ test('replay sends the recorded request of one turn --n times and counts the dis
     { seq: 0, turn: 1, type: 'llm_request', payload: { model: 'm', messages: [], temperature: 0.2, stream: true } },
     { seq: 1, turn: 1, type: 'llm_response', raw: raw('A'), content: 'A', latencyMs: 1 },
   ].map(l => JSON.stringify(l)).join('\n') + '\n')
-  const fake = join(cwd, 'fake.json')
-  await writeFile(fake, JSON.stringify([{ raw: raw('A'), usage: { promptTokens: 7, completionTokens: 1 } }, { raw: raw('B') }, { raw: raw('A') }]))
+  const fake = fakeFile(cwd, [{ raw: raw('A'), usage: { promptTokens: 7, completionTokens: 1 } }, { raw: raw('B') }, { raw: raw('A') }])
   const args = ['replay', 'abc12345', '--turn', '1', '--n', '3', '--base-url', 'http://x/v1', '--kind', 'openai']
   const r = cli([...args, '--temperature', '1', '--json'], { LHB_FAKE_BACKEND: fake }, cwd)
   expect(r.status).toBe(0)
@@ -645,8 +629,7 @@ test('run --answer-schema sends the schema with the request, and exits 0 only on
   const wd = await tmp('lhb-cli-')
   const schema = { type: 'object', properties: { '1': { type: 'string' } }, required: ['1'] }
   await writeFile(join(wd, 'schema.json'), JSON.stringify(schema))
-  const fake = join(wd, 'fake.json')
-  await writeFile(fake, JSON.stringify([{ content: '{"1":"KEEP"}' }]))
+  const fake = fakeFile(wd, [{ content: '{"1":"KEEP"}' }])
   const ok = cli(['run', harness('curator-judge'), '--workdir', wd, '--json', '--answer-schema', join(wd, 'schema.json'), 'judge'], { LHB_FAKE_BACKEND: fake })
   expect(ok.status).toBe(0)
   const events = ok.stdout.trim().split('\n').map(l => JSON.parse(l))
@@ -664,8 +647,7 @@ test('run --answer-schema dies before any request on a harness that would not se
   await writeFile(join(wd, 'schema.json'), '{"type":"object"}')
   await writeFile(join(wd, 'array.json'), '[]')
   await writeFile(join(wd, 'broken.json'), '{')
-  const fake = join(wd, 'fake.json')
-  await writeFile(fake, JSON.stringify([{ content: '{}' }]))
+  const fake = fakeFile(wd, [{ content: '{}' }])
   const cases: [string, string, RegExp][] = [
     ['bare', 'schema.json', /--answer-schema needs a harness that sends it/],
     ['curator-judge', 'array.json', /must hold a JSON object/],
@@ -687,9 +669,9 @@ test('proxy records until SIGINT or SIGTERM, then exits 0 with done appended', a
       req.resume()
       req.on('end', () => { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: 'hi' }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`) })
     })
-    await new Promise<void>(r => up.listen(0, '127.0.0.1', r))
-    const cwd = mkdtempSync(join(tmpdir(), 'lhb-cwd-'))
-    const p = spawn(join(ROOT, 'node_modules', '.bin', 'tsx'), [join(ROOT, 'src', 'cli.ts'), 'proxy', '--upstream', `http://127.0.0.1:${(up.address() as { port: number }).port}`, '--port', '0', '--name', 'cli'], { cwd })
+    await listen(up)
+    const cwd = tmpSync('lhb-cwd-')
+    const p = spawnCli(['proxy', '--upstream', `http://127.0.0.1:${(up.address() as { port: number }).port}`, '--port', '0', '--name', 'cli'], { cwd })
     let err = ''
     const port = await new Promise<number>(done => p.stderr.on('data', (b: Buffer) => { err += b; const m = /proxy on http:\/\/127\.0\.0\.1:(\d+)\/v1/.exec(err); if (m) done(Number(m[1])) }))
     const r = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, { method: 'POST', body: JSON.stringify({ model: 'm', stream: true, messages: [{ role: 'user', content: 'hello' }] }) })
@@ -709,9 +691,9 @@ test('proxy records until SIGINT or SIGTERM, then exits 0 with done appended', a
 
 test('a second SIGINT while proxy is stopping force-exits 130, not the graceful 0', async () => {
   const up = http.createServer(req => { req.resume() }) // accepts, never answers: every request stays in flight until aborted
-  await new Promise<void>(r => up.listen(0, '127.0.0.1', r))
-  const cwd = mkdtempSync(join(tmpdir(), 'lhb-cwd-'))
-  const p = spawn(join(ROOT, 'node_modules', '.bin', 'tsx'), [join(ROOT, 'src', 'cli.ts'), 'proxy', '--upstream', `http://127.0.0.1:${(up.address() as { port: number }).port}`, '--port', '0', '--name', 'cli'], { cwd })
+  await listen(up)
+  const cwd = tmpSync('lhb-cwd-')
+  const p = spawnCli(['proxy', '--upstream', `http://127.0.0.1:${(up.address() as { port: number }).port}`, '--port', '0', '--name', 'cli'], { cwd })
   let err = ''
   const port = await new Promise<number>(done => p.stderr.on('data', (b: Buffer) => { err += b; const m = /proxy on http:\/\/127\.0\.0\.1:(\d+)\/v1/.exec(err); if (m) done(Number(m[1])) }))
   // Many requests of the same session: on the first signal, aborting and recording every one of
@@ -746,8 +728,7 @@ test('replay reads a trace whose last line is half-written', async () => {
     JSON.stringify({ seq: 1, turn: 1, ts: 2, type: 'llm_response', raw: reply, content: 'hi', latencyMs: 1 }),
     '{"seq":2,"turn":2,"ts":',
   ].join('\n'))
-  const fake = join(wd, 'fake.json')
-  await writeFile(fake, JSON.stringify([{ content: 'hi', raw: reply }]))
+  const fake = fakeFile(wd, [{ content: 'hi', raw: reply }])
   const r = cli(['replay', trace, '--turn', '1', '--base-url', 'http://x', '--kind', 'openai', '--n', '1'], { LHB_FAKE_BACKEND: fake })
   expect(r.status).toBe(0); expect(r.stdout).toMatch(/1x same as recorded/)
 }, 30_000)
@@ -782,7 +763,7 @@ function analyzeFixture(dir: string, id: string, done = true) {
 }
 
 test('analyze <run-id> prints one row: stub t3 ate the read, first edit t2', () => {
-  const cwd = mkdtempSync(join(tmpdir(), 'lhb-an-')); mkdirSync(join(cwd, 'runs')); analyzeFixture(join(cwd, 'runs'), 'abcd0001')
+  const cwd = tmpSync('lhb-an-'); mkdirSync(join(cwd, 'runs')); analyzeFixture(join(cwd, 'runs'), 'abcd0001')
   const r = cli(['analyze', 'abcd0001'], {}, cwd)
   expect(r.status).toBe(0)
   const [head, row] = r.stdout.trim().split('\n')
@@ -791,7 +772,7 @@ test('analyze <run-id> prints one row: stub t3 ate the read, first edit t2', () 
 })
 
 test('analyze <bench.json> reads verdicts from the JSON and traces next to it; a run with no trace is a row', () => {
-  const cwd = mkdtempSync(join(tmpdir(), 'lhb-an-')); const runs = join(cwd, 'runs'); mkdirSync(runs); analyzeFixture(runs, 'abcd0002')
+  const cwd = tmpSync('lhb-an-'); const runs = join(cwd, 'runs'); mkdirSync(runs); analyzeFixture(runs, 'abcd0002')
   const run = (trace?: string) => ({ round: 1, verdict: 'PASS', reason: 'final', turns: 3, toolCalls: 2, parseErrors: 0, ms: 1, workdir: '/w', ...(trace ? { trace } : {}) })
   writeFileSync(join(runs, 'bench-x.json'), JSON.stringify({ version: 1, date: '2026-10-10T00:00:00Z', task: 't', n: 2, timeoutS: 1, complete: true,
     harnesses: [{ name: 'tuned-budget', config: {}, pass: 2, reasons: {}, median: { turns: 3, toolCalls: 2, ms: 1 }, runs: [run('abcd0002'), run()] }] }))
@@ -803,7 +784,7 @@ test('analyze <bench.json> reads verdicts from the JSON and traces next to it; a
 })
 
 test('analyze takes a killed run by its .part path; --json gives the full analysis', () => {
-  const cwd = mkdtempSync(join(tmpdir(), 'lhb-an-')); mkdirSync(join(cwd, 'runs')); analyzeFixture(join(cwd, 'runs'), 'abcd0003', false)
+  const cwd = tmpSync('lhb-an-'); mkdirSync(join(cwd, 'runs')); analyzeFixture(join(cwd, 'runs'), 'abcd0003', false)
   const r = cli(['analyze', 'runs/abcd0003.jsonl.part', '--json'], {}, cwd)
   expect(r.status).toBe(0)
   const [row] = JSON.parse(r.stdout)
@@ -820,7 +801,7 @@ test('analyze with no argument or an unknown id exits 2 with a message', () => {
 
 // Final review, Important 3: `bench --out elsewhere/b.json` writes the JSON there but the traces to runs/.
 test('analyze finds the traces of a bench JSON written with --out outside runs/', () => {
-  const cwd = mkdtempSync(join(tmpdir(), 'lhb-an-')); mkdirSync(join(cwd, 'runs')); mkdirSync(join(cwd, 'results')); analyzeFixture(join(cwd, 'runs'), 'abcd0004')
+  const cwd = tmpSync('lhb-an-'); mkdirSync(join(cwd, 'runs')); mkdirSync(join(cwd, 'results')); analyzeFixture(join(cwd, 'runs'), 'abcd0004')
   const run = { round: 1, verdict: 'PASS', reason: 'final', turns: 3, toolCalls: 2, parseErrors: 0, ms: 1, workdir: '/w', trace: 'abcd0004' }
   writeFileSync(join(cwd, 'results', 'b.json'), JSON.stringify({ version: 1, date: '2026-10-10T00:00:00Z', task: 't', n: 1, timeoutS: 1, complete: true,
     harnesses: [{ name: 'h', config: {}, pass: 1, reasons: {}, median: { turns: 3, toolCalls: 2, ms: 1 }, runs: [run] }] }))
@@ -934,8 +915,8 @@ test('argument errors name the option, show the usage, exit 2 and print no stack
 }, 120_000)
 
 test('serve --port 0 listens on a free port and says which', async () => {
-  const cwd = mkdtempSync(join(tmpdir(), 'lhb-cwd-'))
-  const p = spawn(join(ROOT, 'node_modules', '.bin', 'tsx'), [join(ROOT, 'src', 'cli.ts'), 'serve', '--no-open', '--port', '0'], { cwd })
+  const cwd = tmpSync('lhb-cwd-')
+  const p = spawnCli(['serve', '--no-open', '--port', '0'], { cwd })
   try {
     const port = await new Promise<number>((done, fail) => {
       let err = ''
@@ -959,8 +940,8 @@ function inTerminal(steps: object[], args: string[], env: Record<string, string>
 }
 
 test.skipIf(!hasPython)('in a terminal, Ctrl-C while the model works keeps the trace and exits 130', async () => {
-  const wd = await tmp('lhb-cli-'), cwd = mkdtempSync(join(tmpdir(), 'lhb-cwd-')), fake = join(wd, 'fake.json')
-  await writeFile(fake, JSON.stringify([{ toolCalls: [{ name: 'bash', args: { command: 'sleep 5' } }] }, { content: 'fin' }]))
+  const wd = await tmp('lhb-cli-'), cwd = tmpSync('lhb-cwd-')
+  const fake = fakeFile(wd, [{ toolCalls: [{ name: 'bash', args: { command: 'sleep 5' } }] }, { content: 'fin' }])
   const r = inTerminal([{ after: '[y/N]', send: 'y\r' }, { delay: 1, send: '\u0003' }], ['run', harness('bare'), '--workdir', wd, 'x'], { LHB_FAKE_BACKEND: fake }, cwd)
   expect(r.code, r.out).toBe(130)
   expect(r.out).not.toContain('done: final')
@@ -968,8 +949,8 @@ test.skipIf(!hasPython)('in a terminal, Ctrl-C while the model works keeps the t
 }, 30_000)
 
 test.skipIf(!hasPython)('in a terminal, Ctrl-C at the approval prompt exits 130 with no stack and keeps the trace', async () => {
-  const wd = await tmp('lhb-cli-'), cwd = mkdtempSync(join(tmpdir(), 'lhb-cwd-')), fake = join(wd, 'fake.json')
-  await writeFile(fake, JSON.stringify([{ toolCalls: [{ name: 'bash', args: { command: 'echo hi' } }] }]))
+  const wd = await tmp('lhb-cli-'), cwd = tmpSync('lhb-cwd-')
+  const fake = fakeFile(wd, [{ toolCalls: [{ name: 'bash', args: { command: 'echo hi' } }] }])
   const r = inTerminal([{ after: '[y/N]', send: '\u0003' }], ['run', harness('bare'), '--workdir', wd, 'x'], { LHB_FAKE_BACKEND: fake }, cwd)
   expect(r.code, r.out).toBe(130)
   expect(r.out).toContain('run bash: "echo hi"')
@@ -978,8 +959,8 @@ test.skipIf(!hasPython)('in a terminal, Ctrl-C at the approval prompt exits 130 
 }, 30_000)
 
 test.skipIf(!hasPython)('in a terminal, answering n denies the call: it does not run, and the run goes on to its end', async () => {
-  const wd = await tmp('lhb-cli-'), cwd = mkdtempSync(join(tmpdir(), 'lhb-cwd-')), fake = join(wd, 'fake.json')
-  await writeFile(fake, JSON.stringify([{ toolCalls: [{ name: 'bash', args: { command: 'touch ran.txt' } }] }, { content: 'fin' }]))
+  const wd = await tmp('lhb-cli-'), cwd = tmpSync('lhb-cwd-')
+  const fake = fakeFile(wd, [{ toolCalls: [{ name: 'bash', args: { command: 'touch ran.txt' } }] }, { content: 'fin' }])
   const r = inTerminal([{ after: '[y/N]', send: 'n\r' }], ['run', harness('bare'), '--workdir', wd, 'x'], { LHB_FAKE_BACKEND: fake }, cwd)
   expect(r.code, r.out).toBe(0)
   expect(r.out).toContain('denied by user')
@@ -991,12 +972,12 @@ test.skipIf(!hasPython)('in a terminal, answering n denies the call: it does not
 // Why one readline for the whole run: with one per question, a line typed while the model works waits in the
 // terminal and answers the next question, which its typist has not seen yet.
 test.skipIf(!hasPython)('in a terminal, a line typed while the model works does not answer the next question', async () => {
-  const wd = await tmp('lhb-cli-'), cwd = mkdtempSync(join(tmpdir(), 'lhb-cwd-')), fake = join(wd, 'fake.json')
-  await writeFile(fake, JSON.stringify([
+  const wd = await tmp('lhb-cli-'), cwd = tmpSync('lhb-cwd-')
+  const fake = fakeFile(wd, [
     { toolCalls: [{ name: 'bash', args: { command: 'sleep 2' } }] },
     { toolCalls: [{ name: 'bash', args: { command: 'touch second.txt' } }] },
     { content: 'fin' },
-  ]))
+  ])
   const r = inTerminal([
     { after: '[y/N]', send: 'y\r' },                            // the first question: run sleep 2
     { delay: 0.7, send: 'y\r' },                                // typed ahead, while it runs
@@ -1008,8 +989,8 @@ test.skipIf(!hasPython)('in a terminal, a line typed while the model works does 
 }, 30_000)
 
 test.skipIf(!hasPython)('in a terminal, Ctrl-D at the approval prompt ends the run like Ctrl-C: exit 130, the trace kept, no stack', async () => {
-  const wd = await tmp('lhb-cli-'), cwd = mkdtempSync(join(tmpdir(), 'lhb-cwd-')), fake = join(wd, 'fake.json')
-  await writeFile(fake, JSON.stringify([{ toolCalls: [{ name: 'bash', args: { command: 'touch ran.txt' } }] }]))
+  const wd = await tmp('lhb-cli-'), cwd = tmpSync('lhb-cwd-')
+  const fake = fakeFile(wd, [{ toolCalls: [{ name: 'bash', args: { command: 'touch ran.txt' } }] }])
   const r = inTerminal([{ after: '[y/N]', send: '\u0004' }], ['run', harness('bare'), '--workdir', wd, 'x'], { LHB_FAKE_BACKEND: fake }, cwd)
   expect(r.code, r.out).toBe(130)
   expect(r.out).not.toMatch(/AbortError|ERR_USE_AFTER_CLOSE|^\s+at /m)
@@ -1018,12 +999,12 @@ test.skipIf(!hasPython)('in a terminal, Ctrl-D at the approval prompt ends the r
 }, 30_000)
 
 test.skipIf(!hasPython)('in a terminal, Ctrl-D while the model works closes the input: the next question ends the run like Ctrl-C', async () => {
-  const wd = await tmp('lhb-cli-'), cwd = mkdtempSync(join(tmpdir(), 'lhb-cwd-')), fake = join(wd, 'fake.json')
-  await writeFile(fake, JSON.stringify([
+  const wd = await tmp('lhb-cli-'), cwd = tmpSync('lhb-cwd-')
+  const fake = fakeFile(wd, [
     { toolCalls: [{ name: 'bash', args: { command: 'sleep 2' } }] },
     { toolCalls: [{ name: 'bash', args: { command: 'touch second.txt' } }] },
     { content: 'fin' },
-  ]))
+  ])
   const r = inTerminal([{ after: '[y/N]', send: 'y\r' }, { delay: 0.7, send: '\u0004' }], ['run', harness('bare'), '--workdir', wd, 'x'], { LHB_FAKE_BACKEND: fake }, cwd)
   expect(r.code, r.out).toBe(130)
   expect(r.out).not.toMatch(/AbortError|ERR_USE_AFTER_CLOSE|^\s+at /m)
@@ -1034,7 +1015,7 @@ test.skipIf(!hasPython)('in a terminal, Ctrl-D while the model works closes the 
 // ESC [ 8 m hides everything after it until an attribute reset: if what the model read were printed as it is, the
 // question that follows could be written in the screen's own colour.
 test.skipIf(!hasPython)('in a terminal, a file the model read cannot hide the question: its escapes are shown as text, and the question starts with an attribute reset', async () => {
-  const wd = await tmp('lhb-cli-'), cwd = mkdtempSync(join(tmpdir(), 'lhb-cwd-')), fake = join(wd, 'fake.json')
+  const wd = await tmp('lhb-cli-'), cwd = tmpSync('lhb-cwd-'), fake = join(wd, 'fake.json')
   await writeFile(join(wd, 'evil.txt'), '\u001b[8mhidden')
   await writeFile(fake, JSON.stringify([
     { toolCalls: [{ name: 'read_file', args: { path: 'evil.txt' } }] },
@@ -1052,8 +1033,8 @@ test.skipIf(!hasPython)('in a terminal, a file the model read cannot hide the qu
 }, 30_000)
 
 test.skipIf(!hasPython)('in a terminal, the live text is escaped too: a reply streamed in cannot send a control sequence', async () => {
-  const wd = await tmp('lhb-cli-'), cwd = mkdtempSync(join(tmpdir(), 'lhb-cwd-')), fake = join(wd, 'fake.json')
-  await writeFile(fake, JSON.stringify([{ content: 'fin', deltas: [{ reasoning: 'hm\u001b[8m' }, { content: 'fi\u001b[2K' }, { content: 'n\u009b1G\u202e\nline two\ttab' }] }]))
+  const wd = await tmp('lhb-cli-'), cwd = tmpSync('lhb-cwd-')
+  const fake = fakeFile(wd, [{ content: 'fin', deltas: [{ reasoning: 'hm\u001b[8m' }, { content: 'fi\u001b[2K' }, { content: 'n\u009b1G\u202e\nline two\ttab' }] }])
   const r = inTerminal([], ['run', harness('bare'), '--workdir', wd, 'x'], { LHB_FAKE_BACKEND: fake }, cwd)
   expect(r.code, r.out).toBe(0)
   const out = r.out.replaceAll('\r\n', '\n') // the terminal turns every newline into a carriage return and a newline
@@ -1075,8 +1056,8 @@ function refusedCleanly(r: { status: number | null; stderr: string; cwd: string 
 }
 
 test('run without --yes and without a terminal stops before the trace and the first request when it may ask', async () => {
-  const wd = await tmp('lhb-cli-'), fake = join(wd, 'fake.json')
-  await writeFile(fake, JSON.stringify([]))
+  const wd = await tmp('lhb-cli-')
+  const fake = fakeFile(wd, [])
   const plain = JSON.parse(await readFile(harness('bare'), 'utf8'))
   const untilOnly = join(wd, 'until.json'), mcpOnly = join(wd, 'mcp.json')
   await writeFile(untilOnly, JSON.stringify({ ...plain, tools: { enabled: ['read_file'], approveBash: false }, loop: { ...plain.loop, untilBash: 'true' } }))
@@ -1084,17 +1065,17 @@ test('run without --yes and without a terminal stops before the trace and the fi
   // stdin an empty pipe (EOF), as spawnSync gives it
   for (const h of [harness('bare'), untilOnly, mcpOnly]) refusedCleanly(cli(['run', h, '--workdir', wd, 'x'], { LHB_FAKE_BACKEND: fake }))
   // stdin /dev/null
-  const cwd = mkdtempSync(join(tmpdir(), 'lhb-cwd-'))
-  const ignored = spawnSync(join(ROOT, 'node_modules', '.bin', 'tsx'), [join(ROOT, 'src', 'cli.ts'), 'run', harness('bare'), '--workdir', wd, 'x'],
+  const cwd = tmpSync('lhb-cwd-')
+  const ignored = spawnCliSync(['run', harness('bare'), '--workdir', wd, 'x'],
     { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, LHB_FAKE_BACKEND: fake } })
   refusedCleanly({ ...ignored, cwd })
 }, 60_000)
 
 test('run without a terminal whose stdin stays open does not wait for an answer that cannot come', async () => {
-  const wd = await tmp('lhb-cli-'), fake = join(wd, 'fake.json')
-  await writeFile(fake, JSON.stringify([]))
-  const cwd = mkdtempSync(join(tmpdir(), 'lhb-cwd-'))
-  const p = spawn(join(ROOT, 'node_modules', '.bin', 'tsx'), [join(ROOT, 'src', 'cli.ts'), 'run', harness('bare'), '--workdir', wd, 'x'],
+  const wd = await tmp('lhb-cli-')
+  const fake = fakeFile(wd, [])
+  const cwd = tmpSync('lhb-cwd-')
+  const p = spawnCli(['run', harness('bare'), '--workdir', wd, 'x'],
     { cwd, env: { ...process.env, LHB_FAKE_BACKEND: fake } })
   try {
     let stderr = ''
@@ -1110,21 +1091,13 @@ test('run without a terminal whose stdin stays open does not wait for an answer 
 }, 30_000)
 
 test('run without a terminal goes on when the harness cannot ask (curator-judge: approveBash without bash)', async () => {
-  const wd = await tmp('lhb-cli-'), fake = join(wd, 'fake.json')
-  await writeFile(fake, JSON.stringify([{ content: 'fin' }]))
+  const wd = await tmp('lhb-cli-')
+  const fake = fakeFile(wd, [{ content: 'fin' }])
   const r = cli(['run', harness('curator-judge'), '--workdir', wd, 'judge'], { LHB_FAKE_BACKEND: fake })
   expect(r.status).toBe(0)
   expect(r.stderr).not.toContain('stdin is not a terminal')
 }, 30_000)
 
-/** cli() for a test whose server lives in this process: spawnSync would block the server the CLI talks to. */
-const cliAsync = (args: string[], env: Record<string, string> = {}, cwd = mkdtempSync(join(tmpdir(), 'lhb-cwd-'))) =>
-  new Promise<{ status: number | null; stdout: string; stderr: string; cwd: string }>(resolve => {
-    const p = spawn(join(ROOT, 'node_modules', '.bin', 'tsx'), [join(ROOT, 'src', 'cli.ts'), ...args], { cwd, env: { ...process.env, ...env } })
-    let stdout = '', stderr = ''
-    p.stdout.on('data', d => (stdout += d)); p.stderr.on('data', d => (stderr += d))
-    p.on('close', status => resolve({ status, stdout, stderr, cwd }))
-  })
 const KEY_NAME = 'LHB_CLI_TEST_API_KEY', KEY = 'sk-or-v1-' + 'c4'.repeat(16), MARK = `[redacted: ${KEY_NAME}]`
 /** `bare` on a hosted backend whose bash gets the key: the run the key could leak from. */
 async function keyedHarness(dir: string, baseUrl: string) {
@@ -1197,7 +1170,7 @@ test('bench against the Anthropic API: preflight asks the model, the window is i
 
 test('bench against the Anthropic API: an error the server words with a terminal escape is printed escaped', async () => {
   const srv = http.createServer((_req, res) => { res.writeHead(400, { 'content-type': 'application/json' }); res.end(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'bad \x1b[31mred' } })) })
-  await new Promise<void>(r => srv.listen(0, '127.0.0.1', r))
+  await listen(srv)
   try {
     const wd = await tmp('lhb-cli-'), file = await claudeHarness(wd, `http://127.0.0.1:${(srv.address() as AddressInfo).port}`)
     const r = await cliAsync(['bench', '--n', '1', '--out', join(wd, 'b.json'), file], { [KEY_NAME]: KEY })
@@ -1329,7 +1302,7 @@ test('a server\'s junk — escape codes as token counts, a number as a tool name
 test('replay --api-key-env sends the key to the server it names, says so on stderr, and refuses a key it cannot send', async () => {
   const api = await fakeOpenAI([textTurn('A'), textTurn('A')])
   try {
-    const cwd = mkdtempSync(join(tmpdir(), 'lhb-cwd-')); execSync('mkdir runs', { cwd })
+    const cwd = tmpSync('lhb-cwd-'); execSync('mkdir runs', { cwd })
     await writeFile(join(cwd, 'runs', 'abc12345.jsonl'), [
       { meta: { id: 'abc12345' } },
       { seq: 0, turn: 1, type: 'llm_request', payload: { model: 'fake/model', messages: [], temperature: 0.2, stream: true } },
@@ -1376,7 +1349,7 @@ test('the done line carries the run cost when the harness has a price, and no $ 
 test('bench refuses a harness whose native tool calls the model does not take, before any run', async () => {
   const listed = { data: [{ id: 'fake/model', supported_parameters: ['max_tokens'] }] }
   const srv = http.createServer((_req, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(listed)) })
-  await new Promise<void>(r => srv.listen(0, '127.0.0.1', r))
+  await listen(srv)
   try {
     const wd = await tmp('lhb-cli-'), file = await keyedHarness(wd, `http://127.0.0.1:${(srv.address() as AddressInfo).port}/v1`)
     const r = await cliAsync(['bench', '--n', '1', '--out', join(wd, 'b.json'), file], { [KEY_NAME]: KEY })
@@ -1394,8 +1367,7 @@ const withNotesOn = async (dir: string) => {
 
 test('run with notes on: writes the note to the notes dir, outside the project, and says so', async () => {
   const wd = await tmp('lhb-cli-'), cwd = await tmp('lhb-cwd-'), nd = await tmp('lhb-notes-')
-  const fake = join(wd, 'fake.json')
-  await writeFile(fake, JSON.stringify([{ content: 'done' }, { content: JSON.stringify({ notes: ['tests run with npm test'] }) }]))
+  const fake = fakeFile(wd, [{ content: 'done' }, { content: JSON.stringify({ notes: ['tests run with npm test'] }) }])
   const r = cli(['run', await withNotesOn(cwd), '--workdir', wd, '--yes', 'x'], { LHB_FAKE_BACKEND: fake, LHB_NOTES_DIR: nd }, cwd)
   expect(r.status).toBe(0)
   const file = join(nd, `${await notesKey(wd)}.jsonl`)
@@ -1406,8 +1378,7 @@ test('run with notes on: writes the note to the notes dir, outside the project, 
 
 test('run with notes on from the project root: a notes dir inside the workdir is refused', async () => {
   const wd = await tmp('lhb-cli-')
-  const fake = join(wd, 'fake.json')
-  await writeFile(fake, JSON.stringify([{ content: 'done' }]))
+  const fake = fakeFile(wd, [{ content: 'done' }])
   const r = cli(['run', await withNotesOn(wd), '--workdir', wd, '--yes', 'x'], { LHB_FAKE_BACKEND: fake, LHB_NOTES_DIR: join(wd, 'runs', 'notes') }, wd)
   expect(r.status).toBe(0)
   expect(r.stderr).toContain('is inside the workdir')
@@ -1418,8 +1389,7 @@ test('run with notes on from the project root: a notes dir inside the workdir is
 
 test('run prints the notes count once', async () => {
   const wd = await tmp('lhb-cli-'), cwd = await tmp('lhb-cwd-'), nd = await tmp('lhb-notes-')
-  const fake = join(wd, 'fake.json')
-  await writeFile(fake, JSON.stringify([{ content: 'done' }, { content: JSON.stringify({ notes: [] }) }]))
+  const fake = fakeFile(wd, [{ content: 'done' }, { content: JSON.stringify({ notes: [] }) }])
   await writeFile(join(nd, `${await notesKey(wd)}.jsonl`), JSON.stringify({ id: 'a', ts: 1, author: 'model', text: 'old fact' }) + '\n')
   const r = cli(['run', await withNotesOn(cwd), '--workdir', wd, '--yes', 'x'], { LHB_FAKE_BACKEND: fake, LHB_NOTES_DIR: nd }, cwd)
   expect(r.stderr.match(/notes: \d+ loaded/g)).toEqual(['notes: 1 loaded'])
@@ -1428,8 +1398,8 @@ test('run prints the notes count once', async () => {
 test("bench: a run's tokens are the sum of its replies' usage, firstPromptTokens the first prompt", async () => {
   const cwd = await tmp('lhb-cwd-')
   const bench = async (replies: object[]) => {
-    const fake = join(cwd, 'fake.json'), out = join(cwd, 'b.json')
-    await writeFile(fake, JSON.stringify(replies))
+    const out = join(cwd, 'b.json')
+    const fake = fakeFile(cwd, replies)
     expect(cli(['bench', '--n', '1', '--out', out, harness('bare')], { LHB_FAKE_BACKEND: fake }, cwd).status).toBe(0)
     return JSON.parse(await readFile(out, 'utf8')).harnesses[0].runs[0]
   }
@@ -1453,8 +1423,7 @@ test('fake backend: an entry with when answers only requests that contain it, ke
     await writeFile(f, JSON.stringify({ ...h, systemPrompt }))
     return f
   }
-  const fake = join(cwd, 'fake.json')
-  await writeFile(fake, JSON.stringify([{ when: 'OTHER', content: 'wrong' }, { when: 'MARK', keep: true, content: 'right' }]))
+  const fake = fakeFile(cwd, [{ when: 'OTHER', content: 'wrong' }, { when: 'MARK', keep: true, content: 'right' }])
   const env = { LHB_FAKE_BACKEND: fake }
   for (let i = 0; i < 2; i++) {
     const r = cli(['run', await hfile('MARK'), '--workdir', cwd, '--yes', 'x'], env, cwd)
@@ -1484,24 +1453,11 @@ test('bench with notes on reads the task notes and never writes them', async () 
 
 test('bench with notes on and no task notes says it measures notes off', async () => {
   const cwd = await tmp('lhb-cwd-'), nd = await tmp('lhb-notes-')
-  const fake = join(cwd, 'fake.json')
-  await writeFile(fake, JSON.stringify([{ content: 'done' }]))
+  const fake = fakeFile(cwd, [{ content: 'done' }])
   const r = cli(['bench', '--n', '1', '--out', join(cwd, 'b.json'), await withNotesOn(cwd)], { LHB_FAKE_BACKEND: fake, LHB_NOTES_DIR: nd }, cwd)
   expect(r.stderr).toContain('this bench runs as with notes off')
 }, 60_000)
 
-// --- bench --tasks: a repo of the user's own, runs in clones. Every spawn gets its own TMPDIR, so "no clone is left"
-// is about this bench only, whatever other test files run alongside.
-const tasksRepo = (tasks: object[], extra: Record<string, string> = {}) => gitRepo({ 'lhb-tasks.json': JSON.stringify({ tasks }), ...extra })
-const tasksEnv = async (fake: unknown[]) => {
-  const d = await tmp('lhb-tasks-env-')
-  const tmpd = join(d, 'tmp'); mkdirSync(tmpd)
-  writeFileSync(join(d, 'fake.json'), JSON.stringify(fake))
-  return { TMPDIR: tmpd, LHB_FAKE_BACKEND: join(d, 'fake.json'), LHB_STATE_DIR: join(d, 'state'), LHB_NOTES_DIR: join(d, 'notes') }
-}
-const clonesIn = (env: { TMPDIR: string }) => readdirSync(env.TMPDIR).filter(f => f.startsWith('lhb-2'))
-const bashCall = (command: string) => ({ toolCalls: [{ name: 'bash', args: { command } }] })
-const TWO = [{ name: 'a', prompt: 'make done.txt', check: 'test -f done.txt' }, { name: 'b', prompt: 'b', check: 'exit 1' }]
 
 test('bench --tasks: runs each task in a clone, PASS and FAIL with a reason, patch kept, repo untouched', async () => {
   const repo = await tasksRepo(TWO)
@@ -1592,35 +1548,27 @@ test('bench --tasks: the model changing the shared node_modules stops the bench 
   expect(clonesIn(env)).toEqual([])
 }, 60_000)
 
-test('bench --tasks: Ctrl-C leaves no clone behind, the setup clone included', async () => {
-  const repo = await gitRepo({ 'lhb-tasks.json': JSON.stringify({ tasks: TWO, setup: 'mkdir -p node_modules/x' }) })
-  const env = await tasksEnv([bashCall('sleep 20'), { content: 'done' }])
+// Ctrl-C once the bench has printed `ready` and a clone exists: nothing is left of it.
+async function benchCtrlC(setup: string | undefined, fake: unknown[], ready: string) {
+  const repo = await gitRepo({ 'lhb-tasks.json': JSON.stringify({ tasks: TWO, ...(setup && { setup }) }) })
+  const env = await tasksEnv(fake)
   const cwd = await tmp('lhb-cwd-')
-  const child = spawn(join(ROOT, 'node_modules', '.bin', 'tsx'), [join(ROOT, 'src', 'cli.ts'), 'bench', '--tasks', repo, '--n', '1', '--yes', '--out', join(cwd, 'b.json'), harness('bare')],
+  const child = spawnCli(['bench', '--tasks', repo, '--n', '1', '--yes', '--out', join(cwd, 'b.json'), harness('bare')],
     { cwd, env: { ...process.env, ...env }, stdio: ['ignore', 'ignore', 'pipe'] })
   let err = ''
-  await new Promise<void>(res => child.stderr!.on('data', d => { err += d; if (err.includes('--- round')) res() }))
+  await new Promise<void>(res => child.stderr!.on('data', d => { err += d; if (err.includes(ready)) res() }))
   await new Promise(r => setTimeout(r, 1500))
   expect(clonesIn(env).length).toBeGreaterThan(0)
   child.kill('SIGINT')
   await new Promise(r => child.on('exit', r))
   expect(clonesIn(env)).toEqual([])
-}, 60_000)
+}
 
-test('bench --tasks: Ctrl-C during setup leaves no clone behind', async () => {
-  const repo = await gitRepo({ 'lhb-tasks.json': JSON.stringify({ tasks: TWO, setup: 'sleep 20' }) })
-  const env = await tasksEnv([])
-  const cwd = await tmp('lhb-cwd-')
-  const child = spawn(join(ROOT, 'node_modules', '.bin', 'tsx'), [join(ROOT, 'src', 'cli.ts'), 'bench', '--tasks', repo, '--n', '1', '--yes', '--out', join(cwd, 'b.json'), harness('bare')],
-    { cwd, env: { ...process.env, ...env }, stdio: ['ignore', 'ignore', 'pipe'] })
-  let err = ''
-  await new Promise<void>(res => child.stderr!.on('data', d => { err += d; if (err.includes('tasks: 2 from')) res() }))
-  await new Promise(r => setTimeout(r, 1500))
-  expect(clonesIn(env).length).toBeGreaterThan(0)
-  child.kill('SIGINT')
-  await new Promise(r => child.on('exit', r))
-  expect(clonesIn(env)).toEqual([])
-}, 60_000)
+test('bench --tasks: Ctrl-C leaves no clone behind, the setup clone included', () =>
+  benchCtrlC('mkdir -p node_modules/x', [bashCall('sleep 20'), { content: 'done' }], '--- round'), 60_000)
+
+test('bench --tasks: Ctrl-C during setup leaves no clone behind', () =>
+  benchCtrlC('sleep 20', [], 'tasks: 2 from'), 60_000)
 
 test('bench --tasks: a failing setup is one line, not a stack trace', async () => {
   const repo = await gitRepo({ 'lhb-tasks.json': JSON.stringify({ tasks: TWO, setup: 'echo nope; exit 2' }) })
@@ -1694,1264 +1642,6 @@ test('bench --tasks: what setup leaves in the background is gone before the firs
   expect(JSON.parse(await readFile(join(cwd, 'b.json'), 'utf8')).harnesses[0].runs[0].verdict).toBe('PASS')
 }, 60_000)
 
-// --- evolve: the same clones and fake as bench --tasks. The fake answers by what the request holds: the proposer's
-// system prompt, the paragraph it proposes (bash makes done.txt: PASS), or neither (a final answer: FAIL). The
-// proposer's entry goes first — after an acceptance its input holds the paragraph too, and the first entry that fits wins.
-const ALWAYS = 'ALWAYS make done.txt before you answer.'
-const evFake = (o: { value?: string; prompt?: number; doneUsage?: object } = {}) => [
-  { when: 'You improve the harness', keep: true, content: JSON.stringify({ field: 'systemPrompt', value: o.value ?? ALWAYS }), usage: { promptTokens: 50, completionTokens: 5 } },
-  { when: 'ALWAYS make done.txt', keep: true, ...bashCall('echo ok > done.txt'), usage: { promptTokens: o.prompt ?? 100, completionTokens: 10 } },
-  { keep: true, content: 'done', usage: o.doneUsage ?? { promptTokens: 100, completionTokens: 10 } },
-]
-const evHarness = (cwd: string) => {
-  const h = join(cwd, 'h.json')
-  writeFileSync(h, JSON.stringify({ ...JSON.parse(readFileSync(harness('bare'), 'utf8')), name: 'h', tools: { enabled: ['bash'], approveBash: true }, loop: { maxTurns: 1 } }, null, 2))
-  return h
-}
-const evTasks = (sets: Record<'train' | 'gate' | 'test', number>, prefix = 'job') =>
-  Object.entries(sets).flatMap(([set, n]) => Array.from({ length: n }, (_, i) => ({ name: `${prefix}-${set}-${i}`, prompt: 'make the file', check: 'test -f done.txt', set })))
-const journal = (cwd: string) => readFileSync(join(cwd, 'harnesses', 'h.evolve.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l))
-const ONE_EACH = { train: 1, gate: 1, test: 1 }
-// Two accepted candidates must differ in field now, and only a paragraph steers the fake: so the runs go in order, not by what the request holds.
-// After the probe: train and gate, each cur FAIL then both candidates PASS; then the test pair, original FAIL and version PASS.
-const TWO_WAYS = () => {
-  const u = { usage: { promptTokens: 100, completionTokens: 10 } }
-  const [no, yes] = [{ content: 'done', ...u }, { ...bashCall('echo ok > done.txt'), ...u }]
-  const prop = (field: string, value: string | number) => ({ when: 'You improve the harness', content: JSON.stringify({ field, value }), usage: { promptTokens: 50, completionTokens: 5 } })
-  return [prop('systemPrompt', ALWAYS), prop('loop.maxRepeats', 3), no, no, yes, yes, no, yes, yes, no, yes]
-}
-/** Every run a journal line holds, whatever the line. */
-const allRuns = (l: any): any[] => [...(l.runs ?? []), ...(l.cur ?? []), ...(l.cands ?? []).flatMap((c: any) => c.runs), ...(l.orig ?? []), ...(l.last ?? [])]
-
-test('evolve: a candidate that turns the fake to PASS is accepted, v1 written, original byte for byte', async () => {
-  const repo = await tasksRepo(evTasks({ train: 12, gate: 4, test: 8 }))
-  const env = await tasksEnv(evFake())
-  const cwd = await tmp('lhb-cwd-')
-  const h = evHarness(cwd), before = readFileSync(h)
-  const r = cli(['evolve', h, '--tasks', repo, '--mode', 'night', '--yes', '--model', 'other'], env, cwd)
-  expect(r.status, r.stderr).toBe(0)
-  const lines = journal(cwd)
-  const cands = lines.filter(l => l.type === 'candidate')
-  // Candidate 2 is refused before the runs, so its line comes first.
-  expect(cands.map(c => [c.index, c.accepted, c.reason])).toEqual([[2, false, 'field exhausted'], [1, true, 'accepted']])
-  const v1 = JSON.parse(readFileSync(join(cwd, 'harnesses', 'h.v1.json'), 'utf8'))
-  expect(v1.name).toBe('h.v1')
-  expect(v1.systemPrompt).toContain(ALWAYS)
-  expect(v1.backend.model).toBe(JSON.parse(before.toString()).backend.model)
-  expect(readFileSync(h).equals(before)).toBe(true)
-  expect(r.stdout).toContain('better on the tasks of this repo Evolve did not see')
-  expect(r.stdout).toContain(ALWAYS)
-  expect(clonesIn(env)).toEqual([])
-}, 240_000)
-
-test('evolve: every FAIL run in the journal has a sig and the journal ends with the final test', async () => {
-  const repo = await tasksRepo(evTasks({ train: 12, gate: 4, test: 8 }))
-  const env = await tasksEnv(evFake())
-  const cwd = await tmp('lhb-cwd-')
-  const r = cli(['evolve', evHarness(cwd), '--tasks', repo, '--rounds', '1', '--yes', '--model', 'other'], env, cwd)
-  expect(r.status, r.stderr).toBe(0)
-  const lines = journal(cwd)
-  const fails = lines.flatMap(allRuns).filter(x => x.verdict === 'FAIL')
-  expect(fails.length).toBeGreaterThan(0)
-  for (const f of fails) expect(f.sig).toMatch(SIG)
-  expect(lines[lines.length - 1]).toMatchObject({ type: 'final', version: 1 })
-  expect(lines.find(l => l.type === 'testsweep').orig).toHaveLength(8)
-}, 120_000)
-
-test('evolve: the proposer\'s request has no repo path or task name', async () => {
-  const repo = await tasksRepo(evTasks(ONE_EACH, 'quartz'), { 'src/widget_parser.ts': 'export {}\n' })
-  const env = await tasksEnv(evFake())
-  const cwd = await tmp('lhb-cwd-')
-  const r = cli(['evolve', evHarness(cwd), '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
-  expect(r.status, r.stderr).toBe(0)
-  const inputs = journal(cwd).filter(l => l.type === 'candidate').map(l => l.input)
-  expect(inputs).toHaveLength(2)
-  expect(journal(cwd).find(l => l.type === 'proposal')).toBeTruthy()
-  for (const i of inputs) for (const s of ['quartz', 'widget_parser', 'lhb-tasks', 'src/', realpathSync(repo)]) expect(i).not.toContain(s)
-  expect(JSON.parse(inputs[0]).failures[0]).toMatchObject({ count: 1, calls: {} })
-  expect(clonesIn(env)).toEqual([])
-}, 120_000)
-
-test('evolve: reference mode on 1+1+1 says \u041e\u0420\u0406\u0404\u041d\u0422\u0418\u0420 in the output and the journal start line is not declarable', async () => {
-  const repo = await tasksRepo(evTasks(ONE_EACH))
-  const env = await tasksEnv(evFake())
-  const cwd = await tmp('lhb-cwd-')
-  const r = cli(['evolve', evHarness(cwd), '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
-  expect(r.status, r.stderr).toBe(0)
-  expect(r.stdout + r.stderr).toContain('\u041e\u0420\u0406\u0404\u041d\u0422\u0418\u0420, \u041d\u0415 \u0414\u041e\u041a\u0410\u0417')
-  expect(r.stdout).toContain('more PASS')
-  expect(journal(cwd)[0]).toMatchObject({ type: 'start', declarable: false, mode: 'custom' })
-  expect(clonesIn(env)).toEqual([])
-}, 120_000)
-
-test('evolve --mode: neither a mode nor flags refuses, naming the three; a mode with --size or --rounds refuses; an unknown mode refuses', () => {
-  const bad = (args: string[], re: RegExp) => { const r = cli(['evolve', harness('bare'), ...args]); expect(r.status).toBe(2); expect(r.stderr).toMatch(re) }
-  bad(['--tasks', 'x'], /^error: evolve needs --mode hours, night or days/m)
-  bad(['--task', 'polyglot'], /^error: evolve needs --mode hours, night or days/m)
-  bad(['--tasks', 'x', '--mode', 'night', '--rounds', '1'], /^error: --mode cannot go with --size or --rounds$/m)
-  bad(['--task', 'polyglot', '--mode', 'hours', '--size', '6'], /^error: --mode cannot go with --size or --rounds$/m)
-  bad(['--tasks', 'x', '--mode', 'custom'], /^error: --mode must be hours, night or days$/m)
-}, 60_000)
-
-test('evolve --mode hours: enough tasks, more PASS on test, and still a pointer: never Use vN', async () => {
-  const repo = await tasksRepo(evTasks({ train: 12, gate: 4, test: 8 }))
-  const env = await tasksEnv(evFake())
-  const cwd = await tmp('lhb-cwd-')
-  const r = cli(['evolve', evHarness(cwd), '--tasks', repo, '--mode', 'hours', '--yes'], env, cwd)
-  expect(r.status, r.stderr).toBe(0)
-  expect(journal(cwd)[0]).toMatchObject({ type: 'start', mode: 'hours', repeats: 1, rounds: 1, declarable: false })
-  expect(r.stdout).toContain('\u041e\u0420\u0406\u0404\u041d\u0422\u0418\u0420, \u041d\u0415 \u0414\u041e\u041a\u0410\u0417 — --mode hours is orientation only')
-  expect(r.stdout).toContain('--mode night or days declares a winner')
-  expect(r.stdout).not.toContain(`Use ${join('harnesses', 'h.v1.json')}`)
-  expect(r.stdout).toContain(`Try ${join('harnesses', 'h.v1.json')}`)
-}, 240_000)
-
-test('evolve --mode night on too few tasks: it runs three repeats, labels orientation, says why; another mode refuses the resume', async () => {
-  const repo = await tasksRepo(evTasks(ONE_EACH))
-  const env = await tasksEnv(evFake())
-  const cwd = await tmp('lhb-cwd-'), h = evHarness(cwd)
-  const r = cli(['evolve', h, '--tasks', repo, '--mode', 'night', '--yes'], env, cwd)
-  expect(r.status, r.stderr).toBe(0)
-  expect(r.stderr).toContain('mode night: up to 25 runs: 1 probe, 18 sweeps, 6 test')
-  expect(journal(cwd)[0]).toMatchObject({ type: 'start', mode: 'night', repeats: 3, rounds: 1, declarable: false })
-  expect(journal(cwd).filter(l => l.type === 'sweep')).toHaveLength(3)
-  expect(r.stdout).toContain('too few tasks (3 of 24) for a statistical conclusion; add 21 more tasks')
-  expect(r.stdout).not.toContain('orientation only')
-  expect(r.stdout).not.toContain('Use ')
-  const before = evRaw(cwd)
-  const d = cli(['evolve', h, '--tasks', repo, '--mode', 'days', '--yes'], env, cwd)
-  expect(d.status).toBe(2)
-  expect(d.stderr).toContain('this journal ran --mode night; run the same command with it')
-  expect(evRaw(cwd)).toBe(before)
-  // The same command prints the journal's report: repeats and rounds came from its start line.
-  const same = cli(['evolve', h, '--tasks', repo, '--mode', 'night', '--yes'], env, cwd)
-  expect(same.status, same.stderr).toBe(0)
-  expect(same.stdout).toBe(r.stdout)
-  // Nothing runs, so no run count.
-  expect(same.stderr).not.toContain('up to 25 runs')
-  // --report needs neither a mode nor flags.
-  expect(cli(['evolve', h, '--tasks', repo, '--report'], env, cwd).stdout).toBe(r.stdout)
-}, 120_000)
-
-test('evolve --mode: after the probe, what the rest costs and the smallest gain; money only with a price, an upper bound at one repeat', async () => {
-  const repo = await tasksRepo(evTasks(ONE_EACH))
-  const env = await tasksEnv(evFake())
-  const cwd = await tmp('lhb-cwd-')
-  const r = cli(['evolve', evHarness(cwd), '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
-  expect(r.status, r.stderr).toBe(0)
-  expect(r.stderr).toMatch(/^mode custom: up to 9 runs: 1 probe, 6 sweeps, 2 test$/m)
-  // A probe of all FAIL has no variance; the gate's own flips are the floor in every mode.
-  expect(r.stderr).toMatch(/^estimate: up to 8 more runs, about \d+\.\d h; the smallest gain told from noise: at most \+5 tasks of 2 \(upper bound at 1 repeat\)$/m)
-  const cwd2 = await tmp('lhb-cwd-'), h = evHarness(cwd2), c = JSON.parse(readFileSync(h, 'utf8'))
-  writeFileSync(h, JSON.stringify({ ...c, backend: { ...c.backend, pricePerMTok: { input: 1, output: 2 } } }))
-  const p = cli(['evolve', h, '--tasks', repo, '--mode', 'night', '--yes', '--max-usd', '5'], env, cwd2)
-  expect(p.status, p.stderr).toBe(0)
-  expect(p.stderr).toMatch(/^estimate: up to 24 more runs, about \d+\.\d h, about \$0\.\d\d; the smallest gain told from noise: \+\d+ tasks of 2$/m)
-}, 120_000)
-
-test('evolve: a resume with no flags or the wrong ones is told how the journal ran, never to delete it', async () => {
-  const { repo, env, cwd, h } = await evFirst(['--mode', 'night'])
-  writeJournal(cwd, journal(cwd).filter(l => l.type !== 'final'))
-  const before = evRaw(cwd)
-  for (const flags of [[], ['--mode', 'days'], ['--rounds', '1']]) {
-    const r = cli(['evolve', h, '--tasks', repo, ...flags, '--yes'], env, cwd)
-    expect(r.status).toBe(2)
-    expect(r.stderr).toContain('this journal ran --mode night; run the same command with it')
-    expect(r.stderr).not.toContain('delete')
-  }
-  expect(evRaw(cwd)).toBe(before)
-  // A corrupt journal keeps its own error, flags or none.
-  writeFileSync(join(cwd, 'harnesses', 'h.evolve.jsonl'), 'nope\n')
-  const c = cli(['evolve', h, '--tasks', repo, '--yes'], env, cwd)
-  expect(c.status).toBe(2)
-  expect(c.stderr).toContain('line 1: not JSON')
-  // So does a journal with no start line.
-  writeFileSync(join(cwd, 'harnesses', 'h.evolve.jsonl'), '')
-  expect(cli(['evolve', h, '--tasks', repo, '--yes'], env, cwd).stderr).toContain('does not begin with a start line')
-}, 120_000)
-
-test('evolve --task polyglot: a stopped custom journal names its --size and --rounds', async () => {
-  const { LHB_FAKE_BACKEND: _, ...env } = await tasksEnv([])
-  const cwd = await tmp('lhb-cwd-'), h = evHarness(cwd), url = ['--base-url', 'http://127.0.0.1:1'], fake = join(cwd, 'fake.json')
-  // Stopped by the key before its first run: the journal holds its start line alone.
-  writeFileSync(fake, JSON.stringify([{ throw: { status: 401 } }]))
-  expect(cli(['evolve', h, '--task', 'polyglot', '--size', '3', '--rounds', '2'], { ...env, LHB_FAKE_BACKEND: fake }, cwd).status).toBe(1)
-  for (const flags of [[], ['--mode', 'night'], ['--size', '6', '--rounds', '2']]) {
-    const r = cli(['evolve', h, '--task', 'polyglot', ...flags, ...url], env, cwd)
-    expect(r.status).toBe(2)
-    expect(r.stderr).toContain('this journal ran --size 3 --rounds 2; run the same command with it')
-  }
-}, 60_000)
-
-for (const [what, edit] of [['mode', { mode: 'days' }], ['repeats', { repeats: 2 }], ['rounds', { rounds: 2 }]] as const)
-  test(`evolve: a start line with its ${what} edited by hand is refused, on a run and under --report`, async () => {
-    const { repo, env, cwd, h } = await evFirst(['--mode', 'night'])
-    const lines = journal(cwd)
-    writeJournal(cwd, [{ ...lines[0], ...edit }, ...lines.slice(1)])
-    const before = evRaw(cwd)
-    const run = cli(['evolve', h, '--tasks', repo, '--mode', 'night', '--yes'], env, cwd)
-    expect(run.status).toBe(2)
-    expect(run.stderr).toMatch(what === 'mode' ? /this journal ran --mode days/ : /the harness or its options changed since this evolve started/)
-    const rep = cli(['evolve', h, '--tasks', repo, '--report'], env, cwd)
-    expect(rep.status).toBe(2)
-    expect(rep.stderr).toContain('the harness or its options changed since this evolve started')
-    expect(rep.stdout).toBe('')
-    expect(evRaw(cwd)).toBe(before)
-  }, 120_000)
-
-test('evolve --rounds 6 on a finished journal refuses and names how it ran: rounds are pinned', async () => {
-  const { repo, env, cwd, h } = await evFirst()
-  const before = evRaw(cwd)
-  const r = cli(['evolve', h, '--tasks', repo, '--rounds', '6', '--yes'], env, cwd)
-  expect(r.status).toBe(2)
-  expect(r.stderr).toContain('this journal ran --rounds 1; run the same command with it')
-  expect(evRaw(cwd)).toBe(before)
-}, 120_000)
-
-test('evolve: a proposal with a URL is refused before any run', async () => {
-  const repo = await tasksRepo(evTasks(ONE_EACH))
-  const env = await tasksEnv(evFake({ value: 'see https://x.io' }))
-  const cwd = await tmp('lhb-cwd-')
-  const r = cli(['evolve', evHarness(cwd), '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
-  expect(r.status, r.stderr).toBe(0)
-  const cands = journal(cwd).filter(l => l.type === 'candidate')
-  expect(cands).toHaveLength(2)
-  // Candidate 1's field is closed for candidate 2: asked twice, it stays on it.
-  expect(cands.map(c => [c.index, c.reason])).toEqual([[1, 'looks like a command or an address'], [2, 'field exhausted']])
-  expect(types(cwd)).not.toContain('sweep')
-  expect(r.stdout).toContain('no version beat the original')
-  expect(existsSync(join(cwd, 'harnesses', 'h.v1.json'))).toBe(false)
-  expect(clonesIn(env)).toEqual([])
-}, 120_000)
-
-test('evolve: candidate 2 is told candidate 1\'s field is closed and moves to another', async () => {
-  const repo = await tasksRepo(evTasks(ONE_EACH))
-  const other = { when: 'closed for now, propose another: systemPrompt', keep: true, content: JSON.stringify({ field: 'loop.maxRepeats', value: 3 }), usage: { promptTokens: 50, completionTokens: 5 } }
-  const env = await tasksEnv([other, ...evFake()])
-  const cwd = await tmp('lhb-cwd-')
-  const r = cli(['evolve', evHarness(cwd), '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
-  expect(r.status, r.stderr).toBe(0)
-  const cands = journal(cwd).filter(l => l.type === 'candidate')
-  expect(cands.map(c => [c.index, c.edit.field])).toEqual(expect.arrayContaining([[1, 'systemPrompt'], [2, 'loop.maxRepeats']]))
-  expect(r.stderr).toContain('proposer: 110 tokens')
-  expect(clonesIn(env)).toEqual([])
-}, 120_000)
-
-test('evolve: a reply on a closed field is asked once more, then journaled field exhausted with no runs', async () => {
-  const repo = await tasksRepo(evTasks(ONE_EACH))
-  const env = await tasksEnv(evFake())
-  const cwd = await tmp('lhb-cwd-')
-  const r = cli(['evolve', evHarness(cwd), '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
-  expect(r.status, r.stderr).toBe(0)
-  const lines = journal(cwd)
-  expect(lines.find(l => l.type === 'candidate' && l.index === 2)).toMatchObject({ accepted: false, reason: 'field exhausted', edit: { field: 'systemPrompt' } })
-  expect(lines.filter(l => l.type === 'sweep').every(l => l.cands.length === 1)).toBe(true)
-  // 55 tokens a call: candidate 1 once, candidate 2 twice.
-  expect(r.stderr).toContain('proposer: 165 tokens')
-}, 120_000)
-
-test('evolve: with every field closed the rounds end and the report says so', async () => {
-  const repo = await tasksRepo(evTasks(ONE_EACH))
-  // Refused before any run (a string where a number goes), two fields a round, each twice: eight fields in eight rounds.
-  const fields = ['systemPrompt', 'loop.maxTurns', 'loop.maxRepeats', 'loop.freshContext', 'loop.repeatTemperature', 'loop.repeatThinkTokens', 'context.maxToolOutputChars', 'context.budgetTokens']
-  const bad = (field: string) => ({ content: JSON.stringify({ field, value: field === 'systemPrompt' ? ' ' : 'x' }), usage: { promptTokens: 50, completionTokens: 5 } })
-  const asks = fields.flatMap((f, i) => i % 2 ? [] : [bad(f), bad(fields[i + 1]!), bad(f), bad(fields[i + 1]!)])
-  const env = await tasksEnv([{ content: 'done', usage: { promptTokens: 100, completionTokens: 10 } }, ...asks])
-  const cwd = await tmp('lhb-cwd-')
-  const r = cli(['evolve', evHarness(cwd), '--tasks', repo, '--rounds', '9', '--yes'], env, cwd)
-  expect(r.status, r.stderr).toBe(0)
-  expect(r.stdout).toContain('every field is exhausted')
-  expect(r.stderr).toContain('proposer: 880 tokens')
-  expect(journal(cwd).filter(l => l.type === 'candidate')).toHaveLength(16)
-  expect(types(cwd)).not.toContain('sweep')
-}, 120_000)
-
-test('evolve: a candidate whose first request is heavier than the ceiling is refused', async () => {
-  const repo = await tasksRepo(evTasks(ONE_EACH))
-  // The same total tokens per run on both sides, so only the first request's weight differs.
-  const env = await tasksEnv(evFake({ prompt: 200, doneUsage: { promptTokens: 100, completionTokens: 110 } }))
-  const cwd = await tmp('lhb-cwd-')
-  const r = cli(['evolve', evHarness(cwd), '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
-  expect(r.status, r.stderr).toBe(0)
-  const c = journal(cwd).find(l => l.type === 'candidate' && l.index === 1)
-  expect([c.accepted, c.reason]).toEqual([false, 'first request 100% heavier than the original'])
-  expect(journal(cwd).find(l => l.type === 'sweep').cands[0].runs).toHaveLength(2)
-  expect(r.stdout).toContain('no version beat the original')
-  expect(clonesIn(env)).toEqual([])
-}, 120_000)
-
-test('evolve: refuses when harnesses/h.v1.json already exists, before any run', async () => {
-  const repo = await tasksRepo(evTasks(ONE_EACH))
-  const env = await tasksEnv(evFake())
-  const cwd = await tmp('lhb-cwd-')
-  mkdirSync(join(cwd, 'harnesses')); writeFileSync(join(cwd, 'harnesses', 'h.v1.json'), '{}\n')
-  const r = cli(['evolve', evHarness(cwd), '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
-  expect(r.status).toBe(2)
-  expect(r.stderr).toContain(join('harnesses', 'h.v1.json'))
-  expect(readFileSync(join(cwd, 'harnesses', 'h.v1.json'), 'utf8')).toBe('{}\n')
-  expect(existsSync(join(cwd, 'runs'))).toBe(false)
-  expect(existsSync(join(cwd, 'harnesses', 'h.evolve.jsonl'))).toBe(false)
-  expect(clonesIn(env)).toEqual([])
-}, 120_000)
-
-// --max-usd: the harness's own price is what counts. A run of the fake costs $0.00012 (100 + 10 tokens at $1 and $2), a proposal $0.00006.
-const priced = (h: string) => { const c = JSON.parse(readFileSync(h, 'utf8')); writeFileSync(h, JSON.stringify({ ...c, backend: { ...c.backend, pricePerMTok: { input: 1, output: 2 } } })) }
-
-test('evolve --max-usd: a priced harness needs the flag, an unpriced one refuses it, a bad value is an argument error', async () => {
-  const repo = await tasksRepo(evTasks(ONE_EACH))
-  const env = await tasksEnv(evFake())
-  const cwd = await tmp('lhb-cwd-'), h = evHarness(cwd)
-  const run = (extra: string[]) => cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes', ...extra], env, cwd)
-  const plain = run(['--max-usd', '1'])
-  expect(plain.status).toBe(2)
-  expect(plain.stderr).toContain('no price to count against')
-  priced(h)
-  const bare = run([])
-  expect(bare.status).toBe(2)
-  expect(bare.stderr).toMatch(/^error: evolve on a priced harness needs --max-usd <dollars>/m)
-  for (const v of ['0', '-1', 'abc', 'Infinity']) { const r = run([`--max-usd=${v}`]); expect(r.status, v).toBe(2); expect(r.stderr, v).toMatch(/^error: --max-usd must be a positive number$/m) }
-  expect(existsSync(join(cwd, 'harnesses'))).toBe(false)
-}, 120_000)
-
-test('evolve --max-usd: a priced harness with an unpriced proposer starts and says the proposer is not counted', async () => {
-  const repo = await tasksRepo(evTasks(ONE_EACH))
-  const env = await tasksEnv(evFake())
-  const cwd = await tmp('lhb-cwd-'), h = evHarness(cwd), p = join(cwd, 'p.json')
-  priced(h); copyFileSync(harness('bare'), p)
-  const r = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes', '--max-usd', '5', '--proposer', p], env, cwd)
-  expect(r.status, r.stderr).toBe(0)
-  expect(r.stderr).toMatch(/^the proposer has no price: its calls are not counted against --max-usd$/m)
-  expect(journal(cwd).some(l => l.type === 'proposal' && l.costUsd !== undefined)).toBe(false)
-}, 120_000)
-
-test('evolve --max-usd: the limit stops before a run, drops the cut sweep, and the same command with a higher limit continues; --report needs no flag', async () => {
-  const repo = await tasksRepo(evTasks(ONE_EACH))
-  const env = await tasksEnv(evFake())
-  const cwd = await tmp('lhb-cwd-'), h = evHarness(cwd)
-  priced(h)
-  const run = (limit: string) => cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes', '--max-usd', limit], env, cwd)
-  // The probe ($0.00012) and the proposals ($0.00006 each) fit; the first sweep's second run does not.
-  const stopped = run('0.0004')
-  expect(stopped.status, stopped.stderr).toBe(1)
-  expect(stopped.stderr).toMatch(/^evolve stopped: spent \$0\.\d+ of \$0\.0004; the cut sweep's money is in the journal, its runs are not; run again with a higher --max-usd to continue$/m)
-  const lines = journal(cwd)
-  // The first sweep's first run: its money stays though its runs go.
-  expect(lines.at(-1).type).toBe('cut')
-  expect(lines.at(-1).costUsd).toBeCloseTo(0.00012, 9)
-  expect(lines.some(l => l.type === 'sweep')).toBe(false)
-  expect(lines.find(l => l.type === 'proposal').costUsd).toBeCloseTo(0.00006, 9)
-  expect(clonesIn(env)).toEqual([])
-  // Over the limit already: nothing is asked.
-  const again = run('0.0004')
-  expect(again.status).toBe(1)
-  expect(again.stderr).toContain('evolve stopped: spent $')
-  const go = run('5')
-  expect(go.status, go.stderr).toBe(0)
-  expect(go.stdout).toMatch(/^spent \$0\.\d+$/m)
-  const rep = cli(['evolve', h, '--tasks', repo, '--report'], env, cwd)
-  expect(rep.status, rep.stderr).toBe(0)
-  expect(rep.stdout).toBe(go.stdout)
-}, 180_000)
-
-test('evolve: without consent and without a terminal it shows the evolve consent and stops', async () => {
-  const repo = await tasksRepo(evTasks(ONE_EACH))
-  const env = await tasksEnv(evFake())
-  const cwd = await tmp('lhb-cwd-')
-  const r = cli(['evolve', evHarness(cwd), '--tasks', repo, '--rounds', '1'], env, cwd)
-  expect(r.status).toBe(2)
-  for (const s of ['mode: evolve', 'fields: systemPrompt', 'pass --yes']) expect(r.stderr).toContain(s)
-  expect(existsSync(join(cwd, 'harnesses', 'h.evolve.jsonl'))).toBe(false)
-  expect(existsSync(join(cwd, 'runs'))).toBe(false)
-  expect(clonesIn(env)).toEqual([])
-}, 120_000)
-
-for (const [what, fake, money] of [
-  ['a sweep', () => [evFake()[0], { content: 'done', usage: { promptTokens: 100, completionTokens: 10 } }, { content: 'done', usage: { promptTokens: 100, completionTokens: 10 } }, { throw: { status: 401 } }], 0.00012],
-  ['a proposal', () => { const prop = { ...evFake()[0], keep: false }; return [prop, prop, { ...prop, throw: { status: 401 } }, evFake()[2]] }, 0.00006],
-] as const) test(`evolve: a stop on a refused key drops ${what} and keeps its money in a cut line`, async () => {
-  const repo = await tasksRepo(evTasks(ONE_EACH))
-  const env = await tasksEnv(fake() as object[])
-  const cwd = await tmp('lhb-cwd-'), h = evHarness(cwd)
-  priced(h)
-  const r = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes', '--max-usd', '5'], env, cwd)
-  expect(r.status, r.stderr).toBe(1)
-  expect(r.stderr).toContain('answered 401')
-  const last = journal(cwd).at(-1)
-  expect(last.type).toBe('cut')
-  expect(last.costUsd).toBeCloseTo(money, 9)
-  // The same command goes on past it; the report counts it.
-  writeFileSync(env.LHB_FAKE_BACKEND, JSON.stringify(evFake()))
-  const go = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes', '--max-usd', '5'], env, cwd)
-  expect(go.status, go.stderr).toBe(0)
-  expect(types(cwd)).toContain('cut')
-}, 120_000)
-
-for (const [sig, code] of [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129]] as const) test(`evolve: ${sig} in a sweep keeps the finished runs' money in a cut line and leaves no clone`, async () => {
-  const repo = await tasksRepo(evTasks(ONE_EACH))
-  const env = await tasksEnv([])
-  const cwd = await tmp('lhb-cwd-'), h = evHarness(cwd), mark = join(cwd, 'in-the-run')
-  const [prop, , done] = evFake()
-  writeFileSync(env.LHB_FAKE_BACKEND, JSON.stringify([prop, { when: 'ALWAYS make done.txt', keep: true, ...bashCall(`touch ${mark}; sleep 60`), usage: { promptTokens: 100, completionTokens: 10 } }, done]))
-  priced(h)
-  const p = spawn(process.execPath, ['--import', pathToFileURL(join(ROOT, 'node_modules', 'tsx', 'dist', 'loader.mjs')).href, join(ROOT, 'src', 'cli.ts'), 'evolve', h, '--tasks', repo, '--rounds', '1', '--yes', '--max-usd', '5'], { cwd, env: { ...process.env, ...env }, stdio: 'ignore' })
-  try {
-    await vi.waitFor(() => expect(existsSync(mark)).toBe(true), { timeout: 60_000, interval: 100 })
-    expect(await new Promise(done => { p.on('exit', done); p.kill(sig) })).toBe(code)
-  } finally { p.kill('SIGKILL') }
-  const last = journal(cwd).at(-1)
-  expect(last.type).toBe('cut')
-  expect(last.costUsd).toBeCloseTo(0.00012, 9)
-  expect(clonesIn(env)).toEqual([])
-}, 120_000)
-
-// --- evolve resume: stopped and started again, it goes on from the journal or says why not.
-const evRaw = (cwd: string) => readFileSync(join(cwd, 'harnesses', 'h.evolve.jsonl'), 'utf8')
-const evFirst = async (run = ['--rounds', '1']) => {
-  const repo = await tasksRepo(evTasks(ONE_EACH))
-  const env = await tasksEnv(evFake())
-  const cwd = await tmp('lhb-cwd-')
-  const h = evHarness(cwd)
-  const r = cli(['evolve', h, '--tasks', repo, ...run, '--yes'], env, cwd)
-  expect(r.status, r.stderr).toBe(0)
-  return { repo, env, cwd, h }
-}
-
-test('evolve: a journal moved away and started again is attempt 2; a resume and --report keep attempt 1', async () => {
-  const { repo, env, cwd, h } = await evFirst()
-  const jf = join(cwd, 'harnesses', 'h.evolve.jsonl')
-  expect(journal(cwd)[0].attempt).toBe(1)
-  expect(cli(['evolve', h, '--tasks', repo, '--report'], env, cwd).stdout).toContain('attempt 1')
-  expect(cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes'], env, cwd).stdout).toContain('attempt 1')
-  rmSync(jf); rmSync(join(cwd, 'harnesses', 'h.v1.json'), { force: true })
-  expect(cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes'], env, cwd).status).toBe(0)
-  expect(journal(cwd)[0].attempt).toBe(2)
-  expect(cli(['evolve', h, '--tasks', repo, '--report'], env, cwd).stdout).toContain('attempt 2')
-  // A start line without it, or a counter nobody can read: unknown, never a guess.
-  const lines = evRaw(cwd).split('\n'), { attempt, ...start } = JSON.parse(lines[0]!)
-  writeFileSync(jf, [JSON.stringify(start), ...lines.slice(1)].join('\n'))
-  expect(cli(['evolve', h, '--tasks', repo, '--report'], env, cwd).stdout).toContain('attempt unknown')
-}, 240_000)
-
-test('evolve: the attempt counts on over a commit that leaves the tasks alone and a reformatted harness; a changed task starts anew', async () => {
-  const { repo, env, cwd, h } = await evFirst()
-  const again = () => {
-    rmSync(join(cwd, 'harnesses', 'h.evolve.jsonl')); rmSync(join(cwd, 'harnesses', 'h.v1.json'), { force: true })
-    const r = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
-    expect(r.status, r.stderr).toBe(0)
-    return journal(cwd)[0].attempt
-  }
-  writeFileSync(join(repo, 'other.txt'), 'x'); await gitCommit(repo, 'unrelated')
-  const c = JSON.parse(readFileSync(h, 'utf8'))
-  writeFileSync(h, JSON.stringify(Object.fromEntries(Object.entries(c).reverse())))
-  expect(again()).toBe(2)
-  writeFileSync(join(repo, 'lhb-tasks.json'), JSON.stringify({ tasks: evTasks(ONE_EACH).map(t => ({ ...t, prompt: 'make the file now' })) })); await gitCommit(repo, 'tasks')
-  expect(again()).toBe(1)
-}, 240_000)
-
-test('evolve: a garbage attempt counter stays as it is and every start is unknown', async () => {
-  const { repo, env, cwd, h } = await evFirst()
-  const dir = join(env.LHB_STATE_DIR!, 'evolve-attempts'), f = join(dir, readdirSync(dir).find(n => n.endsWith('.txt'))!)
-  writeFileSync(f, 'junk')
-  for (let i = 0; i < 2; i++) {
-    rmSync(join(cwd, 'harnesses', 'h.evolve.jsonl')); rmSync(join(cwd, 'harnesses', 'h.v1.json'), { force: true })
-    const r = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
-    expect(r.status, r.stderr).toBe(0)
-    expect(r.stderr).toContain('attempt count is unreadable')
-    expect(journal(cwd)[0]).not.toHaveProperty('attempt')
-    expect(readFileSync(f, 'utf8')).toBe('junk')
-    expect(cli(['evolve', h, '--tasks', repo, '--report'], env, cwd).stdout).toContain('attempt unknown')
-  }
-}, 240_000)
-
-test('evolve: a journal cut between a round\'s candidate lines resumes at the next, from its sweeps, with no run', async () => {
-  const repo = await tasksRepo(evTasks(ONE_EACH))
-  const env = await tasksEnv(TWO_WAYS())
-  const cwd = await tmp('lhb-cwd-')
-  const h = evHarness(cwd)
-  expect(cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes'], env, cwd).status).toBe(0)
-  const lines = evRaw(cwd).trim().split('\n')
-  const cut = lines.findIndex(l => JSON.parse(l).type === 'candidate')
-  const won = journal(cwd).filter(l => l.type === 'candidate').map(c => [c.index, c.accepted, c.reason])
-  writeFileSync(join(cwd, 'harnesses', 'h.evolve.jsonl'), lines.slice(0, cut + 1).join('\n') + '\n')
-  // Either may win on the fake's clock; when candidate 2 did, the kept journal has no line for v1.
-  if (!won[0]![1]) rmSync(join(cwd, 'harnesses', 'h.v1.json'))
-  writeFileSync(env.LHB_FAKE_BACKEND, JSON.stringify(evFake().slice(1)))
-  const r = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
-  expect(r.status, r.stderr).toBe(0)
-  expect(journal(cwd).filter(l => l.type === 'candidate').map(c => [c.index, c.accepted, c.reason])).toEqual(won)
-  expect(journal(cwd).filter(l => l.type === 'sweep')).toHaveLength(1)
-  expect(evRaw(cwd).startsWith(lines.slice(0, cut + 1).join('\n') + '\n')).toBe(true)
-  expect(clonesIn(env)).toEqual([])
-}, 120_000)
-
-test('evolve: a tampered journal is refused', async () => {
-  const { repo, env, cwd, h } = await evFirst()
-  const lines = evRaw(cwd).trim().split('\n').map(l => JSON.parse(l))
-  const acc = lines.find(l => l.type === 'candidate' && l.accepted)
-  acc.edit = { field: 'tools.enabled', value: 'bash' }
-  writeFileSync(join(cwd, 'harnesses', 'h.evolve.jsonl'), lines.map(l => JSON.stringify(l)).join('\n') + '\n')
-  const r = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
-  expect(r.status).toBe(2)
-  expect(r.stderr).toContain('cannot resume')
-  expect(clonesIn(env)).toEqual([])
-}, 120_000)
-
-test('evolve: a new commit in the repo refuses to resume', async () => {
-  const { repo, env, cwd, h } = await evFirst()
-  await writeFile(join(repo, 'other.txt'), 'x'); await gitCommit(repo)
-  const before = evRaw(cwd)
-  const r = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
-  expect(r.status).toBe(2)
-  expect(r.stderr).toContain('the repo has a new commit since this evolve started')
-  expect(evRaw(cwd)).toBe(before)
-  expect(clonesIn(env)).toEqual([])
-}, 120_000)
-
-// --- evolve: what costs a night if it goes wrong is refused before the runs it would waste.
-const types = (cwd: string) => journal(cwd).map(l => l.type)
-
-test('evolve: a server that gives no usage stops after the original\'s runs, before any candidate', async () => {
-  const repo = await tasksRepo(evTasks(ONE_EACH))
-  const env = await tasksEnv(evFake().map(({ usage: _, ...e }) => e))
-  const cwd = await tmp('lhb-cwd-')
-  const r = cli(['evolve', evHarness(cwd), '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
-  expect(r.status).toBe(2)
-  expect(r.stderr).toContain(`the server gave no usage for the original's runs; evolve needs a server that reports token usage; delete ${join('harnesses', 'h.evolve.jsonl')} to start over`)
-  // The probe is the first look at the usage: no proposal, no sweep.
-  expect(types(cwd)).toEqual(['start', 'probe'])
-  expect(clonesIn(env)).toEqual([])
-}, 120_000)
-
-test('evolve: a server that is down costs no attempt and leaves no journal', async () => {
-  const repo = await tasksRepo(evTasks(ONE_EACH))
-  const { LHB_FAKE_BACKEND: _, ...env } = await tasksEnv([])
-  const cwd = await tmp('lhb-cwd-')
-  const r = cli(['evolve', evHarness(cwd), '--tasks', repo, '--rounds', '1', '--yes', '--base-url', 'http://127.0.0.1:1'], env, cwd)
-  expect(r.status).toBe(2)
-  expect(r.stderr).toContain('preflight:')
-  for (const f of ['h.evolve.jsonl', 'h.evolve.notes.jsonl']) expect(existsSync(join(cwd, 'harnesses', f))).toBe(false)
-  expect(existsSync(join(env.LHB_STATE_DIR!, 'evolve-attempts'))).toBe(false)
-  expect(clonesIn(env)).toEqual([])
-}, 60_000)
-
-test('evolve: an edited harness or another --model refuses to resume', async () => {
-  const { repo, env, cwd, h } = await evFirst()
-  const before = evRaw(cwd)
-  const m = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes', '--model', 'other'], env, cwd)
-  expect(m.status).toBe(2)
-  expect(m.stderr).toContain(`the harness or its options changed since this evolve started; this evolve has finished: see its results with --report and the harness and options it ran with, or move away ${join('harnesses', 'h.evolve.jsonl')} and ${join('harnesses', 'h.v*.json')} to start over`)
-  writeFileSync(h, readFileSync(h, 'utf8') + '\n')
-  const e = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
-  expect(e.status).toBe(2)
-  expect(e.stderr).toContain('the harness or its options changed since this evolve started')
-  expect(evRaw(cwd)).toBe(before)
-  expect(clonesIn(env)).toEqual([])
-}, 120_000)
-
-test('evolve: a proposer that cannot be reached stops without a candidate line; the next evolve continues at that candidate', async () => {
-  const repo = await tasksRepo(evTasks(ONE_EACH))
-  const [, always, done] = evFake()
-  // No entry answers the proposer: its send throws, as a refused connection would.
-  const env = await tasksEnv([always, { ...done, when: 'make the file' }])
-  const cwd = await tmp('lhb-cwd-')
-  const h = evHarness(cwd)
-  const r = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
-  expect(r.status).toBe(2)
-  expect(r.stderr).toContain('proposer failed: fake backend: no response for this request')
-  expect(types(cwd)).toEqual(['start', 'probe'])
-  expect(clonesIn(env)).toEqual([])
-  const before = evRaw(cwd)
-  writeFileSync(env.LHB_FAKE_BACKEND, JSON.stringify(evFake()))
-  const again = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
-  expect(again.status, again.stderr).toBe(0)
-  expect(evRaw(cwd).startsWith(before)).toBe(true)
-  expect(journal(cwd).filter(l => l.type === 'candidate').map(c => c.index)).toEqual([2, 1])
-  expect(clonesIn(env)).toEqual([])
-}, 120_000)
-
-test('evolve: on resume the next version file existing or a link is refused before any run', async () => {
-  const { repo, env, cwd, h } = await evFirst()
-  // Without its final line the journal is unfinished: the run path, past the report.
-  writeJournal(cwd, journal(cwd).filter(l => l.type !== 'final'))
-  const v2 = join(cwd, 'harnesses', 'h.v2.json'), before = evRaw(cwd)
-  writeFileSync(v2, '{}\n')
-  const r = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
-  expect(r.status).toBe(2)
-  expect(r.stderr).toContain(`${join('harnesses', 'h.v2.json')} already exists`)
-  rmSync(v2); symlinkSync(join(cwd, 'elsewhere.json'), v2)
-  const l = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
-  expect(l.status).toBe(2)
-  expect(l.stderr).toContain('is a symbolic link')
-  expect(evRaw(cwd)).toBe(before)
-  expect(existsSync(join(cwd, 'elsewhere.json'))).toBe(false)
-  expect(clonesIn(env)).toEqual([])
-}, 120_000)
-
-test('evolve: started again after it finished, it measures nothing and prints the same report', async () => {
-  const repo = await tasksRepo(evTasks(ONE_EACH))
-  const env = await tasksEnv(evFake())
-  const cwd = await tmp('lhb-cwd-')
-  const h = evHarness(cwd)
-  const first = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
-  expect(first.status, first.stderr).toBe(0)
-  const before = evRaw(cwd), runs = readdirSync(join(cwd, 'runs')).length
-  const r = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
-  expect(r.status, r.stderr).toBe(0)
-  expect(r.stdout).toBe(first.stdout)
-  expect(evRaw(cwd)).toBe(before)
-  expect(readdirSync(join(cwd, 'runs'))).toHaveLength(runs)
-}, 120_000)
-
-
-// --- evolve --report: the journal's report again, with nothing run; or why there is none.
-test('evolve: --report prints exactly what the run printed, and runs nothing', async () => {
-  const repo = await tasksRepo(evTasks({ train: 12, gate: 4, test: 8 }))
-  const env = await tasksEnv(evFake())
-  const cwd = await tmp('lhb-cwd-')
-  const h = evHarness(cwd)
-  const first = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes', '--model', 'other'], env, cwd)
-  expect(first.status, first.stderr).toBe(0)
-  const before = evRaw(cwd), runs = readdirSync(join(cwd, 'runs'))
-  const r = cli(['evolve', h, '--tasks', repo, '--report', '--model', 'other'], env, cwd)
-  expect(r.status, r.stderr).toBe(0)
-  expect(r.stdout).toBe(first.stdout)
-  expect(evRaw(cwd)).toBe(before)
-  expect(readdirSync(join(cwd, 'runs'))).toEqual(runs)
-  expect(r.stderr).not.toContain('mode: evolve')
-  expect(clonesIn(env)).toEqual([])
-}, 120_000)
-
-test('evolve: --report needs no API key: it reads only the journal', async () => {
-  const repo = await tasksRepo(evTasks({ train: 12, gate: 4, test: 8 }))
-  const env = await tasksEnv(evFake())
-  const cwd = await tmp('lhb-cwd-')
-  const h = evHarness(cwd), p = join(cwd, 'p.json')
-  // The proposer's key too: under --report only its bytes are pinned.
-  const ph = JSON.parse(readFileSync(h, 'utf8'))
-  writeFileSync(p, JSON.stringify({ ...ph, backend: { ...ph.backend, kind: 'openai', apiKeyEnv: 'LHB_REPORT_API_KEY' } }))
-  const flags = ['--proposer', p, '--kind', 'openai', '--api-key-env', 'LHB_REPORT_API_KEY']
-  const first = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes', ...flags], { ...env, LHB_REPORT_API_KEY: 'k' }, cwd)
-  expect(first.status, first.stderr).toBe(0)
-  const r = cli(['evolve', h, '--tasks', repo, '--report', ...flags], env, cwd)
-  expect(r.status, r.stderr).toBe(0)
-  expect(r.stdout).toBe(first.stdout)
-}, 120_000)
-
-test('evolve: the report says when vN on disk is not the version measured', async () => {
-  const { repo, env, cwd, h } = await evFirst()
-  const v1 = join(cwd, 'harnesses', 'h.v1.json')
-  const same = cli(['evolve', h, '--tasks', repo, '--report'], env, cwd)
-  expect(same.status, same.stderr).toBe(0)
-  expect(same.stdout).toContain(`Try ${join('harnesses', 'h.v1.json')} in place of h.json`)
-  writeFileSync(v1, readFileSync(v1, 'utf8').replace('"name"', '"description": "x",\n  "name"'))
-  const r = cli(['evolve', h, '--tasks', repo, '--report'], env, cwd)
-  expect(r.status, r.stderr).toBe(0)
-  expect(r.stdout).toContain(`${join('harnesses', 'h.v1.json')} on disk is not the version measured`)
-  expect(r.stdout).not.toContain(`Try ${join('harnesses', 'h.v1.json')}`)
-  expect(r.stdout).not.toContain(`Use ${join('harnesses', 'h.v1.json')}`)
-}, 120_000)
-
-// After the run the report reads only the journal: what moved in the repo or the snapshot since does not hide it.
-for (const [what, change] of [
-  ['a new commit', async (repo: string) => { await writeFile(join(repo, 'other.txt'), 'x'); await gitCommit(repo) }],
-  ['a new commit that edits lhb-tasks.json', async (repo: string) => { await writeFile(join(repo, 'lhb-tasks.json'), JSON.stringify({ tasks: evTasks({ train: 2, gate: 2, test: 2 }, 'new') })); await gitCommit(repo) }],
-  ['the notes snapshot is gone', async (_: string, cwd: string) => rmSync(join(cwd, 'harnesses', 'h.evolve.notes.jsonl'))],
-] as const) test(`evolve: --report prints after ${what}`, async () => {
-  const { repo, env, cwd, h } = await evFirst()
-  const first = cli(['evolve', h, '--tasks', repo, '--report'], env, cwd)
-  expect(first.status, first.stderr).toBe(0)
-  await change(repo, cwd)
-  const r = cli(['evolve', h, '--tasks', repo, '--report'], env, cwd)
-  expect(r.status, r.stderr).toBe(0)
-  expect(r.stdout).toBe(first.stdout)
-  // A resume still refuses: its runs would mix two commits or two snapshots.
-  expect(cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes'], env, cwd).status).toBe(2)
-  expect(clonesIn(env)).toEqual([])
-}, 120_000)
-
-test('evolve: --report when the start commit is no longer in the repo says so', async () => {
-  const { repo, env, cwd, h } = await evFirst()
-  const lines = journal(cwd)
-  lines[0].sha = 'f'.repeat(40)
-  writeFileSync(join(cwd, 'harnesses', 'h.evolve.jsonl'), lines.map(l => JSON.stringify(l)).join('\n') + '\n')
-  const r = cli(['evolve', h, '--tasks', repo, '--report'], env, cwd)
-  expect(r.status).toBe(2)
-  expect(r.stderr).toContain(`the commit this evolve started at (fffffff) is no longer in the repo; the report cannot be shown from ${join('harnesses', 'h.evolve.jsonl')}`)
-  expect(r.stdout).toBe('')
-}, 120_000)
-
-test('evolve: the start-over hint names the version files', async () => {
-  const { repo, env, cwd, h } = await evFirst()
-  // Unfinished: the final test is not in the journal.
-  writeFileSync(join(cwd, 'harnesses', 'h.evolve.jsonl'), journal(cwd).filter(l => l.type !== 'final').map(l => JSON.stringify(l)).join('\n') + '\n')
-  const m = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes', '--model', 'other'], env, cwd)
-  expect(m.status).toBe(2)
-  expect(m.stderr).toContain(`; delete ${join('harnesses', 'h.evolve.jsonl')} and move away ${join('harnesses', 'h.v*.json')} to start over`)
-}, 120_000)
-
-test('evolve: a finished evolve started again after a new commit points at --report, not at deleting its results', async () => {
-  const { repo, env, cwd, h } = await evFirst()
-  await writeFile(join(repo, 'other.txt'), 'x'); await gitCommit(repo)
-  const r = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
-  expect(r.status).toBe(2)
-  expect(r.stderr).toContain(`the repo has a new commit since this evolve started; this evolve has finished: see its results with --report and the harness and options it ran with, or move away ${join('harnesses', 'h.evolve.jsonl')} and ${join('harnesses', 'h.v*.json')} to start over`)
-  expect(r.stderr).not.toContain('delete')
-}, 120_000)
-
-test('evolve: a journal with a flipped decision is refused on resume and on --report', async () => {
-  const { repo, env, cwd, h } = await evFirst()
-  const lines = journal(cwd)
-  const refused = lines.find(l => l.type === 'candidate' && !l.accepted)
-  // The second candidate is refused before any run (field exhausted): flip it, as if it had been measured.
-  Object.assign(refused, { accepted: true, reason: 'accepted', version: 2, edit: { field: 'loop.maxRepeats', value: 3 } })
-  writeFileSync(join(cwd, 'harnesses', 'h.evolve.jsonl'), lines.map(l => JSON.stringify(l)).join('\n') + '\n')
-  const r = cli(['evolve', h, '--tasks', repo, '--report'], env, cwd)
-  expect(r.status).toBe(2)
-  expect(r.stderr).toContain(`cannot resume: round 1 candidate 2: `)
-  expect(r.stderr).toContain(`; the report cannot be shown from ${join('harnesses', 'h.evolve.jsonl')}`)
-  const again = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
-  expect(again.status).toBe(2)
-  expect(again.stderr).toContain(`cannot resume: round 1 candidate 2: `)
-  expect(clonesIn(env)).toEqual([])
-}, 120_000)
-
-test('evolve: the run\'s stdout is the report and nothing else', async () => {
-  const repo = await tasksRepo(evTasks(ONE_EACH))
-  const env = await tasksEnv(evFake())
-  const cwd = await tmp('lhb-cwd-')
-  const r = cli(['evolve', evHarness(cwd), '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
-  expect(r.status, r.stderr).toBe(0)
-  expect(r.stdout.startsWith('== Conclusion')).toBe(true)
-  expect(r.stdout).not.toContain('proposer:')
-  expect(r.stderr).toContain('proposer: ')
-  expect(clonesIn(env)).toEqual([])
-}, 120_000)
-
-test('evolve --report without a journal says so', async () => {
-  const repo = await tasksRepo(evTasks(ONE_EACH))
-  const env = await tasksEnv(evFake())
-  const cwd = await tmp('lhb-cwd-')
-  const r = cli(['evolve', evHarness(cwd), '--tasks', repo, '--report'], env, cwd)
-  expect(r.status).toBe(2)
-  expect(r.stderr).toContain(`no evolve journal at ${join('harnesses', 'h.evolve.jsonl')}`)
-  expect(existsSync(join(cwd, 'harnesses'))).toBe(false)
-  expect(clonesIn(env)).toEqual([])
-}, 120_000)
-
-test('evolve --report on an unfinished evolve says it has not finished', async () => {
-  const { repo, env, cwd, h } = await evFirst()
-  const lines = evRaw(cwd).trim().split('\n')
-  expect(JSON.parse(lines[lines.length - 1]!).type).toBe('final')
-  writeFileSync(join(cwd, 'harnesses', 'h.evolve.jsonl'), lines.slice(0, -1).join('\n') + '\n')
-  const r = cli(['evolve', h, '--tasks', repo, '--report'], env, cwd)
-  expect(r.status).toBe(2)
-  expect(r.stderr).toContain('has not finished')
-  expect(r.stdout).toBe('')
-  expect(clonesIn(env)).toEqual([])
-}, 120_000)
-
-for (const [what, edit, says] of [
-  ['a journal of another base', (s: any) => ({ ...s, base: 'x' }), 'written for another harness'],
-  ['a stage-3 journal', ({ notes, ...s }: any) => s, 'cannot resume'],
-] as const) test(`evolve --report on ${what} is refused`, async () => {
-  const { repo, env, cwd, h } = await evFirst()
-  const lines = evRaw(cwd).trim().split('\n')
-  writeFileSync(join(cwd, 'harnesses', 'h.evolve.jsonl'), [JSON.stringify(edit(JSON.parse(lines[0]!))), ...lines.slice(1)].join('\n') + '\n')
-  const r = cli(['evolve', h, '--tasks', repo, '--report'], env, cwd)
-  expect(r.status).toBe(2)
-  expect(r.stderr).toContain(says)
-  // The journal is the report's only source: no advice to delete it.
-  expect(r.stderr).not.toContain('delete')
-  expect(r.stderr).toContain(`the report cannot be shown from ${join('harnesses', 'h.evolve.jsonl')}`)
-  expect(r.stdout).toBe('')
-  // The same check on a plain resume.
-  const again = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
-  expect(again.status).toBe(2)
-  expect(again.stderr).toContain(says)
-  expect(again.stderr).toContain('delete')
-  expect(clonesIn(env)).toEqual([])
-}, 120_000)
-for (const [what, tamper] of [
-  ['a rewritten notes snapshot stops the next run', (f: string) => writeFileSync(f, readFileSync(f, 'utf8') + '{"note":"x"}\n')],
-  ['a deleted notes snapshot stops the next run the same way', (f: string) => rmSync(f)],
-] as const) test(`evolve: ${what}`, async () => {
-  const { repo, env, cwd, h } = await evFirst()
-  tamper(join(cwd, 'harnesses', 'h.evolve.notes.jsonl'))
-  const r = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
-  expect(r.status).toBe(2)
-  expect(r.stderr).toContain('the notes snapshot changed')
-  expect(r.stderr).toContain(`; this evolve has finished: see its results with --report and the harness and options it ran with, or move away ${join('harnesses', 'h.evolve.jsonl')} and ${join('harnesses', 'h.v*.json')} to start over`)
-  expect(journal(cwd).some(l => l.round === 2)).toBe(false)
-  expect(clonesIn(env)).toEqual([])
-}, 120_000)
-
-test('evolve: ./harnesses as a symbolic link is refused before anything is written', async () => {
-  const repo = await tasksRepo(evTasks(ONE_EACH))
-  const env = await tasksEnv(evFake())
-  const cwd = await tmp('lhb-cwd-'), away = await tmp('lhb-away-')
-  symlinkSync(away, join(cwd, 'harnesses'))
-  const r = cli(['evolve', evHarness(cwd), '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
-  expect(r.status).toBe(2)
-  expect(r.stderr).toContain('harnesses is a symbolic link')
-  expect(readdirSync(away)).toEqual([])
-  expect(existsSync(join(cwd, 'runs'))).toBe(false)
-  expect(clonesIn(env)).toEqual([])
-}, 120_000)
-
-test('evolve: a proposer reply in prose is a journaled rejection, no edit in the reply', async () => {
-  const repo = await tasksRepo(evTasks(ONE_EACH))
-  const [p, ...rest] = evFake()
-  const env = await tasksEnv([{ ...p, content: 'I would tell it to plan first.' }, ...rest])
-  const cwd = await tmp('lhb-cwd-')
-  const r = cli(['evolve', evHarness(cwd), '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
-  expect(r.status, r.stderr).toBe(0)
-  expect(journal(cwd).filter(l => l.type === 'candidate').map(c => c.reason)).toEqual(['no edit in the reply', 'no edit in the reply'])
-  expect(r.stdout).toContain('no version beat the original')
-  expect(clonesIn(env)).toEqual([])
-}, 120_000)
-
-test('evolve: a proposer reply cut at maxTokens is a journaled rejection that says so', async () => {
-  const repo = await tasksRepo(evTasks(ONE_EACH))
-  const [p, ...rest] = evFake()
-  const env = await tasksEnv([{ ...p, content: '{"field":"systemPrompt","value":"Plan', truncated: true }, ...rest])
-  const cwd = await tmp('lhb-cwd-')
-  const r = cli(['evolve', evHarness(cwd), '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
-  expect(r.status, r.stderr).toBe(0)
-  expect(journal(cwd).filter(l => l.type === 'candidate').map(c => c.reason)).toEqual(['reply cut at maxTokens', 'reply cut at maxTokens'])
-}, 120_000)
-
-// --- evolve sweeps: arms side by side per task, every sweep one journal line. More than one sweep is --mode night: three.
-const runOrder = (stderr: string) => [...stderr.matchAll(/(h\.\S+) #(\d+) (job-\S+)/g)].map(m => `${m[1]} ${m[2]} ${m[3]}`)
-const writeJournal = (cwd: string, ls: object[]) => writeFileSync(join(cwd, 'harnesses', 'h.evolve.jsonl'), ls.map(l => JSON.stringify(l) + '\n').join(''))
-
-test('evolve: the arms interleave, per task cur, c1, c2; the test sweep orig, last; the journal has one sweep line', async () => {
-  const repo = await tasksRepo(evTasks(ONE_EACH))
-  const env = await tasksEnv(TWO_WAYS())
-  const cwd = await tmp('lhb-cwd-')
-  const r = cli(['evolve', evHarness(cwd), '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
-  expect(r.status, r.stderr).toBe(0)
-  expect(runOrder(r.stderr)).toEqual([
-    'h.cur 1 job-train-0', // the probe
-    'h.cur 1 job-train-0', 'h.r1c1 1 job-train-0', 'h.r1c2 1 job-train-0',
-    'h.cur 1 job-gate-0', 'h.r1c1 1 job-gate-0', 'h.r1c2 1 job-gate-0',
-    'h.orig 1 job-test-0', 'h.v1 1 job-test-0',
-  ])
-  expect(types(cwd)).toEqual(['start', 'probe', 'proposal', 'proposal', 'sweep', 'candidate', 'candidate', 'testsweep', 'final'])
-  const lines = journal(cwd)
-  expect(lines[0]).toMatchObject({ repeats: 1, rounds: 1 })
-  expect(lines[1].runs.map((x: any) => x.task)).toEqual(['job-train-0'])
-  const s = lines.find(l => l.type === 'sweep')
-  expect(s).toMatchObject({ round: 1, sweep: 1 })
-  expect(s.cands.map((c: any) => c.index)).toEqual([1, 2])
-  for (const x of [...s.cur, ...s.cands.flatMap((c: any) => c.runs)]) expect(x.repeat).toBe(1)
-  expect(clonesIn(env)).toEqual([])
-}, 120_000)
-
-test('evolve: both accepted in a sweep keeps one, the other lost; the report on resume agrees', async () => {
-  const repo = await tasksRepo(evTasks(ONE_EACH))
-  const env = await tasksEnv(TWO_WAYS())
-  const cwd = await tmp('lhb-cwd-')
-  const h = evHarness(cwd)
-  const r = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
-  expect(r.status, r.stderr).toBe(0)
-  const cs = journal(cwd).filter(l => l.type === 'candidate')
-  expect(cs.filter(c => c.accepted)).toHaveLength(1)
-  expect(cs.filter(c => !c.accepted).map(c => c.reason)).toEqual(['lost to the other candidate'])
-  for (const c of cs) expect(c.runs).toBeUndefined()
-  expect(existsSync(join(cwd, 'harnesses', 'h.v2.json'))).toBe(false)
-  const rep = cli(['evolve', h, '--tasks', repo, '--report'], env, cwd)
-  expect(rep.status, rep.stderr).toBe(0)
-  expect(rep.stdout).toBe(r.stdout)
-}, 120_000)
-
-test('evolve: a stop after sweep 2 keeps both sweeps; on resume only sweep 3 runs, nothing is proposed again', async () => {
-  const NIGHT = ['--mode', 'night']
-  const { repo, env, cwd, h } = await evFirst(NIGHT)
-  const lines = journal(cwd)
-  rmSync(join(cwd, 'harnesses', 'h.v1.json'))
-  writeJournal(cwd, lines.slice(0, lines.findLastIndex(l => l.type === 'sweep')))
-  const [, a, d] = evFake()
-  // A real stop first: the key goes in sweep 3's first run, and both sweeps stay.
-  writeFileSync(env.LHB_FAKE_BACKEND, JSON.stringify([{ when: 'make the file', throw: { status: 402 } }, a, d]))
-  const before = evRaw(cwd)
-  const stopped = cli(['evolve', h, '--tasks', repo, ...NIGHT, '--yes'], env, cwd)
-  expect(stopped.status, stopped.stderr).toBe(1)
-  expect(stopped.stderr).toContain('the cut step\'s runs are not in the journal')
-  expect(evRaw(cwd)).toBe(before)
-  // No proposer reply at all: a question to it would get 'done' and be no edit.
-  writeFileSync(env.LHB_FAKE_BACKEND, JSON.stringify([a, d]))
-  const r = cli(['evolve', h, '--tasks', repo, ...NIGHT, '--yes'], env, cwd)
-  expect(r.status, r.stderr).toBe(0)
-  expect(evRaw(cwd).startsWith(before)).toBe(true)
-  expect(runOrder(r.stderr).filter(x => /^h\.(cur|r1)/.test(x))).toEqual(['h.cur 3 job-train-0', 'h.r1c1 3 job-train-0', 'h.cur 3 job-gate-0', 'h.r1c1 3 job-gate-0'])
-  expect(journal(cwd).filter(l => l.type === 'sweep').map(l => l.sweep)).toEqual([1, 2, 3])
-  expect(journal(cwd).filter(l => l.type === 'testsweep').map(l => l.sweep)).toEqual([1, 2, 3])
-  expect(types(cwd).at(-1)).toBe('final')
-  expect(journal(cwd).find(l => l.type === 'candidate' && l.index === 1)).toMatchObject({ accepted: true, version: 1 })
-  expect(clonesIn(env)).toEqual([])
-}, 120_000)
-
-test('evolve: the model changing node_modules in a sweep stops it; the finished sweeps stay', async () => {
-  const repo = await tasksRepo(evTasks(ONE_EACH))
-  mkdirSync(join(repo, 'node_modules', 'x'), { recursive: true }); writeFileSync(join(repo, 'node_modules', 'x', 'index.js'), '1')
-  writeFileSync(join(repo, '.gitignore'), 'node_modules\n'); await gitCommit(repo, 'ig')
-  const env = await tasksEnv(evFake())
-  const cwd = await tmp('lhb-cwd-')
-  const h = evHarness(cwd)
-  expect(cli(['evolve', h, '--tasks', repo, '--mode', 'night', '--yes'], env, cwd).status).toBe(0)
-  const lines = journal(cwd)
-  rmSync(join(cwd, 'harnesses', 'h.v1.json'))
-  writeJournal(cwd, lines.slice(0, lines.findIndex(l => l.type === 'sweep') + 1))
-  const before = evRaw(cwd)
-  writeFileSync(env.LHB_FAKE_BACKEND, JSON.stringify([bashCall('rm node_modules/x/index.js'), { content: 'done' }]))
-  const r = cli(['evolve', h, '--tasks', repo, '--mode', 'night', '--yes'], env, cwd)
-  expect(r.status).toBe(1)
-  expect(r.stderr).toContain(`the model changed the installed packages in ${join(realpathSync(repo), 'node_modules')}; stopping; a resume refuses other packages: restore them, then delete ${join('harnesses', 'h.evolve.jsonl')} and move away ${join('harnesses', 'h.v*.json')} to start over`)
-  expect(evRaw(cwd)).toBe(before)
-  expect(clonesIn(env)).toEqual([])
-}, 120_000)
-
-test('evolve: a resume on other packages refuses and says what to do; --report and a finished evolve still print', async () => {
-  const repo = await tasksRepo(evTasks(ONE_EACH))
-  const pkg = join(repo, 'node_modules', 'x', 'index.js')
-  mkdirSync(join(repo, 'node_modules', 'x'), { recursive: true }); writeFileSync(pkg, '1')
-  writeFileSync(join(repo, '.gitignore'), 'node_modules\n'); await gitCommit(repo, 'ig')
-  const env = await tasksEnv(evFake())
-  const cwd = await tmp('lhb-cwd-'), h = evHarness(cwd)
-  const run = () => cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
-  expect(run().status).toBe(0)
-  const lines = journal(cwd)
-  expect(lines[0].modules).toMatch(/^[0-9a-f]{64}$/)
-  writeFileSync(pkg, '22')
-  expect(run().status).toBe(0) // finished: the same report, nothing runs
-  expect(cli(['evolve', h, '--tasks', repo, '--report'], env, cwd).status).toBe(0)
-  rmSync(join(cwd, 'harnesses', 'h.v1.json'))
-  writeJournal(cwd, lines.slice(0, lines.findIndex(l => l.type === 'sweep') + 1))
-  const before = evRaw(cwd), r = run()
-  expect(r.status).toBe(2)
-  expect(r.stderr).toContain(`the installed packages in ${join(realpathSync(repo), 'node_modules')} changed since this evolve started`)
-  expect(r.stderr).toContain(`delete ${join('harnesses', 'h.evolve.jsonl')} and move away ${join('harnesses', 'h.v*.json')} to start over`)
-  expect(evRaw(cwd)).toBe(before)
-}, 120_000)
-
-test('evolve: a repo with setup installs again, so a resume is exempt and the stop says to run it again; the cut money stays', async () => {
-  const repo = await gitRepo({ 'lhb-tasks.json': JSON.stringify({ tasks: evTasks(ONE_EACH), setup: 'mkdir -p node_modules/x && echo 1 > node_modules/x/index.js' }) })
-  const u = { usage: { promptTokens: 100, completionTokens: 10 } }
-  const env = await tasksEnv([{ ...bashCall('rm node_modules/x/index.js'), ...u }, ...evFake()])
-  const cwd = await tmp('lhb-cwd-'), h = evHarness(cwd)
-  priced(h)
-  const run = () => cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes', '--max-usd', '5'], env, cwd)
-  const r = run()
-  expect(r.status, r.stderr).toBe(1)
-  expect(r.stderr).toContain('the model changed the installed packages in')
-  expect(r.stderr).toContain('run the same command to resume: setup installs them again')
-  expect(journal(cwd)[0]).not.toHaveProperty('modules')
-  expect(types(cwd)).toEqual(['start', 'cut'])
-  writeFileSync(env.LHB_FAKE_BACKEND, JSON.stringify(evFake()))
-  const go = run()
-  expect(go.status, go.stderr).toBe(0)
-}, 120_000)
-
-test('evolve: a stop during the test sweeps keeps the finished one; on resume only the next runs, nothing re-rolled', async () => {
-  const { repo, env, cwd, h } = await evFirst(['--mode', 'night'])
-  const lines = journal(cwd)
-  writeJournal(cwd, lines.slice(0, lines.findIndex(l => l.type === 'testsweep') + 1))
-  const before = evRaw(cwd)
-  const [, a, d] = evFake()
-  writeFileSync(env.LHB_FAKE_BACKEND, JSON.stringify([a, d]))
-  const r = cli(['evolve', h, '--tasks', repo, '--mode', 'night', '--yes'], env, cwd)
-  expect(r.status, r.stderr).toBe(0)
-  expect(evRaw(cwd).startsWith(before)).toBe(true)
-  expect(runOrder(r.stderr)).toEqual(['h.orig 2 job-test-0', 'h.v1 2 job-test-0', 'h.orig 3 job-test-0', 'h.v1 3 job-test-0'])
-  expect(types(cwd).slice(-4)).toEqual(['testsweep', 'testsweep', 'testsweep', 'final'])
-  const rep = cli(['evolve', h, '--tasks', repo, '--report'], env, cwd)
-  expect(rep.status, rep.stderr).toBe(0)
-  expect(rep.stdout).toContain('PASS 0/3')
-  // Three before the cut, two after: the first run's third was rolled again.
-  expect(rep.stdout).toMatch(/^test sweeps started: 5 of 3$/m)
-  expect(clonesIn(env)).toEqual([])
-}, 120_000)
-
-test('evolve: a proposal refused before the runs takes no sweep slot; both refused, no sweep at all and no test sweep', async () => {
-  const { cwd } = await evFirst()
-  expect(journal(cwd).find(l => l.type === 'sweep').cands.map((c: any) => c.index)).toEqual([1])
-  const repo = await tasksRepo(evTasks(ONE_EACH))
-  const env = await tasksEnv(evFake({ value: 'see https://x.io' }))
-  const cwd2 = await tmp('lhb-cwd-')
-  const r = cli(['evolve', evHarness(cwd2), '--tasks', repo, '--rounds', '1', '--yes'], env, cwd2)
-  expect(r.status, r.stderr).toBe(0)
-  expect(types(cwd2)).toEqual(['start', 'probe', 'candidate', 'candidate', 'final'])
-}, 120_000)
-
-test('bench --tasks --yes prints the commands before saving consent', async () => {
-  const repo = await tasksRepo(TWO)
-  const env = await tasksEnv([{ content: 'done' }, { content: 'done' }])
-  const cwd = await tmp('lhb-cwd-')
-  const r = cli(['bench', '--tasks', repo, '--n', '1', '--yes', '--out', join(cwd, 'b.json'), harness('bare')], env, cwd)
-  expect(r.status, r.stderr).toBe(0)
-  for (const s of ['make done.txt', "check — in each run's clone, after the run"]) expect(r.stderr).toContain(s)
-}, 60_000)
-
-// --- evolve stops on a refused key, no credits, a lasting rate limit: exit 1, no journal line for the step it cut.
-const failed = (cwd: string) => journal(cwd).flatMap(allRuns).filter(x => x.reason === 'backend_error')
-
-for (const status of [401, 402, 403])
-  test(`evolve: a run that gets ${status} stops with no line for its set; run again, it completes with no FAIL from it`, async () => {
-    const repo = await tasksRepo(evTasks(ONE_EACH))
-    const env = await tasksEnv([{ when: 'make the file', throw: { status } }, ...evFake()])
-    const cwd = await tmp('lhb-cwd-')
-    const h = evHarness(cwd)
-    const r = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
-    expect(r.status, r.stderr).toBe(1)
-    expect(r.stderr).toContain(String(status))
-    expect(r.stderr).toContain('resume')
-    expect(types(cwd)).toEqual(['start'])
-    expect(clonesIn(env)).toEqual([])
-    writeFileSync(env.LHB_FAKE_BACKEND, JSON.stringify(evFake()))
-    const again = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
-    expect(again.status, again.stderr).toBe(0)
-    expect(types(cwd).at(-1)).toBe('final')
-    expect(failed(cwd)).toEqual([])
-  }, 120_000)
-
-test('evolve: a stop during a candidate\'s runs leaves its proposal; run again, the same edit is measured without asking the proposer', async () => {
-  const repo = await tasksRepo(evTasks(ONE_EACH))
-  const [p, a, d] = evFake()
-  const env = await tasksEnv([{ when: 'ALWAYS make done.txt', throw: { status: 401 } }, p, a, d])
-  const cwd = await tmp('lhb-cwd-')
-  const h = evHarness(cwd)
-  const r = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
-  expect(r.status, r.stderr).toBe(1)
-  // Candidate 2 repeats it, refused before the runs; the sweep it stopped in left no line.
-  expect(types(cwd)).toEqual(['start', 'probe', 'proposal', 'candidate'])
-  const prop = journal(cwd).find(l => l.type === 'proposal')
-  expect(prop).toMatchObject({ round: 1, index: 1, edit: { field: 'systemPrompt', value: ALWAYS } })
-  // No proposer reply at all: a question to it would get 'done' and be no edit.
-  writeFileSync(env.LHB_FAKE_BACKEND, JSON.stringify([a, d]))
-  const again = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
-  expect(again.status, again.stderr).toBe(0)
-  const c1 = journal(cwd).find(l => l.type === 'candidate' && l.index === 1)
-  expect(c1.edit).toEqual(prop.edit)
-  expect(c1.input).toBe(prop.input)
-  expect(journal(cwd).find(l => l.type === 'sweep').cands[0].runs).toHaveLength(2)
-  expect(types(cwd)).toEqual(['start', 'probe', 'proposal', 'candidate', 'sweep', 'candidate', 'testsweep', 'final'])
-}, 120_000)
-
-test('evolve: a proposal cut in round 2 refuses --rounds 1, and --rounds 2 resumes from the journal', async () => {
-  const repo = await tasksRepo(evTasks(ONE_EACH))
-  // Only round 2's proposal carries TWICE: the stop falls on its candidate's runs in the sweep.
-  const [p, a, d] = evFake()
-  const prop = (value: string) => ({ when: 'You improve the harness', content: JSON.stringify({ field: 'systemPrompt', value }), usage: p!.usage })
-  // Round 1: the kept edit, then candidate 2 asked twice on the closed field. Round 2: the marked edit; its candidate 2 takes what is left.
-  const env = await tasksEnv([prop(ALWAYS), prop(`${ALWAYS} X`), prop(`${ALWAYS} X`), prop(`${ALWAYS} TWICE`), { when: 'TWICE', throw: { status: 401 } }, { ...prop(`${ALWAYS} TWICE`), keep: true }, a, d])
-  const cwd = await tmp('lhb-cwd-'), h = evHarness(cwd)
-  expect(cli(['evolve', h, '--tasks', repo, '--rounds', '2', '--yes'], env, cwd).status).toBe(1)
-  expect(journal(cwd).some(l => l.type === 'proposal' && l.round === 2)).toBe(true)
-  const before = evRaw(cwd)
-  const r = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
-  expect(r.status).toBe(2)
-  expect(r.stderr).toContain('this journal ran --rounds 2; run the same command with it')
-  expect(evRaw(cwd)).toBe(before)
-  writeFileSync(env.LHB_FAKE_BACKEND, JSON.stringify([a, d]))
-  const again = cli(['evolve', h, '--tasks', repo, '--rounds', '2', '--yes'], env, cwd)
-  expect(again.status, again.stderr).toBe(0)
-  expect(evRaw(cwd).startsWith(before)).toBe(true)
-  expect(types(cwd).at(-1)).toBe('final')
-}, 120_000)
-
-test('evolve: a hand-written proposal past the pinned rounds refuses, cut in that round', async () => {
-  const { repo, env, cwd, h } = await evFirst()
-  const jf = join(cwd, 'harnesses', 'h.evolve.jsonl')
-  writeFileSync(jf, evRaw(cwd) + JSON.stringify({ v: 2, type: 'proposal', round: 2, index: 1, input: '{}', edit: { field: 'loop.maxRepeats', value: 3 } }) + '\n')
-  const r = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
-  expect(r.status).toBe(2)
-  expect(r.stderr).toContain("ends on round 2's candidate 1, cut in that round, past the 1 of this evolve")
-}, 120_000)
-
-test('evolve: a proposer that gets 429 four times stops with no candidate line', async () => {
-  const repo = await tasksRepo(evTasks(ONE_EACH))
-  const env = await tasksEnv([{ when: 'You improve the harness', keep: true, throw: { status: 429 } }, ...evFake().slice(1)])
-  const cwd = await tmp('lhb-cwd-')
-  const r = cli(['evolve', evHarness(cwd), '--tasks', repo, '--rounds', '1', '--yes'], { ...env, LHB_RETRY_MS: '10' }, cwd)
-  expect(r.status, r.stderr).toBe(1)
-  expect(r.stderr).toContain('429')
-  expect(r.stderr).toContain('proposer')
-  expect(r.stderr).toContain('resume')
-  expect(types(cwd)).toEqual(['start', 'probe'])
-}, 120_000)
-
-for (const [who, when] of [['harness', 'make the file'], ['proposer', 'You improve the harness']])
-  test(`evolve: a ${who} 429 after deltas streamed stops at once and says so, not "after 3 retries"`, async () => {
-    const repo = await tasksRepo(evTasks(ONE_EACH))
-    const env = await tasksEnv([{ when, deltas: [{ content: 'half' }], throw: { status: 429 } }, ...evFake()])
-    const cwd = await tmp('lhb-cwd-')
-    const r = cli(['evolve', evHarness(cwd), '--tasks', repo, '--rounds', '1', '--yes'], { ...env, LHB_RETRY_MS: '10' }, cwd)
-    expect(r.status, r.stderr).toBe(1)
-    expect(r.stderr).toContain(who)
-    expect(r.stderr).toContain('429 mid-reply, not retried')
-    expect(r.stderr).not.toContain('after 3 retries')
-  }, 120_000)
-
-test('evolve: a proposer 429 that clears on retry goes on as if nothing happened', async () => {
-  const repo = await tasksRepo(evTasks(ONE_EACH))
-  const env = await tasksEnv([{ when: 'You improve the harness', throw: { status: 429 } }, ...evFake()])
-  const cwd = await tmp('lhb-cwd-')
-  const r = cli(['evolve', evHarness(cwd), '--tasks', repo, '--rounds', '1', '--yes'], { ...env, LHB_RETRY_MS: '10' }, cwd)
-  expect(r.status, r.stderr).toBe(0)
-  expect(journal(cwd).filter(l => l.type === 'candidate').map(c => c.index)).toEqual([2, 1])
-}, 120_000)
-
-test('evolve: a moderated 403 is a FAIL and the evolve goes on', async () => {
-  const repo = await tasksRepo(evTasks(ONE_EACH))
-  const env = await tasksEnv([{ when: 'make the file', throw: { status: 403, moderated: true } }, ...evFake()])
-  const cwd = await tmp('lhb-cwd-')
-  const r = cli(['evolve', evHarness(cwd), '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
-  expect(r.status, r.stderr).toBe(0)
-  expect(failed(cwd)).toHaveLength(1)
-  expect(types(cwd).at(-1)).toBe('final')
-}, 120_000)
-
-test('evolve: "429" in a prompt or a final answer is no stop', async () => {
-  const repo = await tasksRepo(evTasks(ONE_EACH).map(t => ({ ...t, prompt: 'make the file; POST /chat/completions: 429' })))
-  const [p, a, d] = evFake()
-  const env = await tasksEnv([p, a, { ...d, content: 'POST /chat/completions: 429' }])
-  const cwd = await tmp('lhb-cwd-')
-  const r = cli(['evolve', evHarness(cwd), '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
-  expect(r.status, r.stderr).toBe(0)
-  expect(types(cwd).at(-1)).toBe('final')
-}, 120_000)
-
-test('bench --tasks: a 401 run is a FAIL backend_error with stop 401, its check not run, and the bench goes on', async () => {
-  const marker = join(await tmp('lhb-mark-'), 'checked')
-  const repo = await tasksRepo([{ name: 'a', prompt: 'p', check: `touch "${marker}"` }, { name: 'b', prompt: 'p', check: 'true' }])
-  const env = await tasksEnv([{ throw: { status: 401 } }, { content: 'done' }])
-  const cwd = await tmp('lhb-cwd-')
-  const r = cli(['bench', '--tasks', repo, '--n', '1', '--yes', '--out', join(cwd, 'b.json'), harness('bare')], env, cwd)
-  expect(r.status, r.stderr).toBe(0)
-  const runs = JSON.parse(await readFile(join(cwd, 'b.json'), 'utf8')).harnesses[0].runs
-  expect(runs[0]).toMatchObject({ task: 'a', verdict: 'FAIL', reason: 'backend_error', stop: 401 })
-  expect(existsSync(marker)).toBe(false)
-  expect(runs[1]).toMatchObject({ task: 'b', verdict: 'PASS' })
-  expect(runs[1]).not.toHaveProperty('stop')
-}, 60_000)
-
-test('evolve: a moderated 403 on the proposer stays a die, not a stop', async () => {
-  const repo = await tasksRepo(evTasks(ONE_EACH))
-  const env = await tasksEnv([{ when: 'You improve the harness', throw: { status: 403, moderated: true, message: 'flagged' } }, ...evFake()])
-  const cwd = await tmp('lhb-cwd-')
-  const r = cli(['evolve', evHarness(cwd), '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
-  expect(r.status).toBe(2)
-  expect(r.stderr).toContain('proposer failed: flagged')
-  expect(types(cwd)).toEqual(['start', 'probe'])
-}, 120_000)
-
-test('evolve: short repo task names do not bind the words of an accepted paragraph; --report prints it', async () => {
-  // ALWAYS holds "make" and "you": as task names under 6 chars they are no binding words in a repo.
-  const repo = await tasksRepo([['make', 'train'], ['you', 'gate'], ['zq', 'test']].map(([name, set]) => ({ name, prompt: 'make the file', check: 'test -f done.txt', set })))
-  const env = await tasksEnv(evFake())
-  const cwd = await tmp('lhb-cwd-')
-  const h = evHarness(cwd)
-  const r = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
-  expect(r.status, r.stderr).toBe(0)
-  expect(journal(cwd).find(l => l.type === 'candidate' && l.index === 1)).toMatchObject({ accepted: true })
-  const rep = cli(['evolve', h, '--tasks', repo, '--report'], env, cwd)
-  expect(rep.status, rep.stderr).toBe(0)
-  expect(rep.stdout).toBe(r.stdout)
-}, 120_000)
-
-// --- evolve --task polyglot: the Exercism set as practice ground. One real evolve (6 checks); the rest stops before any run.
-const PROOF_PARA = 'ALWAYS finish the solution before you answer.'
-const polyFake = () => [
-  { when: 'You improve the harness', keep: true, content: JSON.stringify({ field: 'systemPrompt', value: PROOF_PARA }), usage: { promptTokens: 50, completionTokens: 5 } },
-  { when: PROOF_PARA, keep: true, ...bashCall(`for f in *.test.js; do n="\${f%.test.js}"; cp "${join(ROOT, 'polyglot-proofs')}/$n.js" "$n.js"; done`), usage: { promptTokens: 100, completionTokens: 10 } },
-  { keep: true, content: 'done', usage: { promptTokens: 100, completionTokens: 10 } },
-]
-const polyArgs = (h: string, size = '3') => ['evolve', h, '--task', 'polyglot', '--size', size]
-
-test('evolve --task polyglot --size 3 --rounds 1: end to end, the report again, a changed set, nothing left in tmp', async () => {
-  const env = await tasksEnv(polyFake())
-  const cwd = await tmp('lhb-cwd-')
-  const h = evHarness(cwd)
-  const r = cli([...polyArgs(h), '--rounds', '1'], env, cwd)
-  expect(r.status, r.stderr).toBe(0)
-  const lines = journal(cwd)
-  const ex = loadPolyglot().exercises.slice(0, 3)
-  expect(lines[0]).toMatchObject({ type: 'start', declarable: false, sets: { train: [ex[0].name], gate: [ex[1].name], test: [ex[2].name] } })
-  expect(lines[0].sha).toMatch(/^polyglot:[0-9a-f]{64}:3$/)
-  expect(lines.filter(l => l.type === 'candidate').map(l => [l.accepted, l.reason])).toEqual([[false, 'field exhausted'], [true, 'accepted']])
-  expect(r.stdout).toContain('\u041e\u0420\u0406\u0404\u041d\u0422\u0418\u0420, \u041d\u0415 \u0414\u041e\u041a\u0410\u0417')
-  expect(r.stdout).toContain('--mode night or days declares a winner')
-  expect(r.stdout).toContain('more PASS')
-  expect(r.stdout).toContain(`bench ${join('harnesses', 'h.v1.json')} --task polyglot --size 3`)
-  // What the proposer was sent: no exercise name, test name or file of the set.
-  const inputs = lines.filter(l => l.type === 'candidate' || l.type === 'proposal').map(l => l.input as string)
-  expect(inputs.length).toBeGreaterThan(0)
-  for (const i of inputs) for (const s of [...ex.flatMap(e => [e.name, ...e.tests]), 'examples-polyglot', '.js', 'INSTRUCTIONS']) expect(i).not.toContain(s)
-  for (const f of lines.flatMap(allRuns).filter(x => x.verdict === 'FAIL')) expect(f.sig).toMatch(/^[^|]+\|test\|/)
-  expect(readdirSync(env.TMPDIR).filter(f => f.startsWith('lhb-polyglot-'))).toEqual([])
-  // --report prints the same report, with nothing run, the size read from the start line.
-  const rep = cli(['evolve', h, '--task', 'polyglot', '--report'], env, cwd)
-  expect(rep.status, rep.stderr).toBe(0)
-  expect(rep.stdout).toBe(r.stdout)
-  // The set changed since (another fingerprint): a resume is refused, the report still prints.
-  const jf = join(cwd, 'harnesses', 'h.evolve.jsonl'), text = readFileSync(jf, 'utf8')
-  writeFileSync(jf, text.replace(lines[0].sha, `polyglot:${'0'.repeat(64)}:3`))
-  const again = cli([...polyArgs(h), '--rounds', '1', '--yes'], env, cwd)
-  expect(again.status).not.toBe(0)
-  expect(again.stderr).toContain('the exercise set or --size changed since this evolve started; this evolve has finished: see its results with --report')
-  expect(cli([...polyArgs(h), '--report'], env, cwd).stdout).toBe(r.stdout)
-  // An exercise the set no longer has: the report reads its name from the journal.
-  writeFileSync(jf, text.replaceAll(`"${ex[0].name}"`, '"gone-exercise"'))
-  const gone = cli([...polyArgs(h), '--report'], env, cwd)
-  expect(gone.status, gone.stderr).toBe(0)
-  expect(gone.stdout).toContain('== Conclusion')
-}, 180_000)
-
-test('evolve --task polyglot --mode night starts declarable; a proposer on the harness\'s host is said, not asked', async () => {
-  const env = await tasksEnv([{ throw: { status: 401 } }])
-  const cwd = await tmp('lhb-cwd-')
-  // A refused key stops it after the start line, on its first run.
-  const r = cli(['evolve', evHarness(cwd), '--task', 'polyglot', '--mode', 'night', '--base-url', 'http://127.0.0.1:1'], env, cwd)
-  expect(r.status).toBe(1)
-  expect(journal(cwd)[0]).toMatchObject({ type: 'start', declarable: true })
-  expect(r.stderr).toContain('proposer: 127.0.0.1:1, the harness\'s own server')
-  expect(r.stderr).not.toContain('pass --yes')
-}, 60_000)
-
-test('evolve --task polyglot --mode night: size 47, 394 runs before any run; hours: size 24, not declarable', async () => {
-  const env = await tasksEnv([{ throw: { status: 401 } }])
-  const cwd = await tmp('lhb-cwd-')
-  const r = cli(['evolve', evHarness(cwd), '--task', 'polyglot', '--mode', 'night', '--base-url', 'http://127.0.0.1:1'], env, cwd)
-  expect(r.status).toBe(1)
-  expect(r.stderr).toContain('mode night: up to 394 runs: 16 probe, 288 sweeps, 90 test')
-  expect(journal(cwd)[0]).toMatchObject({ type: 'start', mode: 'night', repeats: 3, rounds: 1, declarable: true })
-  expect(journal(cwd)[0].sha).toMatch(/:47$/)
-  const cwd2 = await tmp('lhb-cwd-')
-  const h = cli(['evolve', evHarness(cwd2), '--task', 'polyglot', '--mode', 'hours', '--base-url', 'http://127.0.0.1:1'], env, cwd2)
-  expect(h.stderr).toContain('mode hours: up to 72 runs: 8 probe, 48 sweeps, 16 test')
-  expect(journal(cwd2)[0]).toMatchObject({ mode: 'hours', declarable: false })
-  expect(journal(cwd2)[0].sha).toMatch(/:24$/)
-}, 60_000)
-
-test('evolve --task polyglot: a proposer on another host is asked; --yes accepts it once', async () => {
-  const { LHB_FAKE_BACKEND: _, ...env } = await tasksEnv([])
-  const cwd = await tmp('lhb-cwd-')
-  const h = evHarness(cwd), p = join(cwd, 'p.json')
-  writeFileSync(p, JSON.stringify({ ...JSON.parse(readFileSync(h, 'utf8')), name: 'p', backend: { ...JSON.parse(readFileSync(h, 'utf8')).backend, baseUrl: 'http://127.0.0.1:2' } }))
-  const args = [...polyArgs(h), '--proposer', p, '--base-url', 'http://127.0.0.1:1']
-  const no = cli(args, env, cwd)
-  expect(no.status).toBe(2)
-  for (const s of ['proposer: 127.0.0.1:2', 'fields: systemPrompt', 'how the runs failed', 'pass --yes to send these to this proposer']) expect(no.stderr).toContain(s)
-  expect(no.stderr).toMatch(/^run limit: mode \w+, up to \d+ runs$/m)
-  expect(no.stderr).not.toContain('accept these commands')
-  expect(existsSync(join(cwd, 'harnesses', 'h.evolve.jsonl'))).toBe(false)
-  const yes = cli([...args, '--yes'], env, cwd)
-  expect(yes.stderr).toContain('proposer: 127.0.0.1:2')
-  expect(yes.stderr).toContain('preflight: http://127.0.0.1:1')
-  expect(existsSync(join(cwd, 'harnesses', 'h.evolve.jsonl'))).toBe(false)
-  const later = cli(args, env, cwd)
-  expect(later.stderr).not.toContain('pass --yes')
-}, 60_000)
 
 test('bench records backend.reasoningEffort in the JSON config', async () => {
   const wd = await tmp('lhb-cli-')
@@ -2965,8 +1655,8 @@ test('bench records backend.reasoningEffort in the JSON config', async () => {
 
 test('bench --models runs every harness on every model into one JSON and one table', async () => {
   const wd = await tmp('lhb-cli-')
-  const fake = join(wd, 'fake.json'); const out = join(wd, 'b.json')
-  await writeFile(fake, JSON.stringify([{ content: TUNED_EDIT }, { content: TUNED_FINAL }, { content: TUNED_EDIT }, { content: TUNED_FINAL }]))
+  const out = join(wd, 'b.json')
+  const fake = fakeFile(wd, [{ content: TUNED_EDIT }, { content: TUNED_FINAL }, { content: TUNED_EDIT }, { content: TUNED_FINAL }])
   const r = cli(['bench', '--n', '1', '--models', 'ma,mb', '--out', out, harness('tuned')], { LHB_FAKE_BACKEND: fake })
   expect(r.status).toBe(0)
   const j = JSON.parse(await readFile(out, 'utf8'))

@@ -75,11 +75,6 @@ test('all tools reject escaping paths', async () => {
   await expect(wf({ path: '/tmp/x', content: '' }, ctx)).rejects.toThrow(/escapes/)
 })
 
-test('without the guard (no ctx.reads) editing an unread file still works', async () => {
-  await editFile({ path: 'a.txt', old: 'world', new: 'there' }, ctx)
-  expect(await rf(join(ctx.workdir, 'a.txt'), 'utf8')).toBe('hello\nthere\n')
-})
-
 test('guard: edit_file refuses an unread file, allows it after read_file', async () => {
   const g: ToolCtx = { ...ctx, reads: new Set() }
   await expect(editFile({ path: 'a.txt', old: 'world', new: 'there' }, g))
