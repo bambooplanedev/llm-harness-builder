@@ -29,7 +29,7 @@ import { TASKS, type Task } from './core/tasks.js'
 import { loadPolyglot, polyglotTasks, polyglotBinding, removeAllPolyglotSync, POLYGLOT_MAX } from './core/polyglot.js'
 import { childEnv, bashEnvNote } from './core/tools/env.js'
 import { median, formatTable, rowNames, BENCH_TASKS, benchTotal, runTitle, benchFileName, autoApproves, type BenchRun, type BenchHarness, type BenchResult } from './core/bench.js'
-import { GUARD_BLOCKED, EDIT_MISS } from './core/tools/fs.js'
+import { GUARD_BLOCKED, EDIT_MISS } from './core/tools/errors.js'
 import { createBackend } from './core/backends/index.js'
 import { redactor } from './core/redact.js'
 import { replayPayload, replySignature, recordedTurn } from './core/replay.js'
@@ -54,9 +54,9 @@ function keyFlag(cmd: CommandName, v: string | undefined): void {
 const PORT = (s: string) => /^\d+$/.test(s) && Number(s) <= 65535
 
 const DEMO_HARNESSES = ['bare', 'tuned-nothink', 'tuned-hermes']
-/** tuned-nothink sets backend.think, which config.ts refuses on a hosted API (openai kind with a key): there demo runs tuned. */
 /** Test hook: the wait before a 429 is tried again, in ms. */
 const RETRY_MS = process.env.LHB_RETRY_MS === undefined ? undefined : Number(process.env.LHB_RETRY_MS)
+/** tuned-nothink sets backend.think, which config.ts refuses on a hosted API (openai kind with a key): there demo runs tuned. */
 const demoHarnesses = (kind?: string, apiKeyEnv?: string): string[] => kind === 'openai' && apiKeyEnv ? DEMO_HARNESSES.map(h => h === 'tuned-nothink' ? 'tuned' : h) : DEMO_HARNESSES
 
 let fakeCache: Promise<Backend | undefined> | undefined
@@ -908,11 +908,11 @@ async function cmdEvolve(argv: string[]) {
     // Both on one current; a proposal journaled before a stop stays as it was: asking again would let a stop re-roll it.
     for (let index = 1; index <= CANDIDATES; index++) {
       if (state.pending.some(p => p.round === round && p.index === index) || lines.some(l => l.type === 'candidate' && l.round === round && l.index === index)) continue
-      const train = await Promise.all(state.feed!.map(async run => ({ run, events: await eventsOf(run.trace) })))
+      const train = await Promise.all(state.feed!.filter(r => r.verdict === 'FAIL').map(async run => ({ run, events: await eventsOf(run.trace) })))
       const input = proposerInput(state.current, failureGroups(train), state.rejected, clean)
       // Candidate 2 also leaves candidate 1's field alone (not a rejection: it does not count toward exhausted).
-      const first = index > 1 ? [...state.pending, ...lines.flatMap(l => l.type === 'candidate' && l.round === round && l.index === 1 && l.edit ? [l] : [])].find(x => x.round === round && x.index === 1)?.edit?.field : undefined
-      const closed = [...state.exhausted, ...first ? [first] : []]
+      const taken = index > 1 ? [...state.pending, ...lines.flatMap(l => l.type === 'candidate' && l.round === round && l.index === 1 && l.edit ? [l] : [])].find(x => x.round === round && x.index === 1)?.edit?.field : undefined
+      const closed = [...state.exhausted, ...taken ? [taken] : []]
       if (ALLOWED.every(f => closed.includes(f))) {
         console.error(`candidate ${round}.${index}: field exhausted`)
         append({ v: 2, type: 'candidate', round, index, input, accepted: false, reason: 'field exhausted' })
@@ -970,7 +970,6 @@ async function cmdReplay(argv: string[]) {
   keyFlag('replay', values['api-key-env'])
   const [run] = positionals, kind = values.kind, baseUrl = values['base-url']
   const temperature = values.temperature === undefined ? undefined : Number(values.temperature)
-  const INT = /^[1-9]\d*$/
   if (!run || positionals.length > 1) argError('replay', 'replay needs one run id or trace file')
   if (!INT.test(values.turn ?? '')) argError('replay', '--turn must be a positive integer')
   if (!INT.test(values.n)) argError('replay', '--n must be a positive integer')

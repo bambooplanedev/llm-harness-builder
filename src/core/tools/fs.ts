@@ -12,10 +12,6 @@ const str = (args: Args, key: string): string => {
   return v
 }
 
-// The texts bench counts and analyze classifies live in errors.ts, which the browser can import;
-// they are thrown here, so changing the wording there moves the counters with it.
-export { GUARD_BLOCKED, EDIT_MISS }
-
 const exists = async (p: string): Promise<boolean> => { try { await stat(p); return true } catch { return false } }
 
 /** No-op unless the harness asked for the guard: ctx.reads is present only then. */

@@ -326,7 +326,7 @@ onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer); unsub?.(); d
         <details v-if="runs.length" class="inspector"><summary class="hint">plain table (every column)</summary><pre>{{ plainTable }}</pre></details>
       </template>
       <h5 v-if="result && events.length && !(sideA && sideB)" class="group">{{ sideA ? `${sideA.name} #${sideA.run.round} · ${sideA.run.verdict} · trace` : `${active?.harness ?? ''} #${active?.round ?? ''} · live trace` }}</h5>
-      <Diff v-if="sideA && sideB" :a="sideA" :b="sideB" :task="result!.task" @close="closeDiff" />
+      <Diff v-if="sideA && sideB" :a="sideA" :b="sideB" @close="closeDiff" />
       <Trace v-else-if="result && events.length" :events="events" :task="result.task" :approvable="false" :names="names" />
     </div>
   </div>

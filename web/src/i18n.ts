@@ -194,15 +194,15 @@ export function t(key: Key, params?: Record<string, string | number>): string {
   return params ? s.replace(/\{(\w+)\}/g, (m, n) => (n in params ? String(params[n]) : m)) : s
 }
 /** `t` for a count: the form `Intl.PluralRules` picks for the language, else `.other`; `{n}` is the count. */
-export function tn(base: PluralKey, n: number, params?: Record<string, string | number>): string {
+export function tn(base: PluralKey, n: number): string {
   const k = `${base}.${new Intl.PluralRules(lang.value).select(n)}`
-  return t((k in en ? k : `${base}.other`) as Key, { n, ...params })
+  return t((k in en ? k : `${base}.other`) as Key, { n })
 }
 export const langName = (l: Lang): string => catalog[l]['lang.name'] ?? en['lang.name']
 
-/** `t(k)` with each `{name}` filled by the slot of that name (markup stays in the template) or else by `p`. Text and vnodes only, never HTML. */
+/** `t(k)` with each `{name}` filled by the slot of that name (markup stays in the template) or else left as `{name}`. Text and vnodes only, never HTML. */
 export const T = defineComponent({
-  props: { k: { type: String as PropType<Key>, required: true }, p: Object as PropType<Record<string, string | number>> },
+  props: { k: { type: String as PropType<Key>, required: true } },
   setup: (props, { slots }) => () => h(Fragment, t(props.k).split(/\{(\w+)\}/).flatMap<VNodeChild>((s, i) =>
-    i % 2 ? [slots[s]?.() ?? String(props.p?.[s] ?? `{${s}}`)] : s ? [s] : [])),
+    i % 2 ? [slots[s]?.() ?? `{${s}}`] : s ? [s] : [])),
 })

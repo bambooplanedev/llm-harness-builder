@@ -84,7 +84,7 @@ export function score(results: TestResult[], names: string[], exit: number | nul
   return { pass: true, ...base }
 }
 
-export type Exercise = { name: string; difficulty: number; tests: string[]; stub: string; test: string; instructions: string }
+type Exercise = { name: string; difficulty: number; tests: string[]; stub: string; test: string; instructions: string }
 export type Polyglot = { exercises: Exercise[]; expect: string; pkg: string }
 export const POLYGLOT_MAX = 47
 

@@ -4,10 +4,10 @@ import type { RunLite } from './evolve.js'
 import { signFlipP } from './stats.js'
 
 export const MIN_SHARED = 5 // fewer shared tasks say nothing about cost
-export const COST_ALPHA = 0.10 // looser than the win test: a dear candidate is refused on weaker evidence
+const COST_ALPHA = 0.10 // looser than the win test: a dear candidate is refused on weaker evidence
 export const TOLERANCE = 0.10
 export type Cost = 'turns' | 'tokens' | 'time'
-export type CostCheck = { shared: number; before: number; after: number; allowed: number; ratio: number; p: number; over: boolean }
+type CostCheck = { shared: number; before: number; after: number; allowed: number; ratio: number; p: number; over: boolean }
 
 export type Numbers = { pass: number; tokensPerSuccess?: number; tokens?: number; weight?: number }
 

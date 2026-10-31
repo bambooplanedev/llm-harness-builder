@@ -33,7 +33,7 @@ export type Task = {
 }
 
 /** true = PASS; the object form also says why a FAIL failed. */
-export type CheckResult = boolean | { pass: boolean; reason?: string; tests?: { passed: number; total: number } }
+type CheckResult = boolean | { pass: boolean; reason?: string; tests?: { passed: number; total: number } }
 
 /** The task every number in the README up to v2.6 was measured on. Moved here from cli.ts unchanged; tests/tasks.test.ts pins the bytes. */
 const slug: Task = {

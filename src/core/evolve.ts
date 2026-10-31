@@ -9,17 +9,17 @@ import { jsonCandidates } from './parse.js'
 import type { DoneReason, HarnessEvent } from './events.js'
 import type { ChatRequest } from './backends/types.js'
 import { ALLOWED, DANGER } from './evolve-labels.js'
-import { TOLERANCE, costCheck, costReason, numbersOf, pct, tokensGate, type Numbers } from './evolve-cost.js'
+import { costCheck, costReason, numbersOf, pct, tokensGate, type Numbers } from './evolve-cost.js'
 import { permP } from './stats.js'
-export { ALLOWED, TOLERANCE, numbersOf, tokensGate, type Numbers }
+export { ALLOWED, numbersOf, type Numbers }
 
 export const ROUNDS = 3
 export const CANDIDATES = 2
-export const CEILING = 0.25
-export const MIN_TRAIN_GATE = 16
-export const MIN_TEST = 8
+const CEILING = 0.25
+const MIN_TRAIN_GATE = 16
+const MIN_TEST = 8
 export const ALPHA = 0.05
-export const PARA_MAX = 600
+const PARA_MAX = 600
 /** Polyglot's size, the sweeps per round and per final test, the rounds; on --tasks the repo sets the size. The start line holds all of it. */
 export const MODES = { hours: { size: 24, repeats: 1, rounds: 1 }, night: { size: 47, repeats: 3, rounds: 1 }, days: { size: 47, repeats: 5, rounds: 2 } } as const satisfies Record<string, { size: number; repeats: number; rounds: number }>
 /** `custom` is --size or --rounds: one repeat, and never a declared winner. */
@@ -70,23 +70,8 @@ export const referenceLabel = (m: Split): string => {
 /** JSON with every object's keys sorted: the same value whatever its key order or whitespace in a file. */
 export const canonical = (x: unknown): string => JSON.stringify(x, (_, v) => isObj(v) ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) : v)
 
-/** One-sided exact sign test: P(X >= b) for X ~ Binomial(b + c, 1/2). */
-export function signP(b: number, c: number): number {
-  const n = b + c
-  let p = 0, term = 1 // C(n, 0)
-  for (let k = 0; k <= n; k++) {
-    if (k >= b) p += term
-    term = term * (n - k) / (k + 1)
-  }
-  return p / 2 ** n
-}
-
-/** Flips in one direction and none back that the declarable gate needs. */
-export function neededFlips(): number {
-  let b = 0
-  while (signP(b, 0) >= ALPHA) b++
-  return b
-}
+/** Flips in one direction and none back that the declarable gate needs: with b flips and none back the one-sided sign test gives P = 2^-b, so the smallest b with 2^-b < ALPHA. */
+export const neededFlips = (): number => Math.ceil(-Math.log2(ALPHA))
 
 /** turns and modelMs are on every run of a v2 journal (0 when no reply came); costUsd only when the harness is priced; repeat tells repeats of one task apart. */
 export type RunLite = { task: string; verdict: 'PASS' | 'FAIL'; tokens?: number; firstPromptTokens?: number; turns?: number; modelMs?: number; costUsd?: number; repeat?: number; trace?: string; reason?: string; lastError?: string; sig?: string }
@@ -124,7 +109,6 @@ export function decide(i: { cur: RunLite[]; cand: RunLite[]; orig: RunLite[]; ga
   const { cur, cand, orig, gateNames, split, origMaxTurns } = i
   const numbers = numbersOf(cand)
   const no = (reason: string) => ({ accepted: false, reason, numbers })
-  const o = numbersOf(orig)
   // Every ratio below divides by the original's sums: a 0 there would be NaN or Infinity, never a refusal.
   if (!usable(cand) || !usable(orig)) return no('the server gave no usage')
   if (!numbers.pass) return no('0 PASS')
@@ -235,7 +219,7 @@ export function checkEdit(e: Edit, ctx: { current: object; original: object; tri
   return undefined
 }
 
-export type Group = { signature: string; count: number; calls: Record<string, number>; exts: Record<string, number> }
+type Group = { signature: string; count: number; calls: Record<string, number>; exts: Record<string, number> }
 
 const CHECK_CLASS: [string, string][] = [['check exited', 'check_failed'], ['check timed out', 'check_timeout'], ['the check found 0 tests', 'no_tests'], ['changed a protected file', 'protected'],
   // polyglot's check: by the reason's prefix only — the rest of it holds a test name.
@@ -278,7 +262,7 @@ export function failureGroups(items: { run: RunLite; events: HarnessEvent[] }[])
   return [...groups.values()].sort((x, y) => y.count - x.count)
 }
 
-export type Rejected = { field: string; value?: string | number; reason: string }
+type Rejected = { field: string; value?: string | number; reason: string }
 
 /** The reply's shape, its field one of `fields`. */
 export const proposalSchema = (fields: string[]) => ({
@@ -286,7 +270,6 @@ export const proposalSchema = (fields: string[]) => ({
   properties: { field: { type: 'string', enum: fields }, value: { anyOf: [{ type: 'string' }, { type: 'number' }] }, why: { type: 'string', maxLength: 300 } },
   required: ['field', 'value'], additionalProperties: false,
 })
-export const PROPOSAL_SCHEMA = proposalSchema(ALLOWED)
 
 /** Fields closed for now: two rejected candidates in a row on one (`already tried` and a lost round count), none accepted since.
  *  An acceptance clears every count; a line with no edit counts for nothing. Journal order, so replay and the run loop agree. */
@@ -327,7 +310,7 @@ export function proposerRequest(model: string, input: string, o: { schema: boole
   return {
     model,
     messages: [{ role: 'system', content: o.noThink ? system + '\n/no_think' : system }, { role: 'user', content: input }],
-    ...(o.schema ? { responseSchema: closed.length ? proposalSchema(ALLOWED.filter(f => !closed.includes(f))) : PROPOSAL_SCHEMA } : {}),
+    ...(o.schema ? { responseSchema: proposalSchema(ALLOWED.filter(f => !closed.includes(f))) } : {}),
   }
 }
 
