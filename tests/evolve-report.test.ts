@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { evolveReport, type ReportInput } from '../src/core/evolve-report.js'
-import { applyEdit, referenceLabel, type Edit, type JournalLine, type Mode, type RunLite, type SetName } from '../src/core/evolve.js'
+import { ALLOWED, applyEdit, referenceLabel, type Edit, type JournalLine, type Mode, type RunLite, type SetName } from '../src/core/evolve.js'
 
 const fail = (task: string, sig: string, tokens = 110, fp = 100): RunLite => ({ task, verdict: 'FAIL', tokens, firstPromptTokens: fp, turns: 3, modelMs: 40, sig })
 const pass = (task: string, tokens = 110, fp = 100): RunLite => ({ task, verdict: 'PASS', tokens, firstPromptTokens: fp, turns: 3, modelMs: 40 })
@@ -221,5 +221,16 @@ describe('evolve report', () => {
   it('the same input gives the same text', () => {
     const x = golden()
     expect(evolveReport(x)).toBe(evolveReport(structuredClone(x)))
+  })
+})
+
+describe('every field exhausted', () => {
+  const refuse = (field: string): JournalLine => ({ v: 2, type: 'candidate', round: 2, index: 1, input: '{}', edit: { field, value: 1 }, accepted: false, reason: 'bad value' })
+  it('is a line of the report when the journal closes every field, and only then', () => {
+    const g = v0()
+    expect(evolveReport(g)).not.toContain('every field is exhausted')
+    // v0 has refused the systemPrompt once and loop.maxRepeats once: one more each, and the rest twice
+    const more = ALLOWED.flatMap(f => f === 'systemPrompt' || f === 'loop.maxRepeats' ? [refuse(f)] : [refuse(f), refuse(f)])
+    expect(evolveReport({ ...g, lines: [...g.lines.slice(0, -2), ...more, ...g.lines.slice(-2)] })).toContain('every field is exhausted')
   })
 })

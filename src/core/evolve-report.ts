@@ -3,7 +3,7 @@
 // Every line is a fixed template filled with numbers and fixed words (verdicts, `sig`, `reasonKind`, ALLOWED fields);
 // the only free text is the accepted systemPrompt paragraphs, labelled as the proposer's. Never task names, paths,
 // lastError, trace, why or a run's reason.
-import { ALLOWED, MIN_TEST, MIN_TRAIN_GATE, numbersOf, reasonKind, referenceLabel, STRICT_SIZE, verdict, type JournalLine, type Mode, type RunLite, type SetName } from './evolve.js'
+import { ALLOWED, exhausted, MIN_TEST, MIN_TRAIN_GATE, numbersOf, reasonKind, referenceLabel, STRICT_SIZE, verdict, type JournalLine, type Mode, type RunLite, type SetName } from './evolve.js'
 import { showableText } from './events.js'
 
 export type ReportInput = {
@@ -105,6 +105,7 @@ export function evolveReport(r: ReportInput): string {
     if ((r.original as any).notes?.enabled !== true && n * 2 >= gateCount)
       advice.push(`the same failure (${sig}) recurs on ${n} of ${gateCount} gate tasks and Notes is off: Notes carry what one run learned into the next; compare with bench ${mode.polyglot ? '--task polyglot' : '--tasks'}, Notes on and off`)
   }
+  if (exhausted(lines).length === ALLOWED.length) advice.push('every field is exhausted')
   if (!advice.length) advice.push('none from these numbers')
 
   const apply: string[] = []

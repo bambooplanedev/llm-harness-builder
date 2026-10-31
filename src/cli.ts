@@ -765,22 +765,29 @@ async function cmdEvolve(argv: string[]) {
   const clean = (s: string) => scrubText(s, hRedact, homedir())
   let proposerTokens = 0
   // Built like the notes writer's call: the proposer's own knobs, its /no_think line, a schema only where it enforces one.
-  const propose = async (input: string): Promise<{ edit?: Edit; reason?: string }> => {
+  const propose = async (input: string, closed: string[]): Promise<{ edit?: Edit; reason?: string }> => {
     const req: ChatRequest = {
-      ...proposerRequest(pb.model, input, { schema: proposer.toolCalls.enforceSchema, noThink: NO_THINK_LINE.test(proposer.systemPrompt) }),
+      ...proposerRequest(pb.model, input, { schema: proposer.toolCalls.enforceSchema, noThink: NO_THINK_LINE.test(proposer.systemPrompt), fields: closed }),
       temperature: pb.temperature, maxTokens: pb.maxTokens ?? 1024,
       ...(pb.numCtx === undefined ? {} : { numCtx: pb.numCtx }), ...(pb.think === undefined ? {} : { think: pb.think }),
     }
-    let content: string, cut: boolean
-    try {
-      const r = await sendRetrying(pBackend, pBackend.buildPayload(req), AbortSignal.timeout(timeoutS * 1000), undefined, RETRY_MS)
-      if (r.usage) proposerTokens += r.usage.promptTokens + r.usage.completionTokens
-      content = r.content; cut = !!r.truncated
-    // Not a rejection: a journaled one would never be asked again, and the next evolve continues at this candidate.
-    } catch (e) {
-      if (e instanceof BackendError && isStop(e)) return halt('proposer', pb, e.status!, pRedact, e.midReply)
-      dropWork(work); return die(`proposer failed: ${showable(pRedact.text((e as Error).message))}`) }
-    try { return { edit: parseProposal(content) } } catch { return { reason: cut ? 'reply cut at maxTokens' : 'no edit in the reply' } }
+    const ask = async (): Promise<{ edit?: Edit; reason?: string }> => {
+      let content: string, cut: boolean
+      try {
+        const r = await sendRetrying(pBackend, pBackend.buildPayload(req), AbortSignal.timeout(timeoutS * 1000), undefined, RETRY_MS)
+        if (r.usage) proposerTokens += r.usage.promptTokens + r.usage.completionTokens
+        content = r.content; cut = !!r.truncated
+      // Not a rejection: a journaled one would never be asked again, and the next evolve continues at this candidate.
+      } catch (e) {
+        if (e instanceof BackendError && isStop(e)) return halt('proposer', pb, e.status!, pRedact, e.midReply)
+        dropWork(work); return die(`proposer failed: ${showable(pRedact.text((e as Error).message))}`) }
+      try { return { edit: parseProposal(content) } } catch { return { reason: cut ? 'reply cut at maxTokens' : 'no edit in the reply' } }
+    }
+    const p = await ask()
+    // Once more, same input and same closed list: a second reply on a closed field is the proposer's, journaled and rejected. Any other refusal is not asked again.
+    if (!p.edit || !closed.includes(p.edit.field)) return p
+    const again = await ask()
+    return again.edit && closed.includes(again.edit.field) ? { edit: again.edit, reason: 'field exhausted' } : again
   }
   const writeVersion = (n: number, cfg: object) => {
     const p = vf(n), text = versionText(base, n, cfg)
@@ -794,6 +801,8 @@ async function cmdEvolve(argv: string[]) {
   const usage = () => { if (state.baseline && !usable(state.baseline)) { dropWork(work); die(`the server gave no usage for the original's runs; evolve needs a server that reports token usage; delete ${jf} to start over`) } }
   for (let round = 1; round <= rounds; round++) {
     snapCheck()
+    // Nothing left to propose: on to the final test; the report says why.
+    if (ALLOWED.every(f => state.exhausted.includes(f))) break
     console.error(`--- round ${round}/${rounds}`)
     if (!state.feed) {
       const runs = await sweepOn([{ cfg: state.current, name: `${base}.cur` }], sets.train, 1)
@@ -806,7 +815,15 @@ async function cmdEvolve(argv: string[]) {
       if (state.pending.some(p => p.round === round && p.index === index) || lines.some(l => l.type === 'candidate' && l.round === round && l.index === index)) continue
       const train = await Promise.all(state.feed!.map(async run => ({ run, events: await eventsOf(run.trace) })))
       const input = proposerInput(state.current, failureGroups(train), state.rejected, clean)
-      const p = await propose(input)
+      // Candidate 2 also leaves candidate 1's field alone (not a rejection: it does not count toward exhausted).
+      const first = index > 1 ? [...state.pending, ...lines.flatMap(l => l.type === 'candidate' && l.round === round && l.index === 1 && l.edit ? [l] : [])].find(x => x.round === round && x.index === 1)?.edit?.field : undefined
+      const closed = [...state.exhausted, ...first ? [first] : []]
+      if (ALLOWED.every(f => closed.includes(f))) {
+        console.error(`candidate ${round}.${index}: field exhausted`)
+        append({ v: 2, type: 'candidate', round, index, input, accepted: false, reason: 'field exhausted' })
+        continue
+      }
+      const p = await propose(input, closed)
       const why = p.reason ?? checkEdit(p.edit!, { current: state.current, original: raw, tried: state.tried, binding })
       if (why) {
         console.error(`candidate ${round}.${index}: ${showable(why)}`)

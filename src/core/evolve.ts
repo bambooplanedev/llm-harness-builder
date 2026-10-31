@@ -283,10 +283,24 @@ export function failureGroups(items: { run: RunLite; events: HarnessEvent[] }[])
 
 export type Rejected = { field: string; value?: string | number; reason: string }
 
-export const PROPOSAL_SCHEMA = {
+/** The reply's shape, its field one of `fields`. */
+export const proposalSchema = (fields: string[]) => ({
   type: 'object',
-  properties: { field: { type: 'string', enum: ALLOWED }, value: { anyOf: [{ type: 'string' }, { type: 'number' }] }, why: { type: 'string', maxLength: 300 } },
+  properties: { field: { type: 'string', enum: fields }, value: { anyOf: [{ type: 'string' }, { type: 'number' }] }, why: { type: 'string', maxLength: 300 } },
   required: ['field', 'value'], additionalProperties: false,
+})
+export const PROPOSAL_SCHEMA = proposalSchema(ALLOWED)
+
+/** Fields closed for now: two rejected candidates in a row on one (`already tried` and a lost round count), none accepted since.
+ *  An acceptance clears every count; a line with no edit counts for nothing. Journal order, so replay and the run loop agree. */
+export function exhausted(lines: JournalLine[]): string[] {
+  const n = new Map<string, number>()
+  for (const l of lines) {
+    if (l.type !== 'candidate' || !l.edit) continue
+    if (l.accepted) n.clear()
+    else n.set(l.edit.field, (n.get(l.edit.field) ?? 0) + 1)
+  }
+  return ALLOWED.filter(f => (n.get(f) ?? 0) >= 2)
 }
 
 /** What the proposer is told, as JSON text: the allowed values now, how the train runs failed, what was refused.
@@ -309,11 +323,14 @@ export function proposerInput(current: object, groups: Group[], rejected: Reject
 
 const PROPOSER_SYSTEM = `You improve the harness of a coding agent. The input lists the harness's current settings, groups of failed runs (how each ended, which tools it called, which file types it edited) and edits already refused. Propose exactly one edit, as JSON {"field": ..., "value": ..., "why": ...}. field is one of: ${ALLOWED.join(', ')}. For systemPrompt, value is one short paragraph (at most ${PARA_MAX} characters) appended to the prompt: general advice on how to work on such tasks, never about one task, file or name, and no commands, paths or addresses. For any other field, value is a number; loop.maxTurns is a whole number, at most twice its original value. Do not propose an edit that was refused.`
 
-export function proposerRequest(model: string, input: string, o: { schema: boolean; noThink: boolean }): ChatRequest {
+/** `fields` are the closed ones: named in the prompt (field names from ALLOWED only) and left out of the schema's enum. */
+export function proposerRequest(model: string, input: string, o: { schema: boolean; noThink: boolean; fields?: string[] }): ChatRequest {
+  const closed = ALLOWED.filter(f => o.fields?.includes(f))
+  const system = PROPOSER_SYSTEM + (closed.length ? `\n\nThese fields are closed for now, propose another: ${closed.join(', ')}` : '')
   return {
     model,
-    messages: [{ role: 'system', content: o.noThink ? PROPOSER_SYSTEM + '\n/no_think' : PROPOSER_SYSTEM }, { role: 'user', content: input }],
-    ...(o.schema ? { responseSchema: PROPOSAL_SCHEMA } : {}),
+    messages: [{ role: 'system', content: o.noThink ? system + '\n/no_think' : system }, { role: 'user', content: input }],
+    ...(o.schema ? { responseSchema: closed.length ? proposalSchema(ALLOWED.filter(f => !closed.includes(f))) : PROPOSAL_SCHEMA } : {}),
   }
 }
 
@@ -397,7 +414,7 @@ export function parseJournal(text: string): { lines: JournalLine[] } | { error: 
 
 // The reasons the edit checks and `decide` write. Rejected edits reach the proposer, maybe in the cloud, and the
 // journal is bash-writable: anything else is passed on as `other`.
-const FIXED = /^(?:field not allowed|bad value|looks like a command or an address|tied to a task|already tried|changes more than one field|above 2× the original|the server gave no usage|0 PASS|no more PASS than current|worse on gate|no edit in the reply|reply cut at maxTokens|lost to the other candidate)$/
+const FIXED = /^(?:field not allowed|bad value|looks like a command or an address|tied to a task|already tried|changes more than one field|above 2× the original|the server gave no usage|0 PASS|no more PASS than current|worse on gate|no edit in the reply|reply cut at maxTokens|lost to the other candidate|field exhausted)$/
 const PATTERNED: [RegExp, string][] = [
   [/^within noise \(p=\d\.\d\d\)$/, 'within noise'], [/^costs \d+% more tokens(?: per success)? than the original$/, 'costs more tokens'],
   [/^first request \d+% heavier than the original$/, 'first request heavier'], [/^first request not measured on \d+ tasks$/, 'first request not measured'], [/^invalid config: /, 'invalid config'],
@@ -416,7 +433,7 @@ export const sweptCands = (sweeps: Pick<SweepLine, 'cands'>[]) => sweeps[0]!.can
  *  worked out again from its sweeps: a vN file or a hand-written line is never what the next round starts from.
  *  `feed` is what the proposer reads, `pending` the proposals with no candidate line yet, `tested` the test sweeps of the last version. */
 export function replay(lines: JournalLine[], original: object, ctx: { binding: string[]; sets: Record<SetName, string[]> }):
-  { current: object; version: number; baseline?: RunLite[]; feed?: RunLite[]; tried: Edit[]; rejected: Rejected[]; pending: Proposal[]; tested: number; final?: { orig: RunLite[]; last: RunLite[] } | 'none' } | { error: string } {
+  { current: object; version: number; baseline?: RunLite[]; feed?: RunLite[]; tried: Edit[]; rejected: Rejected[]; pending: Proposal[]; tested: number; exhausted: string[]; final?: { orig: RunLite[]; last: RunLite[] } | 'none' } | { error: string } {
   const [first, ...rest] = lines
   if (first?.type !== 'start') return { error: 'cannot resume: the journal does not begin with a start line' }
   if (JSON.stringify(first.sets) !== JSON.stringify(ctx.sets)) return { error: 'cannot resume: the sets differ from the tasks file' }
@@ -476,6 +493,8 @@ export function replay(lines: JournalLine[], original: object, ctx: { binding: s
     if (l.type === 'proposal') {
       const out = claim(l.round, l.index)
       if (out) return no(`${slot}: ${out}`)
+      // A forged journal cannot steer back onto a field the proposer was told is closed.
+      if (exhausted(lines.slice(0, i + 1)).includes(l.edit.field)) return no(`${slot}: proposed edit: field exhausted`)
       // Both candidates of a round stand on one current, and candidate 2 hears of candidate 1's edit as tried.
       const why = checkEdit(l.edit, { current, original, tried: [...tried, ...pending.map(p => p.edit)], binding: ctx.binding })
       if (why) return no(`${slot}: proposed edit: ${why}`)
@@ -518,7 +537,7 @@ export function replay(lines: JournalLine[], original: object, ctx: { binding: s
     if (end.version !== version || tests.length !== (version ? first.repeats : 0)) return no('the final line does not match the journal')
     final = version ? { orig: tests.flatMap(t => t.orig), last: tests.flatMap(t => t.last) } : 'none'
   }
-  return { current, version, baseline, feed, tried: [...tried, ...pending.map(p => p.edit)], rejected, pending, tested: tests.length, final }
+  return { current, version, baseline, feed, tried: [...tried, ...pending.map(p => p.edit)], rejected, pending, tested: tests.length, exhausted: exhausted(lines), final }
 }
 
 const PRINCIPLE = 'how far this is a principle rather than a fit depends on how unlike the training tasks the test tasks are'

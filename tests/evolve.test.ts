@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ALPHA, boundBy, applyEdit, numbersOf, pickWinner, usable, parseJournal, replay, verdict, bindingTokens, checkEdit, decide, passGain, failureGroups, reasonKind, signatureOf, SIG, modeOf, neededFlips, parseProposal, proposerInput, proposerRequest, referenceLabel, signP, splitSets, PROPOSAL_SCHEMA, type Edit, type Mode, type RunLite } from '../src/core/evolve.js'
+import { ALPHA, boundBy, applyEdit, numbersOf, pickWinner, usable, parseJournal, replay, verdict, bindingTokens, checkEdit, decide, passGain, failureGroups, reasonKind, signatureOf, SIG, modeOf, neededFlips, parseProposal, proposerInput, proposerRequest, proposalSchema, exhausted, ALLOWED, referenceLabel, signP, splitSets, PROPOSAL_SCHEMA, type Edit, type Mode, type RunLite } from '../src/core/evolve.js'
 import type { HarnessEvent } from '../src/core/events.js'
 import { harness } from './helpers.js'
 import type { RepoTask } from '../src/core/repo-tasks.js'
@@ -466,6 +466,40 @@ describe('evolve journal', () => {
     expect(replay([start] as any, harness(), ctx)).toMatchObject({ version: 0, baseline: undefined })
   })
 
+  // Two rejected candidates in a row on one field close it; an acceptance clears every count.
+  const said = (field: string, accepted: boolean, reason = 'bad value') => cand(1, { field, value: 3 }, accepted, accepted ? 'accepted' : reason) as any
+  it('exhausted: two refusals close a field; an acceptance between them, or after, clears the count; a line with no edit counts for nothing', () => {
+    const M = 'loop.maxRepeats'
+    expect(exhausted([said(M, false)])).toEqual([])
+    expect(exhausted([said(M, false), said(M, false)])).toEqual([M])
+    expect(exhausted([said(M, false), said('systemPrompt', true), said(M, false)])).toEqual([])
+    expect(exhausted([said(M, false), said(M, false), said('systemPrompt', true)])).toEqual([])
+    expect(exhausted([said(M, false, 'already tried'), said(M, false, 'lost to the other candidate')])).toEqual([M])
+    const { edit: _, ...bare } = said(M, false, 'field exhausted')
+    expect(exhausted([said(M, false), bare as any])).toEqual([])
+    expect(exhausted([said('loop.untilBash', false), said('loop.untilBash', false)])).toEqual([])
+  })
+
+  it('proposalSchema narrows the enum; proposerRequest names the closed fields in fixed words and drops them from the schema', () => {
+    expect(proposalSchema(['loop.maxTurns']).properties.field.enum).toEqual(['loop.maxTurns'])
+    expect(proposalSchema(ALLOWED)).toEqual(PROPOSAL_SCHEMA)
+    const r = proposerRequest('m', 'IN', { schema: true, noThink: true, fields: ['systemPrompt', 'loop.maxTurns'] })
+    expect(r.messages[0].content).toContain('These fields are closed for now, propose another: systemPrompt, loop.maxTurns')
+    expect(r.messages[0].content).toMatch(/\n\/no_think$/)
+    expect((r.responseSchema as any).properties.field.enum).toEqual(ALLOWED.filter(f => f !== 'systemPrompt' && f !== 'loop.maxTurns'))
+    expect(r.messages[1].content).toBe('IN')
+    expect(proposerRequest('m', 'IN', { schema: false, noThink: false, fields: [] }).messages[0].content).not.toContain('closed for now')
+  })
+
+  it('replay: state.exhausted, and a proposal on a field closed at that point is refused', () => {
+    const M = 'loop.maxRepeats'
+    const shut = [start, cur, cand(1, { field: M, value: 3 }, false, 'bad value'), cand(2, { field: 'systemPrompt', value: 'x' }, false, 'bad value'), cand(1, { field: M, value: 4 }, false, 'bad value', 2)]
+    expect((replay(shut as any, harness(), ctx) as any).exhausted).toEqual([M])
+    const forged = prop({ round: 2, index: 2, input: '{}', edit: { field: M, value: 5 } })
+    expect(replay([...shut, forged] as any, harness(), ctx)).toEqual({ error: 'cannot resume: round 2 candidate 2: proposed edit: field exhausted' })
+    expect(replay([...shut, prop({ round: 2, index: 2, input: '{}', edit: { field: 'loop.maxTurns', value: 6 } })] as any, harness(), ctx)).toHaveProperty('pending')
+  })
+
   it('a proposal line parses; one without an edit or with an extra key is refused', () => {
     expect(parseJournal(jsonl(start, cur, prop(a1)))).toEqual({ lines: [start, cur, prop(a1)] })
     expect(parseJournal(jsonl(start, cur, { ...prop(a1), edit: undefined }))).toEqual({ error: 'line 3: missing edit' })
@@ -601,7 +635,8 @@ describe('evolve sweeps', () => {
   })
 
   it('replay: the baseline is the first sweeps\' cur, in the first round that swept; both refused before the runs takes no sweep', () => {
-    const no = (i: number, v: number) => said(i, { field: 'loop.maxRepeats', value: v }, false, 'bad value')
+    // Two fields, so neither is closed when round 2 proposes on loop.maxRepeats.
+    const no = (i: number, v: number) => said(i, { field: i === 1 ? 'loop.maxTurns' : 'systemPrompt', value: i === 1 ? v : 'x' }, false, 'bad value')
     const r = go(start(), probe, no(1, 1), no(2, 2))
     expect(r.error).toBeUndefined()
     expect(r.baseline).toBeUndefined()

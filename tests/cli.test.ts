@@ -1707,9 +1707,13 @@ const evTasks = (sets: Record<'train' | 'gate' | 'test', number>, prefix = 'job'
   Object.entries(sets).flatMap(([set, n]) => Array.from({ length: n }, (_, i) => ({ name: `${prefix}-${set}-${i}`, prompt: 'make the file', check: 'test -f done.txt', set })))
 const journal = (cwd: string) => readFileSync(join(cwd, 'harnesses', 'h.evolve.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l))
 const ONE_EACH = { train: 1, gate: 1, test: 1 }
-const TWO_WAYS = (a = ALWAYS, b = `${ALWAYS} Then look again.`) => {
-  const [p, ...rest] = evFake()
-  return [{ ...p, keep: false, content: JSON.stringify({ field: 'systemPrompt', value: a }) }, { ...p, keep: false, content: JSON.stringify({ field: 'systemPrompt', value: b }) }, ...rest]
+// Two accepted candidates must differ in field now, and only a paragraph steers the fake: so the runs go in order, not by what the request holds.
+// After the probe: train and gate, each cur FAIL then both candidates PASS; then the test pair, original FAIL and version PASS.
+const TWO_WAYS = () => {
+  const u = { usage: { promptTokens: 100, completionTokens: 10 } }
+  const [no, yes] = [{ content: 'done', ...u }, { ...bashCall('echo ok > done.txt'), ...u }]
+  const prop = (field: string, value: string | number) => ({ when: 'You improve the harness', content: JSON.stringify({ field, value }), usage: { promptTokens: 50, completionTokens: 5 } })
+  return [prop('systemPrompt', ALWAYS), prop('loop.maxRepeats', 3), no, no, yes, yes, no, yes, yes, no, yes]
 }
 /** Every run a journal line holds, whatever the line. */
 const allRuns = (l: any): any[] => [...(l.runs ?? []), ...(l.cur ?? []), ...(l.cands ?? []).flatMap((c: any) => c.runs), ...(l.orig ?? []), ...(l.last ?? [])]
@@ -1724,7 +1728,7 @@ test('evolve: a candidate that turns the fake to PASS is accepted, v1 written, o
   const lines = journal(cwd)
   const cands = lines.filter(l => l.type === 'candidate')
   // Candidate 2 is refused before the runs, so its line comes first.
-  expect(cands.map(c => [c.index, c.accepted, c.reason])).toEqual([[2, false, 'already tried'], [1, true, 'accepted']])
+  expect(cands.map(c => [c.index, c.accepted, c.reason])).toEqual([[2, false, 'field exhausted'], [1, true, 'accepted']])
   const v1 = JSON.parse(readFileSync(join(cwd, 'harnesses', 'h.v1.json'), 'utf8'))
   expect(v1.name).toBe('h.v1')
   expect(v1.systemPrompt).toContain(ALWAYS)
@@ -1783,11 +1787,54 @@ test('evolve: a proposal with a URL is refused before any run', async () => {
   expect(r.status, r.stderr).toBe(0)
   const cands = journal(cwd).filter(l => l.type === 'candidate')
   expect(cands).toHaveLength(2)
-  for (const c of cands) expect(c.reason).toBe('looks like a command or an address')
+  // Candidate 1's field is closed for candidate 2: asked twice, it stays on it.
+  expect(cands.map(c => [c.index, c.reason])).toEqual([[1, 'looks like a command or an address'], [2, 'field exhausted']])
   expect(types(cwd)).not.toContain('sweep')
   expect(r.stdout).toContain('no version beat the original')
   expect(existsSync(join(cwd, 'harnesses', 'h.v1.json'))).toBe(false)
   expect(clonesIn(env)).toEqual([])
+}, 120_000)
+
+test('evolve: candidate 2 is told candidate 1\'s field is closed and moves to another', async () => {
+  const repo = await tasksRepo(evTasks(ONE_EACH))
+  const other = { when: 'closed for now, propose another: systemPrompt', keep: true, content: JSON.stringify({ field: 'loop.maxRepeats', value: 3 }), usage: { promptTokens: 50, completionTokens: 5 } }
+  const env = await tasksEnv([other, ...evFake()])
+  const cwd = await tmp('lhb-cwd-')
+  const r = cli(['evolve', evHarness(cwd), '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
+  expect(r.status, r.stderr).toBe(0)
+  const cands = journal(cwd).filter(l => l.type === 'candidate')
+  expect(cands.map(c => [c.index, c.edit.field])).toEqual(expect.arrayContaining([[1, 'systemPrompt'], [2, 'loop.maxRepeats']]))
+  expect(r.stderr).toContain('proposer: 110 tokens')
+  expect(clonesIn(env)).toEqual([])
+}, 120_000)
+
+test('evolve: a reply on a closed field is asked once more, then journaled field exhausted with no runs', async () => {
+  const repo = await tasksRepo(evTasks(ONE_EACH))
+  const env = await tasksEnv(evFake())
+  const cwd = await tmp('lhb-cwd-')
+  const r = cli(['evolve', evHarness(cwd), '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
+  expect(r.status, r.stderr).toBe(0)
+  const lines = journal(cwd)
+  expect(lines.find(l => l.type === 'candidate' && l.index === 2)).toMatchObject({ accepted: false, reason: 'field exhausted', edit: { field: 'systemPrompt' } })
+  expect(lines.filter(l => l.type === 'sweep').every(l => l.cands.length === 1)).toBe(true)
+  // 55 tokens a call: candidate 1 once, candidate 2 twice.
+  expect(r.stderr).toContain('proposer: 165 tokens')
+}, 120_000)
+
+test('evolve: with every field closed the rounds end and the report says so', async () => {
+  const repo = await tasksRepo(evTasks(ONE_EACH))
+  // Refused before any run (a string where a number goes), two fields a round, each twice: eight fields in eight rounds.
+  const fields = ['systemPrompt', 'loop.maxTurns', 'loop.maxRepeats', 'loop.freshContext', 'loop.repeatTemperature', 'loop.repeatThinkTokens', 'context.maxToolOutputChars', 'context.budgetTokens']
+  const bad = (field: string) => ({ content: JSON.stringify({ field, value: field === 'systemPrompt' ? ' ' : 'x' }), usage: { promptTokens: 50, completionTokens: 5 } })
+  const asks = fields.flatMap((f, i) => i % 2 ? [] : [bad(f), bad(fields[i + 1]!), bad(f), bad(fields[i + 1]!)])
+  const env = await tasksEnv([{ content: 'done', usage: { promptTokens: 100, completionTokens: 10 } }, ...asks])
+  const cwd = await tmp('lhb-cwd-')
+  const r = cli(['evolve', evHarness(cwd), '--tasks', repo, '--rounds', '9', '--yes'], env, cwd)
+  expect(r.status, r.stderr).toBe(0)
+  expect(r.stdout).toContain('every field is exhausted')
+  expect(r.stderr).toContain('proposer: 880 tokens')
+  expect(journal(cwd).filter(l => l.type === 'candidate')).toHaveLength(16)
+  expect(types(cwd)).not.toContain('sweep')
 }, 120_000)
 
 test('evolve: a candidate whose first request is heavier than the ceiling is refused', async () => {
@@ -2112,7 +2159,7 @@ test('evolve: a journal with a flipped decision is refused on resume and on --re
   const { repo, env, cwd, h } = await evFirst()
   const lines = journal(cwd)
   const refused = lines.find(l => l.type === 'candidate' && !l.accepted)
-  // The second candidate is refused before any run (already tried): flip it, as if it had been measured.
+  // The second candidate is refused before any run (field exhausted): flip it, as if it had been measured.
   Object.assign(refused, { accepted: true, reason: 'accepted', version: 2, edit: { field: 'loop.maxRepeats', value: 3 } })
   writeFileSync(join(cwd, 'harnesses', 'h.evolve.jsonl'), lines.map(l => JSON.stringify(l)).join('\n') + '\n')
   const r = cli(['evolve', h, '--tasks', repo, '--report'], env, cwd)
@@ -2536,7 +2583,7 @@ test('evolve --task polyglot --size 3 --rounds 1: end to end, the report again, 
   const ex = loadPolyglot().exercises.slice(0, 3)
   expect(lines[0]).toMatchObject({ type: 'start', strict: false, sets: { train: [ex[0].name], gate: [ex[1].name], test: [ex[2].name] } })
   expect(lines[0].sha).toMatch(/^polyglot:[0-9a-f]{64}:3$/)
-  expect(lines.filter(l => l.type === 'candidate').map(l => [l.accepted, l.reason])).toEqual([[false, 'already tried'], [true, 'accepted']])
+  expect(lines.filter(l => l.type === 'candidate').map(l => [l.accepted, l.reason])).toEqual([[false, 'field exhausted'], [true, 'accepted']])
   expect(r.stdout).toContain('\u041e\u0420\u0406\u0404\u041d\u0422\u0418\u0420, \u041d\u0415 \u0414\u041e\u041a\u0410\u0417')
   expect(r.stdout).toContain('raise --size to 24 for a strict verdict')
   expect(r.stdout).toContain('more PASS')
