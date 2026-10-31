@@ -19,7 +19,7 @@ import { ALLOWED, CANDIDATES, type EvolveMode, MODES, ROUNDS, numbersOf, runCoun
 import { evolveReport } from './core/evolve-report.js'
 import { loadRepoTasks, hostOf, consentText, hasConsent, saveConsent, git, TASKS_FILE, type RepoTasks, type EvolveConsent } from './core/repo-tasks.js'
 import { cloneAt, linkNodeModules, protectedChanged, runCheck, finishRun, removeAllClonesSync, prepareModules, modulesManifest, modulesTampered, type Clone } from './core/repo-clone.js'
-import { validateConfig, sendsAnswerSchema, KEY_ENV, FLAG_WORDS, keyNameMessage, keyErrors, keyProblem, keyNote, apiKey, NO_THINK_LINE, isHttpUrl, isLoopbackUrl, type HarnessConfig, type BackendKind } from './core/config.js'
+import { validateConfig, sendsAnswerSchema, KEY_ENV, FLAG_WORDS, keyNameMessage, keyErrors, keyProblem, keyNote, NO_THINK_LINE, isHttpUrl, isLoopbackUrl, type HarnessConfig, type BackendKind } from './core/config.js'
 import { validateWorkdir } from './core/tools/sandbox.js'
 import { BackendError, isStop, sendRetrying, type Backend, type ChatRequest, type Delta, type NormalizedResponse } from './core/backends/types.js'
 import { approvalPrompt, mcpCounts, quitWithoutWork, showable, showableText, type HarnessEvent, type ToolCall } from './core/events.js'
@@ -31,17 +31,18 @@ import { childEnv, bashEnvNote } from './core/tools/env.js'
 import { median, formatTable, rowNames, BENCH_TASKS, benchTotal, runTitle, benchFileName, autoApproves, type BenchRun, type BenchHarness, type BenchResult } from './core/bench.js'
 import { GUARD_BLOCKED, EDIT_MISS } from './core/tools/errors.js'
 import { createBackend } from './core/backends/index.js'
-import { redactor } from './core/redact.js'
+import { keyRedactor, type Redactor } from './core/redact.js'
 import { replayPayload, replySignature, recordedTurn } from './core/replay.js'
 import { normalizeRequest } from './core/normalize.js'
 import { analyzeTrace, formatAnalysisTable, type AnalyzedRun } from './core/analyze.js'
 import { preflight, windowWarning, type PreflightResult } from './core/preflight.js'
 import { knobsOff } from './core/knobs.js'
 import { startProxy } from './core/proxy/server.js'
-import { COMMANDS, isCommand, usage, commandHelp, overview, type CommandName } from './cli-help.js'
+import { COMMANDS, isCommand, usage, commandHelp, overview, overOf, type CommandName } from './cli-help.js'
 
 const PKG_ROOT = fileURLToPath(new URL('..', import.meta.url))
 const die = (msg: string): never => { console.error(msg); process.exit(2) }
+const sha256 = (b: Buffer | string) => createHash('sha256').update(b).digest('hex')
 const PKG = JSON.parse(readFileSync(path.join(PKG_ROOT, 'package.json'), 'utf8')) as { version: string; description: string }
 /** A command's --help: printed before the command does anything, so `serve --help` copies nothing. */
 const printHelp = (name: CommandName): void => { console.log(commandHelp(name)) }
@@ -148,7 +149,7 @@ type ExecOpts = { yes: boolean; json: boolean; quiet?: boolean; signal?: AbortSi
 /** Runs one agent loop and keeps its trace in ./runs/<id>.jsonl, the file format serve reads. Written as .part and renamed when the loop ends, so a live or killed run is never listed. */
 async function execRun(config: HarnessConfig, task: string, workdir: string, o: ExecOpts): Promise<{ id: string; last: HarnessEvent }> {
   // The task goes to the server as typed; the trace's first line is a file like the events after it, so it has no key in it.
-  const redact = redactor(apiKey(config.backend, process.env), config.backend.apiKeyEnv ?? '')
+  const redact = keyRedactor(config.backend)
   const trace = new TraceWriter('runs', true)
   await trace.open({ harness: config.name, task: redact.text(task), workdir, started: Date.now(), bench: o.bench })
   // Ctrl-C: keep what the run has written instead of leaving a .part nothing ever lists again
@@ -201,6 +202,11 @@ async function execRun(config: HarnessConfig, task: string, workdir: string, o: 
   return { id: trace.id, last: last! }
 }
 
+/** The bash environment and where the key goes, before a harness runs; `prefix` says which one when there are several. */
+function sayNotes(config: HarnessConfig, prefix = ''): void {
+  for (const note of [bashEnvNote(config.tools.bashEnv), keyNote(config.backend, process.env)]) if (note) console.error(prefix + note)
+}
+
 /** A path under the home dir as ~/…, for the terminal. */
 const shortHome = (p: string): string => { const h = homedir(); return p.startsWith(h + path.sep) ? '~' + p.slice(h.length) : p }
 
@@ -214,7 +220,7 @@ async function cmdRun(argv: string[]) {
   if (!file || !taskParts.length) argError('run', 'run needs a harness file and a task')
   const workdir = path.resolve(values.workdir ?? '.')
   const werr = await validateWorkdir(workdir); if (werr) die(werr)
-  const config = await loadHarness(file, { model: values.model, baseUrl: values['base-url'], kind: values.kind, apiKeyEnv: values['api-key-env'] })
+  const config = await loadHarness(file, overOf(values))
   // A schema the harness would not send is a run whose answer nothing holds to a form, and it would look like any other: refuse it here.
   let answerSchema: Record<string, unknown> | undefined
   const schemaFile = values['answer-schema']
@@ -226,10 +232,7 @@ async function cmdRun(argv: string[]) {
   }
   // On a pipe or /dev/null nobody can answer: the run would end at its first question as if interrupted (exit 130, input at EOF) or wait for it forever (input open).
   if (!values.yes && process.stdin.isTTY !== true && mayAsk(config)) die(NO_TTY)
-  const note = bashEnvNote(config.tools.bashEnv)
-  if (note) console.error(note)
-  const key = keyNote(config.backend, process.env)
-  if (key) console.error(key)
+  sayNotes(config)
   const notes = { file: notesPath(await notesKey(workdir)), write: true }
   const { last } = await execRun(config, taskParts.join(' '), workdir, { yes: values.yes, json: values.json, answerSchema, notes })
   const final = last.type === 'done' && last.reason === 'final' ? last : undefined
@@ -253,7 +256,7 @@ async function preflightAll(hs: { name: string; config: HarnessConfig; server?: 
       asked.set(key, r = await preflight(createBackend(b), b))
       if (r.ok) console.error(`preflight: ${b.baseUrl} ${b.model}: window ${r.server.nCtx ?? 'unknown'}${r.server.build ? `, build ${showable(r.server.build)}` : ''}`)
     }
-    if (!r.ok) return showable(redactor(apiKey(b, process.env), b.apiKeyEnv ?? '').text(r.message))
+    if (!r.ok) return showable(keyRedactor(b).text(r.message))
     h.server = r.server
     // A knob without which the harness would be another one is a refusal before any run, like a model that is not there.
     const refuse = knobsOff(h.config, r.server, task.answerSchema?.(size)).refuse
@@ -269,17 +272,14 @@ async function cmdDemo(argv: string[]) {
   keyFlag('demo', values['api-key-env'])
   console.error(autoApproves('demo'))
   const names = demoHarnesses(values.kind, values['api-key-env'])
-  const configs = await Promise.all(names.map(name => loadHarness(path.join(PKG_ROOT, 'harnesses', `${name}.json`), { model: values.model, baseUrl: values['base-url'], kind: values.kind, apiKeyEnv: values['api-key-env'] })))
+  const configs = await Promise.all(names.map(name => loadHarness(path.join(PKG_ROOT, 'harnesses', `${name}.json`), overOf(values))))
   // Not die(): exit 2 is for a bad command line; a server that is not up yet is the newcomer's first stumble.
   const no = await preflightAll(configs.map(config => ({ name: config.name, config })), TASKS.slug)
   if (no) { console.error(no); process.exitCode = 1; return }
   const rows: string[] = []
   for (const [i, name] of names.entries()) {
     const config = configs[i]
-    const note = bashEnvNote(config.tools.bashEnv)
-    if (note) console.error(`${name}: ${note}`)
-    const key = keyNote(config.backend, process.env)
-    if (key) console.error(`${name}: ${key}`)
+    sayNotes(config, `${name}: `)
     const workdir = await TASKS.slug.prepare()
     console.error(`\n=== ${name} (${config.backend.model}) in ${workdir}`)
     const { id, last } = await execRun(config, TASKS.slug.prompt, workdir, { yes: true, json: values.json })
@@ -298,7 +298,7 @@ const INT = /^[1-9]\d*$/
 /** One bench run: fresh task workdir → execRun (timed) → the task's check. Never throws; an exception becomes a FAIL row with reason 'error'. */
 async function benchOnce(config: HarnessConfig, round: number, timeoutS: number, out: string, task: Task, notes: NotesStore, size?: number): Promise<BenchRun> {
   // An exception that escapes execRun is text nothing has cleaned yet, and it goes to the bench JSON and the terminal.
-  const redact = redactor(apiKey(config.backend, process.env), config.backend.apiKeyEnv ?? '')
+  const redact = keyRedactor(config.backend)
   let workdir = '', traceId: string | undefined, parseErrors = 0, toolChars = 0, costUsd: number | undefined, peakTokens: number | undefined, tokens: number | undefined, firstPromptTokens: number | undefined, seenFirst = false, modelMs = 0, toolErrors = 0, guardBlocks = 0, editMiss = 0, toolCounts: Record<string, number> = {}, outputLines = 0, reasoningTokens: number | undefined, lastError: string | undefined, stop: number | undefined, stopMidReply = false, t0 = Date.now(), run: BenchRun
   process.stderr.write(`${config.name} ${runTitle({ round, task: task.name })} `)
   try {
@@ -441,7 +441,7 @@ const SET_OF: SetName[] = ['train', 'gate', 'test']
  *  upgraded set (or another --size) changes none of its numbers, and its names still bind what the proposer wrote. */
 function polyglotSource(size: number, first: StartLine | undefined, report: boolean, harnessUrl: string): EvolveSource {
   const p = loadPolyglot()
-  const id = `polyglot:${createHash('sha256').update(JSON.stringify(p)).digest('hex')}:${size}`
+  const id = `polyglot:${sha256(JSON.stringify(p))}:${size}`
   const tasks = polyglotTasks(p, size)
   const sets = report && first ? first.sets : splitSets(tasks.map((t, i) => ({ name: t.name!, set: SET_OF[i % 3] })))
   return {
@@ -456,7 +456,7 @@ function polyglotSource(size: number, first: StartLine | undefined, report: bool
       if (host === hostOf(harnessUrl)) return void console.error(`proposer: ${host}, the harness's own server`)
       const text = ["mode: evolve on polyglot — the model's own prompts run unreviewed while Evolve measures them", `proposer: ${host}`, `run limit: mode ${mode}, up to ${runs} runs`,
         'it receives how the runs failed (fixed-word signatures) and the current values of these fields, and proposes an edit to one of them', `fields: ${ALLOWED.join(', ')}`].join('\n')
-      const file = path.join(stateDir(), 'consent', 'task-polyglot.evolve.json'), hash = createHash('sha256').update(text).digest('hex')
+      const file = path.join(stateDir(), 'consent', 'task-polyglot.evolve.json'), hash = sha256(text)
       let has = false
       try { has = JSON.parse(readFileSync(file, 'utf8')).hash === hash } catch {}
       await ask(text, has, yes, async () => { await mkdir(path.dirname(file), { recursive: true }); await writeFile(file, JSON.stringify({ hash }) + '\n') },
@@ -485,8 +485,7 @@ async function cmdBench(argv: string[]) {
   const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: COMMANDS.bench.options })
   if (values.help) return printHelp('bench')
   keyFlag('bench', values['api-key-env'])
-  if (!INT.test(values.n)) argError('bench', '--n must be a positive integer')
-  if (!INT.test(values.timeout)) argError('bench', '--timeout must be a positive integer')
+  for (const f of ['n', 'timeout'] as const) if (!INT.test(values[f])) argError('bench', `--${f} must be a positive integer`)
   const models = values.models?.split(',')
   if (models && values.model !== undefined) argError('bench', '--model cannot go with --models: --models names the models')
   if (models?.includes('')) argError('bench', '--models: an empty model name')
@@ -508,11 +507,8 @@ async function cmdBench(argv: string[]) {
   if (!repo && !poly && !builtin) argError('bench', `--task must be one of ${Object.keys(BENCH_TASKS).join('|')}`)
   const size = values.size === undefined ? undefined : Number(values.size)
   // A task with sizes needs one in range; a task without sizes takes none.
-  if (poly && !(values.size !== undefined && INT.test(values.size) && size! <= POLYGLOT_MAX)) argError('bench', `--size must be an integer from 1 to ${POLYGLOT_MAX} for polyglot`)
-  if (builtin) {
-    const sizeOk = builtin.max === undefined ? size === undefined : values.size !== undefined && INT.test(values.size) && size! <= builtin.max
-    if (!sizeOk) argError('bench', builtin.max === undefined ? `--size: ${taskName} has no sizes` : `--size must be an integer from 1 to ${builtin.max} for ${taskName}`)
-  }
+  const max = BENCH_TASKS[taskName] ?? 0
+  if (max ? !(INT.test(values.size ?? '') && size! <= max) : size !== undefined) argError('bench', max ? `--size must be an integer from 1 to ${max} for ${taskName}` : `--size: ${taskName} has no sizes`)
   if (values['max-turns'] !== undefined && !INT.test(values['max-turns'])) argError('bench', '--max-turns must be a positive integer')
   const n = Number(values.n), timeoutS = Number(values.timeout)
   const started = new Date()
@@ -520,7 +516,7 @@ async function cmdBench(argv: string[]) {
   // Per file: a ./harnesses copied by an older version lacks the newer shipped ones.
   const localDir = path.join(process.cwd(), 'harnesses')
   const files = positionals.length ? positionals : demoHarnesses(values.kind, values['api-key-env']).map(h => [path.join(localDir, `${h}.json`), path.join(PKG_ROOT, 'harnesses', `${h}.json`)].find(existsSync)!)
-  const over = { model: values.model, baseUrl: values['base-url'], kind: values.kind, apiKeyEnv: values['api-key-env'], maxTurns: values['max-turns'] === undefined ? undefined : Number(values['max-turns']) }
+  const over = { ...overOf(values), maxTurns: values['max-turns'] === undefined ? undefined : Number(values['max-turns']) }
   console.error(autoApproves('bench'))
   const harnesses: BenchHarness[] = [], from: string[] = []
   // --models: every harness on every model, one model after the other; each model's first harness is the base of its p.
@@ -529,12 +525,7 @@ async function cmdBench(argv: string[]) {
     from.push(f)
     harnesses.push({ name: config.name, config, pass: 0, reasons: {}, median: { turns: 0, toolCalls: 0, ms: 0 }, runs: [] })
   }
-  for (const h of harnesses) {
-    const note = bashEnvNote(h.config.tools.bashEnv)
-    if (note) console.error(`${h.name}: ${note}`)
-    const key = keyNote(h.config.backend, process.env)
-    if (key) console.error(`${h.name}: ${key}`)
-  }
+  for (const h of harnesses) sayNotes(h.config, `${h.name}: `)
   // Read once, before any run: the exercises of a later run are the bytes of now, whatever an earlier run did to the files.
   let work: Work = { tasks: poly ? polyglotTasks(loadPolyglot(), size!) : [builtin!], live: new Map(), async ready() {} }
   if (repo) {
@@ -635,7 +626,7 @@ async function cmdEvolve(argv: string[]) {
   // Read once: edits go onto this JSON and versions are saved from it, without the overrides; the file is never written.
   let raw: object, bytes: Buffer
   try { bytes = await readFile(file!); raw = JSON.parse(bytes.toString('utf8')) } catch (e) { return die(`cannot read harness ${file}:\n  ${(e as Error).message}`) }
-  const over = { model: values.model, baseUrl: values['base-url'], kind: values.kind, apiKeyEnv: values['api-key-env'] }
+  const over = overOf(values)
   const config = overridden(raw, over, file!, !values.report)
   // Priced = the harness's own price: no flag would silently buy a night at a price nobody set a ceiling on. --report runs nothing.
   const limit = values['max-usd'] === undefined ? undefined : Number(values['max-usd'])
@@ -645,7 +636,6 @@ async function cmdEvolve(argv: string[]) {
     if (limit === undefined && config.backend.pricePerMTok) argError('evolve', 'evolve on a priced harness needs --max-usd <dollars>: the most it may spend before it stops (a stopped evolve resumes with a higher one)')
   }
   const proposer = values.proposer === undefined ? config : await loadHarness(values.proposer, {}, !values.report)
-  const sha256 = (b: Buffer | string) => createHash('sha256').update(b).digest('hex')
   // Named from the file, never config.name: that is text inside the file, and it becomes a path.
   const base = path.basename(file!).replace(/\.json$/, '')
   const dir = 'harnesses', jf = path.join(dir, `${base}.evolve.jsonl`), snap = path.join(dir, `${base}.evolve.notes.jsonl`)
@@ -801,11 +791,11 @@ async function cmdEvolve(argv: string[]) {
   const out = path.join('runs', `evolve-${base}.json`), notes: NotesStore = { file: snap, write: false }
   const stop = () => { dropWork(work); console.error(`the model changed the installed packages in ${modulesDir}; stopping; ${modules === undefined ? 'run the same command to resume: setup installs them again' : `a resume refuses other packages: restore them, then ${then}`}`); process.exitCode = 1 }
   const pb = proposer.backend
-  const pRedact = redactor(apiKey(pb, process.env), pb.apiKeyEnv ?? '')
-  const hRedact = redactor(apiKey(config.backend, process.env), config.backend.apiKeyEnv ?? '')
+  const pRedact = keyRedactor(pb)
+  const hRedact = keyRedactor(config.backend)
   // Not a FAIL: the server refused the key, has no credits, or kept limiting. The cut step's runs are not journaled (its proposal may be).
   const WHY: Record<number, string> = { 401: 'the key was refused', 402: 'no credits left', 403: 'the request was refused', 429: 'rate limited, still after 3 retries' }
-  const halt = (who: 'harness' | 'proposer', b: HarnessConfig['backend'], status: number, redact: ReturnType<typeof redactor>, midReply?: boolean): never => {
+  const halt = (who: 'harness' | 'proposer', b: HarnessConfig['backend'], status: number, redact: Redactor, midReply?: boolean): never => {
     cutNow()
     dropWork(work)
     const why = midReply && status === 429 ? '429 mid-reply, not retried' : WHY[status]
@@ -971,8 +961,7 @@ async function cmdReplay(argv: string[]) {
   const [run] = positionals, kind = values.kind, baseUrl = values['base-url']
   const temperature = values.temperature === undefined ? undefined : Number(values.temperature)
   if (!run || positionals.length > 1) argError('replay', 'replay needs one run id or trace file')
-  if (!INT.test(values.turn ?? '')) argError('replay', '--turn must be a positive integer')
-  if (!INT.test(values.n)) argError('replay', '--n must be a positive integer')
+  for (const f of ['turn', 'n'] as const) if (!INT.test(values[f] ?? '')) argError('replay', `--${f} must be a positive integer`)
   if (values['max-tokens'] !== undefined && !INT.test(values['max-tokens'])) argError('replay', '--max-tokens must be a positive integer')
   if (kind === 'anthropic') argError('replay', '--kind anthropic is not yet supported by replay')
   if (kind !== 'openai' && kind !== 'ollama') argError('replay', '--kind must be openai or ollama')
@@ -996,7 +985,7 @@ async function cmdReplay(argv: string[]) {
   if (problem) die(`${problem}: --api-key-env names it as the API key`)
   const note = keyNote(keyed, process.env)
   if (note) console.error(note)
-  const redact = redactor(apiKey(keyed, process.env), keyEnv ?? '')
+  const redact = keyRedactor(keyed)
   const payload = replayPayload(rec.payload, kind as BackendKind, { temperature, maxTokens: values['max-tokens'] === undefined ? undefined : Number(values['max-tokens']) })
   const backend = (await fakeBackendFromEnv()) ?? createBackend({ kind: kind as BackendKind, baseUrl: baseUrl!, model: '', temperature: 0, ...(keyEnv ? { apiKeyEnv: keyEnv } : {}) })
   const recorded = rec.raw === undefined ? undefined : replySignature(rec.raw)

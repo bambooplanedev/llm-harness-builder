@@ -9,6 +9,9 @@ type Docs<O extends Options> = { readonly [K in Exclude<keyof O, 'help'>]: reado
 type Command<O extends Options> = { summary: string; args: string; options: O; docs: Docs<O> }
 const command = <O extends Options>(c: Command<O>): Command<O> => c
 
+/** The backend flags as harness overrides. Do not reorder the keys: evolve's pin hashes this as JSON, and a saved journal with another pin refuses to resume. */
+export const overOf = (v: { model?: string; 'base-url'?: string; kind?: string; 'api-key-env'?: string }) => ({ model: v.model, baseUrl: v['base-url'], kind: v.kind, apiKeyEnv: v['api-key-env'] })
+
 const help = { type: 'boolean', short: 'h' } as const
 const backend = { model: { type: 'string' }, 'base-url': { type: 'string' }, kind: { type: 'string' }, 'api-key-env': { type: 'string' } } as const
 const backendDocs = {

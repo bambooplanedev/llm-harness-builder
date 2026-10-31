@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest'
-import { COMMANDS, isCommand, usage, commandHelp, overview, type CommandName } from '../src/cli-help.js'
+import { COMMANDS, isCommand, usage, commandHelp, overview, overOf, type CommandName } from '../src/cli-help.js'
 import { TASKS } from '../src/core/tasks.js'
 
 const names = Object.keys(COMMANDS) as CommandName[]
@@ -58,4 +58,12 @@ test('README usage lines match --help: every command has its line, word for word
     }
     expect([f, [...seen].sort()]).toEqual([f, [...names].sort()])
   }
+})
+
+// evolve's pin hashes this JSON: another key order or spelling and every saved journal refuses to resume.
+test('overOf: the exact JSON evolve pins, whatever order the flags came in; a flag not given drops out', () => {
+  expect(JSON.stringify(overOf({ 'api-key-env': 'K_API_KEY', kind: 'openai', 'base-url': 'http://h/v1', model: 'm' })))
+    .toBe('{"model":"m","baseUrl":"http://h/v1","kind":"openai","apiKeyEnv":"K_API_KEY"}')
+  expect(JSON.stringify(overOf({ kind: 'ollama' }))).toBe('{"kind":"ollama"}')
+  expect(JSON.stringify(overOf({}))).toBe('{}')
 })
