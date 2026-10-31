@@ -139,12 +139,13 @@ async function startNew() {
 }
 // Per-success costs against the first harness on the same model (the same rule as evolve) and the tool-use means; '-' where a run did not report.
 // p is up to 20000 shuffles per number per harness, and a poll hands over a new result every two seconds: it is redone only when a run came in or the file changed.
-let pKey = '', pMemo: string[][] = []
+let pKey = '', pMemo: string[][] = [], pText = ''
 const wide = computed(() => {
   const hs = result.value?.harnesses ?? [], key = `${result.value?.date}/${runs.value.length}`
-  if (key !== pKey) { pMemo = pCells(hs); pKey = key }
+  if (key !== pKey) { pMemo = pCells(hs); pText = formatTable(hs, { wide: true }); pKey = key }
   return wideCells(hs).map((c, i) => [...c, ...pMemo[i]])
 })
+const plainTable = computed(() => (wide.value, pText))
 /** A row's name: with --models the same harness name stands on several models, so the model is part of it (and of every key). */
 const labels = computed(() => result.value ? rowNames(result.value.harnesses) : [])
 const medCost = (h: BenchHarness) => { const c = h.runs.flatMap(r => r.costUsd ?? []).sort((a, b) => a - b); return c.length ? `$${Number(c[(c.length - 1) >> 1].toPrecision(3))}` : '-' }
@@ -179,7 +180,7 @@ async function tick() {
   } catch (e) {
     if (my === gen) { fetchFailed = true; error.value = (e as Error).message }
   } finally {
-    if (!stopped && my === gen) timer = setTimeout(tick, 2000)
+    if (!stopped && my === gen) timer = setTimeout(tick, document.hidden ? 30000 : 2000)
   }
 }
 
@@ -322,7 +323,7 @@ onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer); unsub?.(); d
           </table>
         </div>
         <p v-if="runs.length" class="hint">{{ t('bench.wilsonNote') }}</p>
-        <details v-if="runs.length" class="inspector"><summary class="hint">plain table (every column)</summary><pre>{{ formatTable(result.harnesses, { wide: true }) }}</pre></details>
+        <details v-if="runs.length" class="inspector"><summary class="hint">plain table (every column)</summary><pre>{{ plainTable }}</pre></details>
       </template>
       <h5 v-if="result && events.length && !(sideA && sideB)" class="group">{{ sideA ? `${sideA.name} #${sideA.run.round} · ${sideA.run.verdict} · trace` : `${active?.harness ?? ''} #${active?.round ?? ''} · live trace` }}</h5>
       <Diff v-if="sideA && sideB" :a="sideA" :b="sideB" :task="result!.task" @close="closeDiff" />
