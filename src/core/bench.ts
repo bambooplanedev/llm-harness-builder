@@ -2,6 +2,7 @@
 import type { DoneReason, HarnessEvent } from './events.js'
 import type { HarnessConfig } from './config.js'
 import { costCheck, type Cost } from './evolve-cost.js'
+import type { RunLite } from './evolve.js'
 
 export type BenchRun = {
   round: number; verdict: 'PASS' | 'FAIL'; reason: DoneReason | 'error'
@@ -108,11 +109,16 @@ const meanCell = (xs: (number | undefined)[]): string => { const v = xs.flatMap(
  *  (the first harness on the same model), then tool use. A cost past evolve's tolerance against the base ends in "!"; nothing is refused. */
 export function wideCells(harnesses: BenchHarness[]): string[][] {
   const lite = (h: BenchHarness) => h.runs.map(r => ({ task: r.task ?? 'task', verdict: r.verdict, turns: r.turns, tokens: r.tokens, modelMs: r.modelMs ?? r.ms }))
+  const pick = { turns: (r: RunLite) => r.turns, tokens: (r: RunLite) => r.tokens, time: (r: RunLite) => r.modelMs }
   return harnesses.map(h => {
-    const base = harnesses.find(b => b.config.backend.model === h.config.backend.model)!
+    const base = harnesses.find(b => b.config.backend?.model === h.config.backend?.model)!
+    const passes = lite(h).filter(r => r.verdict === 'PASS')
     const cell = (cost: Cost, f: (x: number) => string) => {
-      const c = costCheck(lite(base), lite(h), cost, base.config.loop.maxTurns)
-      return c ? f(base === h ? c.before : c.after) + (c.over && base !== h ? '!' : '') : '-'
+      const c = costCheck(lite(base), lite(h), cost, base.config.loop?.maxTurns ?? Infinity)
+      if (c) return f(base === h ? c.before : c.after) + (c.over && base !== h ? '!' : '')
+      // Under MIN_SHARED there is no base to judge by: the plain mean per pass, never marked.
+      const v = passes.flatMap(r => pick[cost](r) ?? [])
+      return v.length ? f(mean(v)) : '-'
     }
     const paid = h.runs.flatMap(r => r.verdict === 'PASS' && r.costUsd !== undefined ? r.costUsd : [])
     return [cell('turns', x => x.toFixed(1)), cell('tokens', x => String(Math.round(x))), cell('time', x => (x / 1000).toFixed(1)),
@@ -152,7 +158,8 @@ export function formatTable(harnesses: BenchHarness[], opts: { wide?: boolean } 
   const line = (r: string[]) => r.map((c, i) => c.padEnd(w[i])).join('').trimEnd()
   return [line(head), ...rows.map(line), 'medians over all runs incl. failures; s = wall-clock per run',
     '95% CI = Wilson interval of the PASS rate; two harnesses whose intervals overlap are not told apart by this bench',
-    ...opts.wide ? ['per success = mean over passes on the tasks shared with the first harness of the same model (at least 5, else -); ! = dearer than evolve allows; tools, out lines, reason tok = mean per run; - = not reported'] : [],
+    ...opts.wide ? ['turns/ok, tok/ok, model s/ok: on 5+ tasks shared with the first harness of the same model, the mean over those tasks\' passes, and ! = dearer than evolve allows; under 5, a plain mean per pass, never marked. A JSON without model time falls back to wall-clock.',
+      '$/ok = plain mean over all passes, never marked. tools, out lines, reason tok = mean per run. - = not reported'] : [],
     ...tests ? ['tests = green tests over all runs; no interval: the tests of one exercise are not independent'] : []].join('\n')
 }
 

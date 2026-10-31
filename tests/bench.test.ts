@@ -167,7 +167,8 @@ test('formatTable --wide: per-success costs on shared successes; over tolerance 
 })
 test('formatTable --wide: under five shared tasks the cost cells are "-"; time falls back to ms', () => {
   const few = gold('base', five({}).slice(0, 4))
-  expect(formatTable([few], { wide: true }).split('\n')[1]).toMatch(/\s-\s+-\s+-\s+-\s+-\s+-\s+-$/)
+  expect(formatTable([few], { wide: true }).split('\n')[1]).toMatch(/\s4\.0\s+1000\s+2\.0\s+-\s+-\s+-\s+-$/)
+  expect(formatTable([gold('none', [{}])], { wide: true }).split('\n')[1]).toMatch(/\s-\s+-\s+-\s+-\s+-\s+-\s+-$/)
   const old = gold('base', five({ modelMs: undefined, ms: 3000 }))
   expect(formatTable([old], { wide: true }).split('\n')[1]).toMatch(/\s3\.0\s/)
 })
@@ -176,4 +177,9 @@ test('formatTable --wide: the base is the first harness on the same model; anoth
   const t = formatTable([m('a1', 'A', {}), m('b1', 'B', { turns: 8 }), m('a2', 'A', { turns: 8 })], { wide: true }).split('\n')
   expect(t[2]).not.toContain('!')
   expect(t[3]).toContain('8.0!')
+})
+
+test('formatTable --wide: an old JSON with a bare config renders without throwing', () => {
+  const h = { ...gold('old', [{ verdict: 'PASS', ms: 5000 }]), config: {} as BenchHarness['config'] }
+  expect(formatTable([h], { wide: true }).split('\n')[1]).toMatch(/\s4\.0\s+-\s+5\.0\s/)
 })
