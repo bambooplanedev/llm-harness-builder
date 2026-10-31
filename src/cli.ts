@@ -705,15 +705,19 @@ async function cmdEvolve(argv: string[]) {
     // Before the start line: a journal is never without its snapshot.
     writeFileSync(snap, existsSync(src.notesFile) ? readFileSync(src.notesFile) : '')
     // Counted per harness bytes + source, on a new journal only; the journal keeps its own number, so a later attempt never relabels it.
-    // An unreadable counter restarts at 1 and the start line says nothing: the report prints `attempt unknown`.
+    // An unreadable counter is left as it is and the start line says nothing: the report prints `attempt unknown`, never a made-up number.
     const cf = path.join(stateDir(), 'evolve-attempts', `${sha256(Buffer.concat([bytes, Buffer.from(src.id)]))}.txt`)
     let attempt: number | undefined
     try {
       const t = existsSync(cf) ? readFileSync(cf, 'utf8').trim() : '0'
-      attempt = /^\d{1,9}$/.test(t) ? Number(t) + 1 : undefined
-      await mkdir(path.dirname(cf), { recursive: true })
-      writeFileSync(cf + '.tmp', `${attempt ?? 1}\n`); renameSync(cf + '.tmp', cf)
-    } catch { attempt = undefined }
+      if (!/^\d{1,9}$/.test(t)) console.error(`the attempt count is unreadable at ${shortHome(cf)}; this journal starts without one`)
+      else {
+        const n = Number(t) + 1
+        await mkdir(path.dirname(cf), { recursive: true })
+        writeFileSync(cf + '.tmp', `${n}\n`); renameSync(cf + '.tmp', cf)
+        attempt = n
+      }
+    } catch { console.error(`the attempt count cannot be read or written at ${shortHome(cf)}; this journal starts without one`) }
     append({ v: 2, type: 'start', base, sha: src.id, pin, sets, strict: mode.strict, proposer: host, notes: sha256(readFileSync(snap)), repeats: REPEATS, rounds, ...(attempt ? { attempt } : {}) })
   }
   const byName = new Map(work.tasks.map(t => [t.name!, t]))

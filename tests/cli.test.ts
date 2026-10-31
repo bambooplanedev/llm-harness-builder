@@ -1858,6 +1858,21 @@ test('evolve: a journal moved away and started again is attempt 2; a resume and 
   expect(cli(['evolve', h, '--tasks', repo, '--report'], env, cwd).stdout).toContain('attempt unknown')
 }, 240_000)
 
+test('evolve: a garbage attempt counter stays as it is and every start is unknown', async () => {
+  const { repo, env, cwd, h } = await evFirst()
+  const dir = join(env.LHB_STATE_DIR!, 'evolve-attempts'), f = join(dir, readdirSync(dir).find(n => n.endsWith('.txt'))!)
+  writeFileSync(f, 'junk')
+  for (let i = 0; i < 2; i++) {
+    rmSync(join(cwd, 'harnesses', 'h.evolve.jsonl')); rmSync(join(cwd, 'harnesses', 'h.v1.json'), { force: true })
+    const r = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes'], env, cwd)
+    expect(r.status, r.stderr).toBe(0)
+    expect(r.stderr).toContain('attempt count is unreadable')
+    expect(journal(cwd)[0]).not.toHaveProperty('attempt')
+    expect(readFileSync(f, 'utf8')).toBe('junk')
+    expect(cli(['evolve', h, '--tasks', repo, '--report'], env, cwd).stdout).toContain('attempt unknown')
+  }
+}, 240_000)
+
 test('evolve: --rounds 1 then --rounds 2 continues from the journal', async () => {
   const { repo, env, cwd, h } = await evFirst()
   const before = evRaw(cwd)
