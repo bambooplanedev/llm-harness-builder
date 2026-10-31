@@ -9,13 +9,12 @@ import { jsonCandidates } from './parse.js'
 import type { DoneReason, HarnessEvent } from './events.js'
 import type { ChatRequest } from './backends/types.js'
 import { ALLOWED, DANGER } from './evolve-labels.js'
-import { costCheck, costReason } from './evolve-cost.js'
+import { TOLERANCE, costCheck, costReason, numbersOf, pct, tokensGate, type Numbers } from './evolve-cost.js'
 import { permP } from './stats.js'
-export { ALLOWED }
+export { ALLOWED, TOLERANCE, numbersOf, tokensGate, type Numbers }
 
 export const ROUNDS = 3
 export const CANDIDATES = 2
-export const TOLERANCE = 0.10
 export const CEILING = 0.25
 export const MIN_TRAIN_GATE = 16
 export const MIN_TEST = 8
@@ -68,6 +67,9 @@ export const referenceLabel = (m: Split): string => {
   return `\u041e\u0420\u0406\u0404\u041d\u0422\u0418\u0420, \u041d\u0415 \u0414\u041e\u041a\u0410\u0417 — ${[...why, ...fix].join('; ')}`
 }
 
+/** JSON with every object's keys sorted: the same value whatever its key order or whitespace in a file. */
+export const canonical = (x: unknown): string => JSON.stringify(x, (_, v) => isObj(v) ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) : v)
+
 /** One-sided exact sign test: P(X >= b) for X ~ Binomial(b + c, 1/2). */
 export function signP(b: number, c: number): number {
   const n = b + c
@@ -88,23 +90,8 @@ export function neededFlips(): number {
 
 /** turns and modelMs are on every run of a v2 journal (0 when no reply came); costUsd only when the harness is priced; repeat tells repeats of one task apart. */
 export type RunLite = { task: string; verdict: 'PASS' | 'FAIL'; tokens?: number; firstPromptTokens?: number; turns?: number; modelMs?: number; costUsd?: number; repeat?: number; trace?: string; reason?: string; lastError?: string; sig?: string }
-export type Numbers = { pass: number; tokensPerSuccess?: number; tokens?: number; weight?: number }
-
-export function numbersOf(runs: RunLite[]): Numbers {
-  const pass = runs.filter(r => r.verdict === 'PASS').length
-  const n: Numbers = { pass }
-  // A run that got no reply has tokens 0; one with replies but no usage has none, and the sum has none either.
-  if (runs.every(r => r.tokens !== undefined)) { n.tokens = runs.reduce((a, r) => a + r.tokens!, 0); if (pass) n.tokensPerSuccess = n.tokens / pass }
-  // A run without a first reply put nothing in front of the model: it is left out of the weight, not counted as 0.
-  const fp = runs.filter(r => r.firstPromptTokens !== undefined)
-  if (fp.length) n.weight = fp.reduce((a, r) => a + r.firstPromptTokens!, 0)
-  return n
-}
-
 /** Runs the gates can divide by: token counts on every run, and some of them, and some first request. */
 export const usable = (runs: RunLite[]): boolean => { const n = numbersOf(runs); return !!n.tokens && !!n.weight }
-
-const pct = (ratio: number) => Math.round((ratio - 1) * 100)
 
 const mean = (xs: number[]) => xs.reduce((a, x) => a + x, 0) / xs.length
 const byTask = <T>(runs: RunLite[], f: (r: RunLite) => T | undefined) => {
@@ -122,15 +109,10 @@ export function passGain(cur: RunLite[], cand: RunLite[]): { p: number; improved
 
 /** The cost gates of `decide` and `verdict`: all tokens, then turns and tokens on shared passes against `orig`, time against `timeBase`. A reason, or undefined when within bounds. */
 function costGate(orig: RunLite[], cand: RunLite[], timeBase: RunLite[], origMaxTurns: number): string | undefined {
-  const numbers = numbersOf(cand), o = numbersOf(orig)
-  if (o.pass) {
-    const r = numbers.tokensPerSuccess! / o.tokensPerSuccess!
-    if (r > 1 + TOLERANCE) return `costs ${pct(r)}% more tokens per success than the original`
-  } else {
-    const r = numbers.tokens! / o.tokens!
-    if (r > 1 + TOLERANCE) return `costs ${pct(r)}% more tokens than the original`
-  }
-  // Under MIN_SHARED tasks a cost says nothing (undefined): the all-tokens gate above stands alone. Time is against `timeBase`, the rest against the original.
+  const all = tokensGate(orig, cand)
+  if (all) return all
+  // Under MIN_SHARED tasks with the original, or at 0 PASS in it, a cost says nothing, time against `timeBase` included: the gate above stands alone.
+  if (!costCheck(orig, cand, 'turns', origMaxTurns)) return
   for (const [cost, base] of [['turns', orig], ['tokens', orig], ['time', timeBase]] as const) {
     const k = costCheck(base, cand, cost, origMaxTurns)
     if (k?.over) return costReason(k, cost)
@@ -361,13 +343,14 @@ type Proposal = { round: number; index: number; input: string; edit: Edit }
 type SweepLine = { v: 2; type: 'sweep'; round: number; sweep: number; cur: RunLite[]; cands: { index: number; runs: RunLite[] }[] }
 type TestSweep = { v: 2; type: 'testsweep'; sweep: number; orig: RunLite[]; last: RunLite[] }
 export type JournalLine =
-  | { v: 2; type: 'start'; base: string; sha: string; pin: string; notes: string; sets: Record<SetName, string[]>; declarable: boolean; mode: EvolveMode; proposer: string; repeats: number; rounds: number; attempt?: number }
+  | { v: 2; type: 'start'; base: string; sha: string; pin: string; notes: string; sets: Record<SetName, string[]>; declarable: boolean; mode: EvolveMode; proposer: string; repeats: number; rounds: number; attempt?: number; modules?: string }
   | { v: 2; type: 'probe'; round: number; runs: RunLite[] }
   | ({ v: 2; type: 'proposal'; costUsd?: number } & Proposal)
   | SweepLine
   | { v: 2; type: 'candidate'; round: number; index: number; input: string; edit?: Edit; accepted: boolean; reason: string; numbers?: Numbers; version?: number; costUsd?: number }
   | TestSweep
   | { v: 2; type: 'final'; version: number }
+  | { v: 2; type: 'cut'; costUsd: number }
 
 // A field's check: undefined = fine, else why not. The journal sits in the user's cwd, where the model's bash can
 // rewrite it, so every key is known and every value typed.
@@ -397,7 +380,9 @@ const sha256: Check = x => typeof x === 'string' && /^[0-9a-f]{64}$/.test(x) ? u
 const v2: Check = x => x === 2 ? undefined : 'not 2'
 const LINE: Record<string, Check> = {
   start: shape({ v: v2, type: str, base: str, sha: str, pin: sha256, notes: sha256, sets: shape({ train: arr(name), gate: arr(name), test: arr(name) }), declarable: bool, mode: x => x === 'custom' || (typeof x === 'string' && Object.hasOwn(MODES, x)) ? undefined : 'not a mode', proposer: str,
-    repeats: x => Number.isInteger(x) && (x as number) >= 1 && (x as number) <= 20 ? undefined : 'not an integer from 1 to 20', rounds: pos }, { attempt: pos }),
+    repeats: x => Number.isInteger(x) && (x as number) >= 1 && (x as number) <= 20 ? undefined : 'not an integer from 1 to 20', rounds: pos },
+    // modules: the manifest of a repo's own node_modules, which nothing reinstalls ('' = it has none).
+    { attempt: pos, modules: x => x === '' ? undefined : sha256(x) }),
   // The current version on train, the proposer's first input; never in a decision.
   probe: shape({ v: v2, type: str, round: pos, runs: arr(RUN) }),
   candidate: shape({ v: v2, type: str, round: pos, index: pos, input: str, accepted: bool, reason: str },
@@ -409,6 +394,8 @@ const LINE: Record<string, Check> = {
   sweep: shape({ v: v2, type: str, round: pos, sweep: pos, cur: arr(RUN), cands: arr(shape({ index: pos, runs: arr(RUN) })) }),
   testsweep: shape({ v: v2, type: str, sweep: pos, orig: arr(RUN), last: arr(RUN) }),
   final: shape({ v: v2, type: str, version: x => Number.isInteger(x) && (x as number) >= 0 ? undefined : 'not a non-negative integer' }),
+  // A stop's dropped sweep or proposal: only its money stays. Between any two lines, and never in a decision.
+  cut: shape({ v: v2, type: str, costUsd: num }),
 }
 
 /** The journal's lines, each checked. A last line without its newline is a torn write and dropped, even if it parses. */
@@ -440,13 +427,16 @@ const PATTERNED: [RegExp, string][] = [
   [/^time \d+\.\ds → \d+\.\ds, allowed up to \d+\.\ds \(p=\d\.\d\d\)$/, 'over tolerance: time'],
 ]
 const REASON_RE = [FIXED, ...PATTERNED.map(p => p[0])]
+const COST_KINDS = ['costs more tokens', 'first request heavier', 'over tolerance: turns', 'over tolerance: tokens', 'over tolerance: time']
 /** The fixed kind of a refusal reason (the numbers and config text dropped); `other` for what the harness does not write. */
 export const reasonKind = (reason: string): string => FIXED.test(reason) ? reason : PATTERNED.find(([re]) => re.test(reason))?.[1] ?? 'other'
+/** What the report prints of a refusal: a cost reason whole (its regex lets through digits and fixed words only), else its kind. */
+export const reasonShown = (reason: string): string => { const k = reasonKind(reason); return COST_KINDS.includes(k) ? reason : k }
 
-/** Dollars in the journal: every run's cost and every proposer call's. A run or call with no price counts 0. */
+/** Dollars in the journal: every run's cost, every proposer call's and every stop's dropped work. A run or call with no price counts 0. */
 export const spent = (lines: JournalLine[]): number => lines.reduce((t, l) => {
   const runs = l.type === 'probe' ? l.runs : l.type === 'sweep' ? [...l.cur, ...l.cands.flatMap(c => c.runs)] : l.type === 'testsweep' ? [...l.orig, ...l.last] : []
-  return t + runs.reduce((a, r) => a + (r.costUsd ?? 0), 0) + (l.type === 'proposal' || l.type === 'candidate' ? l.costUsd ?? 0 : 0)
+  return t + runs.reduce((a, r) => a + (r.costUsd ?? 0), 0) + (l.type === 'proposal' || l.type === 'candidate' || l.type === 'cut' ? l.costUsd ?? 0 : 0)
 }, 0)
 
 /** A round's candidates with their runs of every sweep. */
@@ -457,7 +447,9 @@ export const sweptCands = (sweeps: Pick<SweepLine, 'cands'>[]) => sweeps[0]!.can
  *  `feed` is what the proposer reads, `pending` the proposals with no candidate line yet, `tested` the test sweeps of the last version. */
 export function replay(lines: JournalLine[], original: object, ctx: { binding: string[]; sets: Record<SetName, string[]> }):
   { current: object; version: number; baseline?: RunLite[]; feed?: RunLite[]; tried: Edit[]; rejected: Rejected[]; pending: Proposal[]; tested: number; exhausted: string[]; final?: { orig: RunLite[]; last: RunLite[] } | 'none' } | { error: string } {
-  const [first, ...rest] = lines
+  const [first, ...tail] = lines
+  // A cut line is money only: it may fall anywhere, so no order below sees it.
+  const rest = tail.filter((l): l is Exclude<JournalLine, { type: 'cut' }> => l.type !== 'cut')
   if (first?.type !== 'start') return { error: 'cannot resume: the journal does not begin with a start line' }
   if (JSON.stringify(first.sets) !== JSON.stringify(ctx.sets)) return { error: 'cannot resume: the sets differ from the tasks file' }
   const no = (why: string) => ({ error: `cannot resume: ${why}` })
@@ -517,7 +509,7 @@ export function replay(lines: JournalLine[], original: object, ctx: { binding: s
       const out = claim(l.round, l.index)
       if (out) return no(`${slot}: ${out}`)
       // A forged journal cannot steer back onto a field the proposer was told is closed.
-      if (exhausted(lines.slice(0, i + 1)).includes(l.edit.field)) return no(`${slot}: proposed edit: field exhausted`)
+      if (exhausted(rest.slice(0, i)).includes(l.edit.field)) return no(`${slot}: proposed edit: field exhausted`)
       // Both candidates of a round stand on one current, and candidate 2 hears of candidate 1's edit as tried.
       const why = checkEdit(l.edit, { current, original, tried: [...tried, ...pending.map(p => p.edit)], binding: ctx.binding })
       if (why) return no(`${slot}: proposed edit: ${why}`)
@@ -532,6 +524,7 @@ export function replay(lines: JournalLine[], original: object, ctx: { binding: s
       // decideRound is pure and every input is in the journal: the line's verdict must be what its sweeps give.
       const d = decideRound({ cur: sweeps.flatMap(s => s.cur), cands: sweptCands(sweeps), orig: baseline!, gateNames: ctx.sets.gate, split, origMaxTurns: (original as any).loop?.maxTurns ?? Infinity }).find(x => x.index === l.index)!
       if (d.accepted !== l.accepted) return no(`${slot}: its runs do not give ${l.accepted ? 'an acceptance' : 'a refusal'}`)
+      if (d.reason !== l.reason) return no(`${slot}: its reason is not what its runs give`)
       pending = pending.filter(x => x !== p)
     } else {
       const why = claim(l.round, l.index)
@@ -554,7 +547,7 @@ export function replay(lines: JournalLine[], original: object, ctx: { binding: s
     if (l.edit) tried.push(l.edit)
     if (!pending.length) sweeps = []
   }
-  const end = lines[lines.length - 1]
+  const end = rest.at(-1)
   let final: { orig: RunLite[]; last: RunLite[] } | 'none' | undefined
   if (end?.type === 'final') {
     if (end.version !== version || tests.length !== (version ? first.repeats : 0)) return no('the final line does not match the journal')

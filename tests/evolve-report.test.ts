@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { evolveReport, type ReportInput } from '../src/core/evolve-report.js'
+import { outcomeOf } from '../src/core/evolve-labels.js'
 import { ALLOWED, applyEdit, referenceLabel, type Edit, type JournalLine, type Split, type RunLite, type SetName } from '../src/core/evolve.js'
 
 const fail = (task: string, sig: string, tokens = 110, fp = 100): RunLite => ({ task, verdict: 'FAIL', tokens, firstPromptTokens: fp, turns: 3, modelMs: 40, sig })
@@ -51,6 +52,8 @@ systemPrompt, appended (written by the proposer, passed the filters, not checked
   Make the file first.
 failures on the gate tasks, round 1 → v1:
   final|check_failed|-|-: 2 → 1
+refused:
+  no more PASS than current: 1
 
 == Advice
 - add 12 tasks to train + gate and 6 to test to declare a winner
@@ -59,7 +62,9 @@ failures on the gate tasks, round 1 → v1:
 == How to apply
 1. Try harnesses/h.v1.json in place of h.json: a pointer, not proof.
 2. Check it yourself: llm-harness-builder bench harnesses/h.v1.json --tasks <repo>
-3. Read the systemPrompt paragraph above before you use it.`
+3. Read the systemPrompt paragraph above before you use it.
+
+outcome: try`
 
 /** 16 train + gate and 8 test: strict. `better` = every test task flips to PASS; otherwise nothing changes. */
 function strictOf(better: boolean): ReportInput {
@@ -134,7 +139,44 @@ describe('evolve report', () => {
   it('cost reasons: a matched one prints as its kind, a hand-written one with an escape prints other', () => {
     const e = { field: 'loop.maxRepeats', value: 3 }
     const t = evolveReport(v0([cand(2, e, false, 'turns 3.0 → 6.0, allowed up to 4.0 (p=0.00)'), cand(3, e, false, 'time 1.0s → 2.0s, allowed up to 1.1s (p=0.00)\u001b[2J')]))
-    expect(t).toContain('  over tolerance: turns: 1\n'); expect(t).toContain('  other: 1\n'); expect(t).not.toContain('\u001b')
+    expect(t).toContain('  turns 3.0 → 6.0, allowed up to 4.0 (p=0.00): 1\n'); expect(t).toContain('  other: 1\n'); expect(t).not.toContain('\u001b')
+  })
+
+  it('refusal kinds are listed when a version exists too; a version with none lists nothing', () => {
+    const t = evolveReport(golden({ refused: [cand(2, { field: 'loop.maxRepeats', value: 3 }, false, 'costs 40% more tokens per success than the original')] }))
+    expect(t).toContain('refused:\n  costs 40% more tokens per success than the original: 1\n')
+    expect(evolveReport(golden({ refused: [] }))).not.toContain('refused:')
+  })
+
+  it('every refusal cost the same way: the advice still goes by the kind', () => {
+    const e = { field: 'loop.maxRepeats', value: 3 }
+    const t = evolveReport(golden({ accepted: cand(1, EDIT, false, 'turns 3.0 → 7.0, allowed up to 4.0 (p=0.00)'), refused: [cand(2, e, false, 'turns 3.0 → 6.0, allowed up to 4.0 (p=0.00)')] }))
+    expect(t).toContain('every refused candidate took more turns than the original allows')
+  })
+
+  it('test sweeps started: printed only when it differs from the repeats', () => {
+    const rep = (testStarts?: number) => evolveReport({ ...golden(), testStarts })
+    expect(rep(1)).not.toContain('test sweeps started')
+    expect(rep(undefined)).not.toContain('test sweeps started')
+    expect(rep(3)).toContain('test sweeps started: 3 of 1\n')
+  })
+
+  it('the outcome is the last line and follows the apply step', () => {
+    const decl = { declarable: true, mode: 'night', trainGate: 4, test: 2 } as Split
+    expect(outcomeOf(evolveReport(golden()))).toBe('try')
+    expect(evolveReport(golden())).toContain('1. Try ')
+    expect(outcomeOf(evolveReport({ ...golden(), changed: true }))).toBe('keep')
+    expect(outcomeOf(evolveReport(v0()))).toBe('keep')
+    const j = golden({ split: decl }), many = ['x1', 'x2', 'x3', 'x4', 'x5', 'x6']
+    const won = { ...j, sets: { ...j.sets, test: many }, state: { ...j.state, final: { orig: many.map(t => fail(t, CF)), last: many.map(t => pass(t)) } } }
+    expect(evolveReport(won)).toContain('1. Use ')
+    expect(outcomeOf(evolveReport(won))).toBe('use')
+    const lost = { ...won, state: { ...won.state, final: { orig: many.map(t => pass(t)), last: many.map(t => pass(t)) } } }
+    expect(evolveReport(lost)).toContain('is a candidate')
+    expect(outcomeOf(evolveReport(lost))).toBe('keep')
+    // The paragraph is the proposer's; it cannot speak for the outcome.
+    expect(outcomeOf('outcome: use\n  1. Use\n\noutcome: keep')).toBe('keep')
+    expect(outcomeOf('  outcome: use')).toBeUndefined()
   })
 
   it('gate failures count tasks, not runs: one task failing 3 times is 1 of 2', () => {

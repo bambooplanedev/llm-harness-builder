@@ -3,7 +3,7 @@
 // Every line is a fixed template filled with numbers and fixed words (verdicts, `sig`, `reasonKind`, ALLOWED fields);
 // the only free text is the accepted systemPrompt paragraphs, labelled as the proposer's. Never task names, paths,
 // lastError, trace, why or a run's reason.
-import { ALLOWED, exhausted, numbersOf, orientationOnly, reasonKind, referenceLabel, shortOf, spent, verdict, WINNER_MODES, type JournalLine, type RunLite, type SetName, type Split } from './evolve.js'
+import { ALLOWED, exhausted, numbersOf, orientationOnly, reasonKind, reasonShown, referenceLabel, shortOf, spent, verdict, WINNER_MODES, type JournalLine, type RunLite, type SetName, type Split } from './evolve.js'
 import { showableText } from './events.js'
 
 export type ReportInput = {
@@ -18,6 +18,8 @@ export type ReportInput = {
   changed?: boolean
   /** Which attempt this journal was (the start line's); 'unknown' when it says nothing. Absent: no line. */
   attempt?: number | 'unknown'
+  /** How many test sweeps this attempt started, kill and restart included; absent when the counter says nothing. */
+  testStarts?: number
 }
 
 const leafOf = (o: unknown, f: string): unknown => f.split('.').reduce((x: any, k) => x?.[k], o)
@@ -47,6 +49,7 @@ export function evolveReport(r: ReportInput): string {
   const cands = lines.flatMap(l => l.type === 'candidate' ? [l] : [])
   const accepted = cands.filter(l => l.accepted)
   const refused = count(cands.filter(l => !l.accepted).map(l => reasonKind(l.reason)))
+  const shown = count(cands.filter(l => !l.accepted).map(l => reasonShown(l.reason)))
   const onGate = (rs: RunLite[]) => rs.filter(x => sets.gate.includes(x.task))
   const sweeps = lines.flatMap(l => l.type === 'sweep' ? [l] : [])
   const before = fails(onGate(sweeps.filter(s => s.round === sweeps[0]!.round).flatMap(s => s.cur)))
@@ -81,7 +84,8 @@ export function evolveReport(r: ReportInput): string {
     }
     const drops = new Map([...before].flatMap(([s, n]) => (after!.get(s) ?? 0) < n ? [[s, n - (after!.get(s) ?? 0)] as [string, number]] : []))
     if (drops.size) why.push(`failures on the gate tasks, round 1 → v${version}:`, ...bySize(drops).map(([s]) => `  ${s}: ${before.get(s)} → ${after!.get(s) ?? 0}`))
-  } else why.push('refused:', ...bySize(refused).map(([k, n]) => `  ${k}: ${n}`))
+  }
+  if (!version || shown.size) why.push('refused:', ...bySize(shown).map(([k, n]) => `  ${k}: ${n}`))
 
   const advice: string[] = []
   if (!split.declarable) {
@@ -108,23 +112,28 @@ export function evolveReport(r: ReportInput): string {
   if (!advice.length) advice.push('none from these numbers')
 
   const apply: string[] = []
+  const outcome = version && !r.changed && told.better ? split.declarable ? 'use' : 'try' : 'keep'
   if (!version) apply.push(`Keep ${harness}.`)
   else if (r.changed) apply.push(`Keep ${harness}: ${versionFile} on disk is not the version measured; it changed after evolve wrote it.`)
   else {
-    if (told.better) apply.push(split.declarable ? `Use ${versionFile} in place of ${harness}.` : `Try ${versionFile} in place of ${harness}: a pointer, not proof.`)
+    if (told.better) apply.push(outcome === 'use' ? `Use ${versionFile} in place of ${harness}.` : `Try ${versionFile} in place of ${harness}: a pointer, not proof.`)
     // Accepted on train + gate, not better on test: a candidate.
     else apply.push(`Keep ${harness}; ${versionFile} is a candidate, kept for reference.`)
     apply.push(`Check it yourself: llm-harness-builder bench ${versionFile} ${bench}`)
     if (prompts.length) apply.push('Read the systemPrompt paragraph above before you use it.')
   }
   if (r.attempt !== undefined) conclusion.push(`attempt ${r.attempt}`)
-  // Only a number the journal holds: an unpriced harness has none, and a cut sweep's money was never journaled.
+  const R = lines[0]?.type === 'start' ? lines[0].repeats : undefined
+  // Starts past the repeats mean a test sweep was cut and rolled again: said, never decided on.
+  if (r.testStarts !== undefined && r.testStarts !== R) conclusion.push(`test sweeps started: ${r.testStarts} of ${R}`)
+  // Only a number the journal holds: an unpriced harness has none, and a kill -9 leaves its sweep's money out.
   if (spent(lines) > 0) conclusion.push(`spent $${spent(lines).toFixed(4)}`)
 
   return [
     '== Conclusion', ...conclusion, '',
     '== Why', ...why, '',
     '== Advice', ...advice.map(a => `- ${a}`), '',
-    '== How to apply', ...apply.map((a, i) => `${i + 1}. ${a}`),
+    '== How to apply', ...apply.map((a, i) => `${i + 1}. ${a}`), '',
+    `outcome: ${outcome}`,
   ].join('\n')
 }

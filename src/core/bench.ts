@@ -1,7 +1,7 @@
 // src/core/bench.ts — result shape of `bench` and the pure helpers that summarise it. No fs, no process.
 import { showable, type DoneReason, type HarnessEvent } from './events.js'
 import type { HarnessConfig } from './config.js'
-import { costCheck, type Cost } from './evolve-cost.js'
+import { costCheck, tokensGate, type Cost } from './evolve-cost.js'
 import type { RunLite } from './evolve.js'
 import { permP } from './stats.js'
 
@@ -107,7 +107,7 @@ const toolsCell = (runs: BenchRun[]): string => {
 const meanCell = (xs: (number | undefined)[]): string => { const v = xs.flatMap(x => x ?? []); return v.length ? String(Number(mean(v).toFixed(1))) : '-' }
 
 /** The wide columns of each harness, in order: turns, tokens, model time, dollars per success on the tasks shared with the base
- *  (the first harness on the same model), then tool use. A cost past evolve's tolerance against the base ends in "!"; nothing is refused. */
+ *  (the first harness on the same model), then tool use. A cost past evolve's tolerance against the base ends in "!", tok/ok also past its all-tokens gate; nothing is refused. */
 export function wideCells(harnesses: BenchHarness[]): string[][] {
   const lite = (h: BenchHarness) => h.runs.map(r => ({ task: r.task ?? 'task', verdict: r.verdict, turns: r.turns, tokens: r.tokens, modelMs: r.modelMs ?? r.ms }))
   const pick = { turns: (r: RunLite) => r.turns, tokens: (r: RunLite) => r.tokens, time: (r: RunLite) => r.modelMs }
@@ -116,10 +116,11 @@ export function wideCells(harnesses: BenchHarness[]): string[][] {
     const passes = lite(h).filter(r => r.verdict === 'PASS')
     const cell = (cost: Cost, f: (x: number) => string) => {
       const c = costCheck(lite(base), lite(h), cost, base.config.loop?.maxTurns ?? Infinity)
-      if (c) return f(base === h ? c.before : c.after) + (c.over && base !== h ? '!' : '')
-      // Under MIN_SHARED there is no base to judge by: the plain mean per pass, never marked.
+      const mark = base !== h && (c?.over || (cost === 'tokens' && tokensGate(lite(base), lite(h)))) ? '!' : ''
+      if (c) return f(base === h ? c.before : c.after) + mark
+      // Under MIN_SHARED the shared tasks judge nothing: the plain mean per pass, marked only by the all-tokens gate.
       const v = passes.flatMap(r => pick[cost](r) ?? [])
-      return v.length ? f(mean(v)) : '-'
+      return v.length ? f(mean(v)) + mark : '-'
     }
     const paid = h.runs.flatMap(r => r.verdict === 'PASS' && r.costUsd !== undefined ? r.costUsd : [])
     return [cell('turns', x => x.toFixed(1)), cell('tokens', x => String(Math.round(x))), cell('time', x => (x / 1000).toFixed(1)),
@@ -193,7 +194,7 @@ export function formatTable(harnesses: BenchHarness[], opts: { wide?: boolean } 
   const line = (r: string[]) => r.map((c, i) => c.padEnd(w[i])).join('').trimEnd()
   return [line(head), ...rows.map(line), 'medians over all runs incl. failures; s = wall-clock per run',
     '95% CI = Wilson interval of the PASS rate; two harnesses whose intervals overlap are not told apart by this bench',
-    ...opts.wide ? ['turns/ok, tok/ok, model s/ok: on 5+ tasks shared with the first harness of the same model, the mean over those tasks\' passes, and ! = dearer than evolve allows; under 5, a plain mean per pass, never marked. A JSON without model time falls back to wall-clock.',
+    ...opts.wide ? ['turns/ok, tok/ok, model s/ok: on 5+ tasks shared with the first harness of the same model, the mean over those tasks\' passes, and ! = dearer than evolve allows; under 5, a plain mean per pass. tok/ok also takes ! on any number of tasks when all the tokens per success (all the tokens, at 0 PASS in that harness) are over +10%, evolve\'s all-tokens gate. A JSON without model time falls back to wall-clock.',
       '$/ok = plain mean over all passes, never marked. tools, out lines, reason tok = mean per run. - = not reported',
       'p = two-sided permutation test of the mean (PASS: of the rate) against the first harness of the same model, runs shuffled inside their task; (n) = labellings tried, all of them up to 20000, else 20000 random ones. With many columns some p < 0.05 come by chance.'] : [],
     ...tests ? ['tests = green tests over all runs; no interval: the tests of one exercise are not independent'] : []].join('\n')

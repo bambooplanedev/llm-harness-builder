@@ -19,6 +19,9 @@ export const FIELD_LABEL: Record<string, string> = {
   'context.budgetTokens': 'context budget',
 }
 
+/** The report's last line, from the same `better` as its apply step: what the tab offers. The last line is the template's, never the proposer's text. */
+export const outcomeOf = (report: string): 'use' | 'try' | 'keep' | undefined => /(?:^|\n)outcome: (use|try|keep)\n?$/.exec(report)?.[1] as 'use' | 'try' | 'keep' | undefined
+
 const TESTS = /\b(tests?|check(s|ed)?|assert\w*|skip\w*|pytest|vitest|jest|npm test)\b/i
 /** Each line of a paragraph, flagged when it looks like a command or talks about the tests a change is judged by. */
 export const flagLines = (text: string): { line: string; flag?: 'command' | 'tests' }[] =>

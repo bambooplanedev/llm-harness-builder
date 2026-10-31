@@ -5,8 +5,33 @@ import { signFlipP } from './stats.js'
 
 export const MIN_SHARED = 5 // fewer shared tasks say nothing about cost
 export const COST_ALPHA = 0.10 // looser than the win test: a dear candidate is refused on weaker evidence
+export const TOLERANCE = 0.10
 export type Cost = 'turns' | 'tokens' | 'time'
 export type CostCheck = { shared: number; before: number; after: number; allowed: number; ratio: number; p: number; over: boolean }
+
+export type Numbers = { pass: number; tokensPerSuccess?: number; tokens?: number; weight?: number }
+
+export function numbersOf(runs: RunLite[]): Numbers {
+  const pass = runs.filter(r => r.verdict === 'PASS').length
+  const n: Numbers = { pass }
+  // A run that got no reply has tokens 0; one with replies but no usage has none, and the sum has none either.
+  if (runs.every(r => r.tokens !== undefined)) { n.tokens = runs.reduce((a, r) => a + r.tokens!, 0); if (pass) n.tokensPerSuccess = n.tokens / pass }
+  // A run without a first reply put nothing in front of the model: it is left out of the weight, not counted as 0.
+  const fp = runs.filter(r => r.firstPromptTokens !== undefined)
+  if (fp.length) n.weight = fp.reduce((a, r) => a + r.firstPromptTokens!, 0)
+  return n
+}
+
+export const pct = (ratio: number) => Math.round((ratio - 1) * 100)
+
+/** The all-tokens gate, so failures are not free: tokens per success against the base's, or all tokens when the base has no PASS.
+ *  A reason, or undefined when within +10% or when there is nothing to divide by. `evolve`'s gates and Bench's `!` both come here. */
+export function tokensGate(base: RunLite[], cand: RunLite[]): string | undefined {
+  const c = numbersOf(cand), b = numbersOf(base)
+  if (!b.tokens) return
+  const r = b.pass ? c.tokensPerSuccess! / b.tokensPerSuccess! : c.tokens! / b.tokens
+  if (r > 1 + TOLERANCE) return `costs ${pct(r)}% more tokens${b.pass ? ' per success' : ''} than the original`
+}
 
 /** Turns: +20% up to 10 (at least +1), +10% beyond (at least +2). */
 export const allowedTurns = (base: number): number => base <= 10 ? Math.max(base * 1.2, base + 1) : Math.max(base * 1.1, base + 2)

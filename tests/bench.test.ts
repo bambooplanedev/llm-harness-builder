@@ -172,6 +172,22 @@ test('formatTable --wide: under five shared tasks the cost cells are "-"; time f
   const old = gold('base', five({ modelMs: undefined, ms: 3000 }))
   expect(formatTable([old], { wide: true }).split('\n')[1]).toMatch(/\s3\.0\s/)
 })
+test('formatTable --wide: evolve\'s all-tokens gate marks tok/ok, whatever the shared tasks; failures are not free', () => {
+  // Passes as cheap as the base's, but failures burn tokens: only the all-tokens gate sees it.
+  const fails = ['f', 'g', 'h'].map(task => ({ task, tokens: 9000 }))
+  const base = gold('base', five({})), dear = gold('dear', [...five({}), ...fails])
+  expect(formatTable([base, dear], { wide: true }).split('\n')[2]).toMatch(/\s4\.0\s+1000!\s+2\.0\s/)
+  // Under 5 shared tasks: the plain mean, marked.
+  const few = gold('few', five({}).slice(0, 4)), few2 = gold('few2', [...five({}).slice(0, 4), ...fails])
+  expect(formatTable([few, few2], { wide: true }).split('\n')[2]).toMatch(/\s4\.0\s+1000!\s+2\.0\s/)
+  // Within +10% over all tokens, a missing token count, and a base with no tokens at all: no mark.
+  expect(formatTable([base, gold('near', [...five({ tokens: 1100 })])], { wide: true }).split('\n')[2]).not.toContain('!')
+  expect(formatTable([base, gold('old', [...five({}), { task: 'f' }])], { wide: true }).split('\n')[2]).not.toContain('!')
+  expect(formatTable([gold('none', [{ task: 'f', tokens: 0 }]), gold('x', five({}))], { wide: true }).split('\n')[2]).not.toContain('!')
+  // The base is never marked, and a 0-PASS base is judged on all tokens.
+  expect(formatTable([gold('b', [{ task: 'a', tokens: 100 }]), gold('c', [{ task: 'a', verdict: 'PASS', tokens: 500 }])], { wide: true }).split('\n').slice(1, 3).map(l => l.includes('!'))).toEqual([false, true])
+  expect(formatTable([base, dear], { wide: true })).toContain('tok/ok also takes ! on any number of tasks')
+})
 test('formatTable --wide: the base is the first harness on the same model; another model has its own', () => {
   const m = (name: string, model: string, over: Partial<BenchRun>) => ({ ...gold(name, five(over)), config: { backend: { model }, loop: { maxTurns: 10 } } as BenchHarness['config'] })
   const t = formatTable([m('a1', 'A', {}), m('b1', 'B', { turns: 8 }), m('a2', 'A', { turns: 8 })], { wide: true }).split('\n')

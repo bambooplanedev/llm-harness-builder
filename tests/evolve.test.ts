@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { MODES, runCount, splitOf, type Split, ALPHA, boundBy, applyEdit, numbersOf, pickWinner, usable, parseJournal, replay, verdict, bindingTokens, checkEdit, decide, passGain, failureGroups, reasonKind, signatureOf, SIG, neededFlips, parseProposal, proposerInput, proposerRequest, proposalSchema, exhausted, ALLOWED, referenceLabel, signP, splitSets, PROPOSAL_SCHEMA, type Edit, type RunLite } from '../src/core/evolve.js'
+import { canonical, reasonShown, spent, MODES, runCount, splitOf, type Split, ALPHA, boundBy, applyEdit, numbersOf, pickWinner, usable, parseJournal, replay, verdict, bindingTokens, checkEdit, decide, passGain, failureGroups, reasonKind, signatureOf, SIG, neededFlips, parseProposal, proposerInput, proposerRequest, proposalSchema, exhausted, ALLOWED, referenceLabel, signP, splitSets, PROPOSAL_SCHEMA, type Edit, type RunLite } from '../src/core/evolve.js'
 import type { HarnessEvent } from '../src/core/events.js'
 import { harness } from './helpers.js'
 import type { RepoTask } from '../src/core/repo-tasks.js'
@@ -912,5 +912,64 @@ describe('spent', () => {
     ] as any
     expect(spent(lines)).toBe(1111111)
     expect(spent([])).toBe(0)
+  })
+})
+
+describe('final review fixes', () => {
+  const harnessJson = harness()
+  const ts = ['a', 'b', 'c', 'd', 'e']
+  const r = (t: string, turns: number, modelMs = 40, tokens = 100): RunLite => ({ ...run(t, true, tokens), turns, modelMs })
+  it('under 5 tasks shared with the original the time gate is skipped too: only the all-tokens rule applies', () => {
+    // Five passes shared with cur at 3× its time, four with the original: time has a base, the original says nothing.
+    const orig = [...ts.slice(0, 4).map(t => r(t, 3)), run('e', false)], cur = ts.map(t => r(t, 3, 10)), cand = [...ts.map(t => r(t, 3, 300)), r('f', 3, 300)]
+    expect(dec(cur, cand, orig, [], ref)).toMatchObject({ accepted: true })
+  })
+  it('at 0 PASS in the original the time gate is skipped too', () => {
+    const orig = [...ts, 'f'].map(t => run(t, false)), cur = ts.map(t => r(t, 3, 10)), cand = [...ts.map(t => r(t, 3, 300)), r('f', 3, 300)]
+    expect(dec(cur, cand, orig, [], ref)).toMatchObject({ accepted: true })
+  })
+  it('with 5 tasks shared with the original time still gates against cur', () => {
+    const orig = ts.map(t => r(t, 3)), cur = ts.map(t => r(t, 3, 10)), cand = [...ts.map(t => r(t, 3, 300)), r('f', 3, 300)]
+    expect(dec(cur, cand, orig, [], ref).reason).toMatch(/^time /)
+  })
+  it('reasonShown: a cost reason whole, anything else its kind, an escape other', () => {
+    for (const x of ['costs 12% more tokens than the original', 'costs 12% more tokens per success than the original', 'first request 30% heavier than the original', 'turns 3.0 → 6.0, allowed up to 4.0 (p=0.00)', 'tokens 10 → 20, allowed up to 11 (p=0.03)', 'time 1.0s → 2.0s, allowed up to 1.1s (p=0.00)'])
+      expect(reasonShown(x)).toBe(x)
+    expect(reasonShown('within noise (p=0.25)')).toBe('within noise')
+    expect(reasonShown('invalid config: /x/y')).toBe('invalid config')
+    expect(reasonShown('turns 3.0 → 6.0, allowed up to 4.0 (p=0.00)\u001b[2J')).toBe('other')
+  })
+  it('canonical: key order does not matter, a value does', () => {
+    expect(canonical({ b: 1, a: { d: [1, { y: 1, x: 2 }], c: 2 } })).toBe(canonical({ a: { c: 2, d: [1, { x: 2, y: 1 }] }, b: 1 }))
+    expect(canonical({ a: [1, 2] })).not.toBe(canonical({ a: [2, 1] }))
+  })
+  it('a cut line: typed, counted by spent, anywhere between lines, even before the probe and after the final', () => {
+    const start = { v: 2, type: 'start', base: 'h', sha: 'a', pin: 'a'.repeat(64), notes: 'b'.repeat(64), sets: { train: ['t'], gate: ['g'], test: ['x'] }, declarable: false, mode: 'custom', proposer: 'p', repeats: 1, rounds: 1 }
+    const cut = { v: 2, type: 'cut', costUsd: 0.25 }
+    const parsed = parseJournal([start, cut, { v: 2, type: 'probe', round: 1, runs: [run('t', false)] }, cut, { v: 2, type: 'final', version: 0 }, cut].map(l => JSON.stringify(l) + '\n').join(''))
+    if ('error' in parsed) throw new Error(parsed.error)
+    expect(spent(parsed.lines)).toBeCloseTo(0.75)
+    const st = replay(parsed.lines, { systemPrompt: 'S' }, { binding: [], sets: start.sets })
+    if ('error' in st) throw new Error(st.error)
+    expect(st.final).toBe('none')
+    expect(parseJournal(JSON.stringify({ ...cut, extra: 1 }) + '\n')).toEqual({ error: 'line 1: unknown key "extra"' })
+    expect(parseJournal(JSON.stringify({ v: 2, type: 'cut', costUsd: -1 }) + '\n')).toEqual({ error: 'line 1: costUsd: not a number' })
+  })
+  it('a start line: modules is a hash or empty', () => {
+    const line = { v: 2, type: 'start', base: 'h', sha: 'a', pin: 'a'.repeat(64), notes: 'b'.repeat(64), sets: { train: ['t'], gate: ['g'], test: ['x'] }, declarable: false, mode: 'custom', proposer: 'p', repeats: 1, rounds: 1 }
+    for (const modules of ['', 'c'.repeat(64)]) expect(parseJournal(JSON.stringify({ ...line, modules }) + '\n')).toHaveProperty('lines')
+    expect(parseJournal(JSON.stringify({ ...line, modules: 'x' }) + '\n')).toEqual({ error: 'line 1: modules: not a sha256' })
+  })
+  it('replay refuses a refusal whose reason is not what its runs give', () => {
+    const sets = { train: ['t'], gate: ['g'], test: ['x'] }
+    const start = { v: 2, type: 'start', base: 'h', sha: 'a', pin: 'a'.repeat(64), notes: 'b'.repeat(64), sets, declarable: false, mode: 'custom', proposer: 'p', repeats: 1, rounds: 1 }
+    const edit = { field: 'loop.maxRepeats', value: 3 }
+    const body = [start, { v: 2, type: 'probe', round: 1, runs: [run('t', false)] }, { v: 2, type: 'proposal', round: 1, index: 1, input: '{}', edit },
+      { v: 2, type: 'candidate', round: 1, index: 2, input: '{}', accepted: false, reason: 'no edit in the reply' },
+      sweepLine(1, 1, [run('t', true), run('g', true)], { 1: [run('t', true), run('g', true)] })] as any[]
+    const j = (reason: string) => { const p = parseJournal([...body, { v: 2, type: 'candidate', round: 1, index: 1, input: '{}', edit, accepted: false, reason }].map(l => JSON.stringify(l) + '\n').join('')); if ('error' in p) throw new Error(p.error); return p.lines }
+    const go = (reason: string) => replay(j(reason), harnessJson, { binding: [], sets })
+    expect(go('no more PASS than current')).not.toHaveProperty('error')
+    expect(go('worse on gate')).toEqual({ error: 'cannot resume: round 1 candidate 1: its reason is not what its runs give' })
   })
 })
