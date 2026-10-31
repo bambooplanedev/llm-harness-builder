@@ -931,6 +931,21 @@ test('evolve start: the mode is required and from the table; maxUsd is positive,
   } finally { await e.s.close() }
 })
 
+test('evolve check answers the run count and the orientation without starting or saving anything', async () => {
+  const e = await evolveServer()
+  try {
+    const chk = (over: object = {}) => postJson(`${e.u}/api/evolve/check`, { harness: 'tuned', repo: e.repo, mode: 'night', ...over })
+    const r = await chk()
+    expect(r.status).toBe(200)
+    expect(await r.json()).toMatchObject({ mode: 'night', runs: 25, declarable: false, priced: false, sets: { train: 1, gate: 1, test: 1 } })
+    expect((await chk({ mode: 'custom' })).status).toBe(400) // the same validation as start
+    expect((await chk({ harness: '../x' })).status).toBe(400)
+    expect((await chk({ maxUsd: 1 })).status).toBe(200) // a ceiling is start's business
+    expect(e.got).toEqual([])
+    expect((await e.start({ mode: 'night' })).status).toBe(409) // nothing was saved: still asks for consent
+  } finally { await e.s.close() }
+})
+
 test('an untracked file shows in the consent answer', async () => {
   const e = await evolveServer()
   try {
