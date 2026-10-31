@@ -142,7 +142,8 @@ export class OpenAIBackend implements Backend {
     if (this.key) return undefined // a hosted API has no /apply-template or /tokenize; the estimate and usage remain
     const post = async (path: string, body: unknown) => {
       const r = await this.fetchFn(`${this.root}${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal })
-      return r.ok ? readJson(r, `POST ${path}`) : undefined
+      if (r.ok) return readJson(r, `POST ${path}`)
+      await r.text() // runs every turn: an unread body would keep its connection
     }
     try {
       const { prompt } = await post('/apply-template', payload) ?? {}

@@ -185,6 +185,8 @@ async function tick() {
 }
 
 function restart() { if (timer) clearTimeout(timer); timer = null; void tick() }
+/** A hidden tab polls every 30 s: back in view, do not wait for it. `gen` covers a tick still in flight. */
+const onVisible = () => { if (!document.hidden) restart() }
 
 function openFile(f: string) {
   closeDiff()
@@ -219,8 +221,8 @@ watch([runs, total, () => result.value?.complete], () => {
   document.title = result.value ? `${runs.value.length}/${total.value}${result.value.complete ? ' done' : ''} · bench` : TITLE
 })
 
-onMounted(() => props.example ? openFile('bench-example.json') : void tick())
-onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer); unsub?.(); diffUnsub?.(); document.title = TITLE })
+onMounted(() => { document.addEventListener('visibilitychange', onVisible); props.example ? openFile('bench-example.json') : void tick() })
+onUnmounted(() => { document.removeEventListener('visibilitychange', onVisible); stopped = true; if (timer) clearTimeout(timer); unsub?.(); diffUnsub?.(); document.title = TITLE })
 </script>
 
 <template>

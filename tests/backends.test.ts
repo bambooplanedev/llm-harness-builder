@@ -150,6 +150,13 @@ test('openai countTokens: apply-template then tokenize at the server root, exact
   expect(f.calls[1].body).toEqual({ content: '<|im_start|>rendered', add_special: true, model: 'm' })
 })
 
+test('openai countTokens: a non-2xx body is read to its end, so its connection goes back to the pool', async () => {
+  let read = 0
+  const fn = (async () => ({ ok: false, status: 404, text: async () => { read++; return 'no such route' } })) as unknown as FetchLike
+  expect(await new OpenAIBackend('http://x:8080/v1', fn).countTokens({})).toBeUndefined()
+  expect(read).toBe(1)
+})
+
 test('openai countTokens: a server without the endpoints yields undefined, no throw', async () => {
   const f = routeFetch({ '/apply-template': {} })
   const be = new OpenAIBackend('http://x:8080/v1', f.fn)
