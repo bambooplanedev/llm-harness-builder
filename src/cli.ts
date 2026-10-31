@@ -28,7 +28,7 @@ import { TraceWriter, type Meta } from './server/runs.js'
 import { TASKS, type Task } from './core/tasks.js'
 import { loadPolyglot, polyglotTasks, polyglotBinding, removeAllPolyglotSync, POLYGLOT_MAX } from './core/polyglot.js'
 import { childEnv, bashEnvNote } from './core/tools/env.js'
-import { median, formatTable, BENCH_TASKS, benchTotal, runTitle, benchFileName, autoApproves, type BenchRun, type BenchHarness, type BenchResult } from './core/bench.js'
+import { median, formatTable, rowNames, BENCH_TASKS, benchTotal, runTitle, benchFileName, autoApproves, type BenchRun, type BenchHarness, type BenchResult } from './core/bench.js'
 import { GUARD_BLOCKED, EDIT_MISS } from './core/tools/fs.js'
 import { createBackend } from './core/backends/index.js'
 import { redactor } from './core/redact.js'
@@ -485,6 +485,9 @@ async function cmdBench(argv: string[]) {
   keyFlag('bench', values['api-key-env'])
   if (!INT.test(values.n)) argError('bench', '--n must be a positive integer')
   if (!INT.test(values.timeout)) argError('bench', '--timeout must be a positive integer')
+  const models = values.models?.split(',')
+  if (models && values.model !== undefined) argError('bench', '--model cannot go with --models: --models names the models')
+  if (models?.includes('')) argError('bench', '--models: an empty model name')
   if (values.tasks !== undefined && (values.task !== undefined || values.size !== undefined)) argError('bench', '--tasks cannot go with --task or --size')
   let repo: RepoTasks | undefined
   if (values.tasks !== undefined) try { repo = await loadRepoTasks(values.tasks) } catch (e) { argError('bench', (e as Error).message) }
@@ -516,9 +519,11 @@ async function cmdBench(argv: string[]) {
   const files = positionals.length ? positionals : demoHarnesses(values.kind, values['api-key-env']).map(h => [path.join(localDir, `${h}.json`), path.join(PKG_ROOT, 'harnesses', `${h}.json`)].find(existsSync)!)
   const over = { model: values.model, baseUrl: values['base-url'], kind: values.kind, apiKeyEnv: values['api-key-env'], maxTurns: values['max-turns'] === undefined ? undefined : Number(values['max-turns']) }
   console.error(autoApproves('bench'))
-  const harnesses: BenchHarness[] = []
-  for (const f of files) {
-    const config = await loadHarness(f, over)
+  const harnesses: BenchHarness[] = [], from: string[] = []
+  // --models: every harness on every model, one model after the other; each model's first harness is the base of its p.
+  for (const model of models ?? [values.model]) for (const f of files) {
+    const config = await loadHarness(f, { ...over, model })
+    from.push(f)
     harnesses.push({ name: config.name, config, pass: 0, reasons: {}, median: { turns: 0, toolCalls: 0, ms: 0 }, runs: [] })
   }
   for (const h of harnesses) {
@@ -560,8 +565,9 @@ async function cmdBench(argv: string[]) {
   // The first save happens before any run, so an unwritable --out (a directory, a bad path) is a
   // typo to report, not a crash after 90 minutes.
   try { save() } catch (e) { die(`cannot write ${out}:\n  ${(e as Error).message}`) }
-  console.error(`bench: ${files.length} harnesses × ${benchTotal(result) / harnesses.length} runs, timeout ${timeoutS}s per run, writing ${out}`)
-  files.forEach((f, i) => console.error(`  ${harnesses[i].name.padEnd(13)} ${f}`))
+  console.error(`bench: ${harnesses.length} harnesses × ${benchTotal(result) / harnesses.length} runs, timeout ${timeoutS}s per run, writing ${out}`)
+  const rows = rowNames(harnesses)
+  from.forEach((f, i) => console.error(`  ${rows[i].padEnd(13)} ${f}`))
   // bench reads notes and never writes them: a repo's are those of its folder, a built-in task's are in task-<name>.
   const notes: NotesStore = { file: notesPath(repo ? await notesKey(repo.repo) : `task-${taskName}`), write: false }
   for (const h of harnesses) if (h.config.notes?.enabled) {

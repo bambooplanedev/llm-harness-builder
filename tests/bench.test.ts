@@ -154,8 +154,8 @@ const five = (over: Partial<BenchRun>, extra: Partial<BenchRun> = {}) => ['a', '
 test('formatTable --wide: tool use columns, "-" for missing, 0 stays 0', () => {
   const hs = [gold('x', [{ toolCounts: { bash: 2, read_file: 4 }, outputLines: 10, reasoningTokens: 0 }, { toolCounts: {}, outputLines: 0 }, {}])]
   const [head, row] = formatTable(hs, { wide: true }).split('\n')
-  expect(head).toMatch(/turns\/ok\s+tok\/ok\s+model s\/ok\s+\$\/ok\s+tools\s+out lines\s+reason tok$/)
-  expect(row).toMatch(/\s-\s+-\s+-\s+-\s+bash 1 read_file 2\s+5\s+0$/)
+  expect(head).toMatch(/turns\/ok\s+tok\/ok\s+model s\/ok\s+\$\/ok\s+tools\s+out lines\s+reason tok\s+p PASS\s+p turns\s+p s\s+p tok\s+p calls\s+p lines\s+p reason$/)
+  expect(row).toMatch(/\s-\s+-\s+-\s+-\s+bash 1 read_file 2\s+5\s+0(\s+-){7}$/)
   expect(formatTable(hs, { wide: true }).split('\n')[0]).toContain('med turns')
 })
 test('formatTable --wide: per-success costs on shared successes; over tolerance gets "!", nothing is refused', () => {
@@ -167,8 +167,8 @@ test('formatTable --wide: per-success costs on shared successes; over tolerance 
 })
 test('formatTable --wide: under five shared tasks the cost cells are "-"; time falls back to ms', () => {
   const few = gold('base', five({}).slice(0, 4))
-  expect(formatTable([few], { wide: true }).split('\n')[1]).toMatch(/\s4\.0\s+1000\s+2\.0\s+-\s+-\s+-\s+-$/)
-  expect(formatTable([gold('none', [{}])], { wide: true }).split('\n')[1]).toMatch(/\s-\s+-\s+-\s+-\s+-\s+-\s+-$/)
+  expect(formatTable([few], { wide: true }).split('\n')[1]).toMatch(/\s4\.0\s+1000\s+2\.0\s+-\s+-\s+-\s+-(\s+-){7}$/)
+  expect(formatTable([gold('none', [{}])], { wide: true }).split('\n')[1]).toMatch(/\s-\s+-\s+-\s+-\s+-\s+-\s+-(\s+-){7}$/)
   const old = gold('base', five({ modelMs: undefined, ms: 3000 }))
   expect(formatTable([old], { wide: true }).split('\n')[1]).toMatch(/\s3\.0\s/)
 })
@@ -182,4 +182,49 @@ test('formatTable --wide: the base is the first harness on the same model; anoth
 test('formatTable --wide: an old JSON with a bare config renders without throwing', () => {
   const h = { ...gold('old', [{ verdict: 'PASS', ms: 5000 }]), config: {} as BenchHarness['config'] }
   expect(formatTable([h], { wide: true }).split('\n')[1]).toMatch(/\s4\.0\s+-\s+5\.0\s/)
+})
+
+// p-values: a table cell is "p (permutations)"; split on the two-space padding.
+const cols = (line: string) => line.split(/ {2,}/)
+const pcols = (hs: BenchHarness[]) => { const t = formatTable(hs, { wide: true }).split('\n'); const i = cols(t[0]).indexOf('p PASS'); return t.slice(1, 1 + hs.length).map(l => cols(l).slice(i, i + 7)) }
+const three = (over: Partial<BenchRun>) => [1, 2, 3].map(() => over)
+test('formatTable --wide: p against the first harness of the model, two-sided, on PASS too, with the permutation count', () => {
+  const [a, b] = pcols([gold('a', three({ verdict: 'FAIL', turns: 4 })), gold('b', three({ verdict: 'PASS', turns: 8 }))])
+  expect(a).toEqual(['-', '-', '-', '-', '-', '-', '-'])
+  // 3 v 3 in one task is C(6,3) = 20 labellings; the extreme two of them are as far out as the real one
+  expect(b.slice(0, 2)).toEqual(['0.100 (20)', '0.100 (20)'])
+  // the same 61 s on both sides: every labelling gives the same statistic
+  expect(b[2]).toBe('1.000 (1)')
+})
+test('formatTable --wide: seconds are model time, ms in an old JSON; a number a run lacks leaves that run out', () => {
+  const hs = [gold('a', three({ ms: 1000, modelMs: 1000 })), gold('b', three({ ms: 1000, modelMs: 5000 })), gold('c', three({ ms: 9000, modelMs: undefined }))]
+  const p = pcols(hs)
+  expect(p[1][2]).toBe('0.100 (20)'); expect(p[2][2]).toBe('0.100 (20)')
+  // no tokens, no tool counts, no output lines, no reasoning tokens anywhere: nothing to test
+  expect(p[1].slice(3)).toEqual(['-', '-', '-', '-'])
+  const q = pcols([gold('a', three({ toolCounts: { bash: 1 }, outputLines: 1, reasoningTokens: 1, tokens: 1 })), gold('b', [{ toolCounts: { bash: 5, read_file: 5 }, outputLines: 9, reasoningTokens: 9, tokens: 9 }, { toolCounts: { bash: 5, read_file: 5 }, outputLines: 9, reasoningTokens: 9, tokens: 9 }, { toolCounts: { bash: 5, read_file: 5 }, outputLines: 9, reasoningTokens: 9, tokens: 9 }])])
+  expect(q[1].slice(3)).toEqual(Array(4).fill('0.100 (20)'))
+})
+test('formatTable --wide: runs are shuffled inside their task; the count is the product, and past 20000 it is 20000', () => {
+  const two = (over: Partial<BenchRun>) => ['x', 'y'].flatMap(task => three({ ...over, task }))
+  expect(pcols([gold('a', two({ turns: 4 })), gold('b', two({ turns: 8 }))])[1][1]).toMatch(/ \(400\)$/)
+  const five6 = (over: Partial<BenchRun>) => ['a', 'b', 'c', 'd', 'e'].flatMap(task => three({ ...over, task }))
+  expect(pcols([gold('a', five6({ turns: 4 })), gold('b', five6({ turns: 8 }))])[1][1]).toMatch(/ \(20000\)$/)
+})
+test('formatTable --wide: a harness alone on its model has no p, and a bare old config renders', () => {
+  const m = (name: string, model: string) => ({ ...gold(name, three({})), config: { backend: { model } } as BenchHarness['config'] })
+  expect(pcols([m('a', 'A'), m('b', 'B')]).flat().every(c => c === '-')).toBe(true)
+  const old = { ...gold('old', three({})), config: {} as BenchHarness['config'] }
+  expect(() => formatTable([old, { ...old, name: 'old2' }], { wide: true })).not.toThrow()
+})
+test('formatTable --wide: the caption says what p is and that chance hits happen; plain stays without it', () => {
+  const hs = [gold('a', three({})), gold('b', three({}))]
+  expect(formatTable(hs, { wide: true })).toMatch(/p = two-sided permutation test/)
+  expect(formatTable(hs)).not.toMatch(/permutation/)
+})
+test('formatTable: with more than one model a row is "harness · model", through showable; with one it is the name', () => {
+  const m = (name: string, model: string) => ({ ...gold(name, three({})), config: { backend: { model } } as BenchHarness['config'] })
+  const t = formatTable([m('a', 'A'), m('a', 'B\u001b[2J')]).split('\n')
+  expect(t[1]).toMatch(/^a · A /); expect(t[2]).toMatch(/^a · B\\u001b\[2J /)
+  expect(formatTable([m('a', 'A'), m('b', 'A')]).split('\n')[1]).toMatch(/^a {2}/)
 })

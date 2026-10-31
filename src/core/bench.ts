@@ -1,8 +1,9 @@
 // src/core/bench.ts — result shape of `bench` and the pure helpers that summarise it. No fs, no process.
-import type { DoneReason, HarnessEvent } from './events.js'
+import { showable, type DoneReason, type HarnessEvent } from './events.js'
 import type { HarnessConfig } from './config.js'
 import { costCheck, type Cost } from './evolve-cost.js'
 import type { RunLite } from './evolve.js'
+import { permP } from './stats.js'
 
 export type BenchRun = {
   round: number; verdict: 'PASS' | 'FAIL'; reason: DoneReason | 'error'
@@ -56,8 +57,8 @@ export type BenchResult = { version: 1; date: string; task: string; taskName?: s
   /** Set by Ctrl-C (or Stop bench on the page): no run of it is live any more, though its last .part stays. */
   stopped?: boolean; harnesses: BenchHarness[] }
 
-/** One row of the Bench tab's file list. `model` and the file name tell two bench files apart; `task` is the prompt text, `taskName`/`size` say which task it was (absent in JSON written before v2.7 = slug). */
-export type BenchFile = { file: string; date: string; model: string; complete: boolean }
+/** One row of the Bench tab's file list. `model` (every model of the file) and the file name tell two bench files apart; `task` is the prompt text, `taskName`/`size` say which task it was (absent in JSON written before v2.7 = slug). */
+export type BenchFile = { file: string; date: string; model: string[]; complete: boolean }
 /** The run a `bench` process is executing right now, read from its still-unrenamed runs/<id>.jsonl.part. */
 export type ActiveTrace = { id: string; harness: string; round: number; started: number; events: HarnessEvent[] }
 
@@ -127,6 +128,38 @@ export function wideCells(harnesses: BenchHarness[]): string[][] {
 }
 export const WIDE_HEAD = ['turns/ok', 'tok/ok', 'model s/ok', '$/ok', 'tools', 'out lines', 'reason tok']
 
+/** The numbers a p is computed on, per run: PASS, turns, seconds (model time, wall-clock in an old JSON), tokens, total calls, output lines, reasoning tokens. */
+const P_NUMBERS: ((r: BenchRun) => number | undefined)[] = [
+  r => +(r.verdict === 'PASS'), r => r.turns, r => (r.modelMs ?? r.ms) / 1000, r => r.tokens,
+  r => r.toolCounts && Object.values(r.toolCounts).reduce((a, x) => a + x, 0), r => r.outputLines, r => r.reasoningTokens]
+export const P_HEAD = ['p PASS', 'p turns', 'p s', 'p tok', 'p calls', 'p lines', 'p reason']
+
+/** Per harness, one cell per number: "p (permutations)" of a two-sided test of the mean against the first harness on the same model, runs shuffled inside their task only.
+ *  '-' for the base, a harness alone on its model, and a number no pair of tasks has on both sides. Computed here, never stored, so an old JSON has it too. */
+export function pCells(harnesses: BenchHarness[]): string[][] {
+  return harnesses.map(h => {
+    const base = harnesses.find(b => b.config.backend?.model === h.config.backend?.model)!
+    return P_NUMBERS.map(f => {
+      if (base === h) return '-'
+      const by = (x: BenchHarness) => { const m = new Map<string, number[]>(); for (const r of x.runs) { const v = f(r); if (v !== undefined) m.set(r.task ?? 'task', [...m.get(r.task ?? 'task') ?? [], v]) } return m }
+      const a = by(base), b = by(h)
+      const strata = [...b].filter(([t]) => a.has(t)).map(([t, bs]) => ({ a: a.get(t)!, b: bs }))
+      if (!strata.length) return '-'
+      const { p, perms } = permP(strata, 'two')
+      return `${p.toFixed(3)} (${perms})`
+    })
+  })
+}
+
+/** The models of a bench, in the order the harnesses name them. */
+export const benchModels = (harnesses: BenchHarness[]): string[] => [...new Set(harnesses.map(h => h.config.backend?.model ?? ''))].filter(Boolean)
+
+/** `harness · model` when the file holds more than one model (--models), else the name as it is. Derived, never stored; the model is the file's text, so showable. */
+export const rowNames = (harnesses: BenchHarness[]): string[] => {
+  const multi = benchModels(harnesses).length > 1
+  return harnesses.map(h => multi ? showable(`${h.name} · ${h.config.backend?.model ?? ''}`) : h.name)
+}
+
 /** `wide` adds the tool-use and per-success columns; without it the table is what it always was. */
 export function formatTable(harnesses: BenchHarness[], opts: { wide?: boolean } = {}): string {
   // The tool columns only earn their width when a run measured them: a bench of built-in harnesses
@@ -137,10 +170,12 @@ export function formatTable(harnesses: BenchHarness[], opts: { wide?: boolean } 
   const miss = harnesses.some(h => h.runs.some(r => r.editMiss !== undefined))
   const tests = harnesses.some(h => h.tests)
   const sum = (xs: (number | undefined)[]) => xs.reduce<number>((a, x) => a + (x ?? 0), 0)
-  const head = ['harness', 'PASS', '95% CI', 'reasons', 'med turns', 'med s', ...tools ? ['toolChars', 'med errs'] : [], ...cost ? ['med $'] : [], ...guard ? ['guard'] : [], ...miss ? ['editMiss'] : [], ...tests ? ['tests'] : [], ...opts.wide ? WIDE_HEAD : []]
-  const wide = opts.wide ? wideCells(harnesses) : []
+  const head = ['harness', 'PASS', '95% CI', 'reasons', 'med turns', 'med s', ...tools ? ['toolChars', 'med errs'] : [], ...cost ? ['med $'] : [], ...guard ? ['guard'] : [], ...miss ? ['editMiss'] : [], ...tests ? ['tests'] : [], ...opts.wide ? [...WIDE_HEAD, ...P_HEAD] : []]
+  const ps = opts.wide ? pCells(harnesses) : []
+  const wide = opts.wide ? wideCells(harnesses).map((c, i) => [...c, ...ps[i]]) : []
+  const names = rowNames(harnesses)
   const rows = harnesses.map((h, i) => [
-    h.name, `${h.pass}/${h.runs.length}`,
+    names[i], `${h.pass}/${h.runs.length}`,
     wilson(h.pass, h.runs.length)?.map(x => x.toFixed(2)).join('–') ?? '-',
     Object.entries(h.reasons).map(([k, v]) => `${k}×${v}`).join(' ') || '-',
     String(h.median.turns), String(Math.round(h.median.ms / 1000)),
@@ -159,7 +194,8 @@ export function formatTable(harnesses: BenchHarness[], opts: { wide?: boolean } 
   return [line(head), ...rows.map(line), 'medians over all runs incl. failures; s = wall-clock per run',
     '95% CI = Wilson interval of the PASS rate; two harnesses whose intervals overlap are not told apart by this bench',
     ...opts.wide ? ['turns/ok, tok/ok, model s/ok: on 5+ tasks shared with the first harness of the same model, the mean over those tasks\' passes, and ! = dearer than evolve allows; under 5, a plain mean per pass, never marked. A JSON without model time falls back to wall-clock.',
-      '$/ok = plain mean over all passes, never marked. tools, out lines, reason tok = mean per run. - = not reported'] : [],
+      '$/ok = plain mean over all passes, never marked. tools, out lines, reason tok = mean per run. - = not reported',
+      'p = two-sided permutation test of the mean (PASS: of the rate) against the first harness of the same model, runs shuffled inside their task; (n) = labellings tried, all of them up to 20000, else 20000 random ones. With many columns some p < 0.05 come by chance.'] : [],
     ...tests ? ['tests = green tests over all runs; no interval: the tests of one exercise are not independent'] : []].join('\n')
 }
 

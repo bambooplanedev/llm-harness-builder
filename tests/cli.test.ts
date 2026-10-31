@@ -2847,3 +2847,21 @@ test('bench records backend.reasoningEffort in the JSON config', async () => {
   expect(r.status).toBe(0)
   expect(JSON.parse(await readFile(out, 'utf8')).harnesses[0].config.backend.reasoningEffort).toBe('high')
 }, 60_000)
+
+test('bench --models runs every harness on every model into one JSON and one table', async () => {
+  const wd = await tmp('lhb-cli-')
+  const fake = join(wd, 'fake.json'); const out = join(wd, 'b.json')
+  await writeFile(fake, JSON.stringify([{ content: TUNED_EDIT }, { content: TUNED_FINAL }, { content: TUNED_EDIT }, { content: TUNED_FINAL }]))
+  const r = cli(['bench', '--n', '1', '--models', 'ma,mb', '--out', out, harness('tuned')], { LHB_FAKE_BACKEND: fake })
+  expect(r.status).toBe(0)
+  const j = JSON.parse(await readFile(out, 'utf8'))
+  expect(j.harnesses.map((h: any) => [h.name, h.config.backend.model])).toEqual([['tuned', 'ma'], ['tuned', 'mb']])
+  expect(r.stdout).toMatch(/^tuned · ma\s+1\/1/m); expect(r.stdout).toMatch(/^tuned · mb\s+1\/1/m)
+  expect(r.stderr).toMatch(/tuned · mb\s+\S*tuned\.json/)
+})
+test('bench --models: --model with it, and an empty entry, are argument errors', () => {
+  for (const args of [['--model', 'x', '--models', 'a,b'], ['--models', 'a,'], ['--models', ''], ['--models', ',a']]) {
+    const r = cli(['bench', '--n', '1', ...args, harness('tuned')])
+    expect([args, r.status]).toEqual([args, 2]); expect(r.stderr).toMatch(/^error: --model/); expect(r.stderr).toContain('usage: ')
+  }
+})

@@ -8,7 +8,7 @@ import { apiKey, type RunParams } from '../core/config.js'
 import { redactor } from '../core/redact.js'
 import type { HarnessEvent, ToolCall } from '../core/events.js'
 import type { Backend, Delta } from '../core/backends/types.js'
-import type { BenchResult, BenchFile, ActiveTrace } from '../core/bench.js'
+import { benchModels, type BenchResult, type BenchFile, type ActiveTrace } from '../core/bench.js'
 import { analyzeTrace, analysisCells, type AnalysisCells } from '../core/analyze.js'
 
 export type RunSummary = { id: string; harness: string; task: string; workdir: string; started: number; reason?: string; turns?: number; toolCallCount?: number; active: boolean; session?: string; agent?: string; parent?: string; agentType?: string }
@@ -274,7 +274,7 @@ export class RunStore {
   async benchList(): Promise<BenchFile[]> {
     const files = (await this.benchFiles()).map(({ file, result }) => ({
       file, date: result.date, complete: result.complete,
-      model: result.harnesses[0].config.backend.model ?? '',
+      model: benchModels(result.harnesses),
     }))
     return files.sort((a, b) => b.date.localeCompare(a.date))
   }

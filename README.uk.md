@@ -234,7 +234,7 @@ Ollama думає, якщо їй не сказати інакше, витрач�
     llm-harness-builder serve [--port <n>] [--no-open]
     llm-harness-builder run <harness.json> "task" [--workdir <dir>] [--yes] [--json] [--answer-schema <file.json>] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
     llm-harness-builder demo [--json] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
-    llm-harness-builder bench [harness.json ...] [--n <n>] [--timeout <s>] [--out <file>] [--task <name>] [--size <N>] [--tasks <repo>] [--only <a,b>] [--yes] [--max-turns <N>] [--wide] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
+    llm-harness-builder bench [harness.json ...] [--n <n>] [--timeout <s>] [--out <file>] [--task <name>] [--size <N>] [--tasks <repo>] [--only <a,b>] [--yes] [--max-turns <N>] [--wide] [--models <a,b>] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
     llm-harness-builder evolve <harness.json> [--tasks <repo>] [--task polyglot] [--mode <m>] [--size <N>] [--rounds <N>] [--proposer <harness.json>] [--max-usd <dollars>] [--timeout <s>] [--yes] [--report] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
     llm-harness-builder replay <run-id | trace.jsonl> [--turn <N>] [--n <n>] [--temperature <t>] [--max-tokens <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>] [--json]
     llm-harness-builder analyze <bench.json | run-id | trace.jsonl> ... [--json]
@@ -297,6 +297,17 @@ stderr. `bench --tasks` і `evolve` питають один раз, перед �
 Далі на прогін: виклики кожного інструмента (вбудованого й mcp), рядки виводу інструментів, які бачила
 модель, і токени міркування, про які повідомив сервер. Середні, не медіани. `-` означає, що прогін цього
 не повідомив і до середнього не входить; повідомлений 0 рахується як 0.
+
+Під `--wide` (і завжди на вкладці Bench) кожен харнес, окрім першого на своїй моделі, отримує ще p-значення на
+кожне число (PASS, ходи, секунди, токени, усі виклики, рядки виводу, токени міркування): двосторонній
+перестановочний тест середнього проти цього першого харнеса, прогони перемішуються лише всередині задачі, а
+поруч стоїть кількість перестановок (до 20 000 беруться всі, тож p точне; більше — 20 000 випадкових із
+фіксованим зерном). p рахується з JSON під час друку таблиці, тож і старий файл його має. При багатьох
+колонках і харнесах якесь p < 0.05 з'являється випадково; поправки немає.
+
+`--models a,b` ганяє кожен харнес на кожній моделі в один JSON і одну таблицю, рядки `harness · model`; воно
+замінює `--model`, а p кожного рядка — проти першого харнеса на тій самій моделі. «Run bench again» на
+вкладці Bench лишає кожному конфігу його модель, тож повторює ту саму сітку.
 
 **Попередня перевірка.** Перед першим прогоном `bench` питає кожен сервер, що той уміє, нічого не
 генеруючи. Сервер, що не відповідає або не має моделі, зупиняє бенч з кодом виходу 2 і без JSON.

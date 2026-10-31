@@ -227,7 +227,7 @@ directory to browse them, and reload the list after a CLI run. On every start `s
     llm-harness-builder serve [--port <n>] [--no-open]
     llm-harness-builder run <harness.json> "task" [--workdir <dir>] [--yes] [--json] [--answer-schema <file.json>] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
     llm-harness-builder demo [--json] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
-    llm-harness-builder bench [harness.json ...] [--n <n>] [--timeout <s>] [--out <file>] [--task <name>] [--size <N>] [--tasks <repo>] [--only <a,b>] [--yes] [--max-turns <N>] [--wide] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
+    llm-harness-builder bench [harness.json ...] [--n <n>] [--timeout <s>] [--out <file>] [--task <name>] [--size <N>] [--tasks <repo>] [--only <a,b>] [--yes] [--max-turns <N>] [--wide] [--models <a,b>] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
     llm-harness-builder evolve <harness.json> [--tasks <repo>] [--task polyglot] [--mode <m>] [--size <N>] [--rounds <N>] [--proposer <harness.json>] [--max-usd <dollars>] [--timeout <s>] [--yes] [--report] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
     llm-harness-builder replay <run-id | trace.jsonl> [--turn <N>] [--n <n>] [--temperature <t>] [--max-tokens <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>] [--json]
     llm-harness-builder analyze <bench.json | run-id | trace.jsonl> ... [--json]
@@ -289,6 +289,17 @@ model (at least 5, else `-`); a cost dearer than `evolve` would allow is marked 
 Then, per run: the calls of each tool (built-in and mcp), the lines of tool output the model saw, and the
 reasoning tokens the server reported. Means, not medians. `-` means the run did not report it, and is left out of
 the mean; a reported 0 counts as 0.
+
+Under `--wide` (and always on the Bench tab) every harness but the first on its model also gets a p-value per number
+(PASS, turns, seconds, tokens, total calls, output lines, reasoning tokens): a two-sided permutation test of the
+mean against that first harness, with the runs shuffled only inside their task, and the number of permutations
+next to it (up to 20,000 all of them, so the p is exact; past that, 20,000 random ones with a fixed seed). It is
+computed from the JSON when the table is printed, so an old file has it too. With many columns and harnesses, some
+p < 0.05 come out by chance; nothing is corrected for it.
+
+`--models a,b` runs every harness on every model into one JSON and one table, rows named `harness · model`; it
+replaces `--model`, and the p of each row is against the first harness on the same model. "Run bench again"
+on the Bench tab keeps each config's model, so it repeats the same grid.
 
 **Preflight.** Before the first run `bench` asks each server what it can without generating. A
 server that does not answer, or lacks the model, stops the bench with exit code 2 and no JSON. The

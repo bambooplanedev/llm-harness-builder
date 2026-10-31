@@ -332,7 +332,7 @@ test('GET /api/bench lists bench files newest first and skips everything else', 
   expect(r.status).toBe(200)
   const { files } = await r.json()
   expect(files.map((f: any) => f.file)).toEqual(['b3.json', 'b2.json', 'b1.json'])
-  expect(files[1]).toEqual({ file: 'b2.json', date: '2026-09-13T11:00:00.000Z', model: 'fake-model', complete: true })
+  expect(files[1]).toEqual({ file: 'b2.json', date: '2026-09-13T11:00:00.000Z', model: ['fake-model'], complete: true })
 })
 
 test('GET /api/bench?file= on a version:1 file whose harness has no config is a 404, not a listed file', async () => {
