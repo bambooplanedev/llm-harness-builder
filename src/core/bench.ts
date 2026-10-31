@@ -57,7 +57,7 @@ export type BenchResult = { version: 1; date: string; task: string; taskName?: s
   /** Set by Ctrl-C (or Stop bench on the page): no run of it is live any more, though its last .part stays. */
   stopped?: boolean; harnesses: BenchHarness[] }
 
-/** One row of the Bench tab's file list. `model` (every model of the file) and the file name tell two bench files apart; `task` is the prompt text, `taskName`/`size` say which task it was (absent in JSON written before v2.7 = slug). */
+/** One row of the Bench tab's file list. `model` (every model of the file) and the file name tell two bench files apart. */
 export type BenchFile = { file: string; date: string; model: string[]; complete: boolean }
 /** The run a `bench` process is executing right now, read from its still-unrenamed runs/<id>.jsonl.part. */
 export type ActiveTrace = { id: string; harness: string; round: number; started: number; events: HarnessEvent[] }

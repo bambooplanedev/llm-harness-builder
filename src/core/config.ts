@@ -22,7 +22,7 @@ export const REDACT_MIN = 20
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]'])
 
 /** How the key's rules name the fields: the harness file's names, or replay's flags. */
-export type KeyWords = { key: string; kind: string; url: string }
+type KeyWords = { key: string; kind: string; url: string }
 const FILE_WORDS: KeyWords = { key: 'backend.apiKeyEnv', kind: 'kind openai or anthropic', url: 'an https baseUrl' }
 export const FLAG_WORDS: KeyWords = { key: '--api-key-env', kind: '--kind openai or anthropic', url: 'an https --base-url' }
 export const keyNameMessage = (field: string) => `${field} must be an upper-case variable name ending in _API_KEY (like OPENROUTER_API_KEY)`

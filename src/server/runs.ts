@@ -160,8 +160,8 @@ export class RunStore {
   }
 
   /** Tolerates a half-written last line: the CLI appends while we read, and a killed process can leave one. */
-  async read(id: string, part = false): Promise<HarnessEvent[]> {
-    return this.readPath(this.file(id) + (part ? '.part' : ''))
+  async read(id: string): Promise<HarnessEvent[]> {
+    return this.readPath(this.file(id))
   }
 
   /** The parser behind read(), taking a full path so callers who already have a matched filename (e.g. benchOpen's scan) don't have to re-derive it from untrusted meta content. */

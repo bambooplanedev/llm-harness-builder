@@ -47,7 +47,7 @@ export function textOf(content: unknown): string {
 }
 
 /** The task as the agent typed it: Claude Code wraps context into the first user message as system-reminders; an unclosed one runs to the end. */
-export function taskOf(text: string): string {
+function taskOf(text: string): string {
   return text.replace(/<system-reminder>[\s\S]*?(?:<\/system-reminder>|$)/g, '').trim()
 }
 

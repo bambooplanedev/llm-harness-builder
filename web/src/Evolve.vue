@@ -120,7 +120,7 @@ const clearNotes = () => { if (confirm(t('evolve.clearConfirm'))) void loadNotes
 </script>
 
 <template>
-  <!-- Leaving the tab only hides this page: the job lives in serve, not here. -->
+  <!-- Leaving the tab unmounts this page: the job lives in serve, not here. -->
   <div class="evolve">
     <h3>Evolve <span class="chip">{{ state }}</span></h3>
     <p class="muted">{{ t('evolve.lede') }}</p>
@@ -133,7 +133,7 @@ const clearNotes = () => { if (confirm(t('evolve.clearConfirm'))) void loadNotes
     <section v-if="plan && !running">
       <p><b>{{ plan.runs }}</b> {{ t('evolve.runs') }}</p>
       <label :title="t('h.evolveSets')">Tasks</label>
-      <ul class="sets">
+      <ul>
         <li><b>{{ plan.sets.train }}</b> {{ t('evolve.train') }}</li>
         <li><b>{{ plan.sets.gate }}</b> {{ t('evolve.gate') }}</li>
         <li><b>{{ plan.sets.test }}</b> {{ t('evolve.test') }}</li>

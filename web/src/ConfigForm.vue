@@ -168,7 +168,7 @@ function editMcp(text: string) {
     </div>
     <label>Loop</label>
     <div class="row"><span :title="t('h.maxTurns')">max turns</span><input type="number" v-model.number="config.loop.maxTurns"></div>
-    <details class="advanced" :open="advOpen" @toggle="saveAdv(($event.target as HTMLDetailsElement).open)"><summary :title="t('h.advanced')">Advanced{{ advN ? ` · ${advN} set` : '' }}</summary>
+    <details :open="advOpen" @toggle="saveAdv(($event.target as HTMLDetailsElement).open)"><summary :title="t('h.advanced')">Advanced{{ advN ? ` · ${advN} set` : '' }}</summary>
     <div :title="t('h.guard')"><input type="checkbox" :checked="!!config.tools.requireReadBeforeEdit" @change="toggleGuard(($event.target as HTMLInputElement).checked)"> refuse to edit a file that has not been read</div>
     <div class="row"><span :title="t('h.escalation')">edit misses before a re-read note</span><input type="number" min="1" :value="config.tools.editMissEscalation ?? ''" @change="setEscalation(($event.target as HTMLInputElement).value)"></div>
     <div class="row"><span :title="t('h.readMax')">read_file max bytes</span><input type="number" min="1" placeholder="4194304 (default)" :value="config.tools.readMaxBytes ?? ''" @change="setToolLimit('readMaxBytes', ($event.target as HTMLInputElement).value)"></div>

@@ -6,7 +6,7 @@ import Trace from './Trace.vue'
 import { t, tn, T } from './i18n'
 import { namesIn, shown } from './film'
 
-const props = defineProps<{ a: DiffSide; b: DiffSide; task: string }>()
+const props = defineProps<{ a: DiffSide; b: DiffSide }>()
 defineEmits<{ close: [] }>()
 
 const rows = computed(() => configDiff(props.a.config, props.b.config))

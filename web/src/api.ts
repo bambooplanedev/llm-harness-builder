@@ -14,7 +14,7 @@ export type EvolveStatus = {
   running?: { harness: string; err: string; round?: [number, number] }
   last?: { harness: string; code: number | null; signal: string | null; err: string; out: string }
 }
-/** The 409 of an evolve start that needs the user's yes first. */
+/** What POST /api/evolve/check says; the 409 of an evolve start that needs the user's yes first carries it too, with the consent. */
 export type EvolveCheck = {
   mode: string; sets: { train: number; gate: number; test: number }
   declarable: boolean; runs: number; priced: boolean; needed?: number; reference?: string

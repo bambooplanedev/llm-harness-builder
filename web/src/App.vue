@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { api, type Delta, type EvolveStatus, type HarnessConfig, type HarnessEvent, type RunSummary, type ServerInfo } from './api'
-import { PRESETS, DEFAULT_PROMPTED_TEMPLATE, DEFAULT_PARSE_ERROR_HINT, DEMO_TASK } from '../../src/core/prompts'
+import { DEMO_TASK } from '../../src/core/prompts'
 import { isLoopbackUrl, listsModelsByItself } from '../../src/core/config'
 import { knobsOff } from '../../src/core/knobs'
 import { NEW_HARNESS } from './advanced'

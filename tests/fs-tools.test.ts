@@ -2,7 +2,8 @@ import { test, expect, beforeEach, afterEach } from 'vitest'
 import { rm, writeFile, readFile as rf, mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmp } from './helpers.js'
-import { listDir, readFile, writeFile as wf, editFile, cutLines, GUARD_BLOCKED, EDIT_MISS, type ToolCtx } from '../src/core/tools/fs.js'
+import { listDir, readFile, writeFile as wf, editFile, cutLines, type ToolCtx } from '../src/core/tools/fs.js'
+import { GUARD_BLOCKED, EDIT_MISS } from '../src/core/tools/errors.js'
 
 let ctx: ToolCtx
 beforeEach(async () => {

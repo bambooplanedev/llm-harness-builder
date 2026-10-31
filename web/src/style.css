@@ -11,7 +11,6 @@
   :root {
     --bg: #0F1114; --surface: #161A1F; --sunk: #1D2229; --line: #2B3139; --text: #E5E8EC; --muted: #9EA6B0;
     --accent: #8AB0FF; --accent-bg: #17243D; --warn: #F0BC5A; --warn-bg: #2A2010; --err: #FF9A90; --err-bg: #2F1614;
-    --l-system: var(--muted); --l-tools: var(--accent); --l-history: var(--ok); --l-results: var(--warn);
     --ok: #7ED8A4; --ok-bg: #112619; --stub: #8A9099;
   }
 }

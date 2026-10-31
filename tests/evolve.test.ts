@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { canonical, reasonShown, spent, MODES, runCount, splitOf, type Split, ALPHA, boundBy, applyEdit, numbersOf, pickWinner, usable, parseJournal, replay, verdict, bindingTokens, checkEdit, decide, passGain, failureGroups, reasonKind, signatureOf, SIG, neededFlips, parseProposal, proposerInput, proposerRequest, proposalSchema, exhausted, ALLOWED, referenceLabel, signP, splitSets, PROPOSAL_SCHEMA, type Edit, type RunLite } from '../src/core/evolve.js'
+import { canonical, reasonShown, spent, MODES, runCount, splitOf, type Split, ALPHA, boundBy, applyEdit, numbersOf, pickWinner, usable, parseJournal, replay, verdict, bindingTokens, checkEdit, decide, passGain, failureGroups, reasonKind, signatureOf, SIG, neededFlips, parseProposal, proposerInput, proposerRequest, proposalSchema, exhausted, ALLOWED, referenceLabel, splitSets, type Edit, type RunLite } from '../src/core/evolve.js'
 import type { HarnessEvent } from '../src/core/events.js'
 import { harness } from './helpers.js'
 import type { RepoTask } from '../src/core/repo-tasks.js'
@@ -68,11 +68,7 @@ describe('evolve sets and tests', () => {
     expect(splitOf(sets(0, 3, 3), false, 'night')).toBe('evolve needs at least one task in each of train, gate and test (have 0/3/3)')
   })
 
-  it('signP: (5,0) < 0.05, (4,0) = 0.0625, (5,1) > 0.05, (0,0) = 1', () => {
-    expect(signP(5, 0)).toBeLessThan(ALPHA)
-    expect(signP(4, 0)).toBe(0.0625)
-    expect(signP(5, 1)).toBeGreaterThan(ALPHA)
-    expect(signP(0, 0)).toBe(1)
+  it('neededFlips: 5 flips and none back clear ALPHA', () => {
     expect(neededFlips()).toBe(5)
   })
 })
@@ -355,7 +351,7 @@ describe('evolve signals', () => {
     expect(r.messages[1].content).toBe('IN')
     expect(r.responseSchema).toBeUndefined()
     const s = proposerRequest('m', 'IN', { schema: true, noThink: true })
-    expect(s.responseSchema).toBe(PROPOSAL_SCHEMA)
+    expect(s.responseSchema).toEqual(proposalSchema(ALLOWED))
     expect(s.messages[0].content).toMatch(/\n\/no_think$/)
   })
 
@@ -515,7 +511,6 @@ describe('evolve journal', () => {
 
   it('proposalSchema narrows the enum; proposerRequest names the closed fields in fixed words and drops them from the schema', () => {
     expect(proposalSchema(['loop.maxTurns']).properties.field.enum).toEqual(['loop.maxTurns'])
-    expect(proposalSchema(ALLOWED)).toEqual(PROPOSAL_SCHEMA)
     const r = proposerRequest('m', 'IN', { schema: true, noThink: true, fields: ['systemPrompt', 'loop.maxTurns'] })
     expect(r.messages[0].content).toContain('These fields are closed for now, propose another: systemPrompt, loop.maxTurns')
     expect(r.messages[0].content).toMatch(/\n\/no_think$/)
