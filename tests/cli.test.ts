@@ -2860,7 +2860,7 @@ test('bench --models runs every harness on every model into one JSON and one tab
   expect(r.stderr).toMatch(/tuned · mb\s+\S*tuned\.json/)
 })
 test('bench --models: --model with it, and an empty entry, are argument errors', () => {
-  for (const args of [['--model', 'x', '--models', 'a,b'], ['--models', 'a,'], ['--models', ''], ['--models', ',a']]) {
+  for (const args of [['--model', 'x', '--models', 'a,b'], ['--models', 'a,'], ['--models', ''], ['--models', ',a'], ['--models', 'a,a']]) {
     const r = cli(['bench', '--n', '1', ...args, harness('tuned')])
     expect([args, r.status]).toEqual([args, 2]); expect(r.stderr).toMatch(/^error: --model/); expect(r.stderr).toContain('usage: ')
   }

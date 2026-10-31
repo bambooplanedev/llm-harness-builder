@@ -138,7 +138,13 @@ async function startNew() {
   if (ok) newOpen.value = false
 }
 // Per-success costs against the first harness on the same model (the same rule as evolve) and the tool-use means; '-' where a run did not report.
-const wide = computed(() => { const hs = result.value?.harnesses ?? [], p = pCells(hs); return wideCells(hs).map((c, i) => [...c, ...p[i]]) })
+// p is up to 20000 shuffles per number per harness, and a poll hands over a new result every two seconds: it is redone only when a run came in or the file changed.
+let pKey = '', pMemo: string[][] = []
+const wide = computed(() => {
+  const hs = result.value?.harnesses ?? [], key = `${result.value?.date}/${runs.value.length}`
+  if (key !== pKey) { pMemo = pCells(hs); pKey = key }
+  return wideCells(hs).map((c, i) => [...c, ...pMemo[i]])
+})
 /** A row's name: with --models the same harness name stands on several models, so the model is part of it (and of every key). */
 const labels = computed(() => result.value ? rowNames(result.value.harnesses) : [])
 const medCost = (h: BenchHarness) => { const c = h.runs.flatMap(r => r.costUsd ?? []).sort((a, b) => a - b); return c.length ? `$${Number(c[(c.length - 1) >> 1].toPrecision(3))}` : '-' }

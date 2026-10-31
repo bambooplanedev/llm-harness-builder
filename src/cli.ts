@@ -488,6 +488,7 @@ async function cmdBench(argv: string[]) {
   const models = values.models?.split(',')
   if (models && values.model !== undefined) argError('bench', '--model cannot go with --models: --models names the models')
   if (models?.includes('')) argError('bench', '--models: an empty model name')
+  if (models && new Set(models).size < models.length) argError('bench', '--models: a model is named twice')
   if (values.tasks !== undefined && (values.task !== undefined || values.size !== undefined)) argError('bench', '--tasks cannot go with --task or --size')
   let repo: RepoTasks | undefined
   if (values.tasks !== undefined) try { repo = await loadRepoTasks(values.tasks) } catch (e) { argError('bench', (e as Error).message) }
