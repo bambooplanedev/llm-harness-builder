@@ -47,6 +47,9 @@ const stubbedAt = computed(() => {
   return m
 })
 const pretty = (v: unknown) => JSON.stringify(v, null, 2)
+/** The raw request/response dump, once per event object: a live delta re-renders every turn, and an event never changes after it arrives (a film copy is a new object). */
+const rawText = new WeakMap<object, string>()
+const raw = (e: HarnessEvent) => rawText.get(e) ?? (rawText.set(e, pretty(e.type === 'llm_request' ? e.payload : (e as Extract<HarnessEvent, { type: 'llm_response' }>).raw)), rawText.get(e)!)
 /** The CLI's knobs_off line: what the file sets and was not sent, and who said so. */
 const knobsOff = computed(() => shownEvents.value.flatMap(e => e.type === 'knobs_off' ? e.off.map(o => `${o.knob} ${JSON.stringify(o.value)} not sent: ${o.reason}`) : []))
 /** The anatomy of every request the trace shows, and the same by event seq: counts only, from the trace as recorded. */
@@ -117,8 +120,8 @@ const liveTok = computed(() => Math.ceil(liveText.value.length / 4))
         <template v-if="e.type === 'llm_request'"><template v-if="anatBySeq.get(e.seq)"><div class="hint" :title="t('trace.anatomySplit')">{{ anatomyLine(anatBySeq.get(e.seq)!) }}</div>
           <div v-if="!anatBySeq.get(e.seq)!.exact" class="hint">{{ t('trace.anatomyEstimate') }}</div>
           <div v-if="anatBySeq.get(e.seq)!.toolsInSystem" class="hint">{{ t('trace.anatomyToolsInSystem') }}</div>
-          <div v-if="anatBySeq.get(e.seq)!.thinkingBlocks" class="hint">{{ t('trace.anatomyThinking') }}</div></template><pre>{{ pretty(e.payload) }}</pre></template>
-        <pre v-if="e.type === 'llm_response'">{{ pretty(e.raw) }}</pre>
+          <div v-if="anatBySeq.get(e.seq)!.thinkingBlocks" class="hint">{{ t('trace.anatomyThinking') }}</div></template><pre>{{ raw(e) }}</pre></template>
+        <pre v-if="e.type === 'llm_response'">{{ raw(e) }}</pre>
       </template>
     </details>
   </div>

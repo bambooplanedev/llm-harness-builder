@@ -168,6 +168,17 @@ test('removeClone does not follow the node_modules link; neither does removeClon
   }
 })
 
+test.skipIf(process.getuid?.() === 0)('removeCloneSync takes the probe too when the clone cannot be removed, as removeClone does', async () => {
+  const root = await tmp('lhb-ro-'), probe = await tmp('lhb-probe-')
+  const dir = join(root, 'clone')
+  await mkdir(dir); await writeFile(join(dir, 'f'), '1')
+  await chmod(root, 0o500) // the clone cannot be unlinked from a directory that cannot be written
+  try {
+    expect(() => removeCloneSync({ dir, probe, sha: 'x' })).toThrow()
+    expect(existsSync(probe)).toBe(false)
+  } finally { await chmod(root, 0o700) }
+})
+
 test('an exception between clone and removal leaves no dir', async () => {
   const repo = await repoWith()
   let dir = ''

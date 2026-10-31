@@ -129,7 +129,7 @@ h5.group { margin: 16px 0 4px; font: 600 11px var(--sans); letter-spacing: .06em
 /* Side B of an open comparison: the same accent, dashed. */
 .runs div.b { border: 1px dashed var(--accent); }
 .runs div.notrace { cursor: default; } .runs div.notrace:hover { border-color: var(--line); }
-.runs .clip { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--warn); }
+.clip { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--warn); }
 
 /* Diff: A and B in two columns, the turn number in a gutter; the turns both runs took alike are muted, the split is amber. */
 .diff { --cols: 44px repeat(2, minmax(0, 1fr)); }

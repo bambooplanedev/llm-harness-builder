@@ -45,6 +45,10 @@ createInterface({ input: process.stdin }).on('line', line => {
     if (n === 'stall') return   // never answer
     if (n === 'flood') { setInterval(() => process.stdout.write('x'.repeat(1 << 18)), 5); return }
     if (n === 'getenv') return text(m.id, process.env[m.params?.arguments?.name] ?? '(unset)')
+    if (m.params?.arguments?.text === 'split') {   // one two-byte character cut across two stdout chunks
+      const b = Buffer.from(JSON.stringify({ jsonrpc: '2.0', id: m.id, result: { content: [{ type: 'text', text: 'é' }] } }) + '\n'), at = b.indexOf(0xc3) + 1
+      process.stdout.write(b.subarray(0, at)); setTimeout(() => process.stdout.write(b.subarray(at)), 50); return
+    }
     return text(m.id, `echo: ${m.params?.arguments?.text ?? ''}`)
   }
 })

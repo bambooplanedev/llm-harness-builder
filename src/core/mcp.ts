@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process'
+import { StringDecoder } from 'node:string_decoder'
 import type { ToolSchema } from './backends/types.js'
 import type { McpServerConfig } from './config.js'
 import { track, untrack } from './procs.js'
@@ -30,6 +31,7 @@ class Conn {
   private child: ChildProcess
   private pid?: number
   private buf = ''
+  private readonly utf8 = new StringDecoder('utf8')   // a character cut across two chunks is held back, not turned into U+FFFD
   private id = 0
   private pending = new Map<number, Pending>()
   private stderr = ''
@@ -51,7 +53,7 @@ class Conn {
 
   private onData(d: Buffer) {
     if (this.dead) return
-    this.buf += d.toString('utf8')
+    this.buf += this.utf8.write(d)
     if (this.buf.length > MAX_LINE_BYTES) return this.die('server wrote a line over 1 MB', true)
     for (let i; (i = this.buf.indexOf('\n')) >= 0; ) {
       const line = this.buf.slice(0, i).trim()
