@@ -103,6 +103,23 @@ export function passGain(cur: RunLite[], cand: RunLite[]): { p: number; improved
   return { p: permP(strata, 'greater').p, improved: strata.filter(s => mean(s.b) > mean(s.a)).length }
 }
 
+/** The cost gates of `decide` and `verdict`: all tokens, then turns and tokens on shared passes against `orig`, time against `timeBase`. A reason, or undefined when within bounds. */
+function costGate(orig: RunLite[], cand: RunLite[], timeBase: RunLite[], origMaxTurns: number): string | undefined {
+  const numbers = numbersOf(cand), o = numbersOf(orig)
+  if (o.pass) {
+    const r = numbers.tokensPerSuccess! / o.tokensPerSuccess!
+    if (r > 1 + TOLERANCE) return `costs ${pct(r)}% more tokens per success than the original`
+  } else {
+    const r = numbers.tokens! / o.tokens!
+    if (r > 1 + TOLERANCE) return `costs ${pct(r)}% more tokens than the original`
+  }
+  // Under MIN_SHARED tasks a cost says nothing (undefined): the all-tokens gate above stands alone. Time is against `timeBase`, the rest against the original.
+  for (const [cost, base] of [['turns', orig], ['tokens', orig], ['time', timeBase]] as const) {
+    const k = costCheck(base, cand, cost, origMaxTurns)
+    if (k?.over) return costReason(k, cost)
+  }
+}
+
 /** cur = the current version's runs, cand = the candidate's, orig = the original's, all on train + gate; any number of repeats per task. */
 export function decide(i: { cur: RunLite[]; cand: RunLite[]; orig: RunLite[]; gateNames: string[]; mode: Mode; origMaxTurns: number }): { accepted: boolean; reason: string; numbers: Numbers } {
   const { cur, cand, orig, gateNames, mode, origMaxTurns } = i
@@ -120,18 +137,8 @@ export function decide(i: { cur: RunLite[]; cand: RunLite[]; orig: RunLite[]; ga
   } else if (numbers.pass <= c.pass) return no('no more PASS than current')
   const gate = (rs: RunLite[]) => numbersOf(rs.filter(r => gateNames.includes(r.task))).pass
   if (gate(cand) < gate(cur)) return no('worse on gate')
-  if (o.pass) {
-    const r = numbers.tokensPerSuccess! / o.tokensPerSuccess!
-    if (r > 1 + TOLERANCE) return no(`costs ${pct(r)}% more tokens per success than the original`)
-  } else {
-    const r = numbers.tokens! / o.tokens!
-    if (r > 1 + TOLERANCE) return no(`costs ${pct(r)}% more tokens than the original`)
-  }
-  // Under MIN_SHARED tasks a cost says nothing (undefined): the all-tokens gate above stands alone. Time is against the current, the rest against the original.
-  for (const [cost, base] of [['turns', orig], ['tokens', orig], ['time', cur]] as const) {
-    const k = costCheck(base, cand, cost, origMaxTurns)
-    if (k?.over) return no(costReason(k, cost))
-  }
+  const over = costGate(orig, cand, cur, origMaxTurns)
+  if (over) return no(over)
   // Paired by task: a prompt too heavy for the window gets no reply, so no first request, and must not leave the sum lighter.
   const ofp = byTask(orig, r => r.firstPromptTokens), cfp = byTask(cand, r => r.firstPromptTokens)
   const unmeasured = new Set(cand.filter(r => !cfp.has(r.task) && ofp.has(r.task)).map(r => r.task)).size
@@ -449,21 +456,24 @@ export function replay(lines: JournalLine[], original: object, ctx: { binding: s
 
 const PRINCIPLE = 'how far this is a principle rather than a fit depends on how unlike the training tasks the test tasks are'
 
-/** The original against the last version on the test tasks, paired by name. Only ever about this repo's tasks. */
-export function verdict(orig: RunLite[], last: RunLite[], mode: Mode): string {
-  const was = new Map(orig.map(r => [r.task, r.verdict]))
-  let b = 0, c = 0, po = 0, pl = 0
-  for (const r of last) {
-    const v = was.get(r.task)
-    if (!v) continue
-    if (v === 'PASS') po++
-    if (r.verdict === 'PASS') pl++
-    if (v === 'FAIL' && r.verdict === 'PASS') b++
-    else if (v === 'PASS' && r.verdict === 'FAIL') c++
-  }
+/** The original against the last version on the test tasks, repeats and costs included (time against the original: both ran in one sweep). Only ever about this repo's tasks.
+ *  `better` is the claim: more PASS (strict: p < ALPHA with the flips the sign test needs) and costs within the decide gates. */
+export function verdict(orig: RunLite[], last: RunLite[], mode: Mode, origMaxTurns: number): { better: boolean; lines: string[] } {
   const SEEN = mode.polyglot ? 'on the exercises Evolve did not see' : 'on the tasks of this repo Evolve did not see'
-  const lines = mode.strict
-    ? [signP(b, c) < ALPHA ? `better ${SEEN}` : signP(c, b) < ALPHA ? `worse ${SEEN}` : `not told apart from noise ${SEEN}`]
-    : [referenceLabel(mode), pl > po ? 'more PASS' : pl < po ? 'fewer PASS' : 'not told apart']
-  return [...lines, PRINCIPLE].join('\n')
+  const rate = (rs: RunLite[]) => rs.length ? numbersOf(rs).pass / rs.length : 0
+  const win = (a: RunLite[], b: RunLite[]) => { const { p, improved } = passGain(a, b); return p < ALPHA && improved >= neededFlips() }
+  let better = false, lines: string[]
+  if (mode.strict) {
+    if (win(orig, last)) better = true
+    lines = [better ? `better ${SEEN}` : win(last, orig) ? `worse ${SEEN}` : `not told apart from noise ${SEEN}`]
+  } else {
+    const [po, pl] = [rate(orig), rate(last)]
+    better = pl > po
+    lines = [referenceLabel(mode), pl > po ? 'more PASS' : pl < po ? 'fewer PASS' : 'not told apart']
+  }
+  if (better) {
+    const over = !usable(orig) || !usable(last) ? 'the server gave no usage' : costGate(orig, last, orig, origMaxTurns)
+    if (over) { better = false; lines = [mode.strict ? `more PASS ${SEEN}, but not better: ${over}` : `${lines.join('; ')}, but not better: ${over}`] }
+  }
+  return { better, lines: [...lines, PRINCIPLE] }
 }

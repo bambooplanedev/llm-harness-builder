@@ -73,6 +73,17 @@ describe('evolve report', () => {
     expect(evolveReport(golden())).toBe(GOLDEN)
   })
 
+  it('accepted but not better on test is a candidate: keep the harness, the version is for reference', () => {
+    const r = strictOf(true), f = r.state.final as { orig: RunLite[]; last: RunLite[] }
+    // The same flips at x3 tokens: better on PASS, refused on cost.
+    const dear = { ...r, state: { ...r.state, final: { ...f, last: f.last.map(x => ({ ...x, tokens: 300 })) } } }
+    const out = evolveReport(dear)
+    expect(out).toContain('not better: costs')
+    expect(out).toContain('Keep h.json; harnesses/h.v1.json is a candidate, kept for reference.')
+    expect(out).not.toContain('Use harnesses/h.v1.json')
+    expect(evolveReport(r)).toContain('Use harnesses/h.v1.json in place of h.json.')
+  })
+
   it('rule few tasks: absent in strict mode', () => {
     expect(evolveReport(golden())).toContain('- add 12 tasks')
     expect(evolveReport(strictOf(true))).not.toContain('- add ')
@@ -128,7 +139,7 @@ describe('evolve report', () => {
 
   it('strict better says Use, strict noise says Keep', () => {
     expect(evolveReport(strictOf(true))).toContain('1. Use harnesses/h.v1.json in place of h.json.')
-    expect(evolveReport(strictOf(false))).toContain('1. Keep h.json; harnesses/h.v1.json is kept for reference.')
+    expect(evolveReport(strictOf(false))).toContain('1. Keep h.json; harnesses/h.v1.json is a candidate, kept for reference.')
   })
 
   it('the report says when vN on disk is not the version measured', () => {

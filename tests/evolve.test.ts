@@ -560,15 +560,39 @@ describe('evolve journal', () => {
     const P = 'how far this is a principle rather than a fit depends on how unlike the training tasks the test tasks are'
     const T = names(8)
     const all = (ok: boolean) => T.map(t => run(t, ok))
-    expect(verdict(all(false), all(true), strict)).toBe(`better on the tasks of this repo Evolve did not see\n${P}`)
-    expect(verdict(all(true), all(false), strict)).toBe(`worse on the tasks of this repo Evolve did not see\n${P}`)
-    expect(verdict(all(true), all(true), strict)).toBe(`not told apart from noise on the tasks of this repo Evolve did not see\n${P}`)
+    const v = (o: RunLite[], l: RunLite[], m: Mode) => verdict(o, l, m, 10)
+    const text = (o: RunLite[], l: RunLite[], m: Mode) => v(o, l, m).lines.join('\n')
+    expect(v(all(false), all(true), strict)).toEqual({ better: true, lines: ['better on the tasks of this repo Evolve did not see', P] })
+    expect(text(all(true), all(false), strict)).toBe(`worse on the tasks of this repo Evolve did not see\n${P}`)
+    expect(v(all(true), all(false), strict).better).toBe(false)
+    expect(text(all(true), all(true), strict)).toBe(`not told apart from noise on the tasks of this repo Evolve did not see\n${P}`)
     // Paired by name: the same PASS count on swapped tasks is two flips each way, noise.
-    expect(verdict([run('a', true), run('b', false)], [run('b', true), run('a', false)], strict)).toMatch(/^not told apart from noise/)
-    expect(verdict([run('t0', false)], [run('t0', true)], ref)).toBe(`${referenceLabel(ref)}\nmore PASS\n${P}`)
-    expect(verdict([run('t0', true)], [run('t0', false)], ref)).toBe(`${referenceLabel(ref)}\nfewer PASS\n${P}`)
-    expect(verdict([run('t0', true)], [run('t0', true)], ref)).toBe(`${referenceLabel(ref)}\nnot told apart\n${P}`)
-    for (const m of [strict, ref]) for (const [o, l] of [[all(false), all(true)], [all(true), all(false)]]) expect(verdict(o, l, m)).not.toMatch(/in general/)
+    expect(text([run('a', true), run('b', false)], [run('b', true), run('a', false)], strict)).toMatch(/^not told apart from noise/)
+    expect(v([run('t0', false)], [run('t0', true)], ref)).toEqual({ better: true, lines: [referenceLabel(ref), 'more PASS', P] })
+    expect(text([run('t0', true)], [run('t0', false)], ref)).toBe(`${referenceLabel(ref)}\nfewer PASS\n${P}`)
+    expect(text([run('t0', true)], [run('t0', true)], ref)).toBe(`${referenceLabel(ref)}\nnot told apart\n${P}`)
+    for (const m of [strict, ref]) for (const [o, l] of [[all(false), all(true)], [all(true), all(false)]]) expect(text(o!, l!, m)).not.toMatch(/in general/)
+  })
+
+  it('verdict: a PASS gain with tokens x3 is not better, and the line names the cost', () => {
+    const T = names(8)
+    const v = verdict(T.map(t => run(t, false)), T.map(t => run(t, true, 300)), strict, 10)
+    expect(v.better).toBe(false)
+    expect(v.lines[0]).toMatch(/not better: costs \d+% more tokens/)
+    expect(v.lines.join('\n')).not.toMatch(/^better /)
+    // Passes on both sides, tokens x3 on the shared ones: the per-task turns/tokens gate speaks.
+    const six = names(6), o = [...six.map(t => run(t, true)), run('x', false), run('y', false)]
+    const l = [...six.map(t => run(t, true, 100)), run('x', true, 100), run('y', true, 100)].map(r => r.task.length === 2 ? r : { ...r, tokens: 300 })
+    expect(verdict(o, l, strict, 10).better).toBe(false)
+  })
+
+  it('verdict: repeats on the test tasks count, 5+ improved tasks with costs in bounds is better', () => {
+    const T = names(8), reps = (t: string, oks: boolean[], tokens = 100) => oks.map((ok, repeat) => ({ ...run(t, ok, tokens), repeat }))
+    const o = T.flatMap(t => reps(t, [false, false, false])), l = T.flatMap((t, i) => reps(t, i < 6 ? [true, true, false] : [false, false, false]))
+    expect(verdict(o, l, strict, 10)).toMatchObject({ better: true, lines: [expect.stringMatching(/^better /), expect.anything()] })
+    // 4 tasks improved are under the sign test's floor.
+    const few = T.flatMap((t, i) => reps(t, i < 4 ? [true, true, true] : [false, false, false]))
+    expect(verdict(o, few, strict, 10).better).toBe(false)
   })
 })
 
@@ -632,7 +656,7 @@ describe('evolve on polyglot', () => {
     expect(m).toEqual({ strict: false, trainGate: 2, test: 1, polyglot: true })
     expect(referenceLabel(m)).toBe('\u041e\u0420\u0406\u0404\u041d\u0422\u0418\u0420, \u041d\u0415 \u0414\u041e\u041a\u0410\u0417 — too few exercises (3 of 24) for a statistical conclusion; raise --size to 24')
     const T = names(8), all = (ok: boolean) => T.map(t => run(t, ok))
-    expect(verdict(all(false), all(true), { ...strict, polyglot: true })).toMatch(/^better on the exercises Evolve did not see\n/)
+    expect(verdict(all(false), all(true), { ...strict, polyglot: true }, 10).lines[0]).toBe('better on the exercises Evolve did not see')
   })
 })
 

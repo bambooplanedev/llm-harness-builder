@@ -51,7 +51,7 @@ export function evolveReport(r: ReportInput): string {
   const after = version ? fails(onGate(accepted[accepted.length - 1]?.runs ?? [])) : undefined
   const prompts = accepted.filter(l => l.edit?.field === 'systemPrompt')
   const final = state.final === 'none' ? undefined : state.final
-  const told = final ? verdict(final.orig, final.last, mode) : ''
+  const told = final ? verdict(final.orig, final.last, mode, (r.original as any).loop?.maxTurns ?? Infinity) : { better: false, lines: [] }
   // For polyglot the size is the journal's: train + gate + test.
   const bench = mode.polyglot ? `--task polyglot --size ${mode.trainGate + mode.test}` : '--tasks <repo>'
 
@@ -62,7 +62,7 @@ export function evolveReport(r: ReportInput): string {
       const n = numbersOf(rs)
       return `${label}: PASS ${n.pass}/${rs.length}, tokens per success ${n.tokensPerSuccess === undefined ? '—' : Math.round(n.tokensPerSuccess)}, first requests ${n.weight ?? '—'} tok`
     }
-    conclusion.push(`${versionFile} against ${harness} on the ${sets.test.length} test tasks:`, nums('original', final.orig), nums(`v${version}`, final.last), told)
+    conclusion.push(`${versionFile} against ${harness} on the ${sets.test.length} test tasks:`, nums('original', final.orig), nums(`v${version}`, final.last), ...told.lines)
     if (mode.strict) conclusion.splice(1, 0, strictLine)
   } else {
     conclusion.push('no version beat the original')
@@ -104,13 +104,12 @@ export function evolveReport(r: ReportInput): string {
   if (!advice.length) advice.push('none from these numbers')
 
   const apply: string[] = []
-  const said = told.split('\n')
   if (!version) apply.push(`Keep ${harness}.`)
   else if (r.changed) apply.push(`Keep ${harness}: ${versionFile} on disk is not the version measured; it changed after evolve wrote it.`)
   else {
-    if (mode.strict && said[0]!.startsWith('better ')) apply.push(`Use ${versionFile} in place of ${harness}.`)
-    else if (!mode.strict && said.includes('more PASS')) apply.push(`Try ${versionFile} in place of ${harness}: a pointer, not proof (too few tasks).`)
-    else apply.push(`Keep ${harness}; ${versionFile} is kept for reference.`)
+    if (told.better) apply.push(mode.strict ? `Use ${versionFile} in place of ${harness}.` : `Try ${versionFile} in place of ${harness}: a pointer, not proof (too few tasks).`)
+    // Accepted on train + gate, not better on test: a candidate.
+    else apply.push(`Keep ${harness}; ${versionFile} is a candidate, kept for reference.`)
     apply.push(`Check it yourself: llm-harness-builder bench ${versionFile} ${bench}`)
     if (prompts.length) apply.push('Read the systemPrompt paragraph above before you use it.')
   }
