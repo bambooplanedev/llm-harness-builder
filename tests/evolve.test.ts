@@ -241,6 +241,16 @@ describe('evolve edits', () => {
     expect(checkEdit({ field: 'loop.freshContext', value: 2 }, ctx())).toMatch(/^invalid config: loop\.freshContext needs loop\.maxRepeats/)
   })
 
+  it('checkEdit: loop.maxTurns may rise to twice the original, no further, never chained', () => {
+    const h = (n: number) => harness({ loop: { maxTurns: n } })
+    const c = (v: unknown, cur = 15) => checkEdit({ field: 'loop.maxTurns', value: v as number }, { ...ctx(), original: h(15), current: h(cur) })
+    expect(c(31)).toBe('above 2× the original')
+    expect(c(30)).toBeUndefined()
+    expect(c(31, 30)).toBe('above 2× the original')
+    expect(c(17.5)).toBe('bad value')
+    expect(c('20')).toBe('bad value')
+  })
+
   it('applyEdit refuses a field outside the list, so __proto__ cannot pollute', () => {
     expect(() => applyEdit({}, { field: '__proto__.polluted', value: 1 })).toThrow('field not allowed')
     expect(({} as any).polluted).toBeUndefined()
@@ -296,7 +306,7 @@ describe('evolve signals', () => {
       [{ field: 'systemPrompt', value: 'about fix-login', reason: 'tied to a task' }, { field: 'loop.maxRepeats', value: 'x'.repeat(300), reason: 'bad value' }], s => s.replace(/\s+/g, ' '))
     for (const bad of ['secret-name', 'fix-login', 'TOPSECRET']) expect(input).not.toContain(bad)
     const x = JSON.parse(input)
-    expect(x.current).toEqual({ systemPrompt: 'be careful\u200b', 'context.maxToolOutputChars': 4000, 'context.budgetTokens': 0 })
+    expect(x.current).toEqual({ systemPrompt: 'be careful\u200b', 'loop.maxTurns': 5,'context.maxToolOutputChars': 4000, 'context.budgetTokens': 0 })
     expect(x.rejected[0]).toEqual({ field: 'systemPrompt', reason: 'tied to a task' })
     expect(x.rejected[1].value).toHaveLength(200)
     expect(x.failures[0]).toMatchObject({ signature: 'final|check_failed|other|-', count: 1, exts: { ts: 1 } })
@@ -449,6 +459,7 @@ describe('evolve journal', () => {
 
   it('refuses a proposed edit outside ALLOWED or already tried, before anything is measured', () => {
     expect(replay([start, cur, prop({ ...a1, edit: { field: 'loop.untilBash', value: 'rm -rf x' } })] as any, harness(), ctx)).toEqual({ error: 'cannot resume: round 1 candidate 1: proposed edit: field not allowed' })
+    expect(replay([start, cur, prop({ ...a1, edit: { field: 'loop.maxTurns', value: 11 } })] as any, harness(), ctx)).toEqual({ error: 'cannot resume: round 1 candidate 1: proposed edit: above 2× the original' })
     const refused = cand(1, a1.edit, false, 'bad value')
     expect(replay([start, cur, refused, prop({ ...r2, edit: a1.edit })] as any, harness(), ctx)).toEqual({ error: 'cannot resume: round 1 candidate 2: proposed edit: already tried' })
     expect(replay([cur] as any, harness(), ctx)).toEqual({ error: expect.stringMatching(/^cannot resume: /) })

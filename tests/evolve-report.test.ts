@@ -106,10 +106,17 @@ describe('evolve report', () => {
     expect(evolveReport(v0())).not.toContain('every refused')
   })
 
-  it('rule knob outside evolve: fires when 2 gate runs after end max_turns, absent at 1', () => {
+  it('rule knob at its ceiling: the max_turns hint shows only when loop.maxTurns is at 2× the original', () => {
+    const mt = 'max_turns|-|-|-', afterGate = [fail('g1', mt), fail('g2', mt)]
+    const at = (cur: number) => evolveReport({ ...golden({ afterGate, original: { systemPrompt: 'S', loop: { maxTurns: 1 } } }), state: { current: { systemPrompt: 'S', loop: { maxTurns: cur } }, version: 1, final: golden().state.final } as any })
+    expect(at(2)).toContain(`- ${mt} is still the biggest failure on the gate tasks (2 of 2): loop.maxTurns is at its ceiling of 2× the original`)
+    expect(at(1)).not.toContain('still the biggest')
+  })
+
+  it('rule knob: absent when loop.maxTurns is below its ceiling, or at 1 max_turns', () => {
     const mt = 'max_turns|-|-|-'
     expect(evolveReport(golden({ afterGate: [fail('g1', mt), fail('g2', mt)] })))
-      .toContain(`- ${mt} is still the biggest failure on the gate tasks (2 of 2): loop.maxTurns is not a field evolve edits: raise it by hand if the tasks need more turns`)
+      .not.toContain('still the biggest')
     expect(evolveReport(golden({ afterGate: [pass('g1'), fail('g2', mt)] }))).not.toContain('still the biggest')
   })
 

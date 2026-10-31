@@ -35,9 +35,8 @@ const ONE_REASON: Record<string, string> = {
   'over tolerance: time': 'every refused candidate took more model time than the current version allows',
   'tied to a task': 'every refused candidate was tied to a task',
 }
-// Matched against a signature's reason or check part: failures no edit evolve may make can fix.
+// Matched against a signature's reason or check part: failures no edit evolve may make can fix. max_turns is one only at the ceiling.
 const KNOB: Record<string, string> = {
-  max_turns: 'loop.maxTurns is not a field evolve edits: raise it by hand if the tasks need more turns',
   parse_failed: 'the model\'s tool calls did not parse: check toolCalls by hand',
   check_timeout: 'the checks timed out: raise checkTimeoutS in lhb-tasks.json',
 }
@@ -100,7 +99,8 @@ export function evolveReport(r: ReportInput): string {
   const [top] = bySize(after ?? before), gateCount = new Set(sets.gate).size
   if (top && top[1] >= 2) {
     const [sig, n] = top, [reason, check] = sig.split('|')
-    const hint = KNOB[reason!] ?? KNOB[check!]
+    const mt = (o: unknown) => leafOf(o, 'loop.maxTurns') as number
+    const hint = reason === 'max_turns' ? (mt(state.current) >= 2 * mt(r.original) ? 'loop.maxTurns is at its ceiling of 2× the original' : undefined) : KNOB[reason!] ?? KNOB[check!]
     if (hint) advice.push(`${sig} is still the biggest failure on the gate tasks (${n} of ${gateCount}): ${hint}`)
     if ((r.original as any).notes?.enabled !== true && n * 2 >= gateCount)
       advice.push(`the same failure (${sig}) recurs on ${n} of ${gateCount} gate tasks and Notes is off: Notes carry what one run learned into the next; compare with bench ${mode.polyglot ? '--task polyglot' : '--tasks'}, Notes on and off`)

@@ -226,7 +226,9 @@ export function checkEdit(e: Edit, ctx: { current: object; original: object; tri
     if (/[\p{Cf}]|[^\P{Cc}\n\t]/u.test(v)) return 'bad value'
     if (DANGER.some(re => re.test(v))) return 'looks like a command or an address'
     if (boundBy(v, ctx.binding)) return 'tied to a task'
-  } else if (typeof v !== 'number' || !Number.isFinite(v)) return 'bad value'
+  } else if (typeof v !== 'number' || !Number.isFinite(v) || (e.field === 'loop.maxTurns' && !Number.isInteger(v))) return 'bad value'
+  // Against the original, not current: a raise cannot chain past 2×. Here, not in a caller, so replay holds a journal to it too.
+  else if (e.field === 'loop.maxTurns' && v > 2 * ((ctx.original as any).loop?.maxTurns ?? 0)) return 'above 2× the original'
   if (ctx.tried.some(t => t.field === e.field && t.value === v)) return 'already tried'
   const cand = applyEdit(ctx.current, e)
   const errs = validateConfig(cand)
@@ -305,7 +307,7 @@ export function proposerInput(current: object, groups: Group[], rejected: Reject
   })
 }
 
-const PROPOSER_SYSTEM = `You improve the harness of a coding agent. The input lists the harness's current settings, groups of failed runs (how each ended, which tools it called, which file types it edited) and edits already refused. Propose exactly one edit, as JSON {"field": ..., "value": ..., "why": ...}. field is one of: ${ALLOWED.join(', ')}. For systemPrompt, value is one short paragraph (at most ${PARA_MAX} characters) appended to the prompt: general advice on how to work on such tasks, never about one task, file or name, and no commands, paths or addresses. For any other field, value is a number. Do not propose an edit that was refused.`
+const PROPOSER_SYSTEM = `You improve the harness of a coding agent. The input lists the harness's current settings, groups of failed runs (how each ended, which tools it called, which file types it edited) and edits already refused. Propose exactly one edit, as JSON {"field": ..., "value": ..., "why": ...}. field is one of: ${ALLOWED.join(', ')}. For systemPrompt, value is one short paragraph (at most ${PARA_MAX} characters) appended to the prompt: general advice on how to work on such tasks, never about one task, file or name, and no commands, paths or addresses. For any other field, value is a number; loop.maxTurns is a whole number, at most twice its original value. Do not propose an edit that was refused.`
 
 export function proposerRequest(model: string, input: string, o: { schema: boolean; noThink: boolean }): ChatRequest {
   return {
@@ -395,7 +397,7 @@ export function parseJournal(text: string): { lines: JournalLine[] } | { error: 
 
 // The reasons the edit checks and `decide` write. Rejected edits reach the proposer, maybe in the cloud, and the
 // journal is bash-writable: anything else is passed on as `other`.
-const FIXED = /^(?:field not allowed|bad value|looks like a command or an address|tied to a task|already tried|changes more than one field|the server gave no usage|0 PASS|no more PASS than current|worse on gate|no edit in the reply|reply cut at maxTokens|lost to the other candidate)$/
+const FIXED = /^(?:field not allowed|bad value|looks like a command or an address|tied to a task|already tried|changes more than one field|above 2× the original|the server gave no usage|0 PASS|no more PASS than current|worse on gate|no edit in the reply|reply cut at maxTokens|lost to the other candidate)$/
 const PATTERNED: [RegExp, string][] = [
   [/^within noise \(p=\d\.\d\d\)$/, 'within noise'], [/^costs \d+% more tokens(?: per success)? than the original$/, 'costs more tokens'],
   [/^first request \d+% heavier than the original$/, 'first request heavier'], [/^first request not measured on \d+ tasks$/, 'first request not measured'], [/^invalid config: /, 'invalid config'],

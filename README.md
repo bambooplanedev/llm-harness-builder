@@ -450,8 +450,9 @@ Measured on 28–29 October 2026 (`qwen/qwen3-coder-30b-a3b-instruct` on OpenRou
 No version beat the original, so the 15 test tasks were not run. No gain is this model on this task,
 not a property of evolve. The unchanged harness alone scored 15, 8 and 11 of 32, so a gain of a few
 tasks is noise here, which is what the strict threshold is for. The proposer edited only
-`loop.maxRepeats`, all six times. The report's advice was the field it may not edit: `loop.maxTurns`
-(15) ended 5 of the 16 gate tasks; raise it by hand. In an earlier, shorter run, `--size 6 --rounds 1` took about
+`loop.maxRepeats`, all six times. `loop.maxTurns` (15) ended 5 of the 16 gate tasks; evolve may raise it
+up to twice the original (30), and a 31.10 spike found 15 → 30 gave no gain beyond noise and ×3.4 tokens, on this model
+and these tasks only. In an earlier, shorter run, `--size 6 --rounds 1` took about
 20 minutes and about $0.04.
 
 ##### Self-improvement window
