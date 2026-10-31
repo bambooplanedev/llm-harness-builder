@@ -228,7 +228,7 @@ directory to browse them, and reload the list after a CLI run. On every start `s
     llm-harness-builder run <harness.json> "task" [--workdir <dir>] [--yes] [--json] [--answer-schema <file.json>] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
     llm-harness-builder demo [--json] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
     llm-harness-builder bench [harness.json ...] [--n <n>] [--timeout <s>] [--out <file>] [--task <name>] [--size <N>] [--tasks <repo>] [--only <a,b>] [--yes] [--max-turns <N>] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
-    llm-harness-builder evolve <harness.json> [--tasks <repo>] [--task polyglot] [--mode <m>] [--size <N>] [--rounds <N>] [--proposer <harness.json>] [--timeout <s>] [--yes] [--report] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
+    llm-harness-builder evolve <harness.json> [--tasks <repo>] [--task polyglot] [--mode <m>] [--size <N>] [--rounds <N>] [--proposer <harness.json>] [--max-usd <dollars>] [--timeout <s>] [--yes] [--report] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
     llm-harness-builder replay <run-id | trace.jsonl> [--turn <N>] [--n <n>] [--temperature <t>] [--max-tokens <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>] [--json]
     llm-harness-builder analyze <bench.json | run-id | trace.jsonl> ... [--json]
     llm-harness-builder proxy [--upstream <url>] [--port <n>] [--name <label>]
@@ -424,6 +424,13 @@ quickest.
 The proposer never gets exercise names, test names or paths. The journal is bound to the loaded set and
 the size: a changed set refuses a resume, `--report` still prints. The proposer is asked about only when
 its host differs from the harness's (`--yes` accepts); the same host gets a notice line.
+
+A harness with `backend.pricePerMTok` needs `--max-usd <dollars>`; without a price the flag is refused
+(`no price to count against`). Before each run and each proposal evolve adds up what the journal holds
+and stops with exit 1 once that reaches the limit; the same command with a higher limit continues. The
+money of a sweep that a stop cuts is not in the journal and is not counted, so the real total may be one
+sweep higher. A proposer with no price of its own is not counted (evolve says so at the start). `--report`
+needs no flag and prints what the journal says was spent.
 
 A 429 is retried up to 3 times (the `Retry-After` wait, at most 300 s, else 60 s); a 429 after part of
 the reply has streamed is not retried and stops at once. A 401, a 402, a 403 without

@@ -363,9 +363,9 @@ type TestSweep = { v: 2; type: 'testsweep'; sweep: number; orig: RunLite[]; last
 export type JournalLine =
   | { v: 2; type: 'start'; base: string; sha: string; pin: string; notes: string; sets: Record<SetName, string[]>; declarable: boolean; mode: EvolveMode; proposer: string; repeats: number; rounds: number; attempt?: number }
   | { v: 2; type: 'probe'; round: number; runs: RunLite[] }
-  | ({ v: 2; type: 'proposal' } & Proposal)
+  | ({ v: 2; type: 'proposal'; costUsd?: number } & Proposal)
   | SweepLine
-  | { v: 2; type: 'candidate'; round: number; index: number; input: string; edit?: Edit; accepted: boolean; reason: string; numbers?: Numbers; version?: number }
+  | { v: 2; type: 'candidate'; round: number; index: number; input: string; edit?: Edit; accepted: boolean; reason: string; numbers?: Numbers; version?: number; costUsd?: number }
   | TestSweep
   | { v: 2; type: 'final'; version: number }
 
@@ -401,9 +401,10 @@ const LINE: Record<string, Check> = {
   // The current version on train, the proposer's first input; never in a decision.
   probe: shape({ v: v2, type: str, round: pos, runs: arr(RUN) }),
   candidate: shape({ v: v2, type: str, round: pos, index: pos, input: str, accepted: bool, reason: str },
-    { edit: EDIT, numbers: shape({ pass: num }, { tokensPerSuccess: num, tokens: num, weight: num }), version: pos }),
+    { edit: EDIT, numbers: shape({ pass: num }, { tokensPerSuccess: num, tokens: num, weight: num }), version: pos, costUsd: num }),
   // Written before the candidate's runs: a stop during them resumes with this edit, not a new roll of the proposer.
-  proposal: shape({ v: v2, type: str, round: pos, index: pos, input: str, edit: EDIT }),
+  // costUsd: the proposer's own call(s) for it, when the proposer is priced; the candidate line of a measured proposal carries none, so nothing is counted twice.
+  proposal: shape({ v: v2, type: str, round: pos, index: pos, input: str, edit: EDIT }, { costUsd: num }),
   // One line per sweep: a stop loses at most the sweep it cut.
   sweep: shape({ v: v2, type: str, round: pos, sweep: pos, cur: arr(RUN), cands: arr(shape({ index: pos, runs: arr(RUN) })) }),
   testsweep: shape({ v: v2, type: str, sweep: pos, orig: arr(RUN), last: arr(RUN) }),
@@ -441,6 +442,12 @@ const PATTERNED: [RegExp, string][] = [
 const REASON_RE = [FIXED, ...PATTERNED.map(p => p[0])]
 /** The fixed kind of a refusal reason (the numbers and config text dropped); `other` for what the harness does not write. */
 export const reasonKind = (reason: string): string => FIXED.test(reason) ? reason : PATTERNED.find(([re]) => re.test(reason))?.[1] ?? 'other'
+
+/** Dollars in the journal: every run's cost and every proposer call's. A run or call with no price counts 0. */
+export const spent = (lines: JournalLine[]): number => lines.reduce((t, l) => {
+  const runs = l.type === 'probe' ? l.runs : l.type === 'sweep' ? [...l.cur, ...l.cands.flatMap(c => c.runs)] : l.type === 'testsweep' ? [...l.orig, ...l.last] : []
+  return t + runs.reduce((a, r) => a + (r.costUsd ?? 0), 0) + (l.type === 'proposal' || l.type === 'candidate' ? l.costUsd ?? 0 : 0)
+}, 0)
 
 /** A round's candidates with their runs of every sweep. */
 export const sweptCands = (sweeps: Pick<SweepLine, 'cands'>[]) => sweeps[0]!.cands.map(({ index }) => ({ index, runs: sweeps.flatMap(s => s.cands.find(c => c.index === index)!.runs) }))

@@ -897,3 +897,20 @@ describe('evolve labels for the web', () => {
     expect(Object.keys(FIELD_LABEL)).toEqual(ALLOWED)
   })
 })
+
+describe('spent', () => {
+  it('adds the runs of every sweep kind and the proposer calls of proposals and refused candidates, and no decided candidate twice', async () => {
+    const { spent } = await import('../src/core/evolve.js')
+    const r = (costUsd?: number) => ({ task: 't', verdict: 'PASS' as const, turns: 1, modelMs: 1, ...(costUsd === undefined ? {} : { costUsd }) })
+    const lines = [
+      { v: 2, type: 'probe', round: 1, runs: [r(1), r()] },
+      { v: 2, type: 'proposal', round: 1, index: 1, input: '', edit: { field: 'a', value: 1 }, costUsd: 10 },
+      { v: 2, type: 'candidate', round: 1, index: 2, input: '', accepted: false, reason: 'x', costUsd: 100 },
+      { v: 2, type: 'sweep', round: 1, sweep: 1, cur: [r(1000)], cands: [{ index: 1, runs: [r(10000)] }] },
+      { v: 2, type: 'testsweep', sweep: 1, orig: [r(100000)], last: [r(1000000)] },
+      { v: 2, type: 'final', version: 0 },
+    ] as any
+    expect(spent(lines)).toBe(1111111)
+    expect(spent([])).toBe(0)
+  })
+})

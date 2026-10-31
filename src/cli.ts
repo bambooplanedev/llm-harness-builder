@@ -14,7 +14,8 @@ import { killTracked } from './core/procs.js'
 import { withNotes, type NotesStore } from './core/notes-run.js'
 import { notesKey, notesPath, readNotes, scrubText, stateDir } from './core/notes.js'
 import { smallestGain } from './core/stats.js'
-import { ALLOWED, CANDIDATES, type EvolveMode, MODES, ROUNDS, numbersOf, runCount, splitSets, splitOf, referenceLabel, neededFlips, usable, decideRound, sweptCands, applyEdit, bindingTokens, checkEdit, failureGroups, signatureOf, proposerInput, proposerRequest, parseProposal, parseJournal, replay, type Edit, type JournalLine, type RunLite, type SetName } from './core/evolve.js'
+import { costOf } from './core/cost.js'
+import { ALLOWED, CANDIDATES, type EvolveMode, MODES, ROUNDS, numbersOf, runCount, splitSets, splitOf, referenceLabel, neededFlips, usable, decideRound, sweptCands, applyEdit, bindingTokens, checkEdit, failureGroups, signatureOf, proposerInput, proposerRequest, parseProposal, parseJournal, replay, spent, type Edit, type JournalLine, type RunLite, type SetName } from './core/evolve.js'
 import { evolveReport } from './core/evolve-report.js'
 import { loadRepoTasks, hostOf, consentText, hasConsent, saveConsent, git, TASKS_FILE, type RepoTasks, type EvolveConsent } from './core/repo-tasks.js'
 import { cloneAt, linkNodeModules, protectedChanged, runCheck, finishRun, removeAllClonesSync, prepareModules, modulesManifest, modulesTampered, type Clone } from './core/repo-clone.js'
@@ -621,6 +622,13 @@ async function cmdEvolve(argv: string[]) {
   try { bytes = await readFile(file!); raw = JSON.parse(bytes.toString('utf8')) } catch (e) { return die(`cannot read harness ${file}:\n  ${(e as Error).message}`) }
   const over = { model: values.model, baseUrl: values['base-url'], kind: values.kind, apiKeyEnv: values['api-key-env'] }
   const config = overridden(raw, over, file!, !values.report)
+  // Priced = the harness's own price: no flag would silently buy a night at a price nobody set a ceiling on. --report runs nothing.
+  const limit = values['max-usd'] === undefined ? undefined : Number(values['max-usd'])
+  if (limit !== undefined && !(Number.isFinite(limit) && limit > 0)) argError('evolve', '--max-usd must be a positive number')
+  if (!values.report) {
+    if (limit !== undefined && !config.backend.pricePerMTok) argError('evolve', '--max-usd: no price to count against; the harness has no backend.pricePerMTok')
+    if (limit === undefined && config.backend.pricePerMTok) argError('evolve', 'evolve on a priced harness needs --max-usd <dollars>: the most it may spend before it stops (a stopped evolve resumes with a higher one)')
+  }
   const proposer = values.proposer === undefined ? config : await loadHarness(values.proposer, {}, !values.report)
   const sha256 = (b: Buffer | string) => createHash('sha256').update(b).digest('hex')
   // Named from the file, never config.name: that is text inside the file, and it becomes a path.
@@ -706,6 +714,16 @@ async function cmdEvolve(argv: string[]) {
     console.log(report())
     return
   }
+  if (limit !== undefined && !proposer.backend.pricePerMTok) console.error('the proposer has no price: its calls are not counted against --max-usd')
+  // The sweep or proposer call in flight is not journaled yet and a stop drops it, so it counts here: else a stop would let one more sweep through. Not in `pin`: a higher limit is how a stopped evolve resumes.
+  let unsaved = 0
+  const overStop = (): void => {
+    if (limit === undefined || spent(lines) + unsaved < limit) return
+    dropWork(work)
+    console.error(`evolve stopped: spent $${(spent(lines) + unsaved).toFixed(4)} of $${limit}; the cut sweep's runs are not in the journal, so the real total may be one sweep higher; run again with a higher --max-usd to continue`)
+    process.exit(1)
+  }
+  overStop()
   console.error(`mode ${mode}: up to ${count.all} runs: ${count.probe} probe, ${count.sweeps} sweeps, ${count.test} test`)
   console.error(autoApproves('evolve'))
   await src.consent(values.yes, proposer.backend.baseUrl)
@@ -764,16 +782,18 @@ async function cmdEvolve(argv: string[]) {
   const sweepOn = async (arms: { cfg: object; name: string }[], names: string[], sweep: number): Promise<RunLite[][] | undefined> => {
     const cs = arms.map(a => overridden({ ...a.cfg, name: a.name }, over, file!))
     const runs: RunLite[][] = arms.map(() => [])
-    for (const n of names) for (const [i, c] of cs.entries()) {
+    try { for (const n of names) for (const [i, c] of cs.entries()) {
+      overStop()
       const r = await benchOnce(c, sweep, timeoutS, out, byName.get(n)!, notes)
       if (r.stop !== undefined) halt('harness', c.backend, r.stop, hRedact, r.stopMidReply)
+      unsaved += r.costUsd ?? 0
       const lite: RunLite = { task: n, verdict: r.verdict, tokens: r.tokens, firstPromptTokens: r.firstPromptTokens, turns: r.turns, modelMs: r.modelMs ?? 0, costUsd: r.costUsd, repeat: sweep, trace: r.trace, reason: r.reason, lastError: r.lastError }
       // Signed now, while the trace is here: the report groups failures by it without reading a trace again.
       runs[i]!.push(lite.verdict === 'FAIL' ? { ...lite, sig: signatureOf(lite, await eventsOf(r.trace)) } : lite)
       // As in bench: a run that changed the linked node_modules changed every run after it.
       if (modulesDir && await modulesManifest(modulesDir) !== modules0) return undefined
     }
-    return runs
+    return runs } finally { unsaved = 0 }
   }
   // A trace id from the journal is a path only when it looks like one of ours.
   const eventsOf = async (trace?: string): Promise<HarnessEvent[]> => {
@@ -791,17 +811,21 @@ async function cmdEvolve(argv: string[]) {
   const clean = (s: string) => scrubText(s, hRedact, homedir())
   let proposerTokens = 0
   // Built like the notes writer's call: the proposer's own knobs, its /no_think line, a schema only where it enforces one.
-  const propose = async (input: string, closed: string[]): Promise<{ edit?: Edit; reason?: string }> => {
+  const propose = async (input: string, closed: string[]): Promise<{ edit?: Edit; reason?: string; costUsd?: number }> => {
     const req: ChatRequest = {
       ...proposerRequest(pb.model, input, { schema: proposer.toolCalls.enforceSchema, noThink: NO_THINK_LINE.test(proposer.systemPrompt), fields: closed }),
       temperature: pb.temperature, maxTokens: pb.maxTokens ?? 1024,
       ...(pb.numCtx === undefined ? {} : { numCtx: pb.numCtx }), ...(pb.think === undefined ? {} : { think: pb.think }),
     }
+    let cost: number | undefined
     const ask = async (): Promise<{ edit?: Edit; reason?: string }> => {
       let content: string, cut: boolean
+      overStop()
       try {
         const r = await sendRetrying(pBackend, pBackend.buildPayload(req), AbortSignal.timeout(timeoutS * 1000), undefined, RETRY_MS)
         if (r.usage) proposerTokens += r.usage.promptTokens + r.usage.completionTokens
+        const c = costOf(r.usage, pb.pricePerMTok)
+        if (c !== undefined) { cost = (cost ?? 0) + c; unsaved += c }
         content = r.content; cut = !!r.truncated
       // Not a rejection: a journaled one would never be asked again, and the next evolve continues at this candidate.
       } catch (e) {
@@ -809,11 +833,14 @@ async function cmdEvolve(argv: string[]) {
         dropWork(work); return die(`proposer failed: ${showable(pRedact.text((e as Error).message))}`) }
       try { return { edit: parseProposal(content) } } catch { return { reason: cut ? 'reply cut at maxTokens' : 'no edit in the reply' } }
     }
-    const p = await ask()
-    // Once more, same input and same closed list: a second reply on a closed field is the proposer's, journaled and rejected. Any other refusal is not asked again.
-    if (!p.edit || !closed.includes(p.edit.field)) return p
-    const again = await ask()
-    return again.edit && closed.includes(again.edit.field) ? { edit: again.edit, reason: 'field exhausted' } : again
+    // The line that follows holds the cost, so the in-flight copy goes the moment it is written (no check comes between).
+    try {
+      const p = await ask()
+      // Once more, same input and same closed list: a second reply on a closed field is the proposer's, journaled and rejected. Any other refusal is not asked again.
+      if (!p.edit || !closed.includes(p.edit.field)) return { ...p, costUsd: cost }
+      const again = await ask()
+      return { ...again.edit && closed.includes(again.edit.field) ? { edit: again.edit, reason: 'field exhausted' } : again, costUsd: cost }
+    } finally { unsaved = 0 }
   }
   const writeVersion = (n: number, cfg: object) => {
     const p = vf(n), text = versionText(base, n, cfg)
@@ -854,8 +881,8 @@ async function cmdEvolve(argv: string[]) {
       const why = p.reason ?? checkEdit(p.edit!, { current: state.current, original: raw, tried: state.tried, binding })
       if (why) {
         console.error(`candidate ${round}.${index}: ${showable(why)}`)
-        append({ v: 2, type: 'candidate', round, index, input, ...(p.edit ? { edit: p.edit } : {}), accepted: false, reason: why })
-      } else append({ v: 2, type: 'proposal', round, index, input, edit: p.edit! })
+        append({ v: 2, type: 'candidate', round, index, input, ...(p.edit ? { edit: p.edit } : {}), accepted: false, reason: why, ...p.costUsd === undefined ? {} : { costUsd: p.costUsd } })
+      } else append({ v: 2, type: 'proposal', round, index, input, edit: p.edit!, ...p.costUsd === undefined ? {} : { costUsd: p.costUsd } })
     }
     const open = state.pending.filter(p => p.round === round)
     if (!open.length) continue

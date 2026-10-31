@@ -67,7 +67,7 @@ export const COMMANDS = {
     summary: 'Improve a harness on your own tasks: propose one edit at a time, keep it only if it wins on tasks the proposer never saw.',
     args: '<harness.json>',
     options: {
-      tasks: { type: 'string' }, task: { type: 'string' }, mode: { type: 'string' }, size: { type: 'string' }, rounds: { type: 'string' }, proposer: { type: 'string' },
+      tasks: { type: 'string' }, task: { type: 'string' }, mode: { type: 'string' }, size: { type: 'string' }, rounds: { type: 'string' }, proposer: { type: 'string' }, 'max-usd': { type: 'string' },
       timeout: { type: 'string', default: '1800' }, yes: { type: 'boolean', default: false }, report: { type: 'boolean', default: false }, ...backend, help,
     },
     docs: {
@@ -77,6 +77,7 @@ export const COMMANDS = {
       size: ['<N>', 'instead of --mode: the first N of the 47 polyglot exercises, 3 to 47; orientation only, a quick look: --size 6 --rounds 1'],
       rounds: ['<N>', `instead of --mode: rounds of proposals (with --size alone ${ROUNDS}); orientation only`],
       proposer: ['<harness.json>', 'the harness whose backend proposes the edits (default: the one being improved)'],
+      'max-usd': ['<dollars>', 'stop before a run or a proposal once this much is spent (needed when the harness has backend.pricePerMTok; refused without one; a cut sweep\'s money is not counted)'],
       timeout: ['<s>', 'seconds per run (default 1800)'],
       yes: ['', 'accept the commands of --tasks, or a proposer on another host, without asking (needed without a terminal)'],
       report: ['', 'print the report of a finished evolve from its journal, with no run (the mode, the size and the rounds come from the journal; give the other options of the run)'],

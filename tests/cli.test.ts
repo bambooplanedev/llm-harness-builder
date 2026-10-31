@@ -1,7 +1,7 @@
 import { test, expect } from 'vitest'
 import { spawn, spawnSync, execSync } from 'node:child_process'
 import { writeFile, readFile, readdir, stat, cp } from 'node:fs/promises'
-import { chmodSync, mkdtempSync, existsSync, writeFileSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
+import { chmodSync, copyFileSync, mkdtempSync, existsSync, writeFileSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import http from 'node:http'
@@ -1838,7 +1838,7 @@ test('evolve --mode: after the probe, what the rest costs and the smallest gain;
   expect(r.stderr).toMatch(/^estimate: up to 8 more runs, about \d+\.\d h; the smallest gain told from noise: at most \+5 tasks of 2 \(upper bound at 1 repeat\)$/m)
   const cwd2 = await tmp('lhb-cwd-'), h = evHarness(cwd2), c = JSON.parse(readFileSync(h, 'utf8'))
   writeFileSync(h, JSON.stringify({ ...c, backend: { ...c.backend, pricePerMTok: { input: 1, output: 2 } } }))
-  const p = cli(['evolve', h, '--tasks', repo, '--mode', 'night', '--yes'], env, cwd2)
+  const p = cli(['evolve', h, '--tasks', repo, '--mode', 'night', '--yes', '--max-usd', '5'], env, cwd2)
   expect(p.status, p.stderr).toBe(0)
   expect(p.stderr).toMatch(/^estimate: up to 24 more runs, about \d+\.\d h, about \$0\.\d\d; the smallest gain told from noise: \+\d+ tasks of 2$/m)
 }, 120_000)
@@ -1986,6 +1986,62 @@ test('evolve: refuses when harnesses/h.v1.json already exists, before any run', 
   expect(existsSync(join(cwd, 'harnesses', 'h.evolve.jsonl'))).toBe(false)
   expect(clonesIn(env)).toEqual([])
 }, 120_000)
+
+// --max-usd: the harness's own price is what counts. A run of the fake costs $0.00012 (100 + 10 tokens at $1 and $2), a proposal $0.00006.
+const priced = (h: string) => { const c = JSON.parse(readFileSync(h, 'utf8')); writeFileSync(h, JSON.stringify({ ...c, backend: { ...c.backend, pricePerMTok: { input: 1, output: 2 } } })) }
+
+test('evolve --max-usd: a priced harness needs the flag, an unpriced one refuses it, a bad value is an argument error', async () => {
+  const repo = await tasksRepo(evTasks(ONE_EACH))
+  const env = await tasksEnv(evFake())
+  const cwd = await tmp('lhb-cwd-'), h = evHarness(cwd)
+  const run = (extra: string[]) => cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes', ...extra], env, cwd)
+  const plain = run(['--max-usd', '1'])
+  expect(plain.status).toBe(2)
+  expect(plain.stderr).toContain('no price to count against')
+  priced(h)
+  const bare = run([])
+  expect(bare.status).toBe(2)
+  expect(bare.stderr).toMatch(/^error: evolve on a priced harness needs --max-usd <dollars>/m)
+  for (const v of ['0', '-1', 'abc', 'Infinity']) { const r = run([`--max-usd=${v}`]); expect(r.status, v).toBe(2); expect(r.stderr, v).toMatch(/^error: --max-usd must be a positive number$/m) }
+  expect(existsSync(join(cwd, 'harnesses'))).toBe(false)
+}, 120_000)
+
+test('evolve --max-usd: a priced harness with an unpriced proposer starts and says the proposer is not counted', async () => {
+  const repo = await tasksRepo(evTasks(ONE_EACH))
+  const env = await tasksEnv(evFake())
+  const cwd = await tmp('lhb-cwd-'), h = evHarness(cwd), p = join(cwd, 'p.json')
+  priced(h); copyFileSync(harness('bare'), p)
+  const r = cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes', '--max-usd', '5', '--proposer', p], env, cwd)
+  expect(r.status, r.stderr).toBe(0)
+  expect(r.stderr).toMatch(/^the proposer has no price: its calls are not counted against --max-usd$/m)
+  expect(journal(cwd).some(l => l.type === 'proposal' && l.costUsd !== undefined)).toBe(false)
+}, 120_000)
+
+test('evolve --max-usd: the limit stops before a run, drops the cut sweep, and the same command with a higher limit continues; --report needs no flag', async () => {
+  const repo = await tasksRepo(evTasks(ONE_EACH))
+  const env = await tasksEnv(evFake())
+  const cwd = await tmp('lhb-cwd-'), h = evHarness(cwd)
+  priced(h)
+  const run = (limit: string) => cli(['evolve', h, '--tasks', repo, '--rounds', '1', '--yes', '--max-usd', limit], env, cwd)
+  // The probe ($0.00012) and the proposals ($0.00006 each) fit; the first sweep's second run does not.
+  const stopped = run('0.0004')
+  expect(stopped.status, stopped.stderr).toBe(1)
+  expect(stopped.stderr).toMatch(/^evolve stopped: spent \$0\.\d+ of \$0\.0004; the cut sweep's runs are not in the journal, so the real total may be one sweep higher; run again with a higher --max-usd to continue$/m)
+  const lines = journal(cwd)
+  expect(lines.some(l => l.type === 'sweep')).toBe(false)
+  expect(lines.find(l => l.type === 'proposal').costUsd).toBeCloseTo(0.00006, 9)
+  expect(clonesIn(env)).toEqual([])
+  // Over the limit already: nothing is asked.
+  const again = run('0.0004')
+  expect(again.status).toBe(1)
+  expect(again.stderr).toContain('evolve stopped: spent $')
+  const go = run('5')
+  expect(go.status, go.stderr).toBe(0)
+  expect(go.stdout).toMatch(/^spent \$0\.\d+$/m)
+  const rep = cli(['evolve', h, '--tasks', repo, '--report'], env, cwd)
+  expect(rep.status, rep.stderr).toBe(0)
+  expect(rep.stdout).toBe(go.stdout)
+}, 180_000)
 
 test('evolve: without consent and without a terminal it shows the evolve consent and stops', async () => {
   const repo = await tasksRepo(evTasks(ONE_EACH))

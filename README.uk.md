@@ -235,7 +235,7 @@ Ollama думає, якщо їй не сказати інакше, витрач�
     llm-harness-builder run <harness.json> "task" [--workdir <dir>] [--yes] [--json] [--answer-schema <file.json>] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
     llm-harness-builder demo [--json] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
     llm-harness-builder bench [harness.json ...] [--n <n>] [--timeout <s>] [--out <file>] [--task <name>] [--size <N>] [--tasks <repo>] [--only <a,b>] [--yes] [--max-turns <N>] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
-    llm-harness-builder evolve <harness.json> [--tasks <repo>] [--task polyglot] [--mode <m>] [--size <N>] [--rounds <N>] [--proposer <harness.json>] [--timeout <s>] [--yes] [--report] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
+    llm-harness-builder evolve <harness.json> [--tasks <repo>] [--task polyglot] [--mode <m>] [--size <N>] [--rounds <N>] [--proposer <harness.json>] [--max-usd <dollars>] [--timeout <s>] [--yes] [--report] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
     llm-harness-builder replay <run-id | trace.jsonl> [--turn <N>] [--n <n>] [--temperature <t>] [--max-tokens <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>] [--json]
     llm-harness-builder analyze <bench.json | run-id | trace.jsonl> ... [--json]
     llm-harness-builder proxy [--upstream <url>] [--port <n>] [--name <label>]
@@ -430,6 +430,13 @@ gate чи test за `i % 3`. `--rounds N`, а на polyglot і `--size N` (ві�
 Журнал прив'язано до завантаженого набору й розміру: змінений набір відхиляє відновлення, а `--report`
 усе одно друкує. Про пропонувальника питають, лише коли його хост відрізняється від хоста харнесу
 (`--yes` погоджує); на тому самому хості друкується рядок-повідомлення.
+
+Харнес із `backend.pricePerMTok` потребує `--max-usd <dollars>`; без ціни прапорець відхиляється
+(`no price to count against`). Перед кожним прогоном і кожною пропозицією evolve додає те, що є в журналі,
+і зупиняється з кодом 1, щойно сума досягає ліміту; та сама команда з вищим лімітом продовжує. Гроші
+набору, який зупинка перервала, у журнал не потрапляють і не враховуються, тож справжня сума може бути
+на один набір вищою. Пропонувальник без власної ціни не враховується (evolve каже про це на старті).
+`--report` не потребує прапорця й друкує те, що журнал каже про витрати.
 
 429 повторюється до 3 разів (чекаємо `Retry-After`, але не довше 300 с, інакше 60 с); 429 після того,
 як частина відповіді вже надійшла потоком, не повторюється й зупиняє одразу. 401, 402, 403 без причин модерації

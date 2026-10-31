@@ -3,7 +3,7 @@
 // Every line is a fixed template filled with numbers and fixed words (verdicts, `sig`, `reasonKind`, ALLOWED fields);
 // the only free text is the accepted systemPrompt paragraphs, labelled as the proposer's. Never task names, paths,
 // lastError, trace, why or a run's reason.
-import { ALLOWED, exhausted, numbersOf, orientationOnly, reasonKind, referenceLabel, shortOf, verdict, WINNER_MODES, type JournalLine, type RunLite, type SetName, type Split } from './evolve.js'
+import { ALLOWED, exhausted, numbersOf, orientationOnly, reasonKind, referenceLabel, shortOf, spent, verdict, WINNER_MODES, type JournalLine, type RunLite, type SetName, type Split } from './evolve.js'
 import { showableText } from './events.js'
 
 export type ReportInput = {
@@ -118,6 +118,8 @@ export function evolveReport(r: ReportInput): string {
     if (prompts.length) apply.push('Read the systemPrompt paragraph above before you use it.')
   }
   if (r.attempt !== undefined) conclusion.push(`attempt ${r.attempt}`)
+  // Only a number the journal holds: an unpriced harness has none, and a cut sweep's money was never journaled.
+  if (spent(lines) > 0) conclusion.push(`spent $${spent(lines).toFixed(4)}`)
 
   return [
     '== Conclusion', ...conclusion, '',
