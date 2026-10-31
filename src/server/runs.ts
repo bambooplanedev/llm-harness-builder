@@ -4,8 +4,8 @@ import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import { withNotes } from '../core/notes-run.js'
 import { notesKey, notesPath } from '../core/notes.js'
-import { apiKey, type RunParams } from '../core/config.js'
-import { redactor } from '../core/redact.js'
+import type { RunParams } from '../core/config.js'
+import { keyRedactor } from '../core/redact.js'
 import type { HarnessEvent, ToolCall } from '../core/events.js'
 import type { Backend, Delta } from '../core/backends/types.js'
 import { benchModels, type BenchResult, type BenchFile, type ActiveTrace } from '../core/bench.js'
@@ -109,7 +109,7 @@ export class RunStore {
 
   async start(params: RunParams, backend?: Backend): Promise<string> {
     // runAgent redacts its own events; the meta line and the catch below write outside it. First, so nothing is reserved yet if this throws.
-    const redact = redactor(apiKey(params.config.backend, process.env), params.config.backend.apiKeyEnv ?? '')
+    const redact = keyRedactor(params.config.backend)
     const workdir = await realpath(params.workdir)
     // Check-and-reserve with no `await` between them: nothing else can run on this thread
     // in between, so two concurrent starts for the same workdir cannot both pass the check.

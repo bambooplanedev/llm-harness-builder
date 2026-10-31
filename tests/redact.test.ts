@@ -1,5 +1,5 @@
-import { test, expect } from 'vitest'
-import { redactor } from '../src/core/redact.js'
+import { test, expect, vi } from 'vitest'
+import { keyRedactor, redactor } from '../src/core/redact.js'
 import { apiKey } from '../src/core/config.js'
 
 const KEY = 'sk-or-v1-' + 'a1'.repeat(16)
@@ -37,4 +37,15 @@ test('20 characters is redacted; 19, 19 left after the trim apiKey does, and no 
   expect(redactor(padded, 'K_API_KEY').text(`  ${nineteen}  `)).toBe(`  ${nineteen}  `)
   const none = { a: 'x' }
   expect(redactor(undefined, 'K_API_KEY').deep(none)).toBe(none)
+})
+
+test('keyRedactor: the value the name holds, trimmed, marked with the name; no name or no usable value redacts nothing', () => {
+  vi.stubEnv('K_API_KEY', `  ${KEY}  `)
+  try {
+    expect(keyRedactor({ apiKeyEnv: 'K_API_KEY' }).text(`x${KEY}y`)).toBe('x[redacted: K_API_KEY]y')
+    expect(keyRedactor({}).text(KEY)).toBe(KEY)
+    expect(keyRedactor({ apiKeyEnv: 'UNSET_API_KEY' }).text(KEY)).toBe(KEY)
+    vi.stubEnv('K_API_KEY', '')
+    expect(keyRedactor({ apiKeyEnv: 'K_API_KEY' }).text(KEY)).toBe(KEY)
+  } finally { vi.unstubAllEnvs() }
 })

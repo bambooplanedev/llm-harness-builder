@@ -5,10 +5,10 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { RunStore, WorkdirBusyError, safeName } from './runs.js'
 import { refusal } from './origin.js'
-import { validateConfig, backendErrors, keyProblem, apiKey, type HarnessConfig, type RunParams } from '../core/config.js'
+import { validateConfig, backendErrors, keyProblem, type HarnessConfig, type RunParams } from '../core/config.js'
 import { validateWorkdir } from '../core/tools/sandbox.js'
 import { createBackend, type Backend } from '../core/backends/index.js'
-import { redactor } from '../core/redact.js'
+import { keyRedactor } from '../core/redact.js'
 import { unreachable } from '../core/preflight.js'
 import type { HarnessEvent } from '../core/events.js'
 import { benchFileName, BENCH_TASKS } from '../core/bench.js'
@@ -123,7 +123,7 @@ export async function startServer(opts: ServerOpts) {
         const missing = errors.length ? undefined : keyMissing(backend)
         if (missing) errors.push(missing)
         if (errors.length) return json(res, 400, { errors })
-        const redact = redactor(apiKey(backend, process.env), backend.apiKeyEnv ?? '')
+        const redact = keyRedactor(backend)
         try {
           if (!info) return json(res, 200, await backendFactory(backend).listModels())
           // Only what the form shows: undefined fields drop out of the JSON.

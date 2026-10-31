@@ -1,6 +1,6 @@
 // src/core/redact.ts — the value of the backend key, taken out of text the harness records or shows. Replaced by its
 // variable's name, wherever it occurs; a value shorter than REDACT_MIN is not looked for (see config.ts).
-import { REDACT_MIN } from './config.js'
+import { REDACT_MIN, apiKey } from './config.js'
 
 export type Redactor = { text(s: string): string; deep<T>(x: T): T }
 
@@ -24,3 +24,6 @@ export function redactor(value: string | undefined, name: string): Redactor {
   }
   return { text, deep: <T>(x: T) => walk(x) as T }
 }
+
+/** The redactor for a backend's key, read from this process's environment: the one rule for every place that records or shows text. */
+export const keyRedactor = (b: { apiKeyEnv?: string }): Redactor => redactor(apiKey(b, process.env), b.apiKeyEnv ?? '')
