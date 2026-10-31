@@ -21,12 +21,16 @@ export type ReportInput = {
 const leafOf = (o: unknown, f: string): unknown => f.split('.').reduce((x: any, k) => x?.[k], o)
 const bySize = (m: Map<string, number>) => [...m].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
 const count = (keys: string[]) => { const m = new Map<string, number>(); for (const k of keys) m.set(k, (m.get(k) ?? 0) + 1); return m }
-const fails = (rs: RunLite[]) => count(rs.filter(r => r.verdict === 'FAIL').map(r => r.sig ?? '-|-|-|-'))
+// Distinct tasks, not runs: with repeats one task failing 3 times is one task of the gate.
+const fails = (rs: RunLite[]) => count([...new Set(rs.filter(r => r.verdict === 'FAIL').map(r => JSON.stringify([r.task, r.sig ?? '-|-|-|-'])))].map(k => JSON.parse(k)[1]))
 
 const ONE_REASON: Record<string, string> = {
   'within noise': 'every refused candidate was within noise: more tasks that tell versions apart would let a real gain show',
   'costs more tokens': 'every refused candidate cost more than +10% tokens per success',
   'first request heavier': 'every refused candidate made the first request more than +25% heavier',
+  'over tolerance: turns': 'every refused candidate took more turns than the original allows',
+  'over tolerance: tokens': 'every refused candidate took more tokens on the tasks both pass than the original allows',
+  'over tolerance: time': 'every refused candidate took more model time than the current version allows',
   'tied to a task': 'every refused candidate was tied to a task',
 }
 // Matched against a signature's reason or check part: failures no edit evolve may make can fix.
@@ -89,7 +93,7 @@ export function evolveReport(r: ReportInput): string {
     advice.push('the server gave no usage (token counts) for some runs, so those candidates could not pass the gates: use a server that reports them')
   const kinds = [...refused.keys()], nRefused = [...refused.values()].reduce((a, n) => a + n, 0)
   if (!version && nRefused >= 2 && kinds.length === 1) advice.push(ONE_REASON[kinds[0]!] ?? `every refused candidate: ${kinds[0]}`)
-  const [top] = bySize(after ?? before), gateCount = sets.gate.length
+  const [top] = bySize(after ?? before), gateCount = new Set(sets.gate).size
   if (top && top[1] >= 2) {
     const [sig, n] = top, [reason, check] = sig.split('|')
     const hint = KNOB[reason!] ?? KNOB[check!]

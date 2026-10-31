@@ -98,6 +98,17 @@ describe('evolve report', () => {
     expect(evolveReport(golden({ afterGate: [pass('g1'), fail('g2', mt)] }))).not.toContain('still the biggest')
   })
 
+  it('cost reasons: a matched one prints as its kind, a hand-written one with an escape prints other', () => {
+    const e = { field: 'loop.maxRepeats', value: 3 }
+    const t = evolveReport(v0([cand(2, e, false, 'turns 3.0 → 6.0, allowed up to 4.0 (p=0.00)'), cand(3, e, false, 'time 1.0s → 2.0s, allowed up to 1.1s (p=0.00)\u001b[2J')]))
+    expect(t).toContain('  over tolerance: turns: 1\n'); expect(t).toContain('  other: 1\n'); expect(t).not.toContain('\u001b')
+  })
+
+  it('gate failures count tasks, not runs: one task failing 3 times is 1 of 2', () => {
+    const mt = 'max_turns|-|-|-'
+    expect(evolveReport(golden({ afterGate: [fail('g1', mt), fail('g1', mt), fail('g1', mt), pass('g2')] }))).not.toContain('still the biggest')
+  })
+
   it('rule notes: fires when Notes is off and the group covers half the gate, absent with notes.enabled true', () => {
     const afterGate = [fail('g1', CF), fail('g2', CF)]
     expect(evolveReport(golden({ afterGate })))

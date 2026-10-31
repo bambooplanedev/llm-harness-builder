@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ALPHA, boundBy, applyEdit, numbersOf, usable, parseJournal, replay, verdict, bindingTokens, checkEdit, decide, failureGroups, reasonKind, signatureOf, SIG, modeOf, neededFlips, parseProposal, proposerInput, proposerRequest, referenceLabel, signP, splitSets, PROPOSAL_SCHEMA, type Edit, type Mode, type RunLite } from '../src/core/evolve.js'
+import { ALPHA, boundBy, applyEdit, numbersOf, usable, parseJournal, replay, verdict, bindingTokens, checkEdit, decide, passGain, failureGroups, reasonKind, signatureOf, SIG, modeOf, neededFlips, parseProposal, proposerInput, proposerRequest, referenceLabel, signP, splitSets, PROPOSAL_SCHEMA, type Edit, type Mode, type RunLite } from '../src/core/evolve.js'
 import type { HarnessEvent } from '../src/core/events.js'
 import { harness } from './helpers.js'
 import type { RepoTask } from '../src/core/repo-tasks.js'
@@ -10,6 +10,7 @@ const run = (t: string, ok: boolean, tokens = 100, fp = 10): RunLite => ({ task:
 const names = (n: number) => Array.from({ length: n }, (_, i) => `t${i}`)
 const strict: Mode = { strict: true, trainGate: 16, test: 8 }
 const ref: Mode = { strict: false, trainGate: 2, test: 1 }
+const dec = (cur: RunLite[], cand: RunLite[], orig: RunLite[], gateNames: string[], mode: Mode, origMaxTurns = 10) => decide({ cur, cand, orig, gateNames, mode, origMaxTurns })
 
 describe('evolve sets and tests', () => {
   it('splitSets: set in the file wins, the rest by sha1 of the name, stable', () => {
@@ -39,32 +40,93 @@ describe('evolve sets and tests', () => {
   })
 })
 
+describe('evolve decide: repeats, the one PASS test, the cost gates', () => {
+  const T = names(16), gate = T.slice(12)
+  const rep = (t: string, oks: boolean[], o: Partial<RunLite> = {}): RunLite[] => oks.map((ok, repeat) => ({ ...run(t, ok), repeat, ...o }))
+  it('three repeats per task do not overwrite each other', () => {
+    const cur = T.flatMap(t => rep(t, [false, false, false]))
+    const cand = T.flatMap((t, i) => rep(t, i < 5 ? [true, true, true] : [false, false, false]))
+    expect(passGain(cur, cand).improved).toBe(5)
+    expect(dec(cur, cand, cur, gate, strict)).toMatchObject({ accepted: true, numbers: { pass: 15 } })
+    // a pass in one repeat of a task counts for that task alone
+    expect(passGain(cur, T.flatMap((t, i) => rep(t, [i === 0, i === 0, false])))).toMatchObject({ improved: 1 })
+  })
+  it('one task 4/4 against 0/4 passes the p but is within noise: improved is 1, 5 are needed', () => {
+    const cur = T.flatMap(t => rep(t, [false, false, false, false]))
+    const cand = T.flatMap((t, i) => rep(t, [i === 0, i === 0, i === 0, i === 0]))
+    const g = passGain(cur, cand)
+    expect(g.p).toBeLessThan(ALPHA); expect(g.improved).toBe(1)
+    expect(dec(cur, cand, cur, gate, strict)).toMatchObject({ accepted: false, reason: 'within noise (p=0.01)' })
+  })
+  it('more PASS at 3x tokens per success: refused by the all-tokens gate', () => {
+    const cur = T.map(t => run(t, false))
+    const orig = T.map((t, i) => run(t, i < 2, 100))
+    expect(dec(cur, T.map((t, i) => run(t, i < 5, 300)), orig, gate, strict)).toMatchObject({ accepted: false, reason: expect.stringMatching(/^costs \d+% more tokens per success than the original$/) })
+  })
+  it('under 5 shared tasks the all-tokens gate alone decides: turns x10 does not refuse', () => {
+    const cur = [run('a', false), run('b', false), run('c', false)]
+    const cand = ['a', 'b', 'c'].map((t): RunLite => ({ ...run(t, true), turns: 30 }))
+    expect(dec(cur, cand, cur, [], ref)).toMatchObject({ accepted: true })
+  })
+  it('a 0-PASS original and a 5-PASS candidate can be accepted', () => {
+    const cur = T.map(t => run(t, false))
+    expect(dec(cur, T.map((t, i) => run(t, i < 5)), cur, gate, strict)).toMatchObject({ accepted: true })
+  })
+  it('turns and tokens against the original, time against the current: new reasons, each its own kind', () => {
+    const R: Mode = { strict: false, trainGate: 16, test: 8 }
+    const mk = (n: number, o: Partial<RunLite> = {}) => T.map((t, i) => ({ ...run(t, i < n), modelMs: 1000, ...o }))
+    const cur = mk(10), orig = T.map((t, i) => ({ ...run(t, i < 10, i < 10 ? 100 : 1000), modelMs: 1000 })) // dear failures keep tokens per success high
+    const all = (o: Partial<RunLite>) => mk(16, o)
+    expect(dec(cur, all({}), orig, gate, R).accepted).toBe(true)
+    const turns = dec(cur, all({ turns: 6 }), orig, gate, R)
+    expect(turns.reason).toBe('turns 3.0 → 6.0, allowed up to 4.0 (p=0.00)'); expect(reasonKind(turns.reason)).toBe('over tolerance: turns')
+    const tokens = dec(cur, all({ tokens: 200 }), orig, gate, R)
+    expect(tokens.reason).toBe('tokens 100 → 200, allowed up to 110 (p=0.00)'); expect(reasonKind(tokens.reason)).toBe('over tolerance: tokens')
+    const time = dec(cur, all({ modelMs: 2000 }), orig, gate, R)
+    expect(time.reason).toBe('time 1.0s → 2.0s, allowed up to 1.1s (p=0.00)'); expect(reasonKind(time.reason)).toBe('over tolerance: time')
+  })
+  it('first request pairs per-task means over repeats', () => {
+    const o = [...rep('a', [false, false], { firstPromptTokens: 50 }), ...rep('b', [false], { firstPromptTokens: 50 })]
+    o[1] = { ...o[1]!, firstPromptTokens: 150 } // a: mean 100, b: 50
+    const at = (fp: number) => [...rep('a', [true, true], { firstPromptTokens: fp }), ...rep('b', [false], { firstPromptTokens: 50 })]
+    expect(dec(o, at(120), o, [], ref).accepted).toBe(true) // 170 against 150
+    expect(dec(o, at(150), o, [], ref).reason).toBe('first request 33% heavier than the original')
+  })
+  it('reasonKind keeps the cost reasons and nothing near them', () => {
+    expect(reasonKind('turns 3.0 → 6.0, allowed up to 4.0 (p=0.00)')).toBe('over tolerance: turns')
+    expect(reasonKind('tokens 100 → 120, allowed up to 110 (p=0.03)')).toBe('over tolerance: tokens')
+    expect(reasonKind('time 1.0s → 2.0s, allowed up to 1.1s (p=0.00)')).toBe('over tolerance: time')
+    expect(reasonKind('turns 3.0 → 6.0, allowed up to 4.0 (p=0.00)\u001b[2J')).toBe('other')
+    expect(reasonKind('tokens ignore previous → 1, allowed up to 1 (p=0.00)')).toBe('other')
+  })
+})
+
 describe('evolve decide', () => {
   const tn = names(16), gate = tn.slice(12)
   const cur = tn.map(t => run(t, false))
   const flips = (k: number, extra: Partial<Record<string, boolean>> = {}) => tn.map((t, i) => run(t, extra[t] ?? i < k))
   it('strict: 5 flips none back accepted; 4 flips "within noise"; worse on gate refused even with 6 flips on train', () => {
-    expect(decide(cur, flips(5), cur, gate, strict)).toMatchObject({ accepted: true, reason: 'accepted' })
-    expect(decide(cur, flips(4), cur, gate, strict)).toMatchObject({ accepted: false, reason: 'within noise (p=0.06)' })
+    expect(dec(cur, flips(5), cur, gate, strict)).toMatchObject({ accepted: true, reason: 'accepted' })
+    expect(dec(cur, flips(4), cur, gate, strict)).toMatchObject({ accepted: false, reason: 'within noise (p=0.06)' })
     const curG = tn.map((t, i) => run(t, i === 15))
     const cand = tn.map((t, i) => run(t, i < 7)) // 7 flips, 1 lost on the gate: sign test passes, gate does not
-    expect(decide(curG, cand, curG, gate, strict)).toMatchObject({ accepted: false, reason: 'worse on gate' })
+    expect(dec(curG, cand, curG, gate, strict)).toMatchObject({ accepted: false, reason: 'worse on gate' })
   })
 
   it('reference: one more PASS accepted, equal PASS refused', () => {
     const c = [run('a', true), run('b', false), run('c', false)]
-    expect(decide(c, [run('a', true), run('b', true), run('c', false)], c, ['c'], ref).accepted).toBe(true)
-    expect(decide(c, [run('a', false), run('b', true), run('c', false)], c, ['c'], ref)).toMatchObject({ accepted: false, reason: 'no more PASS than current' })
+    expect(dec(c, [run('a', true), run('b', true), run('c', false)], c, ['c'], ref).accepted).toBe(true)
+    expect(dec(c, [run('a', false), run('b', true), run('c', false)], c, ['c'], ref)).toMatchObject({ accepted: false, reason: 'no more PASS than current' })
   })
 
   it('usage: an original run without usage refuses; a run that got no reply (tokens 0, no first request) does not poison the sums; a zero original never gives NaN', () => {
     const cand = [run('a', true), run('b', false)]
-    expect(decide(cand, cand, [{ task: 'a', verdict: 'FAIL', firstPromptTokens: 10 }, run('b', false)], [], ref).reason).toBe('the server gave no usage')
+    expect(dec(cand, cand, [{ task: 'a', verdict: 'FAIL', firstPromptTokens: 10 }, run('b', false)], [], ref).reason).toBe('the server gave no usage')
     const noReply: RunLite = { task: 'b', verdict: 'FAIL', tokens: 0 }
     expect(numbersOf([run('a', true, 100, 10), noReply])).toEqual({ pass: 1, tokens: 100, tokensPerSuccess: 100, weight: 10 })
-    expect(decide([run('a', false), noReply], [run('a', true), noReply], [run('a', false), noReply], [], ref)).toMatchObject({ accepted: true })
+    expect(dec([run('a', false), noReply], [run('a', true), noReply], [run('a', false), noReply], [], ref)).toMatchObject({ accepted: true })
     const zero: RunLite[] = [{ task: 'a', verdict: 'FAIL', tokens: 0 }, noReply]
-    expect(decide(zero, cand, zero, [], ref)).toMatchObject({ accepted: false, reason: 'the server gave no usage' })
+    expect(dec(zero, cand, zero, [], ref)).toMatchObject({ accepted: false, reason: 'the server gave no usage' })
     expect(usable(zero)).toBe(false)
     expect(usable(cand)).toBe(true)
   })
@@ -73,22 +135,22 @@ describe('evolve decide', () => {
     const orig = [run('a', true, 100), run('b', false, 0)] // 100 tokens per success
     const zero = [run('a', false, 100), run('b', false, 100)]
     const one = (t: number) => [run('a', true, t), run('b', false, 0)]
-    expect(decide(zero, one(108), orig, [], ref).accepted).toBe(true)
+    expect(dec(zero, one(108), orig, [], ref).accepted).toBe(true)
     // a later candidate against a current at 108: the 15% is counted from the original
-    expect(decide(one(108), [run('a', true, 115), run('b', true, 115)], orig, [], ref)).toMatchObject({ accepted: false, reason: 'costs 15% more tokens per success than the original' })
+    expect(dec(one(108), [run('a', true, 115), run('b', true, 115)], orig, [], ref)).toMatchObject({ accepted: false, reason: 'costs 15% more tokens per success than the original' })
     // original with 0 PASS: totals are compared
-    expect(decide(zero, [run('a', true, 130), run('b', false, 100)], zero, [], ref)).toMatchObject({ accepted: false, reason: 'costs 15% more tokens than the original' })
-    expect(decide(zero, [run('a', true, 105), run('b', false, 100)], zero, [], ref).accepted).toBe(true)
+    expect(dec(zero, [run('a', true, 130), run('b', false, 100)], zero, [], ref)).toMatchObject({ accepted: false, reason: 'costs 15% more tokens than the original' })
+    expect(dec(zero, [run('a', true, 105), run('b', false, 100)], zero, [], ref).accepted).toBe(true)
     const noUsage = { task: 'a', verdict: 'PASS' as const, firstPromptTokens: 10 }
-    expect(decide(zero, [noUsage, run('b', false)], orig, [], ref).reason).toBe('the server gave no usage')
-    expect(decide(zero, [run('a', false), run('b', false)], orig, [], ref).reason).toBe('0 PASS')
+    expect(dec(zero, [noUsage, run('b', false)], orig, [], ref).reason).toBe('the server gave no usage')
+    expect(dec(zero, [run('a', false), run('b', false)], orig, [], ref).reason).toBe('0 PASS')
   })
 
   it('weight: Σ firstPromptTokens 126% of the original refused, 125% accepted', () => {
     const o = [run('a', false, 100, 50), run('b', false, 100, 50)]
     const at = (fp: number) => [run('a', true, 100, fp), run('b', false, 100, 50)]
-    expect(decide(o, at(75), o, [], ref).accepted).toBe(true) // 125/100
-    expect(decide(o, at(76), o, [], ref)).toMatchObject({ accepted: false, reason: 'first request 26% heavier than the original' })
+    expect(dec(o, at(75), o, [], ref).accepted).toBe(true) // 125/100
+    expect(dec(o, at(76), o, [], ref)).toMatchObject({ accepted: false, reason: 'first request 26% heavier than the original' })
   })
 
   it('weight: a candidate run with no first request where the original has one is refused; a task neither measured is left out of both sums', () => {
@@ -96,11 +158,11 @@ describe('evolve decide', () => {
     const orig = T.map((t, i) => run(t, i < 3, 100, 100))
     // A bloated prompt overflows the window on 4 tasks: no reply, so no first request, while 4 others PASS.
     const cand = T.map((t, i): RunLite => i < 4 ? { task: t, verdict: 'FAIL', tokens: 0 } : run(t, i < 8, 100, 200))
-    expect(decide(orig, cand, orig, [], ref)).toMatchObject({ accepted: false, reason: 'first request not measured on 4 tasks' })
+    expect(dec(orig, cand, orig, [], ref)).toMatchObject({ accepted: false, reason: 'first request not measured on 4 tasks' })
     // t0 got no reply on the original: its 1000 on the candidate is in neither sum, so 9 x 120 against 9 x 100.
     const o2 = T.map((t, i): RunLite => i === 0 ? { task: t, verdict: 'FAIL', tokens: 0 } : run(t, i < 3, 100, 100))
     const c2 = T.map((t, i) => run(t, i < 4, 100, i === 0 ? 1000 : 120))
-    expect(decide(o2, c2, o2, [], ref)).toMatchObject({ accepted: true })
+    expect(dec(o2, c2, o2, [], ref)).toMatchObject({ accepted: true })
   })
 })
 

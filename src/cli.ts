@@ -810,7 +810,7 @@ async function cmdEvolve(argv: string[]) {
       const cand = applyEdit(state.current, edit)
       const runs = await runOn(cand, `${base}.r${round}c${index}`, trainGate, round)
       if (stopped) return stop()
-      const d = decide(cmp, runs, state.baseline!, sets.gate, mode)
+      const d = decide({ cur: cmp, cand: runs, orig: state.baseline!, gateNames: sets.gate, mode, origMaxTurns: (raw as any).loop?.maxTurns ?? Infinity })
       const version = d.accepted ? state.version + 1 : undefined
       if (version) { writeVersion(version, cand); cmp = runs }
       append({ v: 2, type: 'candidate', round, index, input, edit, accepted: d.accepted, reason: d.reason, numbers: d.numbers, runs, ...(version ? { version } : {}) })

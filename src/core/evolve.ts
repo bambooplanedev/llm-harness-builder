@@ -9,6 +9,8 @@ import { jsonCandidates } from './parse.js'
 import type { DoneReason, HarnessEvent } from './events.js'
 import type { ChatRequest } from './backends/types.js'
 import { ALLOWED, DANGER } from './evolve-labels.js'
+import { costCheck, costReason } from './evolve-cost.js'
+import { permP } from './stats.js'
 export { ALLOWED }
 
 export const ROUNDS = 3
@@ -87,8 +89,23 @@ export const usable = (runs: RunLite[]): boolean => { const n = numbersOf(runs);
 
 const pct = (ratio: number) => Math.round((ratio - 1) * 100)
 
-/** cur = the current version's runs, cand = the candidate's, orig = the original's, all on train + gate. */
-export function decide(cur: RunLite[], cand: RunLite[], orig: RunLite[], gateNames: string[], mode: Mode): { accepted: boolean; reason: string; numbers: Numbers } {
+const mean = (xs: number[]) => xs.reduce((a, x) => a + x, 0) / xs.length
+const byTask = <T>(runs: RunLite[], f: (r: RunLite) => T | undefined) => {
+  const m = new Map<string, T[]>()
+  for (const r of runs) { const v = f(r); if (v !== undefined) m.set(r.task, [...(m.get(r.task) ?? []), v]) }
+  return m
+}
+
+/** One test for any number of repeats: tasks are the strata, runs inside a task are exchangeable. `improved` = tasks whose pass rate rose. */
+export function passGain(cur: RunLite[], cand: RunLite[]): { p: number; improved: number } {
+  const a = byTask(cur, r => +(r.verdict === 'PASS')), b = byTask(cand, r => +(r.verdict === 'PASS'))
+  const strata = [...b].filter(([t]) => a.has(t)).map(([t, bs]) => ({ a: a.get(t)!, b: bs }))
+  return { p: permP(strata, 'greater').p, improved: strata.filter(s => mean(s.b) > mean(s.a)).length }
+}
+
+/** cur = the current version's runs, cand = the candidate's, orig = the original's, all on train + gate; any number of repeats per task. */
+export function decide(i: { cur: RunLite[]; cand: RunLite[]; orig: RunLite[]; gateNames: string[]; mode: Mode; origMaxTurns: number }): { accepted: boolean; reason: string; numbers: Numbers } {
+  const { cur, cand, orig, gateNames, mode, origMaxTurns } = i
   const numbers = numbersOf(cand)
   const no = (reason: string) => ({ accepted: false, reason, numbers })
   const o = numbersOf(orig)
@@ -97,15 +114,9 @@ export function decide(cur: RunLite[], cand: RunLite[], orig: RunLite[], gateNam
   if (!numbers.pass) return no('0 PASS')
   const c = numbersOf(cur)
   if (mode.strict) {
-    const was = new Map(cur.map(r => [r.task, r.verdict]))
-    let b = 0, w = 0
-    for (const r of cand) {
-      const v = was.get(r.task)
-      if (v === 'FAIL' && r.verdict === 'PASS') b++
-      else if (v === 'PASS' && r.verdict === 'FAIL') w++
-    }
-    const p = signP(b, w)
-    if (!(p < ALPHA)) return no(`within noise (p=${p.toFixed(2)})`)
+    const { p, improved } = passGain(cur, cand)
+    // The p alone could be one task at 4/4 against 0/4; the flips needed are the sign test's own floor.
+    if (!(p < ALPHA && improved >= neededFlips())) return no(`within noise (p=${p.toFixed(2)})`)
   } else if (numbers.pass <= c.pass) return no('no more PASS than current')
   const gate = (rs: RunLite[]) => numbersOf(rs.filter(r => gateNames.includes(r.task))).pass
   if (gate(cand) < gate(cur)) return no('worse on gate')
@@ -116,14 +127,19 @@ export function decide(cur: RunLite[], cand: RunLite[], orig: RunLite[], gateNam
     const r = numbers.tokens! / o.tokens!
     if (r > 1 + TOLERANCE) return no(`costs ${pct(r)}% more tokens than the original`)
   }
+  // Under MIN_SHARED tasks a cost says nothing (undefined): the all-tokens gate above stands alone. Time is against the current, the rest against the original.
+  for (const [cost, base] of [['turns', orig], ['tokens', orig], ['time', cur]] as const) {
+    const k = costCheck(base, cand, cost, origMaxTurns)
+    if (k?.over) return no(costReason(k, cost))
+  }
   // Paired by task: a prompt too heavy for the window gets no reply, so no first request, and must not leave the sum lighter.
-  const ofp = new Map(orig.map(r => [r.task, r.firstPromptTokens]))
-  const unmeasured = cand.filter(r => r.firstPromptTokens === undefined && ofp.get(r.task) !== undefined).length
+  const ofp = byTask(orig, r => r.firstPromptTokens), cfp = byTask(cand, r => r.firstPromptTokens)
+  const unmeasured = new Set(cand.filter(r => !cfp.has(r.task) && ofp.has(r.task)).map(r => r.task)).size
   if (unmeasured) return no(`first request not measured on ${unmeasured} tasks`)
-  const both = cand.filter(r => r.firstPromptTokens !== undefined && ofp.get(r.task) !== undefined)
-  const ow = both.reduce((a, r) => a + ofp.get(r.task)!, 0)
+  const both = [...cfp].filter(([t]) => ofp.has(t))
+  const ow = both.reduce((a, [t]) => a + mean(ofp.get(t)!), 0)
   if (!ow) return no('the server gave no usage')
-  const wr = both.reduce((a, r) => a + r.firstPromptTokens!, 0) / ow
+  const wr = both.reduce((a, [, v]) => a + mean(v), 0) / ow
   if (wr > 1 + CEILING) return no(`first request ${pct(wr)}% heavier than the original`)
   return { accepted: true, reason: 'accepted', numbers }
 }
@@ -344,6 +360,9 @@ const FIXED = /^(?:field not allowed|bad value|looks like a command or an addres
 const PATTERNED: [RegExp, string][] = [
   [/^within noise \(p=\d\.\d\d\)$/, 'within noise'], [/^costs \d+% more tokens(?: per success)? than the original$/, 'costs more tokens'],
   [/^first request \d+% heavier than the original$/, 'first request heavier'], [/^first request not measured on \d+ tasks$/, 'first request not measured'], [/^invalid config: /, 'invalid config'],
+  // costReason: digits and fixed words only; the number's own shape per cost (turns 1 decimal, tokens whole, time 1 decimal + s).
+  [/^turns \d+\.\d → \d+\.\d, allowed up to \d+\.\d \(p=\d\.\d\d\)$/, 'over tolerance: turns'], [/^tokens \d+ → \d+, allowed up to \d+ \(p=\d\.\d\d\)$/, 'over tolerance: tokens'],
+  [/^time \d+\.\ds → \d+\.\ds, allowed up to \d+\.\ds \(p=\d\.\d\d\)$/, 'over tolerance: time'],
 ]
 const REASON_RE = [FIXED, ...PATTERNED.map(p => p[0])]
 /** The fixed kind of a refusal reason (the numbers and config text dropped); `other` for what the harness does not write. */
@@ -401,7 +420,7 @@ export function replay(lines: JournalLine[], original: object, ctx: { binding: s
       const was = cmp.get(l.round)
       if (typeof mode === 'string') return { error: `cannot resume: ${mode}` }
       if (!was) return { error: `cannot resume: ${slot}: no current runs of its round to compare with` }
-      if (decide(was, l.runs, baseline!, ctx.sets.gate, mode).accepted !== l.accepted) return { error: `cannot resume: ${slot}: its runs do not give ${l.accepted ? 'an acceptance' : 'a refusal'}` }
+      if (decide({ cur: was, cand: l.runs, orig: baseline!, gateNames: ctx.sets.gate, mode, origMaxTurns: (original as any).loop?.maxTurns ?? Infinity }).accepted !== l.accepted) return { error: `cannot resume: ${slot}: its runs do not give ${l.accepted ? 'an acceptance' : 'a refusal'}` }
     }
     if (l.accepted) {
       current = applyEdit(current, l.edit!)
