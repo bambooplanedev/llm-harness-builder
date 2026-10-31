@@ -74,7 +74,7 @@ export async function startServer(opts: ServerOpts) {
   const demoDirs = new Set<string>()
 
   const exists = (f: string) => stat(f).then(() => true, () => false)
-  /** The one bench start: 409 while one runs, else spawns `opts.cli([bench, ...args, --out])`; 201 once its JSON exists (past preflight), else 502 with its stderr. */
+  /** The one bench start: 409 while one runs, else spawns `opts.cli([bench, --out, ...args])`; 201 once its JSON exists (past preflight), else 502 with its stderr. */
   async function startBench(args: string[], cleanup?: () => void): Promise<{ status: 201 | 409 | 502; body: { file?: string; error?: string } }> {
     if (busy()) return { status: 409, body: { error: busy() } }
     const first = benchFileName(new Date())
@@ -234,7 +234,7 @@ export async function startServer(opts: ServerOpts) {
       if (opts.cli && (mm = m('POST', /^\/api\/(bench|evolve)\/stop$/))) {
         // Only the child this server holds: no pid or name from the page. SIGINT = Ctrl-C, the finished runs stay in its JSON.
         if (runningKind() !== mm[1]) return json(res, 409, { error: `no ${mm[1]} started from this page is running` })
-        stopping = true // read only by a bench's startBench
+        if (mm[1] === 'bench') stopping = true // read only by a bench's startBench
         job!.child.kill('SIGINT')
         return json(res, 200, { ok: true })
       }
