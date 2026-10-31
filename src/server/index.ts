@@ -243,7 +243,7 @@ export async function startServer(opts: ServerOpts) {
       if (opts.cli && m('POST', /^\/api\/evolve\/(start|check)$/)) {
         // A harness name and a repo, never a flag: argv is built here. Nothing runs before the repo's tasks are accepted (hash of what will run).
         // `check` is the same validation up to the run count and starts or saves nothing: the tab asks it before every Start.
-        const check = req.url!.endsWith('/check')
+        const check = url.pathname.endsWith('/check')
         const body = await readBody(req) as { harness?: unknown; repo?: unknown; accept?: unknown; mode?: unknown; maxUsd?: unknown }
         const bad = (...errors: string[]) => json(res, 400, { errors })
         if (!check && busy()) return json(res, 409, { error: busy() }) // before the consent question: nobody accepts while the slot is taken

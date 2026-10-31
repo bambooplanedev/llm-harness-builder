@@ -155,9 +155,10 @@ export async function finishRun(c: Clone, patchFile: string | undefined): Promis
 /** For a SIGINT handler that exits right after it. */
 export function removeCloneSync(c: Clone): void {
   try { if (lstatSync(path.join(c.dir, 'node_modules')).isSymbolicLink()) unlinkSync(path.join(c.dir, 'node_modules')) } catch { /* none */ }
-  rmSync(c.dir, { recursive: true, force: true })
-  rmSync(c.probe, { recursive: true, force: true })
-  LIVE.delete(c)
+  try { rmSync(c.dir, { recursive: true, force: true }) } finally {
+    rmSync(c.probe, { recursive: true, force: true })
+    LIVE.delete(c)
+  }
 }
 
 // Tool caches the test runners write on every run: a change there is no change to the installed packages.

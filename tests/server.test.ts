@@ -941,6 +941,8 @@ test('evolve check answers the run count and the orientation without starting or
     expect((await chk({ mode: 'custom' })).status).toBe(400) // the same validation as start
     expect((await chk({ harness: '../x' })).status).toBe(400)
     expect((await chk({ maxUsd: 1 })).status).toBe(200) // a ceiling is start's business
+    const q = await postJson(`${e.u}/api/evolve/check?x=1`, { harness: 'tuned', repo: e.repo, mode: 'night' }) // a query string does not turn check into start
+    expect([q.status, (await q.json()).runs]).toEqual([200, 25])
     expect(e.got).toEqual([])
     expect((await e.start({ mode: 'night' })).status).toBe(409) // nothing was saved: still asks for consent
   } finally { await e.s.close() }

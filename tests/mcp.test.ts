@@ -271,3 +271,8 @@ test('a server starts with this process\'s environment except the variable named
     try { expect(await plain.call('getenv', { name: 'LHB_MCP_TEST_API_KEY' })).toEqual({ output: 'secret-value-0123456789', error: false }) } finally { plain.close() }
   } finally { delete process.env.LHB_MCP_KEEP; delete process.env.LHB_MCP_TEST_API_KEY }
 })
+
+test('a character cut across two stdout chunks of a server arrives whole', async () => {
+  const s = await startServers(fake(), await wd())
+  try { expect(await s.call('echo', { text: 'split' })).toEqual({ output: 'é', error: false }) } finally { s.close() }
+})
