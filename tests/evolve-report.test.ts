@@ -2,20 +2,20 @@ import { describe, expect, it } from 'vitest'
 import { evolveReport, type ReportInput } from '../src/core/evolve-report.js'
 import { applyEdit, referenceLabel, type Edit, type JournalLine, type Mode, type RunLite, type SetName } from '../src/core/evolve.js'
 
-const fail = (task: string, sig: string, tokens = 110, fp = 100): RunLite => ({ task, verdict: 'FAIL', tokens, firstPromptTokens: fp, sig })
-const pass = (task: string, tokens = 110, fp = 100): RunLite => ({ task, verdict: 'PASS', tokens, firstPromptTokens: fp })
+const fail = (task: string, sig: string, tokens = 110, fp = 100): RunLite => ({ task, verdict: 'FAIL', tokens, firstPromptTokens: fp, turns: 3, modelMs: 40, sig })
+const pass = (task: string, tokens = 110, fp = 100): RunLite => ({ task, verdict: 'PASS', tokens, firstPromptTokens: fp, turns: 3, modelMs: 40 })
 const CF = 'final|check_failed|-|-'
 const cand = (index: number, edit: Edit, accepted: boolean, reason: string, runs?: RunLite[], version?: number): JournalLine =>
-  ({ v: 1, type: 'candidate', round: 1, index, input: '{}', edit, accepted, reason, ...(runs ? { runs } : {}), ...(version ? { version } : {}) })
+  ({ v: 2, type: 'candidate', round: 1, index, input: '{}', edit, accepted, reason, ...(runs ? { runs } : {}), ...(version ? { version } : {}) })
 
 /** The journal as lines, and what replay would have made of them. */
 function journalOf(o: { sets: Record<SetName, string[]>; mode: Mode; original: object; current: RunLite[]; cands: JournalLine[]; final?: { orig: RunLite[]; last: RunLite[] } }): ReportInput {
   let current = o.original, version = 0
   for (const l of o.cands) if (l.type === 'candidate' && l.accepted) { current = applyEdit(current, l.edit!); version++ }
   const lines: JournalLine[] = [
-    { v: 1, type: 'start', base: 'h', sha: 's', pin: '0'.repeat(64), notes: '0'.repeat(64), sets: o.sets, strict: o.mode.strict, proposer: 'p' },
-    { v: 1, type: 'current', round: 1, runs: o.current }, ...o.cands,
-    { v: 1, type: 'final', version, ...(version ? o.final : {}) },
+    { v: 2, type: 'start', base: 'h', sha: 's', pin: '0'.repeat(64), notes: '0'.repeat(64), sets: o.sets, strict: o.mode.strict, proposer: 'p' },
+    { v: 2, type: 'current', round: 1, runs: o.current }, ...o.cands,
+    { v: 2, type: 'final', version, ...(version ? o.final : {}) },
   ]
   return { lines, state: { current, version, final: version ? o.final! : 'none' }, original: o.original, mode: o.mode, sets: o.sets, harness: 'h.json', versionFile: version ? `harnesses/h.v${version}.json` : '' }
 }

@@ -297,7 +297,7 @@ const INT = /^[1-9]\d*$/
 async function benchOnce(config: HarnessConfig, round: number, timeoutS: number, out: string, task: Task, notes: NotesStore, size?: number): Promise<BenchRun> {
   // An exception that escapes execRun is text nothing has cleaned yet, and it goes to the bench JSON and the terminal.
   const redact = redactor(apiKey(config.backend, process.env), config.backend.apiKeyEnv ?? '')
-  let workdir = '', traceId: string | undefined, parseErrors = 0, toolChars = 0, costUsd: number | undefined, peakTokens: number | undefined, tokens: number | undefined, firstPromptTokens: number | undefined, seenFirst = false, toolErrors = 0, guardBlocks = 0, editMiss = 0, lastError: string | undefined, stop: number | undefined, stopMidReply = false, t0 = Date.now(), run: BenchRun
+  let workdir = '', traceId: string | undefined, parseErrors = 0, toolChars = 0, costUsd: number | undefined, peakTokens: number | undefined, tokens: number | undefined, firstPromptTokens: number | undefined, seenFirst = false, modelMs = 0, toolErrors = 0, guardBlocks = 0, editMiss = 0, lastError: string | undefined, stop: number | undefined, stopMidReply = false, t0 = Date.now(), run: BenchRun
   process.stderr.write(`${config.name} ${runTitle({ round, task: task.name })} `)
   try {
     workdir = await task.prepare(size)
@@ -311,6 +311,7 @@ async function benchOnce(config: HarnessConfig, round: number, timeoutS: number,
         if (e.type === 'parse_error') parseErrors++
         if (e.type === 'llm_response' && e.costUsd !== undefined) costUsd = (costUsd ?? 0) + e.costUsd
         if (e.type === 'llm_response') {
+          modelMs += e.latencyMs
           if (!seenFirst) { seenFirst = true; firstPromptTokens = e.usage?.promptTokens }
           if (e.usage) { const t = e.usage.promptTokens + e.usage.completionTokens; peakTokens = Math.max(peakTokens ?? 0, t); tokens = (tokens ?? 0) + t }
         }
@@ -334,9 +335,9 @@ async function benchOnce(config: HarnessConfig, round: number, timeoutS: number,
     const checked = typeof c === 'boolean' ? { pass: c } : c
     if (checked.reason) lastError = checked.reason
     const verdict = checked.pass ? 'PASS' : 'FAIL'
-    run = { ...(task.name ? { task: task.name } : {}), ...checked.tests ? { tests: checked.tests } : {}, round, verdict, reason: d?.reason ?? 'error', turns: d?.turns ?? 0, toolCalls: d?.toolCallCount ?? 0, parseErrors, lastError, ms, workdir, trace: id, toolChars: toolChars || undefined, costUsd, peakTokens, tokens: seenFirst ? tokens : 0, firstPromptTokens, toolErrors, guardBlocks: config.tools.requireReadBeforeEdit ? guardBlocks : undefined, editMiss, ...stop === undefined ? {} : { stop }, ...stopMidReply ? { stopMidReply } : {} }
+    run = { ...(task.name ? { task: task.name } : {}), ...checked.tests ? { tests: checked.tests } : {}, round, verdict, reason: d?.reason ?? 'error', turns: d?.turns ?? 0, toolCalls: d?.toolCallCount ?? 0, parseErrors, lastError, ms, workdir, trace: id, toolChars: toolChars || undefined, modelMs, costUsd, peakTokens, tokens: seenFirst ? tokens : 0, firstPromptTokens, toolErrors, guardBlocks: config.tools.requireReadBeforeEdit ? guardBlocks : undefined, editMiss, ...stop === undefined ? {} : { stop }, ...stopMidReply ? { stopMidReply } : {} }
   } catch (e) {
-    run = { ...(task.name ? { task: task.name } : {}), round, verdict: 'FAIL', reason: 'error', turns: 0, toolCalls: 0, parseErrors, lastError: redact.text(String(e)), ms: Date.now() - t0, workdir, toolChars: toolChars || undefined, costUsd, peakTokens, tokens: seenFirst ? tokens : 0, firstPromptTokens, toolErrors, guardBlocks: config.tools.requireReadBeforeEdit ? guardBlocks : undefined, editMiss }
+    run = { ...(task.name ? { task: task.name } : {}), round, verdict: 'FAIL', reason: 'error', turns: 0, toolCalls: 0, parseErrors, lastError: redact.text(String(e)), ms: Date.now() - t0, workdir, toolChars: toolChars || undefined, modelMs, costUsd, peakTokens, tokens: seenFirst ? tokens : 0, firstPromptTokens, toolErrors, guardBlocks: config.tools.requireReadBeforeEdit ? guardBlocks : undefined, editMiss }
   } finally {
     // The check's own leftovers too, and a run that threw: nothing keeps writing into a clone being removed.
     await killTracked()
@@ -702,7 +703,7 @@ async function cmdEvolve(argv: string[]) {
     // Every version reads this frozen copy: a note written during evolve would make one version's runs depend on another's.
     // Before the start line: a journal is never without its snapshot.
     writeFileSync(snap, existsSync(src.notesFile) ? readFileSync(src.notesFile) : '')
-    append({ v: 1, type: 'start', base, sha: src.id, pin, sets, strict: mode.strict, proposer: host, notes: sha256(readFileSync(snap)) })
+    append({ v: 2, type: 'start', base, sha: src.id, pin, sets, strict: mode.strict, proposer: host, notes: sha256(readFileSync(snap)) })
   }
   const byName = new Map(work.tasks.map(t => [t.name!, t]))
   const no = await preflightAll([{ name: config.name, config }, { name: 'proposer', config: proposer }], work.tasks[0])
@@ -732,7 +733,7 @@ async function cmdEvolve(argv: string[]) {
     for (const n of names) {
       const r = await benchOnce(c, round, timeoutS, out, byName.get(n)!, notes)
       if (r.stop !== undefined) halt('harness', c.backend, r.stop, hRedact, r.stopMidReply)
-      const lite: RunLite = { task: n, verdict: r.verdict, tokens: r.tokens, firstPromptTokens: r.firstPromptTokens, trace: r.trace, reason: r.reason, lastError: r.lastError }
+      const lite: RunLite = { task: n, verdict: r.verdict, tokens: r.tokens, firstPromptTokens: r.firstPromptTokens, turns: r.turns, modelMs: r.modelMs ?? 0, costUsd: r.costUsd, trace: r.trace, reason: r.reason, lastError: r.lastError }
       // Signed now, while the trace is here: the report groups failures by it without reading a trace again.
       rs.push(lite.verdict === 'FAIL' ? { ...lite, sig: signatureOf(lite, await eventsOf(r.trace)) } : lite)
       // As in bench: a run that changed the linked node_modules changed every run after it.
@@ -782,7 +783,7 @@ async function cmdEvolve(argv: string[]) {
     if (!cmp) {
       cmp = await runOn(state.current, `${base}.cur`, trainGate, round)
       if (stopped) return stop()
-      append({ v: 1, type: 'current', round, runs: cmp })
+      append({ v: 2, type: 'current', round, runs: cmp })
     }
     // Every gate divides by the original's tokens: without them each candidate's runs would be spent for a sure refusal.
     if (!usable(state.baseline!)) { dropWork(work); die(`the server gave no usage for the original's runs; evolve needs a server that reports token usage; delete ${jf} to start over`) }
@@ -800,11 +801,11 @@ async function cmdEvolve(argv: string[]) {
         const why = p.reason ?? checkEdit(p.edit!, { current: state.current, original: raw, tried: state.tried, binding })
         if (why) {
           console.error(`candidate ${round}.${index}: ${showable(why)}`)
-          append({ v: 1, type: 'candidate', round, index, input, ...(p.edit ? { edit: p.edit } : {}), accepted: false, reason: why })
+          append({ v: 2, type: 'candidate', round, index, input, ...(p.edit ? { edit: p.edit } : {}), accepted: false, reason: why })
           continue
         }
         edit = p.edit!
-        append({ v: 1, type: 'proposal', round, index, input, edit })
+        append({ v: 2, type: 'proposal', round, index, input, edit })
       }
       const cand = applyEdit(state.current, edit)
       const runs = await runOn(cand, `${base}.r${round}c${index}`, trainGate, round)
@@ -812,7 +813,7 @@ async function cmdEvolve(argv: string[]) {
       const d = decide(cmp, runs, state.baseline!, sets.gate, mode)
       const version = d.accepted ? state.version + 1 : undefined
       if (version) { writeVersion(version, cand); cmp = runs }
-      append({ v: 1, type: 'candidate', round, index, input, edit, accepted: d.accepted, reason: d.reason, numbers: d.numbers, runs, ...(version ? { version } : {}) })
+      append({ v: 2, type: 'candidate', round, index, input, edit, accepted: d.accepted, reason: d.reason, numbers: d.numbers, runs, ...(version ? { version } : {}) })
       console.error(`candidate ${round}.${index}: ${d.reason}${version ? ` — wrote ${vf(version)}` : ''}`)
     }
   }
@@ -824,8 +825,8 @@ async function cmdEvolve(argv: string[]) {
       if (stopped) return stop()
       const last = await runOn(state.current, `${base}.v${state.version}`, sets.test, 1)
       if (stopped) return stop()
-      append({ v: 1, type: 'final', version: state.version, orig, last })
-    } else append({ v: 1, type: 'final', version: 0 })
+      append({ v: 2, type: 'final', version: state.version, orig, last })
+    } else append({ v: 2, type: 'final', version: 0 })
   }
   // Per session, so not in the report: the same journal gives the same report.
   console.error(`proposer: ${proposerTokens} tokens in this session (not in the gates)`)

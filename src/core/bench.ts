@@ -9,6 +9,8 @@ export type BenchRun = {
   trace?: string
   /** description + schema characters every mcp server put in front of the model. Absent when the harness has no mcp server. */
   toolChars?: number
+  /** Model time: the sum of the replies' latencyMs, 429 pauses left out. 0 when no reply came; absent in older JSON. */
+  modelMs?: number
   /** Dollars the run's replies cost: the sum of their costUsd. Absent when the harness has no price or the server reported no usage. */
   costUsd?: number
   /** The biggest prompt + reply of the run, in the server's own tokens: how close it came to the window. Absent when the server reported no usage, and in older JSON. */

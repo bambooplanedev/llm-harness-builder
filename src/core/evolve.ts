@@ -67,7 +67,8 @@ export function neededFlips(): number {
   return b
 }
 
-export type RunLite = { task: string; verdict: 'PASS' | 'FAIL'; tokens?: number; firstPromptTokens?: number; trace?: string; reason?: string; lastError?: string; sig?: string }
+/** turns and modelMs are on every run of a v2 journal (0 when no reply came); costUsd only when the harness is priced; repeat tells repeats of one task apart. */
+export type RunLite = { task: string; verdict: 'PASS' | 'FAIL'; tokens?: number; firstPromptTokens?: number; turns?: number; modelMs?: number; costUsd?: number; repeat?: number; trace?: string; reason?: string; lastError?: string; sig?: string }
 export type Numbers = { pass: number; tokensPerSuccess?: number; tokens?: number; weight?: number }
 
 export function numbersOf(runs: RunLite[]): Numbers {
@@ -277,11 +278,11 @@ export function parseProposal(content: string): Edit {
 }
 
 export type JournalLine =
-  | { v: 1; type: 'start'; base: string; sha: string; pin: string; notes: string; sets: Record<SetName, string[]>; strict: boolean; proposer: string }
-  | { v: 1; type: 'current'; round: number; runs: RunLite[] }
-  | { v: 1; type: 'candidate'; round: number; index: number; input: string; edit?: Edit; accepted: boolean; reason: string; numbers?: Numbers; runs?: RunLite[]; version?: number }
-  | { v: 1; type: 'proposal'; round: number; index: number; input: string; edit: Edit }
-  | { v: 1; type: 'final'; version: number; orig?: RunLite[]; last?: RunLite[] }
+  | { v: 2; type: 'start'; base: string; sha: string; pin: string; notes: string; sets: Record<SetName, string[]>; strict: boolean; proposer: string }
+  | { v: 2; type: 'current'; round: number; runs: RunLite[] }
+  | { v: 2; type: 'candidate'; round: number; index: number; input: string; edit?: Edit; accepted: boolean; reason: string; numbers?: Numbers; runs?: RunLite[]; version?: number }
+  | { v: 2; type: 'proposal'; round: number; index: number; input: string; edit: Edit }
+  | { v: 2; type: 'final'; version: number; orig?: RunLite[]; last?: RunLite[] }
 
 // A field's check: undefined = fine, else why not. The journal sits in the user's cwd, where the model's bash can
 // rewrite it, so every key is known and every value typed.
@@ -304,19 +305,19 @@ const shape = (req: Record<string, Check>, opt: Record<string, Check> = {}): Che
   for (const [k, c] of Object.entries(req)) { if (!Object.hasOwn(x, k)) return `missing ${k}`; const w = c(x[k]); if (w) return `${k}: ${w}` }
   for (const [k, c] of Object.entries(opt)) if (Object.hasOwn(x, k)) { const w = c(x[k]); if (w) return `${k}: ${w}` }
 }
-const RUN = shape({ task: name, verdict: x => x === 'PASS' || x === 'FAIL' ? undefined : 'not PASS or FAIL' },
-  { tokens: num, firstPromptTokens: num, trace: str, reason: str, lastError: str, sig: x => typeof x === 'string' && SIG.test(x) ? undefined : 'not a signature' })
+const RUN = shape({ task: name, verdict: x => x === 'PASS' || x === 'FAIL' ? undefined : 'not PASS or FAIL', turns: num, modelMs: num },
+  { repeat: pos, costUsd: num, tokens: num, firstPromptTokens: num, trace: str, reason: str, lastError: str, sig: x => typeof x === 'string' && SIG.test(x) ? undefined : 'not a signature' })
 const EDIT = shape({ field: str, value: x => typeof x === 'string' || (typeof x === 'number' && Number.isFinite(x)) ? undefined : 'not a string or a number' }, { why: str })
 const sha256: Check = x => typeof x === 'string' && /^[0-9a-f]{64}$/.test(x) ? undefined : 'not a sha256'
-const v1: Check = x => x === 1 ? undefined : 'not 1'
+const v2: Check = x => x === 2 ? undefined : 'not 2'
 const LINE: Record<string, Check> = {
-  start: shape({ v: v1, type: str, base: str, sha: str, pin: sha256, notes: sha256, sets: shape({ train: arr(name), gate: arr(name), test: arr(name) }), strict: bool, proposer: str }),
-  current: shape({ v: v1, type: str, round: pos, runs: arr(RUN) }),
-  candidate: shape({ v: v1, type: str, round: pos, index: pos, input: str, accepted: bool, reason: str },
+  start: shape({ v: v2, type: str, base: str, sha: str, pin: sha256, notes: sha256, sets: shape({ train: arr(name), gate: arr(name), test: arr(name) }), strict: bool, proposer: str }),
+  current: shape({ v: v2, type: str, round: pos, runs: arr(RUN) }),
+  candidate: shape({ v: v2, type: str, round: pos, index: pos, input: str, accepted: bool, reason: str },
     { edit: EDIT, numbers: shape({ pass: num }, { tokensPerSuccess: num, tokens: num, weight: num }), runs: arr(RUN), version: pos }),
   // Written before the candidate's runs: a stop during them resumes with this edit, not a new roll of the proposer.
-  proposal: shape({ v: v1, type: str, round: pos, index: pos, input: str, edit: EDIT }),
-  final: shape({ v: v1, type: str, version: x => Number.isInteger(x) && (x as number) >= 0 ? undefined : 'not a non-negative integer' }, { orig: arr(RUN), last: arr(RUN) }),
+  proposal: shape({ v: v2, type: str, round: pos, index: pos, input: str, edit: EDIT }),
+  final: shape({ v: v2, type: str, version: x => Number.isInteger(x) && (x as number) >= 0 ? undefined : 'not a non-negative integer' }, { orig: arr(RUN), last: arr(RUN) }),
 }
 
 /** The journal's lines, each checked. A last line without its newline is a torn write and dropped, even if it parses. */
@@ -327,6 +328,8 @@ export function parseJournal(text: string): { lines: JournalLine[] } | { error: 
   for (const [i, p] of parts.entries()) {
     let x: unknown
     try { x = JSON.parse(p) } catch { return { error: `line ${i + 1}: not JSON` } }
+    // Fail closed: a v1 line has no turns or model time, and a check that skipped what it lacks would pass it.
+    if (isObj(x) && x.v === 1) return { error: `line ${i + 1}: an older evolve journal: this version cannot read it; move it away to start over` }
     const c = isObj(x) && typeof x.type === 'string' && Object.hasOwn(LINE, x.type) ? LINE[x.type] : undefined
     const why = c ? c(x) : 'unknown type'
     if (why) return { error: `line ${i + 1}: ${why}` }

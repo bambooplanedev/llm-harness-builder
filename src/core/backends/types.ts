@@ -204,9 +204,9 @@ const pause = (ms: number, signal?: AbortSignal): Promise<boolean> => new Promis
   signal?.addEventListener('abort', on, { once: true })
 })
 
-/** backend.send, with a 429 tried again up to 3 times after Retry-After (at most 300 s; else 60 s; `waitMs` overrides both). Not after
+/** backend.send, with a 429 tried again up to 3 times after Retry-After (at most 300 s; else 60 s; `waitMs` overrides both; `onWait` hears each pause, to keep it out of a timing). Not after
  *  a delta: the caller has shown it. An abort during a wait throws the 429 itself, so the run ends as the stop. */
-export async function sendRetrying(backend: Backend, payload: unknown, signal?: AbortSignal, onDelta?: (d: Delta) => void, waitMs?: number): Promise<NormalizedResponse> {
+export async function sendRetrying(backend: Backend, payload: unknown, signal?: AbortSignal, onDelta?: (d: Delta) => void, waitMs?: number, onWait?: (ms: number) => void): Promise<NormalizedResponse> {
   for (let retries = 0; ; retries++) {
     let streamed = false
     try {
@@ -214,7 +214,10 @@ export async function sendRetrying(backend: Backend, payload: unknown, signal?: 
     } catch (e) {
       if (e instanceof BackendError && streamed) e.midReply = true
       if (!(e instanceof BackendError) || e.status !== 429 || streamed || retries === 3 || signal?.aborted) throw e
-      if (!await pause(waitMs ?? Math.min(e.retryAfter ?? 60, 300) * 1000, signal)) throw e
+      const t = Date.now()
+      const ok = await pause(waitMs ?? Math.min(e.retryAfter ?? 60, 300) * 1000, signal)
+      onWait?.(Date.now() - t)
+      if (!ok) throw e
     }
   }
 }

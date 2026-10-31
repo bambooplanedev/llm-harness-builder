@@ -6,7 +6,7 @@ import type { RepoTask } from '../src/core/repo-tasks.js'
 import { loadPolyglot, polyglotBinding } from '../src/core/polyglot.js'
 
 const task = (name: string, set?: RepoTask['set']): RepoTask => ({ name, prompt: 'p', check: 'c', set, checkTimeoutS: 60 })
-const run = (t: string, ok: boolean, tokens = 100, fp = 10): RunLite => ({ task: t, verdict: ok ? 'PASS' : 'FAIL', tokens, firstPromptTokens: fp })
+const run = (t: string, ok: boolean, tokens = 100, fp = 10): RunLite => ({ task: t, verdict: ok ? 'PASS' : 'FAIL', tokens, firstPromptTokens: fp, turns: 3, modelMs: 40 })
 const names = (n: number) => Array.from({ length: n }, (_, i) => `t${i}`)
 const strict: Mode = { strict: true, trainGate: 16, test: 8 }
 const ref: Mode = { strict: false, trainGate: 2, test: 1 }
@@ -274,12 +274,12 @@ describe('evolve signals', () => {
 
 describe('evolve journal', () => {
   const sets = { train: ['t0', 't1'], gate: ['t2'], test: ['t3'] }
-  const start = { v: 1, type: 'start', base: 'h', sha: 'abc', pin: 'a'.repeat(64), notes: 'b'.repeat(64), sets, strict: false, proposer: 'http://p/v1' }
-  const cur = { v: 1, type: 'current', round: 1, runs: [run('t0', false), run('t1', true), run('t2', true)] }
+  const start = { v: 2, type: 'start', base: 'h', sha: 'abc', pin: 'a'.repeat(64), notes: 'b'.repeat(64), sets, strict: false, proposer: 'http://p/v1' }
+  const cur = { v: 2, type: 'current', round: 1, runs: [run('t0', false), run('t1', true), run('t2', true)] }
   // An accepted candidate's runs beat the current's, as decide would have it; a refused one's do not.
   const win = [run('t0', true), run('t1', true), run('t2', true)]
   const cand = (index: number, edit: Edit, accepted: boolean, reason: string, round = 1) =>
-    ({ v: 1, type: 'candidate', round, index, input: '{}', edit, accepted, reason, numbers: { pass: 3, tokens: 300, tokensPerSuccess: 100, weight: 30 }, runs: accepted ? win : cur.runs, ...(accepted ? { version: 1 } : {}) })
+    ({ v: 2, type: 'candidate', round, index, input: '{}', edit, accepted, reason, numbers: { pass: 3, tokens: 300, tokensPerSuccess: 100, weight: 30 }, runs: accepted ? win : cur.runs, ...(accepted ? { version: 1 } : {}) })
   const a1 = cand(1, { field: 'systemPrompt', value: 'plan first', why: 'w' }, true, 'accepted')
   const r2 = cand(2, { field: 'systemPrompt', value: 'mind t0_file' }, false, 'tied to a task')
   const r3 = { ...cand(1, { field: 'loop.maxRepeats', value: 3 }, false, 'within noise (p=0.50)', 2), numbers: undefined }
@@ -300,7 +300,14 @@ describe('evolve journal', () => {
     expect(parseJournal(jsonl(start, { ...cur, runs: [run('../x', true)] }))).toEqual({ error: expect.stringMatching(/^line 2: /) })
     expect(parseJournal(jsonl(start) + '{"v":1,"ty\n' + jsonl(cur))).toEqual({ error: expect.stringMatching(/^line 2: /) })
     expect(parseJournal(jsonl(start, cur, { ...a1, edit: { ...a1.edit, extra: 1 } }))).toEqual({ error: expect.stringMatching(/^line 3: /) })
-    expect(parseJournal(jsonl({ ...start, v: 2 }))).toEqual({ error: expect.stringMatching(/^line 1: /) })
+    expect(parseJournal(jsonl({ ...start, v: 3 }))).toEqual({ error: expect.stringMatching(/^line 1: /) })
+    expect(parseJournal(jsonl({ ...start, v: 1 }))).toEqual({ error: expect.stringContaining('older evolve journal') })
+    const { turns: _t, ...noTurns } = run('t0', true) as Required<RunLite>
+    expect(parseJournal(jsonl(start, { ...cur, runs: [noTurns] }))).toEqual({ error: 'line 2: runs: [0] missing turns' })
+    const { modelMs: _m, ...noMs } = run('t0', true) as Required<RunLite>
+    expect(parseJournal(jsonl(start, { ...cur, runs: [noMs] }))).toEqual({ error: 'line 2: runs: [0] missing modelMs' })
+    const priced = { ...cur, runs: [{ ...run('t0', true), costUsd: 0.01, repeat: 2 }] }
+    expect(parseJournal(jsonl(start, priced))).toEqual({ lines: [start, priced] })
     expect(parseJournal(jsonl({ ...start, sets: { ...sets, more: [] } }))).toEqual({ error: expect.stringMatching(/^line 1: /) })
     const { pin: _, ...noPin } = start
     expect(parseJournal(jsonl(noPin))).toEqual({ error: 'line 1: missing pin' })
@@ -308,7 +315,7 @@ describe('evolve journal', () => {
   })
 
   const tr = (ok = true) => [run('t3', ok)]
-  const fin = (o: object = {}) => ({ v: 1, type: 'final', version: 1, orig: tr(false), last: tr(true), ...o })
+  const fin = (o: object = {}) => ({ v: 2, type: 'final', version: 1, orig: tr(false), last: tr(true), ...o })
 
   it('a run with a sig outside the vocabulary is refused', () => {
     expect(parseJournal(jsonl(start, { ...cur, runs: [{ ...run('t0', false), sig: 'x ; rm' }] }))).toEqual({ error: expect.stringMatching(/^line 2: .*sig/) })
@@ -333,13 +340,13 @@ describe('evolve journal', () => {
     // Order does not matter; a name repeated in place of another does.
     expect((replay(lines(s2, cur, a1, fin({ orig: both, last: both })), harness(), two) as any).final).toEqual({ orig: both, last: both })
     expect(replay(lines(s2, cur, a1, fin({ orig: [run('t3', false), run('t3', false)], last: both })), harness(), two)).toEqual({ error: expect.stringContaining('final') })
-    expect(replay(lines(start, cur, a1, { v: 1, type: 'final', version: 1, orig: tr() }), harness(), ctx)).toEqual({ error: expect.stringContaining('final') })
+    expect(replay(lines(start, cur, a1, { v: 2, type: 'final', version: 1, orig: tr() }), harness(), ctx)).toEqual({ error: expect.stringContaining('final') })
   })
 
   it('a final line for version 0 has no runs', () => {
     const lines = (...ls: object[]) => (parseJournal(jsonl(...ls)) as any).lines
-    expect((replay(lines(start, cur, { v: 1, type: 'final', version: 0 }), harness(), ctx) as any).final).toBe('none')
-    expect(replay(lines(start, cur, { v: 1, type: 'final', version: 0, orig: tr() }), harness(), ctx)).toEqual({ error: expect.stringContaining('final') })
+    expect((replay(lines(start, cur, { v: 2, type: 'final', version: 0 }), harness(), ctx) as any).final).toBe('none')
+    expect(replay(lines(start, cur, { v: 2, type: 'final', version: 0, orig: tr() }), harness(), ctx)).toEqual({ error: expect.stringContaining('final') })
   })
 
   it('parseJournal: an inherited or prototype key is refused with its line number, never a throw', () => {
@@ -386,7 +393,7 @@ describe('evolve journal', () => {
   })
 
   // The proposal goes in before its runs: a stop between them cannot re-roll it.
-  const prop = (c: { round: number; index: number; input: string; edit?: Edit }) => ({ v: 1, type: 'proposal', round: c.round, index: c.index, input: c.input, edit: c.edit })
+  const prop = (c: { round: number; index: number; input: string; edit?: Edit }) => ({ v: 2, type: 'proposal', round: c.round, index: c.index, input: c.input, edit: c.edit })
   it('a proposal line parses; one without an edit or with an extra key is refused', () => {
     expect(parseJournal(jsonl(start, cur, prop(a1), a1))).toEqual({ lines: [start, cur, prop(a1), a1] })
     expect(parseJournal(jsonl(start, cur, { ...prop(a1), edit: undefined }))).toEqual({ error: 'line 3: missing edit' })
@@ -499,18 +506,18 @@ describe('evolve on polyglot', () => {
   it('a short repo task name binds nothing: an accepted paragraph using it still replays', () => {
     const binding = bindingTokens({ names: ['test', 'fix'], paths: [], prompts: [] })
     expect(binding).toEqual([])
-    const start = { v: 1, type: 'start', base: 'h', sha: 'abc', pin: 'a'.repeat(64), notes: 'b'.repeat(64), sets: { train: ['test'], gate: ['fix'], test: ['c'] }, strict: false, proposer: 'p' }
-    const cur = { v: 1, type: 'current', round: 1, runs: [run('test', false), run('fix', false)] }
+    const start = { v: 2, type: 'start', base: 'h', sha: 'abc', pin: 'a'.repeat(64), notes: 'b'.repeat(64), sets: { train: ['test'], gate: ['fix'], test: ['c'] }, strict: false, proposer: 'p' }
+    const cur = { v: 2, type: 'current', round: 1, runs: [run('test', false), run('fix', false)] }
     const won = [run('test', true), run('fix', true)]
-    const a = { v: 1, type: 'candidate', round: 1, index: 1, input: '{}', edit: { field: 'systemPrompt', value: 'run the test first, then fix it' }, accepted: true, reason: 'accepted', numbers: { pass: 2, tokens: 200, tokensPerSuccess: 100, weight: 20 }, runs: won, version: 1 }
+    const a = { v: 2, type: 'candidate', round: 1, index: 1, input: '{}', edit: { field: 'systemPrompt', value: 'run the test first, then fix it' }, accepted: true, reason: 'accepted', numbers: { pass: 2, tokens: 200, tokensPerSuccess: 100, weight: 20 }, runs: won, version: 1 }
     const r = replay([start, cur, a] as any, harness(), { binding, sets: start.sets })
     expect('error' in r ? r.error : r.version).toBe(1)
   })
 
   it('replay drops a refused value bound by a short name, by word boundary', () => {
-    const start = { v: 1, type: 'start', base: 'h', sha: 'polyglot:x:3', pin: 'a'.repeat(64), notes: 'b'.repeat(64), sets, strict: false, proposer: 'p' }
-    const cur = { v: 1, type: 'current', round: 1, runs: [run('a', false), run('b', false)] }
-    const c = (index: number, value: string) => ({ v: 1, type: 'candidate', round: 1, index, input: '{}', edit: { field: 'systemPrompt', value }, accepted: false, reason: 'no edit in the reply' })
+    const start = { v: 2, type: 'start', base: 'h', sha: 'polyglot:x:3', pin: 'a'.repeat(64), notes: 'b'.repeat(64), sets, strict: false, proposer: 'p' }
+    const cur = { v: 2, type: 'current', round: 1, runs: [run('a', false), run('b', false)] }
+    const c = (index: number, value: string) => ({ v: 2, type: 'candidate', round: 1, index, input: '{}', edit: { field: 'systemPrompt', value }, accepted: false, reason: 'no edit in the reply' })
     const r = replay([start, cur, c(1, 'think of poker'), c(2, 'write short essays')] as any, harness(), { binding: ['poker', 'say'], sets })
     expect('error' in r ? r : r.rejected).toEqual([{ field: 'systemPrompt', reason: 'no edit in the reply' }, { field: 'systemPrompt', value: 'write short essays', reason: 'no edit in the reply' }])
   })
