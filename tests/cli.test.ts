@@ -1,5 +1,6 @@
 import { test, expect, vi } from 'vitest'
 import { spawn, spawnSync, execSync } from 'node:child_process'
+import { pathToFileURL } from 'node:url'
 import { writeFile, readFile, readdir, stat, cp } from 'node:fs/promises'
 import { chmodSync, copyFileSync, mkdtempSync, existsSync, writeFileSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -2085,17 +2086,17 @@ for (const [what, fake, money] of [
   expect(types(cwd)).toContain('cut')
 }, 120_000)
 
-test('evolve: SIGINT in a sweep keeps the finished runs\' money in a cut line, and an unpriced harness writes none', async () => {
+for (const [sig, code] of [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129]] as const) test(`evolve: ${sig} in a sweep keeps the finished runs' money in a cut line and leaves no clone`, async () => {
   const repo = await tasksRepo(evTasks(ONE_EACH))
   const env = await tasksEnv([])
   const cwd = await tmp('lhb-cwd-'), h = evHarness(cwd), mark = join(cwd, 'in-the-run')
   const [prop, , done] = evFake()
   writeFileSync(env.LHB_FAKE_BACKEND, JSON.stringify([prop, { when: 'ALWAYS make done.txt', keep: true, ...bashCall(`touch ${mark}; sleep 60`), usage: { promptTokens: 100, completionTokens: 10 } }, done]))
   priced(h)
-  const p = spawn(join(ROOT, 'node_modules', '.bin', 'tsx'), [join(ROOT, 'src', 'cli.ts'), 'evolve', h, '--tasks', repo, '--rounds', '1', '--yes', '--max-usd', '5'], { cwd, env: { ...process.env, ...env }, stdio: 'ignore' })
+  const p = spawn(process.execPath, ['--import', pathToFileURL(join(ROOT, 'node_modules', 'tsx', 'dist', 'loader.mjs')).href, join(ROOT, 'src', 'cli.ts'), 'evolve', h, '--tasks', repo, '--rounds', '1', '--yes', '--max-usd', '5'], { cwd, env: { ...process.env, ...env }, stdio: 'ignore' })
   try {
     await vi.waitFor(() => expect(existsSync(mark)).toBe(true), { timeout: 60_000, interval: 100 })
-    expect(await new Promise(done => { p.on('exit', done); p.kill('SIGINT') })).toBe(130)
+    expect(await new Promise(done => { p.on('exit', done); p.kill(sig) })).toBe(code)
   } finally { p.kill('SIGKILL') }
   const last = journal(cwd).at(-1)
   expect(last.type).toBe('cut')

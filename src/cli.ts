@@ -795,7 +795,7 @@ async function cmdEvolve(argv: string[]) {
   const byName = new Map(work.tasks.map(t => [t.name!, t]))
   try { await work.ready(childEnv(config.tools.bashEnv ?? [])) } catch (e) { die((e as Error).message) }
   await killTracked()
-  process.once('SIGINT', () => { cutNow(); dropWork(work); process.exit(130) })
+  for (const [sig, code] of [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129]] as const) process.once(sig, () => { cutNow(); dropWork(work); process.exit(code) })
   const modulesDir = work.modules && path.join(work.modules, 'node_modules')
   const modules0 = modules ?? (modulesDir && await modulesManifest(modulesDir))
   const out = path.join('runs', `evolve-${base}.json`), notes: NotesStore = { file: snap, write: false }

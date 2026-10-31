@@ -487,9 +487,9 @@ A harness with `backend.pricePerMTok` needs `--max-usd <dollars>`; without a pri
 (`no price to count against`). Before each run and each proposal evolve adds up what the journal holds
 and stops with exit 1 once that reaches the limit; the same command with a higher limit continues. The
 money of a sweep or a proposal that a stop cuts stays in the journal in a `cut` line and counts, whether the
-stop was Ctrl-C, the limit, a refused key or a changed `node_modules`. The run in flight at Ctrl-C is not in
-it (its cost is known only when it ends), and a `kill -9` writes no line, so it leaves out the money of the
-sweep or proposal it cut. A proposer with no price of its own is not counted (evolve says so at the start). `--report`
+stop was Ctrl-C, SIGTERM, SIGHUP, the limit, a refused key or a changed `node_modules`. The run in flight at
+a signal is not in it (its cost is known only when it ends), and a `kill -9` writes no line, so it leaves out
+the money of the sweep or proposal it cut. A proposer with no price of its own is not counted (evolve says so at the start). `--report`
 needs no flag and prints what the journal says was spent.
 
 A 429 is retried up to 3 times (the `Retry-After` wait, at most 300 s, else 60 s); a 429 after part of
