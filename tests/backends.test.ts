@@ -444,6 +444,13 @@ test('usage carries cached_tokens as cacheReadTokens, only as a finite non-negat
   expect((await send('7')).usage).toEqual({ promptTokens: 9, completionTokens: 1 })
 })
 
+test('usage carries completion_tokens_details.reasoning_tokens, only as a finite non-negative number', async () => {
+  const send = (r: unknown) => new OpenAIBackend('http://x/v1', fakeFetch(200, { choices: [{ message: { content: 'hi' }, finish_reason: 'stop' }], usage: { prompt_tokens: 9, completion_tokens: 5, completion_tokens_details: { reasoning_tokens: r } } })).send({ stream: false })
+  expect((await send(3)).usage).toEqual({ promptTokens: 9, completionTokens: 5, reasoningTokens: 3 })
+  expect((await send(0)).usage).toEqual({ promptTokens: 9, completionTokens: 5, reasoningTokens: 0 })
+  expect((await send('3')).usage).toEqual({ promptTokens: 9, completionTokens: 5 })
+})
+
 test('createBackend: kind anthropic never falls through to OpenAIBackend', () => {
   const b = { kind: 'anthropic' as const, baseUrl: 'https://api.anthropic.com', model: 'm', temperature: 0 }
   expect(() => createBackend(b, {})).toThrow('backend.kind anthropic needs backend.apiKeyEnv')

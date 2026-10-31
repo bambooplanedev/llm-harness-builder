@@ -48,7 +48,7 @@ export const COMMANDS = {
     args: '[harness.json ...]',
     options: {
       n: { type: 'string', default: '3' }, timeout: { type: 'string', default: '1800' }, out: { type: 'string' },
-      task: { type: 'string' }, size: { type: 'string' }, tasks: { type: 'string' }, only: { type: 'string' }, yes: { type: 'boolean', default: false }, 'max-turns': { type: 'string' }, ...backend, help,
+      task: { type: 'string' }, size: { type: 'string' }, tasks: { type: 'string' }, only: { type: 'string' }, yes: { type: 'boolean', default: false }, 'max-turns': { type: 'string' }, wide: { type: 'boolean', default: false }, ...backend, help,
     },
     docs: {
       n: ['<n>', 'runs per harness (default 3)'],
@@ -60,6 +60,7 @@ export const COMMANDS = {
       only: ['<a,b>', 'run only these tasks of --tasks, by name'],
       yes: ['', 'accept the commands of --tasks without asking (needed without a terminal)'],
       'max-turns': ['<N>', 'turn limit, overriding the harness files'],
+      wide: ['', 'add per-success turns, tokens, time and dollars, and per-run tool use, to the table'],
       ...backendDocs,
     },
   }),

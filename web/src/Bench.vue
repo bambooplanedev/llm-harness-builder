@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { api, type ActiveTrace, type AnalysisCells, type BenchFile, type BenchHarness, type BenchResult, type BenchRun, type HarnessConfig, type HarnessEvent } from './api'
 import { cellsLine } from '../../src/core/analyze'
-import { formatTable, mmss, wilson, benchTotal, runTitle, BENCH_TASKS, defaultSize } from '../../src/core/bench'
+import { formatTable, wideCells, WIDE_HEAD, mmss, wilson, benchTotal, runTitle, BENCH_TASKS, defaultSize } from '../../src/core/bench'
 import Trace from './Trace.vue'
 import { t, tn, T, lang } from './i18n'
 import Diff from './Diff.vue'
@@ -136,6 +136,8 @@ async function startNew() {
     backend: { kind: b.kind, baseUrl: b.baseUrl, model: b.model, ...b.apiKeyEnv ? { apiKeyEnv: b.apiKeyEnv } : {} } }))
   if (ok) newOpen.value = false
 }
+// Per-success costs against the first harness on the same model (the same rule as evolve) and the tool-use means; '-' where a run did not report.
+const wide = computed(() => result.value ? wideCells(result.value.harnesses) : [])
 const medCost = (h: BenchHarness) => { const c = h.runs.flatMap(r => r.costUsd ?? []).sort((a, b) => a - b); return c.length ? `$${Number(c[(c.length - 1) >> 1].toPrecision(3))}` : '-' }
 
 /**
@@ -289,9 +291,9 @@ onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer); unsub?.(); d
         </div>
         <div v-if="runs.length" class="table-wrap">
           <table class="bench">
-            <thead><tr><th>harness</th><th class="n" :title="t('h.pass')">pass</th><th :title="t('h.rate')">rate · 95% interval</th><th class="n" :title="t('h.medTurns')">med turns</th><th class="n" :title="t('h.medTime')">med time</th><th v-if="hasCost" class="n" :title="t('h.medCost')">med cost</th><th v-if="hasPeak" class="n" :title="t('h.peak')">peak tok</th><th :title="t('h.reasons')">how runs ended</th></tr></thead>
+            <thead><tr><th>harness</th><th class="n" :title="t('h.pass')">pass</th><th :title="t('h.rate')">rate · 95% interval</th><th class="n" :title="t('h.medTurns')">med turns</th><th class="n" :title="t('h.medTime')">med time</th><th v-if="hasCost" class="n" :title="t('h.medCost')">med cost</th><th v-if="hasPeak" class="n" :title="t('h.peak')">peak tok</th><th v-for="w in WIDE_HEAD" :key="w" class="n" title="mean per run, or per success on the tasks shared with the first harness of the same model; ! = dearer than evolve allows">{{ w }}</th><th :title="t('h.reasons')">how runs ended</th></tr></thead>
             <tbody>
-              <tr v-for="h in result.harnesses" :key="h.name" :class="{ on: h.name === openHarness }">
+              <tr v-for="(h, hi) in result.harnesses" :key="h.name" :class="{ on: h.name === openHarness }">
                 <td>{{ h.name }}</td>
                 <td class="n"><span :class="['chip', h.runs.length && h.pass === 0 ? 'err' : h.runs.length && h.pass === h.runs.length ? 'ok' : '']">{{ h.pass }} / {{ h.runs.length }}</span></td>
                 <td :title="h.runs.length ? `${ci(h.pass, h.runs.length).map(x => x.toFixed(2)).join('–')}` : 'no runs yet'">
@@ -304,13 +306,14 @@ onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer); unsub?.(); d
                 <td class="n">{{ mmss(h.median.ms) }}</td>
                 <td v-if="hasCost" class="n">{{ medCost(h) }}</td>
                 <td v-if="hasPeak" class="n" :class="{ warn: nCtx && (peak(h) ?? 0) > nCtx * 0.9 }">{{ peak(h)?.toLocaleString(lang) ?? '-' }}</td>
+                <td v-for="(w, wi) in wide[hi]" :key="wi" class="n">{{ w }}</td>
                 <td><span v-for="(v, k) in h.reasons" :key="k" :class="['chip', reasonTone(String(k))]">{{ k }} ×{{ v }}</span></td>
               </tr>
             </tbody>
           </table>
         </div>
         <p v-if="runs.length" class="hint">{{ t('bench.wilsonNote') }}</p>
-        <details v-if="runs.length" class="inspector"><summary class="hint">plain table (every column)</summary><pre>{{ formatTable(result.harnesses) }}</pre></details>
+        <details v-if="runs.length" class="inspector"><summary class="hint">plain table (every column)</summary><pre>{{ formatTable(result.harnesses, { wide: true }) }}</pre></details>
       </template>
       <h5 v-if="result && events.length && !(sideA && sideB)" class="group">{{ sideA ? `${sideA.name} #${sideA.run.round} · ${sideA.run.verdict} · trace` : `${active?.harness ?? ''} #${active?.round ?? ''} · live trace` }}</h5>
       <Diff v-if="sideA && sideB" :a="sideA" :b="sideB" :task="result!.task" @close="closeDiff" />

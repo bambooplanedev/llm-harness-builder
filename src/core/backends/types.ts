@@ -15,7 +15,7 @@ const patient = new Agent({ headersTimeout: 0, bodyTimeout: 0 })
 export const defaultFetch: FetchLike = (url, init) => undiciFetch(url, { ...init, dispatcher: patient })
 
 /** promptTokens is the whole prompt; the cache counts are the parts of it served from or written to the cache. */
-export type Usage = { promptTokens: number; completionTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number }
+export type Usage = { promptTokens: number; completionTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number; reasoningTokens?: number }
 
 /** A count as a server sent it: absent is 0, as it always was; anything but a finite non-negative number is not one. */
 export const tokenCount = (x: unknown): number | undefined =>
@@ -23,13 +23,13 @@ export const tokenCount = (x: unknown): number | undefined =>
 
 /** Usage from the two counts a server sent, or none at all: a server's text must never reach the terminal as a count,
  *  two lines above an approval question. */
-export function usageFrom(prompt: unknown, completion: unknown, cacheRead?: unknown, cacheWrite?: unknown): Usage | undefined {
+export function usageFrom(prompt: unknown, completion: unknown, cacheRead?: unknown, cacheWrite?: unknown, reasoning?: unknown): Usage | undefined {
   const p = tokenCount(prompt), c = tokenCount(completion)
   if (p === undefined || c === undefined) return undefined
   // Unlike the two counts, an absent or bad cache count is no field at all: 0 would claim the server said "no hit".
   const count = (x: unknown) => typeof x === 'number' && Number.isFinite(x) && x >= 0 ? x : undefined
-  const r = count(cacheRead), w = count(cacheWrite)
-  return { promptTokens: p, completionTokens: c, ...(r === undefined ? {} : { cacheReadTokens: r }), ...(w === undefined ? {} : { cacheWriteTokens: w }) }
+  const r = count(cacheRead), w = count(cacheWrite), t = count(reasoning)
+  return { promptTokens: p, completionTokens: c, ...(t === undefined ? {} : { reasoningTokens: t }), ...(r === undefined ? {} : { cacheReadTokens: r }), ...(w === undefined ? {} : { cacheWriteTokens: w }) }
 }
 
 /** Text a server sent, only when it is text: a number, an array or an object in its place is dropped, not printed. */

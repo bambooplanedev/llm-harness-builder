@@ -199,11 +199,12 @@ test('bench --n 2 on one harness: table, JSON with per-run reason/parseErrors/wo
   const wd = await tmp('lhb-cli-')
   const fake = join(wd, 'fake.json'); const out = join(wd, 'b.json')
   // run 1: edit → final. run 2: garbage (parse_error, retried) → edit → final.
-  await writeFile(fake, JSON.stringify([{ content: TUNED_EDIT, usage: { promptTokens: 100, completionTokens: 10 } }, { content: TUNED_FINAL, usage: { promptTokens: 150, completionTokens: 5 } }, { content: 'not json' }, { content: TUNED_EDIT }, { content: TUNED_FINAL }]))
-  const r = cli(['bench', '--n', '2', '--out', out, harness('tuned')], { LHB_FAKE_BACKEND: fake })
+  await writeFile(fake, JSON.stringify([{ content: TUNED_EDIT, usage: { promptTokens: 100, completionTokens: 10, reasoningTokens: 7 } }, { content: TUNED_FINAL, usage: { promptTokens: 150, completionTokens: 5 } }, { content: 'not json' }, { content: TUNED_EDIT }, { content: TUNED_FINAL }]))
+  const r = cli(['bench', '--n', '2', '--wide', '--out', out, harness('tuned')], { LHB_FAKE_BACKEND: fake })
   expect(r.status).toBe(0)
   expect(r.stdout).toMatch(/^tuned\s+2\/2\s+0\.34–1\.00\s+final×2\s/m)
   expect(r.stderr).toMatch(/--- round 2\/2/)
+  expect(r.stdout).toMatch(/turns\/ok.*reason tok/)
   const j = JSON.parse(await readFile(out, 'utf8'))
   expect(j).toMatchObject({ version: 1, n: 2, timeoutS: 1800, complete: true })
   // the JSON is written via a tmp file + rename, so a Ctrl-C mid-write can never truncate it; no tmp is left behind
@@ -215,6 +216,10 @@ test('bench --n 2 on one harness: table, JSON with per-run reason/parseErrors/wo
   expect(h.runs[0].lastError).toBeUndefined()
   // the biggest prompt + reply of the run; a run whose server reported no usage has none
   expect(h.runs.map((x: any) => x.peakTokens)).toEqual([155, undefined])
+  // tool use: calls by name, lines the model saw, reasoning tokens only where a reply reported them
+  expect(h.runs.map((x: any) => x.toolCounts)).toEqual([{ edit_file: 1 }, { edit_file: 1 }])
+  expect(h.runs.map((x: any) => x.reasoningTokens)).toEqual([7, undefined])
+  expect(h.runs.every((x: any) => x.outputLines >= 1)).toBe(true)
   for (const x of h.runs) { expect(x.ms).toBeGreaterThanOrEqual(0); expect((await stat(x.workdir)).isDirectory()).toBe(true) }
   // each run has a trace in cwd/runs that the UI's store reads like its own, and the meta points back at the bench
   expect(r.stderr).toMatch(/trace=[0-9a-f]{8}/)

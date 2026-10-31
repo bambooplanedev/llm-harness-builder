@@ -1,6 +1,7 @@
 // src/core/bench.ts — result shape of `bench` and the pure helpers that summarise it. No fs, no process.
 import type { DoneReason, HarnessEvent } from './events.js'
 import type { HarnessConfig } from './config.js'
+import { costCheck, type Cost } from './evolve-cost.js'
 
 export type BenchRun = {
   round: number; verdict: 'PASS' | 'FAIL'; reason: DoneReason | 'error'
@@ -19,6 +20,12 @@ export type BenchRun = {
   tokens?: number
   /** The prompt tokens of the run's first reply: what the harness puts in front of the model before any work. Absent when that reply had no usage. */
   firstPromptTokens?: number
+  /** Calls per tool name, built-in and mcp: what the run did. Absent in JSON written before v2.59. */
+  toolCounts?: Record<string, number>
+  /** Lines of tool output the model saw (after any cut; a final newline is not a line). Absent in older JSON. */
+  outputLines?: number
+  /** The sum of the replies' usage.completion_tokens_details.reasoning_tokens. Absent when no reply reported it: a server that does not say is not a server that said 0. */
+  reasoningTokens?: number
   /** Tool results that came back as errors — mcp or built-in. */
   toolErrors?: number
   /** Edits the read-before-edit guard refused. Absent when the harness had the guard off. */
@@ -89,7 +96,33 @@ export function wilson(pass: number, n: number, z = 1.96): [number, number] | un
   return [Math.max(0, center - half), Math.min(1, center + half)]
 }
 
-export function formatTable(harnesses: BenchHarness[]): string {
+const mean = (xs: number[]) => xs.reduce((a, x) => a + x, 0) / xs.length
+/** Calls per run by tool, over the runs that counted them: "bash 2.5 read_file 1"; '-' when none did. */
+const toolsCell = (runs: BenchRun[]): string => {
+  const rs = runs.filter(r => r.toolCounts), names = [...new Set(rs.flatMap(r => Object.keys(r.toolCounts!)))].sort()
+  return rs.length ? names.map(k => `${k} ${Number(mean(rs.map(r => r.toolCounts![k] ?? 0)).toFixed(1))}`).join(' ') || '0' : '-'
+}
+const meanCell = (xs: (number | undefined)[]): string => { const v = xs.flatMap(x => x ?? []); return v.length ? String(Number(mean(v).toFixed(1))) : '-' }
+
+/** The wide columns of each harness, in order: turns, tokens, model time, dollars per success on the tasks shared with the base
+ *  (the first harness on the same model), then tool use. A cost past evolve's tolerance against the base ends in "!"; nothing is refused. */
+export function wideCells(harnesses: BenchHarness[]): string[][] {
+  const lite = (h: BenchHarness) => h.runs.map(r => ({ task: r.task ?? 'task', verdict: r.verdict, turns: r.turns, tokens: r.tokens, modelMs: r.modelMs ?? r.ms }))
+  return harnesses.map(h => {
+    const base = harnesses.find(b => b.config.backend.model === h.config.backend.model)!
+    const cell = (cost: Cost, f: (x: number) => string) => {
+      const c = costCheck(lite(base), lite(h), cost, base.config.loop.maxTurns)
+      return c ? f(base === h ? c.before : c.after) + (c.over && base !== h ? '!' : '') : '-'
+    }
+    const paid = h.runs.flatMap(r => r.verdict === 'PASS' && r.costUsd !== undefined ? r.costUsd : [])
+    return [cell('turns', x => x.toFixed(1)), cell('tokens', x => String(Math.round(x))), cell('time', x => (x / 1000).toFixed(1)),
+      paid.length ? String(Number(mean(paid).toPrecision(4))) : '-', toolsCell(h.runs), meanCell(h.runs.map(r => r.outputLines)), meanCell(h.runs.map(r => r.reasoningTokens))]
+  })
+}
+export const WIDE_HEAD = ['turns/ok', 'tok/ok', 'model s/ok', '$/ok', 'tools', 'out lines', 'reason tok']
+
+/** `wide` adds the tool-use and per-success columns; without it the table is what it always was. */
+export function formatTable(harnesses: BenchHarness[], opts: { wide?: boolean } = {}): string {
   // The tool columns only earn their width when a run measured them: a bench of built-in harnesses
   // prints exactly the table it printed before mcp existed.
   const tools = harnesses.some(h => h.runs.some(r => r.toolChars))
@@ -98,8 +131,9 @@ export function formatTable(harnesses: BenchHarness[]): string {
   const miss = harnesses.some(h => h.runs.some(r => r.editMiss !== undefined))
   const tests = harnesses.some(h => h.tests)
   const sum = (xs: (number | undefined)[]) => xs.reduce<number>((a, x) => a + (x ?? 0), 0)
-  const head = ['harness', 'PASS', '95% CI', 'reasons', 'med turns', 'med s', ...tools ? ['toolChars', 'med errs'] : [], ...cost ? ['med $'] : [], ...guard ? ['guard'] : [], ...miss ? ['editMiss'] : [], ...tests ? ['tests'] : []]
-  const rows = harnesses.map(h => [
+  const head = ['harness', 'PASS', '95% CI', 'reasons', 'med turns', 'med s', ...tools ? ['toolChars', 'med errs'] : [], ...cost ? ['med $'] : [], ...guard ? ['guard'] : [], ...miss ? ['editMiss'] : [], ...tests ? ['tests'] : [], ...opts.wide ? WIDE_HEAD : []]
+  const wide = opts.wide ? wideCells(harnesses) : []
+  const rows = harnesses.map((h, i) => [
     h.name, `${h.pass}/${h.runs.length}`,
     wilson(h.pass, h.runs.length)?.map(x => x.toFixed(2)).join('–') ?? '-',
     Object.entries(h.reasons).map(([k, v]) => `${k}×${v}`).join(' ') || '-',
@@ -112,11 +146,13 @@ export function formatTable(harnesses: BenchHarness[]): string {
     ...guard ? [h.runs.some(r => r.guardBlocks !== undefined) ? String(sum(h.runs.map(r => r.guardBlocks))) : '-'] : [],
     ...miss ? [String(sum(h.runs.map(r => r.editMiss)))] : [],
     ...tests ? [h.tests ? `${h.tests.passed}/${h.tests.total}` : '-'] : [],
+    ...wide[i] ?? [],
   ])
   const w = head.map((c, i) => Math.max(c.length, ...rows.map(r => r[i].length)) + 2)
   const line = (r: string[]) => r.map((c, i) => c.padEnd(w[i])).join('').trimEnd()
   return [line(head), ...rows.map(line), 'medians over all runs incl. failures; s = wall-clock per run',
     '95% CI = Wilson interval of the PASS rate; two harnesses whose intervals overlap are not told apart by this bench',
+    ...opts.wide ? ['per success = mean over passes on the tasks shared with the first harness of the same model (at least 5, else -); ! = dearer than evolve allows; tools, out lines, reason tok = mean per run; - = not reported'] : [],
     ...tests ? ['tests = green tests over all runs; no interval: the tests of one exercise are not independent'] : []].join('\n')
 }
 

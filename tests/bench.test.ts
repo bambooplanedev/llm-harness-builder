@@ -130,3 +130,50 @@ test('defaultSize: polyglot starts at 5, the rest at their largest', () => {
   expect(defaultSize('pool')).toBe(10)
   expect(defaultSize('slug')).toBe(0)
 })
+
+// Pinned before --wide existed: the plain table is byte for byte what it was.
+const gold = (name: string, runs: Partial<BenchRun>[], tests?: { passed: number; total: number }): BenchHarness =>
+  ({ name, config: { backend: { model: 'm' }, loop: { maxTurns: 10 } } as BenchHarness['config'], pass: runs.filter(r => r.verdict === 'PASS').length, reasons: { final: 2, max_turns: 1 }, median: { turns: 4, toolCalls: 3, ms: 61000 }, tests,
+    runs: runs.map((r, i) => ({ round: i + 1, verdict: 'FAIL', reason: 'final', turns: 4, toolCalls: 3, parseErrors: 0, ms: 61000, workdir: '/w', ...r })) as BenchRun[] })
+test('formatTable: the plain table is unchanged by --wide existing (golden)', () => {
+  const hs = [
+    gold('bare', [{ verdict: 'PASS', costUsd: 0.012, toolChars: 900, toolErrors: 1, guardBlocks: 2, editMiss: 1 }, { costUsd: 0.02, toolErrors: 0, guardBlocks: 0, editMiss: 0 }, { verdict: 'PASS', costUsd: 0.5, toolErrors: 3, guardBlocks: 1, editMiss: 2 }], { passed: 7, total: 9 }),
+    gold('tuned', [{ verdict: 'PASS', toolErrors: 0 }, { verdict: 'PASS' }, { verdict: 'PASS' }]),
+  ]
+  expect(formatTable(hs)).toMatchInlineSnapshot(`
+    "harness  PASS  95% CI     reasons              med turns  med s  toolChars  med errs  med $  guard  editMiss  tests
+    bare     2/3   0.21–0.94  final×2 max_turns×1  4          61     900        1         0.02   3      3         7/9
+    tuned    3/3   0.44–1.00  final×2 max_turns×1  4          61     -          0         -      -      0         -
+    medians over all runs incl. failures; s = wall-clock per run
+    95% CI = Wilson interval of the PASS rate; two harnesses whose intervals overlap are not told apart by this bench
+    tests = green tests over all runs; no interval: the tests of one exercise are not independent"
+  `)
+})
+
+const five = (over: Partial<BenchRun>, extra: Partial<BenchRun> = {}) => ['a', 'b', 'c', 'd', 'e'].map(t => ({ task: t, verdict: 'PASS' as const, turns: 4, tokens: 1000, modelMs: 2000, ...over, ...extra }))
+test('formatTable --wide: tool use columns, "-" for missing, 0 stays 0', () => {
+  const hs = [gold('x', [{ toolCounts: { bash: 2, read_file: 4 }, outputLines: 10, reasoningTokens: 0 }, { toolCounts: {}, outputLines: 0 }, {}])]
+  const [head, row] = formatTable(hs, { wide: true }).split('\n')
+  expect(head).toMatch(/turns\/ok\s+tok\/ok\s+model s\/ok\s+\$\/ok\s+tools\s+out lines\s+reason tok$/)
+  expect(row).toMatch(/\s-\s+-\s+-\s+-\s+bash 1 read_file 2\s+5\s+0$/)
+  expect(formatTable(hs, { wide: true }).split('\n')[0]).toContain('med turns')
+})
+test('formatTable --wide: per-success costs on shared successes; over tolerance gets "!", nothing is refused', () => {
+  const hs = [gold('base', five({}, { costUsd: 0.01 })), gold('dear', five({ turns: 8, tokens: 1000, modelMs: 2000 }, { costUsd: 0.03 }))]
+  const [, base, dear] = formatTable(hs, { wide: true }).split('\n')
+  expect(base).toMatch(/\s4\.0\s+1000\s+2\.0\s+0\.01\s/)
+  expect(dear).toMatch(/\s8\.0!\s+1000\s+2\.0\s+0\.03\s/)
+  expect(base).not.toContain('!')
+})
+test('formatTable --wide: under five shared tasks the cost cells are "-"; time falls back to ms', () => {
+  const few = gold('base', five({}).slice(0, 4))
+  expect(formatTable([few], { wide: true }).split('\n')[1]).toMatch(/\s-\s+-\s+-\s+-\s+-\s+-\s+-$/)
+  const old = gold('base', five({ modelMs: undefined, ms: 3000 }))
+  expect(formatTable([old], { wide: true }).split('\n')[1]).toMatch(/\s3\.0\s/)
+})
+test('formatTable --wide: the base is the first harness on the same model; another model has its own', () => {
+  const m = (name: string, model: string, over: Partial<BenchRun>) => ({ ...gold(name, five(over)), config: { backend: { model }, loop: { maxTurns: 10 } } as BenchHarness['config'] })
+  const t = formatTable([m('a1', 'A', {}), m('b1', 'B', { turns: 8 }), m('a2', 'A', { turns: 8 })], { wide: true }).split('\n')
+  expect(t[2]).not.toContain('!')
+  expect(t[3]).toContain('8.0!')
+})

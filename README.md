@@ -227,7 +227,7 @@ directory to browse them, and reload the list after a CLI run. On every start `s
     llm-harness-builder serve [--port <n>] [--no-open]
     llm-harness-builder run <harness.json> "task" [--workdir <dir>] [--yes] [--json] [--answer-schema <file.json>] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
     llm-harness-builder demo [--json] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
-    llm-harness-builder bench [harness.json ...] [--n <n>] [--timeout <s>] [--out <file>] [--task <name>] [--size <N>] [--tasks <repo>] [--only <a,b>] [--yes] [--max-turns <N>] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
+    llm-harness-builder bench [harness.json ...] [--n <n>] [--timeout <s>] [--out <file>] [--task <name>] [--size <N>] [--tasks <repo>] [--only <a,b>] [--yes] [--max-turns <N>] [--wide] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
     llm-harness-builder evolve <harness.json> [--tasks <repo>] [--task polyglot] [--mode <m>] [--size <N>] [--rounds <N>] [--proposer <harness.json>] [--max-usd <dollars>] [--timeout <s>] [--yes] [--report] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
     llm-harness-builder replay <run-id | trace.jsonl> [--turn <N>] [--n <n>] [--temperature <t>] [--max-tokens <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>] [--json]
     llm-harness-builder analyze <bench.json | run-id | trace.jsonl> ... [--json]
@@ -282,6 +282,13 @@ Next to each PASS count the table prints its 95% Wilson interval: 1/3 is 0.06–
 each harness's full config and each run's `reason`, `parseErrors`, `toolErrors`, `lastError`, peak
 tokens, temp `workdir` and `trace` (the run's `runs/<id>.jsonl`), so two files are comparable by
 config, not by name.
+
+`--wide` adds columns to the printed table (the JSON and the Bench tab always carry them). Per success: the mean turns,
+tokens, model time and dollars of the passing runs, on the tasks shared with the first harness of the same
+model (at least 5, else `-`); a cost dearer than `evolve` would allow is marked `!`, and nothing is refused.
+Then, per run: the calls of each tool (built-in and mcp), the lines of tool output the model saw, and the
+reasoning tokens the server reported. Means, not medians. `-` means the run did not report it, and is left out of
+the mean; a reported 0 counts as 0.
 
 **Preflight.** Before the first run `bench` asks each server what it can without generating. A
 server that does not answer, or lacks the model, stops the bench with exit code 2 and no JSON. The

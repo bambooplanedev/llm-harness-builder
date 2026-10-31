@@ -234,7 +234,7 @@ Ollama думає, якщо їй не сказати інакше, витрач�
     llm-harness-builder serve [--port <n>] [--no-open]
     llm-harness-builder run <harness.json> "task" [--workdir <dir>] [--yes] [--json] [--answer-schema <file.json>] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
     llm-harness-builder demo [--json] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
-    llm-harness-builder bench [harness.json ...] [--n <n>] [--timeout <s>] [--out <file>] [--task <name>] [--size <N>] [--tasks <repo>] [--only <a,b>] [--yes] [--max-turns <N>] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
+    llm-harness-builder bench [harness.json ...] [--n <n>] [--timeout <s>] [--out <file>] [--task <name>] [--size <N>] [--tasks <repo>] [--only <a,b>] [--yes] [--max-turns <N>] [--wide] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
     llm-harness-builder evolve <harness.json> [--tasks <repo>] [--task polyglot] [--mode <m>] [--size <N>] [--rounds <N>] [--proposer <harness.json>] [--max-usd <dollars>] [--timeout <s>] [--yes] [--report] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
     llm-harness-builder replay <run-id | trace.jsonl> [--turn <N>] [--n <n>] [--temperature <t>] [--max-tokens <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>] [--json]
     llm-harness-builder analyze <bench.json | run-id | trace.jsonl> ... [--json]
@@ -290,6 +290,13 @@ stderr. `bench --tasks` і `evolve` питають один раз, перед �
 конфіг кожного харнесу і для кожного прогону `reason`, `parseErrors`, `toolErrors`, `lastError`,
 пікові токени, тимчасовий `workdir` і `trace` (`runs/<id>.jsonl` прогону), тож два файли можна
 порівнювати за конфігом, а не за назвою.
+
+`--wide` додає колонки до надрукованої таблиці (JSON і вкладка Bench завжди їх мають). На успіх: середні
+ходи, токени, час моделі та долари проходжень на задачах, спільних із першим харнесом тієї самої
+моделі (не менше 5, інакше `-`); ціна, дорожча за допуск `evolve`, позначена `!`, і нічого не відхиляється.
+Далі на прогін: виклики кожного інструмента (вбудованого й mcp), рядки виводу інструментів, які бачила
+модель, і токени міркування, про які повідомив сервер. Середні, не медіани. `-` означає, що прогін цього
+не повідомив і до середнього не входить; повідомлений 0 рахується як 0.
 
 **Попередня перевірка.** Перед першим прогоном `bench` питає кожен сервер, що той уміє, нічого не
 генеруючи. Сервер, що не відповідає або не має моделі, зупиняє бенч з кодом виходу 2 і без JSON.
