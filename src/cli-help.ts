@@ -116,11 +116,13 @@ export const COMMANDS = {
   proxy: command({
     summary: 'Record what another agent sends a server, live, into ./runs.',
     args: '',
-    options: { upstream: { type: 'string', default: 'http://127.0.0.1:8080' }, port: { type: 'string', default: '8090' }, name: { type: 'string', default: 'proxy' }, help },
+    options: { upstream: { type: 'string', default: 'http://127.0.0.1:8080' }, port: { type: 'string', default: '8090' }, name: { type: 'string', default: 'proxy' }, dialect: { type: 'string', multiple: true }, connection: { type: 'string', multiple: true }, help },
     docs: {
       upstream: ['<url>', 'server root to forward to (default http://127.0.0.1:8080)'],
       port: ['<n>', 'port to listen on (default 8090)'],
       name: ['<label>', 'harness name of the recorded runs (default proxy)'],
+      dialect: ['<abs.mjs>', 'your own dialect file, absolute path; repeatable'],
+      connection: ['<abs.json>', 'your own connection file, absolute path; repeatable'],
     },
   }),
 }

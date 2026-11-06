@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest'
-import { spawnSync, execSync } from 'node:child_process'
+import { spawn, spawnSync, execSync } from 'node:child_process'
 import { writeFile, readFile, readdir, stat, cp } from 'node:fs/promises'
 import { chmodSync, existsSync, writeFileSync, mkdirSync, readFileSync, readdirSync, realpathSync } from 'node:fs'
 import { join } from 'node:path'
@@ -692,6 +692,46 @@ test('proxy records until SIGINT or SIGTERM, then exits 0 with done appended', a
     expect(err.indexOf('proxy on')).toBeLessThan(err.indexOf('for Claude Code'))
   }
 }, 60_000)
+
+test('proxy --dialect relative.mjs dies naming the flag value; own files are announced after the hints', async () => {
+  const bad = cli(['proxy', '--dialect', 'relative.mjs', '--port', '0'])
+  expect(bad.status).not.toBe(0)
+  expect(bad.stderr).toMatch(/^proxy: dialect relative\.mjs: .*absolute/m)
+  const d = tmpSync('lhb-own-')
+  const dialect = join(d, 'd.mjs'), connection = join(d, 'c.json')
+  writeFileSync(dialect, readFileSync(join(ROOT, 'tests/fixtures/dialects/no-messages.mjs')))
+  writeFileSync(connection, '{"name":"claude-code","hints":{"session":"x-mine"},"taskStrip":[]}')
+  const p = spawnCli(['proxy', '--port', '0', '--dialect', dialect, '--connection', connection], { cwd: tmpSync('lhb-cwd-') })
+  let err = ''
+  const tail = `dialect no-messages from ${dialect}\nconnection claude-code from ${connection} (replaces built-in)\n`
+  await new Promise<void>(done => p.stderr!.on('data', (b: Buffer) => { err += b; if (err.includes('(replaces built-in)\n')) done() }))
+  await new Promise(done => { p.on('exit', done); p.kill('SIGINT') })
+  expect(err).toMatch(/^proxy on .*give the agent that base URL\n/)
+  expect(err.endsWith(tail)).toBe(true)
+}, 30_000)
+
+test('proxy exits 0 when the pid in LHB_SERVE_PID is gone, and its run is closed', async () => {
+  const up = http.createServer((req, res) => {
+    req.resume()
+    req.on('end', () => { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: 'hi' }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`) })
+  })
+  await listen(up)
+  const sleeper = spawn('sleep', ['60'])
+  const cwd = tmpSync('lhb-cwd-')
+  const p = spawnCli(['proxy', '--port', '0', '--upstream', `http://127.0.0.1:${(up.address() as { port: number }).port}`], { cwd, env: { ...process.env, LHB_SERVE_PID: String(sleeper.pid) } })
+  let err = ''
+  const port = await new Promise<number>(done => p.stderr!.on('data', (b: Buffer) => { err += b; const m = /proxy on http:\/\/127\.0\.0\.1:(\d+)\/v1/.exec(err); if (m) done(Number(m[1])) }))
+  await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, { method: 'POST', body: JSON.stringify({ model: 'm', messages: [{ role: 'user', content: 'hello' }] }) }).then(r => r.text())
+  const exited = new Promise<number | null>(done => p.on('exit', done))
+  sleeper.kill()
+  const code = await Promise.race([exited, new Promise<string>(done => setTimeout(() => done('timeout'), 3000))])
+  if (code === 'timeout') p.kill('SIGKILL')
+  up.close()
+  expect(code).toBe(0)
+  const files = await readdir(join(cwd, 'runs'))
+  const lines = (await readFile(join(cwd, 'runs', files[0]), 'utf8')).trim().split('\n').map(l => JSON.parse(l))
+  expect(lines.at(-1)).toMatchObject({ type: 'done', reason: 'proxy_stopped' })
+}, 30_000)
 
 test('proxy ignores a connections folder in its cwd', async () => {
   const up = http.createServer((req, res) => {

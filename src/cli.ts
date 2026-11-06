@@ -1058,7 +1058,7 @@ async function cmdServe(argv: string[]) {
     port: Number(values.port), runsDir: path.join(cwd, 'runs'), harnessesDir, examplesDir: path.join(PKG_ROOT, 'example-runs'),
     staticDir: path.join(PKG_ROOT, 'web', 'dist'), backendFactory: fake ? () => fake : undefined,
     // This very CLI, under the same node flags (tsx in development), in serve's cwd: its traces land in the runs/ serve reads.
-    cli: args => spawn(process.execPath, [...process.execArgv, fileURLToPath(import.meta.url), ...args], { cwd, stdio: ['ignore', 'pipe', 'pipe'] }),
+    cli: args => spawn(process.execPath, [...process.execArgv, fileURLToPath(import.meta.url), ...args], { cwd, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, LHB_SERVE_PID: String(process.pid) } }),
   })
   const url = `http://localhost:${srv.port}`
   console.error(`llm-harness-builder serving on ${url}  (harnesses: ${harnessesDir}, runs: ${path.join(cwd, 'runs')})`)
@@ -1080,10 +1080,11 @@ async function cmdProxy(argv: string[]) {
   const upstream = values.upstream.replace(/\/+$/, '')
   if (/\/v1$/.test(upstream)) die(`--upstream is the server root, not its /v1: try ${upstream.slice(0, -3)}`)
   const runsDir = path.join(process.cwd(), 'runs')
-  const p = await startProxy({ upstream, port: Number(values.port), runsDir, harness: values.name, log: l => console.error(l) })
+  const p = await startProxy({ upstream, port: Number(values.port), runsDir, harness: values.name, dialectFiles: values.dialect, connectionFiles: values.connection, log: l => console.error(l) })
     .catch(e => die(`proxy: ${(e as Error).message}`))
   console.error(`proxy on http://127.0.0.1:${p.port}/v1 -> ${upstream}  (runs: ${runsDir}); give the agent that base URL`)
   for (const h of p.hints) console.error(h)
+  for (const l of p.loaded) console.error(l)
   // Stopping is how a proxy session ends, so it exits 0, not run's 130. A second signal while
   // stopping force-exits with 130 instead, in case the graceful stop is stuck: any run this leaves
   // without a `done` gets the usual `aborted` repair from serve once this process's pid is gone.
@@ -1094,6 +1095,12 @@ async function cmdProxy(argv: string[]) {
     p.stop().then(() => process.exit(0), e => die(`proxy: ${(e as Error).message}`))
   }
   process.on('SIGINT', stop); process.on('SIGTERM', stop)
+  // Started by `serve`: when that process dies (even by SIGKILL) nobody can press Stop, so stop with it.
+  const parent = Number(process.env.LHB_SERVE_PID)
+  if (Number.isInteger(parent) && parent > 0) {
+    const gone = () => { try { process.kill(parent, 0); return false } catch (e) { return (e as NodeJS.ErrnoException).code === 'ESRCH' } }
+    setInterval(() => { if (gone()) stop() }, 1000).unref()
+  }
 }
 
 const commands: Record<CommandName, (a: string[]) => Promise<void>> = { serve: cmdServe, run: cmdRun, demo: cmdDemo, bench: cmdBench, evolve: cmdEvolve, replay: cmdReplay, analyze: cmdAnalyze, proxy: cmdProxy }
