@@ -53,7 +53,8 @@ test('two proxies run side by side, each with the port from its ready line; Stop
     const ai = await a.json()
     expect(ai).toMatchObject({ name: 'a', upstream: ok.upstream, port: 41001, lines: ['hint: one', 'dialect x from /abs/x.mjs'] })
     expect(typeof ai.id).toBe('string')
-    expect(Date.parse(ai.started)).not.toBeNaN()
+    expect(typeof ai.started).toBe('number') // ms, as RunSummary.started: the page compares them
+    expect(Math.abs(Date.now() - ai.started)).toBeLessThan(10_000)
     expect(ai.exit).toBeUndefined()
     const b = await start({ ...ok, name: 'b', port: 41002 })
     expect(b.status).toBe(201)

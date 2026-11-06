@@ -6,7 +6,7 @@ import type { BenchFile, BenchResult, BenchHarness, BenchRun, ActiveTrace } from
 import type { AnalysisCells } from '../../src/core/analyze'
 import type { Note } from '../../src/core/notes'
 /** One recording proxy `serve` runs for the page (GET /api/proxies). */
-export type ProxyItem = { id: string; name: string; upstream: string; port: number; started: string; lines: string[]; tail: string; exit?: { code: number | null; signal: string | null } }
+export type ProxyItem = { id: string; name: string; upstream: string; port: number; started: number; lines: string[]; tail: string; exit?: { code: number | null; signal: string | null } }
 export type { HarnessConfig, HarnessEvent, RunSummary, Delta, ServerInfo, BenchFile, BenchResult, BenchHarness, BenchRun, ActiveTrace, AnalysisCells, Note }
 
 /** GET /api/evolve. While `running` is there, `last` may be the job before it. */

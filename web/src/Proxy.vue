@@ -11,13 +11,15 @@ const runs = ref<RunSummary[]>([])
 /** null until the first answer; false when this serve has no cli (the routes 404). */
 const available = ref<boolean | null>(null)
 const error = ref('')
+/** A failed Stop, on its card. */
+const stopError = ref<Record<string, string>>({})
 const stopping = ref(new Set<string>())
 const upstream = ref(''); const port = ref('0'); const name = ref('')
 const dialects = ref(['']); const connections = ref([''])
 const starting = ref(false)
 
 /** A session of a proxy is a run it recorded: its harness is the proxy's name, started after the proxy did. */
-const sessions = (p: ProxyItem) => runs.value.filter(r => r.harness === p.name && r.started >= Number(p.started))
+const sessions = (p: ProxyItem) => runs.value.filter(r => r.harness === p.name && r.started >= p.started)
 const exited = (p: ProxyItem) => `exited ${p.exit!.code ?? '-'}${p.exit!.signal ? ` (${p.exit!.signal})` : ''}`
 
 async function refresh() {
@@ -39,7 +41,8 @@ async function start() {
 async function stop(id: string) {
   if (stopping.value.has(id)) return
   stopping.value = new Set(stopping.value).add(id)
-  try { await api.stopProxy(id) } catch (e) { error.value = (e as Error).message }
+  delete stopError.value[id]
+  try { await api.stopProxy(id) } catch (e) { stopError.value[id] = (e as Error).message }
   stopping.value.delete(id); stopping.value = new Set(stopping.value)
   await refresh()
 }
@@ -76,6 +79,7 @@ onUnmounted(() => clearInterval(timer))
             <div class="muted">{{ r.task.slice(0, 60) }}</div>
           </div>
         </div>
+        <div v-if="stopError[p.id]" class="err">{{ stopError[p.id] }}</div>
         <pre v-if="p.tail" class="err">{{ p.tail }}</pre>
       </div>
     </template>

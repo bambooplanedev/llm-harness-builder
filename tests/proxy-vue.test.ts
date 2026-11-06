@@ -74,7 +74,7 @@ test('a 502 shows its error under the form and the list stays as it was', async 
 test('each item is a card with its lines, tail and its own sessions; Stop calls stopProxy(id) and disables itself while pending', async () => {
   const a = item({ id: 'a', name: 'one', started: 1000, lines: ['dialect d from /abs/d.mjs (replaces built-in)'], tail: 'record problem' })
   const b = item({ id: 'b', name: 'two', started: 1000, port: 8091 })
-  const runs = [run({ id: 'mine', harness: 'one', started: 1500 }), run({ id: 'before', harness: 'one', started: 500 }), run({ id: 'other', harness: 'two', started: 1500 })]
+  const runs = [run({ id: 'run-late', harness: 'one', started: 2000 }), run({ id: 'run-edge', harness: 'one', started: 1000 }), run({ id: 'run-early', harness: 'one', started: 999 }), run({ id: 'run-othr', harness: 'two', started: 2000 })]
   let release!: () => void
   const gate = new Promise<void>(r => (release = r))
   const m = await mount({ 'GET /api/proxies': [a, b], 'GET /api/runs': runs, 'POST /api/proxies/a/stop': () => gate.then(() => ({ ok: true })) })
@@ -82,10 +82,10 @@ test('each item is a card with its lines, tail and its own sessions; Stop calls 
   expect(cards).toHaveLength(2)
   const [c1, c2] = cards.map(textOf)
   expect(c1).toContain('dialect d from /abs/d.mjs (replaces built-in)'); expect(c1).toContain('record problem')
-  expect(c1).toContain('mine'.slice(0, 8)); expect(c1).not.toContain('before'); expect(c1).not.toContain('other')
-  expect(c2).not.toContain('mine')
+  expect(c1).toContain('run-late'); expect(c1).toContain('run-edge'); expect(c1).not.toContain('run-early'); expect(c1).not.toContain('run-othr')
+  expect(c2).not.toContain('run-late'); expect(c2).toContain('run-othr')
   // clicking a session opens it
-  all(cards[0]).find(n => n.props.class === 'session')!.props.onClick(); expect(m.opened.map(r => r.id)).toEqual(['mine'])
+  all(cards[0]).find(n => n.props.class === 'session')!.props.onClick(); expect(m.opened.map(r => r.id)).toEqual(['run-late'])
   const stop = all(cards[0]).find(n => n.tag === 'button' && /^Stop|stopping/.test(textOf(n)))!
   stop.props.onClick(); await settle()
   expect(textOf(stop)).toBe('stopping…'); expect(stop.props.disabled).toBe(true)
@@ -114,4 +114,12 @@ test('storage is never touched, and the poll stops on unmount', async () => {
 test('a serve without a cli says start is unavailable and offers no Start', async () => {
   const m = await mount({ 'GET /api/proxies': new Response('{"error":"not found"}', { status: 404 }), 'GET /api/runs': [] })
   expect(m.text()).toContain('unavailable'); expect(m.button('Start')).toBeUndefined()
+})
+
+test('a failed Stop shows its error on its card, not under the form', async () => {
+  const m = await mount({ 'GET /api/proxies': [item({ id: 'a' }), item({ id: 'b', name: 'two' })], 'GET /api/runs': [], 'POST /api/proxies/a/stop': new Response('{"error":"gone"}', { status: 404 }) })
+  m.button('Stop', 0).props.onClick(); await settle()
+  const cards = all(m.root).filter(n => n.props.class === 'proxy-card')
+  expect(textOf(cards[0])).toContain('gone'); expect(textOf(cards[1])).not.toContain('gone')
+  expect(all(m.root).filter(n => n.props.class === 'err form-err')).toHaveLength(0)
 })

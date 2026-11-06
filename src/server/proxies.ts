@@ -5,7 +5,7 @@ import path from 'node:path'
 import type { ChildProcess } from 'node:child_process'
 
 export type ProxyItem = {
-  id: string; name: string; upstream: string; port: number; started: string
+  id: string; name: string; upstream: string; port: number; started: number
   /** The stderr lines right after the ready line: hints and the own files it loaded. */
   lines: string[]
   /** Stderr after those, the last 2000 chars: record problems, a crash. */
@@ -60,7 +60,7 @@ export function proxies(cli: (args: string[]) => ChildProcess, killMs = 5000) {
         ...dialects.map(d => `--dialect=${d}`), ...connections.map(c => `--connection=${c}`)])
       child.stdout?.resume() // nothing reads its stdout: a full pipe would stall it
       startingChildren.add(child)
-      const item: ProxyItem = { id: randomUUID(), name, upstream, port: 0, started: new Date().toISOString(), lines: [], tail: '' }
+      const item: ProxyItem = { id: randomUUID(), name, upstream, port: 0, started: Date.now(), lines: [], tail: '' }
       let err = '' // all of stderr until it is listed: the 502 shows it
       let buf = '' // the part of a line not yet ended
       let phase: 'wait' | 'settle' | 'run' | 'failed' = 'wait'
