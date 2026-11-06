@@ -463,3 +463,22 @@ test('anthropic: a title call before the first turn lands in the main run, whose
   ])
   expect(ts.every(t => t.events.at(-1).reason === 'proxy_stopped')).toBe(true)
 })
+
+test('a stream cut before any delta: OpenAI error body is the empty string', async () => {
+  const up = await upstream((req, res) => { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.flushHeaders(); setTimeout(() => req.socket.destroy(), 20) })
+  const px = await proxy(up.url)
+  await expect(post(px.base, chat()).then(r => r.text())).rejects.toThrow()
+  await px.stop()
+  const err = (await traces(px.runsDir)).flatMap(t => t.events).find(e => e.type === 'error')
+  expect(err).toEqual(expect.objectContaining({ type: 'error', body: '' }))
+})
+
+test('anthropic: a stream cut before any delta has an error without body', async () => {
+  const up = await upstream((req, res) => { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.flushHeaders(); setTimeout(() => req.socket.destroy(), 20) })
+  const px = await proxy(up.url)
+  await expect(msgs(px.base, ANT).then(r => r.text())).rejects.toThrow()
+  await px.stop()
+  const err = (await traces(px.runsDir)).flatMap(t => t.events).find(e => e.type === 'error')
+  expect(err).toBeDefined()
+  expect('body' in err).toBe(false)
+})

@@ -236,3 +236,59 @@ test('hintsOf takes only the whitelist, as single printable strings', () => {
   const b = s.onRequest(ccReq([{ role: 'user', content: 'do it' }]), 'anthropic')
   expect(b).toMatchObject({ run: 'run1', turn: 2 })
 })
+
+// Characterization: pins today's exact output so the proxy refactor can prove nothing changed.
+const req = (s: Sessions, payload: object, api: 'openai' | 'anthropic' = 'openai', headers: Record<string, string> = {}) => s.onRequest(payload, api, hintsOf(headers))
+
+test('characterization: the Claude Code fixture, every event exact', () => {
+  const steps: { headers: Record<string, string>; payload: any; reply: any }[] = JSON.parse(readFileSync('tests/fixtures/claude-code-session.json', 'utf8'))
+  const s = mk(), all: unknown[] = []
+  for (const step of steps) {
+    const out = req(s, step.payload, 'anthropic', step.headers)
+    all.push({ out, replied: s.onReply(out.run, out.turn, ok({ ...step.reply, raw: {} }), out.side) })
+  }
+  all.push(s.close())
+  expect(all).toMatchSnapshot()
+})
+
+test('characterization: an OpenAI multi-turn session, every event exact', () => {
+  const s = mk(), all: unknown[] = []
+  const a = req(s, { messages: [S, U] })
+  all.push({ out: a, replied: s.onReply(a.run, a.turn, ok(reply([{ id: 'x1', args: { path: 'a' } }, { id: 'x2', args: { path: 'b' } }]))) })
+  const h = [S, U, asst(['x1', 'x2']), tool('x2', 'B'), tool('x1', 'A')]
+  const b = req(s, { messages: h })
+  all.push({ out: b, replied: s.onReply(b.run, b.turn, ok(reply([], 'done'))) })
+  all.push({ retry: req(s, { messages: h }) })
+  all.push(s.close())
+  expect(all).toMatchSnapshot()
+})
+
+test('a compaction request-class without a session is still a compaction note', () => {
+  const s = mk()
+  const a = req(s, { messages: [S, U] }, 'openai', { 'x-claude-code-request-class': 'compaction' })
+  expect(a.events.map(e => e.type)).toEqual(['proxy_note', 'llm_request'])
+  expect(a.events[0]).toMatchObject({ type: 'proxy_note', kind: 'compaction', turn: 1 })
+  expect(a.meta!.session).toBeUndefined()
+})
+
+test('an auxiliary request-class without a session is an ordinary turn', () => {
+  const s = mk()
+  const a = req(s, { messages: [S, U] }, 'openai', { 'x-claude-code-request-class': 'auxiliary' })
+  expect(a).toMatchObject({ turn: 1, meta: { task: 'task one' } })
+  expect(a.side).toBeUndefined()
+  expect(a.events.map(e => e.type)).toEqual(['llm_request'])
+})
+
+test('Claude Code headers on the OpenAI route: agent, parent, type, and no length rule', () => {
+  const s = mk(), h = { 'x-claude-code-session-id': CC, 'x-claude-code-agent-id': 'a-1', 'x-claude-code-parent-agent-id': 'p-1', 'x-claude-code-agent-type': 'Explore' }
+  const a = req(s, { messages: [S, U, { role: 'user', content: 'more' }] }, 'openai', h)
+  expect(a.meta).toMatchObject({ session: CC, agent: 'a-1', parent: 'p-1', agentType: 'Explore' })
+  expect(req(s, { messages: [S, U] }, 'openai', h).run).toBe('run1')
+})
+
+test('one invalid hint drops only itself', () => {
+  const s = mk()
+  const a = req(s, { messages: [S, U] }, 'openai', { 'x-claude-code-session-id': CC, 'x-claude-code-agent-id': 'x'.repeat(129), 'x-claude-code-request-class': 'main' })
+  expect(a.meta).toMatchObject({ session: CC, agent: 'main' })
+  expect(a.meta!.parent).toBeUndefined()
+})

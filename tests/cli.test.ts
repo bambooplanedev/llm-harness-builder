@@ -671,7 +671,8 @@ test('proxy records until SIGINT or SIGTERM, then exits 0 with done appended', a
     })
     await listen(up)
     const cwd = tmpSync('lhb-cwd-')
-    const p = spawnCli(['proxy', '--upstream', `http://127.0.0.1:${(up.address() as { port: number }).port}`, '--port', '0', '--name', 'cli'], { cwd })
+    const upUrl = `http://127.0.0.1:${(up.address() as { port: number }).port}`
+    const p = spawnCli(['proxy', '--upstream', upUrl, '--port', '0', '--name', 'cli'], { cwd })
     let err = ''
     const port = await new Promise<number>(done => p.stderr.on('data', (b: Buffer) => { err += b; const m = /proxy on http:\/\/127\.0\.0\.1:(\d+)\/v1/.exec(err); if (m) done(Number(m[1])) }))
     const r = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, { method: 'POST', body: JSON.stringify({ model: 'm', stream: true, messages: [{ role: 'user', content: 'hello' }] }) })
@@ -686,6 +687,9 @@ test('proxy records until SIGINT or SIGTERM, then exits 0 with done appended', a
     expect(lines.slice(1).map(l => l.type)).toEqual(['llm_request', 'llm_response', 'done'])
     expect(err).toContain(`run ${files[0].slice(0, 8)}: hello`)
     expect(err).toContain(`ANTHROPIC_BASE_URL=http://127.0.0.1:${port}`)
+    expect(err).toContain(`proxy on http://127.0.0.1:${port}/v1 -> ${upUrl}  (runs: ${join(realpathSync(cwd), 'runs')}); give the agent that base URL\n`)
+    expect(err).toContain(`\nfor Claude Code: ANTHROPIC_BASE_URL=http://127.0.0.1:${port}\n`)
+    expect(err.indexOf('proxy on')).toBeLessThan(err.indexOf('for Claude Code'))
   }
 }, 60_000)
 
