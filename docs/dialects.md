@@ -37,6 +37,43 @@ Each running proxy gets a card with its start lines, its recorded sessions (clic
 tail of its stderr, and Stop. A bad file shows its error under the form and starts nothing. The tab needs a `serve`
 started from the command line, as Bench does.
 
+## Where each part of a request came from
+
+The "sources" block in a turn's inspector, and the A/B group comparison, label each part of a recorded request. The
+labels come from the request text alone: nothing reads files on your disk. So what gets a label depends on what the
+harness writes into the request.
+
+| What the harness sends | Label |
+|---|---|
+| A top-level `system`, or leading `system`/`developer` messages | `harness` · `system prompt` |
+| `tools` | `harness` · `N tools` |
+| A user text block that does not start with `<` | `you` |
+| A text block that starts with any other `<tag>` | `harness` · `reminder` |
+| A `<system-reminder>` block with lines of the form `Contents of /abs/path (what it is):` | each section: `file` · its file name |
+| Tool calls, results and the model's replies | `history` |
+| Claude Code's SessionStart hook, `# Environment`, skills list, `Skill` tool | `hook`, `skill <name>`, `environment`, … |
+
+The last row is specific to Claude Code. For another harness, the text it adds from your files (its rules file,
+memory, skills) is labelled `harness` or `you`, not with a file name. Two things to do about that:
+
+- **A harness you wrote yourself:** wrap each file it adds in the same markers Claude Code uses, and the file gets
+  its own label:
+
+  ```text
+  <system-reminder>
+  Contents of /home/me/project/RULES.md (project rules):
+  …the file's text…
+  </system-reminder>
+  ```
+
+  The header must be on a line of its own, start with an absolute or `~` path, and end in `):`. A section runs to
+  the next such header or to `</system-reminder>`. The label is the file name, or `.folder/name` when the file sits
+  in a folder whose name starts with a dot.
+- **A harness you can't change:** find what a file contributes with the group comparison. Record a few runs
+  without the file (or with its old text) and mark them A, then a few with it and mark them B. "compare groups"
+  shows only the lines that every run of one side has and no run of the other, so the file's lines show up there,
+  even when they carry no label.
+
 ## The dialect file
 
 A `.mjs` file whose `export default` is an object:
