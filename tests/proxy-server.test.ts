@@ -380,7 +380,7 @@ test('anthropic: the key and the bearer token reach the upstream and nothing els
   await (await msgs(px.base, body('a'), both)).text()
   expect((await msgs(px.base, body('b'), both)).status).toBe(401)
   expect(up.seen[0].headers['x-api-key']).toBe(KEY); expect(up.seen[1].headers.authorization).toBe(`Bearer ${TOKEN}`)
-  // A hint header carrying the key itself: printable and short, so hintsOf keeps it, and only the scrubber stops it.
+  // A hint header carrying the key itself: printable and short, so pickConnection keeps it, and only the scrubber stops it.
   await (await msgs(px.base, body('c'), { ...both, 'x-claude-code-session-id': 's-1', 'x-claude-code-agent-type': KEY })).text()
   await px.stop()
   await noSecretOnDisk(px.runsDir)
@@ -388,6 +388,12 @@ test('anthropic: the key and the bearer token reach the upstream and nothing els
   expect(px.lines.join('\n')).not.toContain(KEY); expect(px.lines.join('\n')).not.toContain(TOKEN)
   const all = JSON.stringify(await traces(px.runsDir))
   expect(all).toContain('[redacted: x-api-key]'); expect(all).toContain('[redacted: authorization]')
+})
+
+test('startProxy rejects a bad connections folder', async () => {
+  const up = await upstream((_q, res) => { res.writeHead(200); res.end() })
+  const runsDir = await tmp('lhb-proxy-runs-')
+  await expect(startProxy({ upstream: up.url, port: 0, runsDir, harness: 't', connectionsDir: await tmp('lhb-connections-') })).rejects.toThrow(/connections/)
 })
 
 test('anthropic: a subscription request (bearer + anthropic-beta) reaches the upstream unchanged', async () => {
@@ -462,4 +468,23 @@ test('anthropic: a title call before the first turn lands in the main run, whose
     ['sess-b', '', 'proxy_note done'],
   ])
   expect(ts.every(t => t.events.at(-1).reason === 'proxy_stopped')).toBe(true)
+})
+
+test('a stream cut before any delta: OpenAI error body is the empty string', async () => {
+  const up = await upstream((req, res) => { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.flushHeaders(); setTimeout(() => req.socket.destroy(), 20) })
+  const px = await proxy(up.url)
+  await expect(post(px.base, chat()).then(r => r.text())).rejects.toThrow()
+  await px.stop()
+  const err = (await traces(px.runsDir)).flatMap(t => t.events).find(e => e.type === 'error')
+  expect(err).toEqual(expect.objectContaining({ type: 'error', body: '' }))
+})
+
+test('anthropic: a stream cut before any delta has an error without body', async () => {
+  const up = await upstream((req, res) => { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.flushHeaders(); setTimeout(() => req.socket.destroy(), 20) })
+  const px = await proxy(up.url)
+  await expect(msgs(px.base, ANT).then(r => r.text())).rejects.toThrow()
+  await px.stop()
+  const err = (await traces(px.runsDir)).flatMap(t => t.events).find(e => e.type === 'error')
+  expect(err).toBeDefined()
+  expect('body' in err).toBe(false)
 })

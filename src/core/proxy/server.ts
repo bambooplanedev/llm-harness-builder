@@ -5,12 +5,13 @@ import https from 'node:https'
 import { randomUUID } from 'node:crypto'
 import { TraceWriter } from '../../server/runs.js'
 import { refusal } from '../../server/origin.js'
-import { collect, fromJson } from '../backends/openai.js'
-import { collectAnthropic, fromAnthropicJson } from '../backends/anthropic.js'
-import { BackendError, jsonChunks, type NormalizedResponse } from '../backends/types.js'
+import { BackendError } from '../backends/types.js'
 import type { HarnessEvent } from '../events.js'
-import { Sessions, hintsOf, type ReplyOutcome, type RunMeta } from './sessions.js'
+import { Sessions, type ReplyOutcome, type RunMeta } from './sessions.js'
 import { redactor } from '../redact.js'
+import { DIALECTS } from './dialects/index.js'
+import type { Dialect } from './dialects/dialect.js'
+import { CONNECTIONS_DIR, loadConnections, pickConnection } from './connections.js'
 
 export type ProxyOpts = {
   /** Server root, e.g. http://127.0.0.1:8080; a path prefix, if any, is kept. */
@@ -23,8 +24,11 @@ export type ProxyOpts = {
   log?: (line: string) => void
   /** Request bodies larger than this are forwarded but not recorded. */
   recordCap?: number
+  /** Where the connection files are read from; the package's own folder unless a test says otherwise. */
+  connectionsDir?: string
 }
-export type ProxyServer = { port: number; stop(): Promise<void> }
+/** `hints`: each connection's startup line, with its port, in pick order. */
+export type ProxyServer = { port: number; hints: string[]; stop(): Promise<void> }
 
 const HOP = ['connection', 'keep-alive', 'transfer-encoding', 'te', 'trailer', 'upgrade', 'proxy-authorization', 'proxy-authenticate']
 // A request also loses host (http.request sets the upstream's), accept-encoding (the reply and the copy we parse
@@ -61,12 +65,6 @@ export const drained = (res: http.ServerResponse) => new Promise<void>(resolve =
   res.on('drain', done); res.on('close', done)
 })
 
-type Api = 'openai' | 'anthropic'
-const LABEL: Record<Api, string> = { openai: 'POST /chat/completions', anthropic: 'POST /v1/messages' }
-/** The API a request is recorded as, if any: /v1/messages/count_tokens and the rest pass through unrecorded. */
-const apiOf = (method: string | undefined, pathname: string): Api | undefined =>
-  method !== 'POST' ? undefined : pathname.endsWith('/chat/completions') ? 'openai' : pathname.endsWith('/v1/messages') ? 'anthropic' : undefined
-
 /** Takes this request's x-api-key and bearer token out of whatever is recorded from it; headers themselves never are. */
 const scrubberOf = (h: http.IncomingHttpHeaders) => {
   const key = redactor(String(h['x-api-key'] ?? ''), 'x-api-key')
@@ -74,27 +72,12 @@ const scrubberOf = (h: http.IncomingHttpHeaders) => {
   return <T>(x: T): T => token.deep(key.deep(x))
 }
 
-/** The text, thinking and tool-argument deltas of a Messages SSE text, joined in order; lines that do not parse are skipped. */
-const deltaText = (sse: string) => sse.split('\n').map(l => {
-  if (!l.startsWith('data:')) return ''
-  try { const d = JSON.parse(l.slice(5)).delta; return [d?.text, d?.thinking, d?.partial_json].find(x => typeof x === 'string') ?? '' } catch { return '' }
-}).join('')
-
-/** The reply as the backend itself would read it: a JSON body or an SSE stream, by content-type. */
-async function readReply(chunks: Buffer[], contentType: string, api: Api): Promise<NormalizedResponse> {
-  if (/^application\/json/i.test(contentType)) {
-    const j = JSON.parse(Buffer.concat(chunks).toString('utf8'))
-    return api === 'anthropic' ? fromAnthropicJson(j) : fromJson(j)
-  }
-  const sse = jsonChunks({ body: (async function* () { yield* chunks })() }, LABEL[api], 'data:')
-  return api === 'anthropic' ? collectAnthropic(sse) : collect(sse)
-}
-
 export async function startProxy(o: ProxyOpts): Promise<ProxyServer> {
   const up = new URL(o.upstream)
   const prefix = up.pathname.replace(/\/+$/, '')
   const log = o.log ?? (() => {})
   const cap = o.recordCap ?? 20e6
+  const conns = loadConnections(o.connectionsDir ?? CONNECTIONS_DIR)
   const sessions = new Sessions({ now: Date.now, newId: () => randomUUID().slice(0, 8), harness: o.harness, upstream: o.upstream, pid: process.pid })
   const writers = new Map<string, { t: TraceWriter; chain: Promise<void> }>()
   const inflight = new Set<AbortController>()
@@ -130,19 +113,21 @@ export async function startProxy(o: ProxyOpts): Promise<ProxyServer> {
     if (target.origin !== up.origin) return refuse(res, 400, 'bad request path')
     const body = await readAll(req)
 
-    let rec: { run: string; turn: number; api: Api; side?: { model: string } } | undefined
-    const api = apiOf(req.method, target.pathname)
+    let rec: { run: string; turn: number; dialect: Dialect; side?: { model: string } } | undefined
+    // The format a request is recorded as, if any: /v1/messages/count_tokens and the rest pass through unrecorded.
+    const dialect = DIALECTS.find(d => d.matches(req.method, target.pathname))
     const scrub = scrubberOf(req.headers)
-    if (api) {
+    if (dialect) {
       let payload: unknown
       if (body.length > cap) log(`not recorded: a ${body.length}-byte request is over the ${cap}-byte cap`)
       else try { payload = JSON.parse(body.toString('utf8')) } catch { log('not recorded: the request body is not JSON') }
       if (payload && typeof payload === 'object') {
         // Only the hint headers, scrubbed like the body: Sessions never sees req.headers.
-        const out = sessions.onRequest(scrub(payload), api, scrub(hintsOf(req.headers)))
+        const picked = pickConnection(conns, req.headers)
+        const out = sessions.onRequest(scrub(payload), dialect, { conn: picked.conn, hints: scrub(picked.hints) })
         if (out.meta) log(`run ${out.run}: ${out.meta.task.slice(0, 80).replace(/\n/g, ' ')}`)
         record(out.run, out.events, out.meta)
-        rec = { run: out.run, turn: out.turn, api, side: out.side }
+        rec = { run: out.run, turn: out.turn, dialect, side: out.side }
       }
     }
 
@@ -185,18 +170,16 @@ export async function startProxy(o: ProxyOpts): Promise<ProxyServer> {
     } finally { inflight.delete(ac) }
 
     if (!rec) return
-    // A cut Messages stream has no message_stop, which collectAnthropic refuses: its body is the text its deltas carried,
-    // joined, never the raw SSE (a key echoed in pieces would pass the scrubber); nothing readable is no body.
-    const partial = async () => rec.api === 'anthropic' ? deltaText(Buffer.concat(chunks).toString('utf8')) || undefined
-      : (await readReply(chunks, contentType, rec.api).catch(() => undefined))?.content ?? ''
+    // A cut reply's body is the text the dialect decodes from it, never the raw SSE (a key echoed in pieces would pass the scrubber).
+    const partial = () => rec.dialect.partial(chunks, contentType)
     let outcome: ReplyOutcome
     if (stoppedByUs.has(ac) && failure !== undefined) outcome = { ok: false, message: 'the proxy stopped before the reply ended', body: await partial() }
     else if (clientClosed) outcome = { ok: false, message: 'client closed the connection', body: await partial() }
-    else if (failure !== undefined && !status) outcome = { ok: false, message: `${LABEL[rec.api]}: ${failure}` }
-    else if (failure !== undefined) outcome = { ok: false, message: `${LABEL[rec.api]}: the upstream closed the connection mid-reply`, body: await partial() }
-    else if (status < 200 || status > 299) outcome = { ok: false, message: `${LABEL[rec.api]}: ${status}`, body: Buffer.concat(chunks).toString('utf8') }
+    else if (failure !== undefined && !status) outcome = { ok: false, message: `${rec.dialect.label}: ${failure}` }
+    else if (failure !== undefined) outcome = { ok: false, message: `${rec.dialect.label}: the upstream closed the connection mid-reply`, body: await partial() }
+    else if (status < 200 || status > 299) outcome = { ok: false, message: `${rec.dialect.label}: ${status}`, body: Buffer.concat(chunks).toString('utf8') }
     else {
-      try { outcome = { ok: true, res: await readReply(chunks, contentType, rec.api), latencyMs: Date.now() - t0 } }
+      try { outcome = { ok: true, res: await rec.dialect.readReply(chunks, contentType), latencyMs: Date.now() - t0 } }
       catch (e) {
         outcome = e instanceof BackendError ? { ok: false, message: e.message, body: e.body } : { ok: false, message: `could not read the reply: ${(e as Error).message}` }
       }
@@ -217,8 +200,10 @@ export async function startProxy(o: ProxyOpts): Promise<ProxyServer> {
     server.listen(o.port, '127.0.0.1', () => { server.off('error', reject); resolve() })
   })
 
+  const port = (server.address() as { port: number }).port
   return {
-    port: (server.address() as { port: number }).port,
+    port,
+    hints: conns.flatMap(c => c.hint === undefined ? [] : [c.hint.replaceAll('{port}', String(port))]),
     /** Aborts replies in flight, waits for them to be recorded, then ends every open run with done. */
     async stop() {
       for (const ac of inflight) { if (!ac.signal.aborted) stoppedByUs.add(ac); ac.abort() }

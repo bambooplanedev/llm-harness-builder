@@ -1,0 +1,948 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`characterization: an OpenAI multi-turn session, every event exact 1`] = `
+[
+  {
+    "out": {
+      "events": [
+        {
+          "payload": {
+            "messages": [
+              {
+                "content": "sys",
+                "role": "system",
+              },
+              {
+                "content": "task one",
+                "role": "user",
+              },
+            ],
+          },
+          "seq": 0,
+          "ts": 1001,
+          "turn": 1,
+          "type": "llm_request",
+        },
+      ],
+      "meta": {
+        "harness": "oc",
+        "id": "run1",
+        "proxy": {
+          "pid": 42,
+          "upstream": "http://u",
+        },
+        "started": 1000,
+        "task": "task one",
+        "workdir": "",
+      },
+      "run": "run1",
+      "turn": 1,
+    },
+    "replied": [
+      {
+        "content": "",
+        "latencyMs": 5,
+        "raw": {},
+        "reasoning": undefined,
+        "seq": 1,
+        "ts": 1002,
+        "turn": 1,
+        "type": "llm_response",
+        "usage": undefined,
+      },
+      {
+        "call": {
+          "args": {
+            "path": "a",
+          },
+          "backendId": "x1",
+          "callId": "c1",
+          "name": "read_file",
+        },
+        "seq": 2,
+        "ts": 1003,
+        "turn": 1,
+        "type": "tool_call",
+      },
+      {
+        "call": {
+          "args": {
+            "path": "b",
+          },
+          "backendId": "x2",
+          "callId": "c2",
+          "name": "read_file",
+        },
+        "seq": 3,
+        "ts": 1004,
+        "turn": 1,
+        "type": "tool_call",
+      },
+    ],
+  },
+  {
+    "out": {
+      "events": [
+        {
+          "callId": "c2",
+          "name": "read_file",
+          "output": "B",
+          "seq": 4,
+          "ts": 1005,
+          "turn": 1,
+          "type": "tool_result",
+        },
+        {
+          "callId": "c1",
+          "name": "read_file",
+          "output": "A",
+          "seq": 5,
+          "ts": 1006,
+          "turn": 1,
+          "type": "tool_result",
+        },
+        {
+          "payload": {
+            "messages": [
+              {
+                "content": "sys",
+                "role": "system",
+              },
+              {
+                "content": "task one",
+                "role": "user",
+              },
+              {
+                "content": "",
+                "role": "assistant",
+                "tool_calls": [
+                  {
+                    "function": {
+                      "arguments": "{}",
+                      "name": "read_file",
+                    },
+                    "id": "x1",
+                    "type": "function",
+                  },
+                  {
+                    "function": {
+                      "arguments": "{}",
+                      "name": "read_file",
+                    },
+                    "id": "x2",
+                    "type": "function",
+                  },
+                ],
+              },
+              {
+                "content": "B",
+                "role": "tool",
+                "tool_call_id": "x2",
+              },
+              {
+                "content": "A",
+                "role": "tool",
+                "tool_call_id": "x1",
+              },
+            ],
+          },
+          "seq": 6,
+          "ts": 1007,
+          "turn": 2,
+          "type": "llm_request",
+        },
+      ],
+      "meta": undefined,
+      "run": "run1",
+      "turn": 2,
+    },
+    "replied": [
+      {
+        "content": "done",
+        "latencyMs": 5,
+        "raw": {},
+        "reasoning": undefined,
+        "seq": 7,
+        "ts": 1008,
+        "turn": 2,
+        "type": "llm_response",
+        "usage": undefined,
+      },
+    ],
+  },
+  {
+    "retry": {
+      "events": [
+        {
+          "payload": {
+            "messages": [
+              {
+                "content": "sys",
+                "role": "system",
+              },
+              {
+                "content": "task one",
+                "role": "user",
+              },
+              {
+                "content": "",
+                "role": "assistant",
+                "tool_calls": [
+                  {
+                    "function": {
+                      "arguments": "{}",
+                      "name": "read_file",
+                    },
+                    "id": "x1",
+                    "type": "function",
+                  },
+                  {
+                    "function": {
+                      "arguments": "{}",
+                      "name": "read_file",
+                    },
+                    "id": "x2",
+                    "type": "function",
+                  },
+                ],
+              },
+              {
+                "content": "B",
+                "role": "tool",
+                "tool_call_id": "x2",
+              },
+              {
+                "content": "A",
+                "role": "tool",
+                "tool_call_id": "x1",
+              },
+            ],
+          },
+          "seq": 8,
+          "ts": 1009,
+          "turn": 3,
+          "type": "llm_request",
+        },
+      ],
+      "meta": undefined,
+      "run": "run1",
+      "turn": 3,
+    },
+  },
+  [
+    {
+      "events": [
+        {
+          "reason": "proxy_stopped",
+          "seq": 9,
+          "toolCallCount": 2,
+          "ts": 1010,
+          "turn": 3,
+          "turns": 3,
+          "type": "done",
+        },
+      ],
+      "run": "run1",
+    },
+  ],
+]
+`;
+
+exports[`characterization: the Claude Code fixture, every event exact 1`] = `
+[
+  {
+    "out": {
+      "events": [
+        {
+          "payload": {
+            "max_tokens": 1024,
+            "messages": [
+              {
+                "content": [
+                  {
+                    "text": "<system-reminder>context (stub)</system-reminder>",
+                    "type": "text",
+                  },
+                  {
+                    "text": "Find the parser",
+                    "type": "text",
+                  },
+                ],
+                "role": "user",
+              },
+            ],
+            "metadata": {
+              "user_id": "user_fixture_0000",
+            },
+            "model": "claude-opus-fixture",
+            "stream": true,
+            "system": [
+              {
+                "text": "attribution: fixture",
+                "type": "text",
+              },
+              {
+                "text": "You are a coding agent (stub).",
+                "type": "text",
+              },
+            ],
+            "tools": [
+              {
+                "description": "stub",
+                "input_schema": {
+                  "type": "object",
+                },
+                "name": "Task",
+              },
+              {
+                "description": "stub",
+                "input_schema": {
+                  "type": "object",
+                },
+                "name": "Read",
+              },
+            ],
+          },
+          "seq": 0,
+          "ts": 1001,
+          "turn": 1,
+          "type": "llm_request",
+        },
+      ],
+      "meta": {
+        "agent": "main",
+        "harness": "oc",
+        "id": "run1",
+        "proxy": {
+          "pid": 42,
+          "upstream": "http://u",
+        },
+        "session": "00000000-0000-4000-8000-000000000001",
+        "started": 1000,
+        "task": "Find the parser",
+        "workdir": "",
+      },
+      "run": "run1",
+      "turn": 1,
+    },
+    "replied": [
+      {
+        "content": "",
+        "latencyMs": 5,
+        "raw": {},
+        "reasoning": undefined,
+        "seq": 1,
+        "ts": 1002,
+        "turn": 1,
+        "type": "llm_response",
+        "usage": {
+          "completionTokens": 10,
+          "promptTokens": 100,
+        },
+      },
+      {
+        "call": {
+          "args": {
+            "description": "find parser",
+            "prompt": "Find where the parser lives",
+            "subagent_type": "Explore",
+          },
+          "backendId": "toolu_m1",
+          "callId": "c1",
+          "name": "Task",
+        },
+        "seq": 2,
+        "ts": 1003,
+        "turn": 1,
+        "type": "tool_call",
+      },
+    ],
+  },
+  {
+    "out": {
+      "events": [],
+      "run": "run1",
+      "side": {
+        "model": "claude-haiku-fixture",
+      },
+      "turn": 1,
+    },
+    "replied": [
+      {
+        "kind": "auxiliary",
+        "latencyMs": 5,
+        "model": "claude-haiku-fixture",
+        "seq": 3,
+        "ts": 1004,
+        "turn": 1,
+        "type": "proxy_note",
+        "usage": {
+          "completionTokens": 3,
+          "promptTokens": 20,
+        },
+      },
+    ],
+  },
+  {
+    "out": {
+      "events": [
+        {
+          "payload": {
+            "max_tokens": 1024,
+            "messages": [
+              {
+                "content": "Find where the parser lives",
+                "role": "user",
+              },
+            ],
+            "metadata": {
+              "user_id": "user_fixture_0000",
+            },
+            "model": "claude-opus-fixture",
+            "stream": true,
+            "system": [
+              {
+                "text": "attribution: fixture",
+                "type": "text",
+              },
+              {
+                "text": "You are a coding agent (stub).",
+                "type": "text",
+              },
+            ],
+            "tools": [
+              {
+                "description": "stub",
+                "input_schema": {
+                  "type": "object",
+                },
+                "name": "Task",
+              },
+              {
+                "description": "stub",
+                "input_schema": {
+                  "type": "object",
+                },
+                "name": "Read",
+              },
+            ],
+          },
+          "seq": 0,
+          "ts": 1006,
+          "turn": 1,
+          "type": "llm_request",
+        },
+      ],
+      "meta": {
+        "agent": "agent-0001",
+        "agentType": "Explore",
+        "harness": "oc",
+        "id": "run2",
+        "parent": "main",
+        "proxy": {
+          "pid": 42,
+          "upstream": "http://u",
+        },
+        "session": "00000000-0000-4000-8000-000000000001",
+        "started": 1005,
+        "task": "Find where the parser lives",
+        "workdir": "",
+      },
+      "run": "run2",
+      "turn": 1,
+    },
+    "replied": [
+      {
+        "content": "",
+        "latencyMs": 5,
+        "raw": {},
+        "reasoning": undefined,
+        "seq": 1,
+        "ts": 1007,
+        "turn": 1,
+        "type": "llm_response",
+        "usage": {
+          "completionTokens": 10,
+          "promptTokens": 100,
+        },
+      },
+      {
+        "call": {
+          "args": {
+            "file_path": "src/parser.ts",
+          },
+          "backendId": "toolu_s1",
+          "callId": "c1",
+          "name": "Read",
+        },
+        "seq": 2,
+        "ts": 1008,
+        "turn": 1,
+        "type": "tool_call",
+      },
+    ],
+  },
+  {
+    "out": {
+      "events": [
+        {
+          "callId": "c1",
+          "name": "Read",
+          "output": "export function parse() {}",
+          "seq": 3,
+          "ts": 1009,
+          "turn": 1,
+          "type": "tool_result",
+        },
+        {
+          "payload": {
+            "max_tokens": 1024,
+            "messages": [
+              {
+                "content": "Find where the parser lives",
+                "role": "user",
+              },
+              {
+                "content": [
+                  {
+                    "id": "toolu_s1",
+                    "input": {
+                      "file_path": "src/parser.ts",
+                    },
+                    "name": "Read",
+                    "type": "tool_use",
+                  },
+                ],
+                "role": "assistant",
+              },
+              {
+                "content": [
+                  {
+                    "content": "export function parse() {}",
+                    "tool_use_id": "toolu_s1",
+                    "type": "tool_result",
+                  },
+                ],
+                "role": "user",
+              },
+            ],
+            "metadata": {
+              "user_id": "user_fixture_0000",
+            },
+            "model": "claude-opus-fixture",
+            "stream": true,
+            "system": [
+              {
+                "text": "attribution: fixture",
+                "type": "text",
+              },
+              {
+                "text": "You are a coding agent (stub).",
+                "type": "text",
+              },
+            ],
+            "tools": [
+              {
+                "description": "stub",
+                "input_schema": {
+                  "type": "object",
+                },
+                "name": "Task",
+              },
+              {
+                "description": "stub",
+                "input_schema": {
+                  "type": "object",
+                },
+                "name": "Read",
+              },
+            ],
+          },
+          "seq": 4,
+          "ts": 1010,
+          "turn": 2,
+          "type": "llm_request",
+        },
+      ],
+      "meta": undefined,
+      "run": "run2",
+      "turn": 2,
+    },
+    "replied": [
+      {
+        "content": "The parser is in src/parser.ts.",
+        "latencyMs": 5,
+        "raw": {},
+        "reasoning": undefined,
+        "seq": 5,
+        "ts": 1011,
+        "turn": 2,
+        "type": "llm_response",
+        "usage": {
+          "completionTokens": 10,
+          "promptTokens": 100,
+        },
+      },
+    ],
+  },
+  {
+    "out": {
+      "events": [
+        {
+          "callId": "c1",
+          "name": "Task",
+          "output": "The parser is in src/parser.ts.",
+          "seq": 4,
+          "ts": 1012,
+          "turn": 1,
+          "type": "tool_result",
+        },
+        {
+          "payload": {
+            "max_tokens": 1024,
+            "messages": [
+              {
+                "content": [
+                  {
+                    "text": "<system-reminder>context (stub)</system-reminder>",
+                    "type": "text",
+                  },
+                  {
+                    "text": "Find the parser",
+                    "type": "text",
+                  },
+                ],
+                "role": "user",
+              },
+              {
+                "content": [
+                  {
+                    "id": "toolu_m1",
+                    "input": {
+                      "description": "find parser",
+                      "prompt": "Find where the parser lives",
+                      "subagent_type": "Explore",
+                    },
+                    "name": "Task",
+                    "type": "tool_use",
+                  },
+                ],
+                "role": "assistant",
+              },
+              {
+                "content": [
+                  {
+                    "content": [
+                      {
+                        "text": "The parser is in src/parser.ts.",
+                        "type": "text",
+                      },
+                    ],
+                    "tool_use_id": "toolu_m1",
+                    "type": "tool_result",
+                  },
+                ],
+                "role": "user",
+              },
+            ],
+            "metadata": {
+              "user_id": "user_fixture_0000",
+            },
+            "model": "claude-opus-fixture",
+            "stream": true,
+            "system": [
+              {
+                "text": "attribution: fixture",
+                "type": "text",
+              },
+              {
+                "text": "You are a coding agent (stub).",
+                "type": "text",
+              },
+            ],
+            "tools": [
+              {
+                "description": "stub",
+                "input_schema": {
+                  "type": "object",
+                },
+                "name": "Task",
+              },
+              {
+                "description": "stub",
+                "input_schema": {
+                  "type": "object",
+                },
+                "name": "Read",
+              },
+            ],
+          },
+          "seq": 5,
+          "ts": 1013,
+          "turn": 2,
+          "type": "llm_request",
+        },
+      ],
+      "meta": undefined,
+      "run": "run1",
+      "turn": 2,
+    },
+    "replied": [
+      {
+        "content": "It is in src/parser.ts.",
+        "latencyMs": 5,
+        "raw": {},
+        "reasoning": undefined,
+        "seq": 6,
+        "ts": 1014,
+        "turn": 2,
+        "type": "llm_response",
+        "usage": {
+          "completionTokens": 10,
+          "promptTokens": 100,
+        },
+      },
+    ],
+  },
+  {
+    "out": {
+      "events": [
+        {
+          "kind": "compaction",
+          "seq": 7,
+          "ts": 1015,
+          "turn": 3,
+          "type": "proxy_note",
+        },
+        {
+          "payload": {
+            "max_tokens": 1024,
+            "messages": [
+              {
+                "content": [
+                  {
+                    "text": "<system-reminder>context (stub)</system-reminder>",
+                    "type": "text",
+                  },
+                  {
+                    "text": "Find the parser",
+                    "type": "text",
+                  },
+                ],
+                "role": "user",
+              },
+              {
+                "content": [
+                  {
+                    "id": "toolu_m1",
+                    "input": {
+                      "description": "find parser",
+                      "prompt": "Find where the parser lives",
+                      "subagent_type": "Explore",
+                    },
+                    "name": "Task",
+                    "type": "tool_use",
+                  },
+                ],
+                "role": "assistant",
+              },
+              {
+                "content": [
+                  {
+                    "content": [
+                      {
+                        "text": "The parser is in src/parser.ts.",
+                        "type": "text",
+                      },
+                    ],
+                    "tool_use_id": "toolu_m1",
+                    "type": "tool_result",
+                  },
+                ],
+                "role": "user",
+              },
+              {
+                "content": [
+                  {
+                    "text": "It is in src/parser.ts.",
+                    "type": "text",
+                  },
+                ],
+                "role": "assistant",
+              },
+              {
+                "content": "Summarize the conversation so far (stub).",
+                "role": "user",
+              },
+            ],
+            "metadata": {
+              "user_id": "user_fixture_0000",
+            },
+            "model": "claude-opus-fixture",
+            "stream": true,
+            "system": [
+              {
+                "text": "attribution: fixture",
+                "type": "text",
+              },
+              {
+                "text": "You are a coding agent (stub).",
+                "type": "text",
+              },
+            ],
+            "tools": [
+              {
+                "description": "stub",
+                "input_schema": {
+                  "type": "object",
+                },
+                "name": "Task",
+              },
+              {
+                "description": "stub",
+                "input_schema": {
+                  "type": "object",
+                },
+                "name": "Read",
+              },
+            ],
+          },
+          "seq": 8,
+          "ts": 1016,
+          "turn": 3,
+          "type": "llm_request",
+        },
+      ],
+      "meta": undefined,
+      "run": "run1",
+      "turn": 3,
+    },
+    "replied": [
+      {
+        "content": "Summary: the parser is in src/parser.ts.",
+        "latencyMs": 5,
+        "raw": {},
+        "reasoning": undefined,
+        "seq": 9,
+        "ts": 1017,
+        "turn": 3,
+        "type": "llm_response",
+        "usage": {
+          "completionTokens": 10,
+          "promptTokens": 100,
+        },
+      },
+    ],
+  },
+  {
+    "out": {
+      "events": [
+        {
+          "payload": {
+            "max_tokens": 1024,
+            "messages": [
+              {
+                "content": [
+                  {
+                    "text": "Summary: the parser is in src/parser.ts.",
+                    "type": "text",
+                  },
+                  {
+                    "text": "Now add a test.",
+                    "type": "text",
+                  },
+                ],
+                "role": "user",
+              },
+            ],
+            "metadata": {
+              "user_id": "user_fixture_0000",
+            },
+            "model": "claude-opus-fixture",
+            "stream": true,
+            "system": [
+              {
+                "text": "attribution: fixture",
+                "type": "text",
+              },
+              {
+                "text": "You are a coding agent (stub).",
+                "type": "text",
+              },
+            ],
+            "tools": [
+              {
+                "description": "stub",
+                "input_schema": {
+                  "type": "object",
+                },
+                "name": "Task",
+              },
+              {
+                "description": "stub",
+                "input_schema": {
+                  "type": "object",
+                },
+                "name": "Read",
+              },
+            ],
+          },
+          "seq": 10,
+          "ts": 1018,
+          "turn": 4,
+          "type": "llm_request",
+        },
+      ],
+      "meta": undefined,
+      "run": "run1",
+      "turn": 4,
+    },
+    "replied": [
+      {
+        "content": "Done.",
+        "latencyMs": 5,
+        "raw": {},
+        "reasoning": undefined,
+        "seq": 11,
+        "ts": 1019,
+        "turn": 4,
+        "type": "llm_response",
+        "usage": {
+          "completionTokens": 10,
+          "promptTokens": 100,
+        },
+      },
+    ],
+  },
+  [
+    {
+      "events": [
+        {
+          "reason": "proxy_stopped",
+          "seq": 12,
+          "toolCallCount": 1,
+          "ts": 1020,
+          "turn": 4,
+          "turns": 4,
+          "type": "done",
+        },
+      ],
+      "run": "run1",
+    },
+    {
+      "events": [
+        {
+          "reason": "proxy_stopped",
+          "seq": 6,
+          "toolCallCount": 1,
+          "ts": 1021,
+          "turn": 2,
+          "turns": 2,
+          "type": "done",
+        },
+      ],
+      "run": "run2",
+    },
+  ],
+]
+`;

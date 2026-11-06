@@ -1,0 +1,14 @@
+{
+  "name": "claude-code",
+  "hints": {
+    "session": "x-claude-code-session-id",
+    "agent": "x-claude-code-agent-id",
+    "parent": "x-claude-code-parent-agent-id",
+    "agentType": "x-claude-code-agent-type",
+    "requestClass": "x-claude-code-request-class"
+  },
+  "auxiliary": "auxiliary",
+  "compaction": "compaction",
+  "taskStrip": [["<system-reminder>", "</system-reminder>"]],
+  "hint": "for Claude Code: ANTHROPIC_BASE_URL=http://127.0.0.1:{port}"
+}
