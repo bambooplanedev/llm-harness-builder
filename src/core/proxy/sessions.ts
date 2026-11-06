@@ -2,7 +2,7 @@
 // Pure: no sockets, no files, no clock of its own. Every event is read off the wire; nothing is inferred.
 import type { Ev, HarnessEvent, ToolCall } from '../events.js'
 import type { NormalizedResponse } from '../backends/types.js'
-import type { Dialect } from './dialects/dialect.js'
+import type { Dialect, ToolResultSeen } from './dialects/dialect.js'
 import { stripTask, type Picked } from './connections.js'
 
 /** The meta line of a proxy run; `proxy` marks the file as a transcription, `pid` lets serve tell a live writer from a killed one. */
@@ -46,8 +46,6 @@ export class Sessions {
    * run's meta (with the real task) and the notes come with that request. A compaction is a turn of its agent's run, marked by a note.
    */
   onRequest(payload: object, dialect: Dialect, { conn, hints }: Picked): { run: string; turn: number; meta?: RunMeta; events: HarnessEvent[]; side?: { model: string } } {
-    const raw = (payload as { messages?: unknown }).messages
-    const msgs: any[] = Array.isArray(raw) ? raw : []
     const k = dialect.keyOf(payload)
     let key = k.key
     const task = stripTask(conn, k.taskText)
@@ -56,7 +54,9 @@ export class Sessions {
     const aux = hints.session !== undefined && cls !== undefined && cls === conn.auxiliary
     const agent = aux ? 'main' : hints.agent ?? 'main'
     if (hints.session !== undefined) key = `${conn.name}\0${hints.session}\0${agent}`
-    let run = this.runs.filter(r => r.open && r.key === key && (hints.session !== undefined || r.len <= msgs.length)).sort((a, b) => b.active - a.active)[0]
+    let run = this.runs.filter(r => r.open && r.key === key && (hints.session !== undefined || r.len <= k.len)).sort((a, b) => b.active - a.active)[0]
+    // Everything the dialect reads comes before any state changes: a throw leaves the sessions as they were.
+    const seen = !aux && run?.replied ? dialect.toolResults(payload, run.replied.calls) : []
     let meta: RunMeta | undefined
     const metaOf = (id: string): RunMeta => {
       const m: RunMeta = { id, harness: this.d.harness, task: aux ? '' : task, workdir: '', started: this.d.now(), proxy: { upstream: this.d.upstream, pid: this.d.pid } }
@@ -74,15 +74,15 @@ export class Sessions {
       if (aux) run.pending = { meta: metaOf(run.id), notes: [] }
       else meta = metaOf(run.id)
     }
-    if (aux) return { run: run.id, turn: run.turn, events: [], side: { model: String((payload as { model?: unknown }).model ?? '') } }
+    if (aux) return { run: run.id, turn: run.turn, events: [], side: { model: k.model } }
     const events: HarnessEvent[] = []
     if (run.pending) {
       meta = metaOf(run.id)
       events.push(...this.flush(run))
     }
-    run.len = msgs.length
+    run.len = k.len
     run.active = ++this.tick
-    events.push(...this.results(run, msgs, dialect))
+    events.push(...this.results(run, seen))
     const turn = ++run.turn
     if (cls !== undefined && cls === conn.compaction) events.push(this.ev(run, turn, { type: 'proxy_note', kind: 'compaction' }))
     events.push(this.ev(run, turn, { type: 'llm_request', payload }))
@@ -97,16 +97,14 @@ export class Sessions {
   }
 
   /**
-   * tool_result for each result the dialect finds after the request's last assistant message, matched to the
+   * tool_result for each result the dialect found after the request's last assistant message, matched to the
    * calls of the run's latest replied turn. A call already resulted is skipped: a retry repeats them.
    */
-  private results(run: Run, msgs: any[], dialect: Dialect): HarnessEvent[] {
-    let last = -1
-    for (let i = msgs.length - 1; i >= 0; i--) if (msgs[i]?.role === 'assistant') { last = i; break }
+  private results(run: Run, seen: ToolResultSeen[]): HarnessEvent[] {
     const replied = run.replied
-    if (last < 0 || !replied) return []
+    if (!replied) return []
     const out: HarnessEvent[] = []
-    for (const { call, output, error } of dialect.toolResults(msgs[last], msgs.slice(last + 1), replied.calls)) {
+    for (const { call, output, error } of seen) {
       if (run.resulted.has(call.callId)) continue
       run.resulted.add(call.callId)
       out.push(this.ev(run, replied.turn, { type: 'tool_result', callId: call.callId, name: call.name, output, ...(error ? { error: true } : {}) }))

@@ -297,3 +297,18 @@ test('one invalid hint drops only itself', () => {
   expect(a.meta).toMatchObject({ session: CC, agent: 'main' })
   expect(a.meta!.parent).toBeUndefined()
 })
+
+test('onRequest leaves no state behind when the dialect throws', () => {
+  const s = mk()
+  const bad = { ...openaiChat, toolResults: () => { throw new Error('boom') } }
+  const a = s.onRequest({ messages: [S, U] }, openaiChat, NO)
+  s.onReply(a.run, 1, ok(reply([{ id: 'x1' }])))
+  expect(() => s.onRequest({ messages: [S, U, asst(['x1']), tool('x1', 'AAA')] }, bad, NO)).toThrow('boom')
+  const c = s.onRequest({ messages: [S, U, asst(['x1']), tool('x1', 'AAA')] }, openaiChat, NO)
+  expect(c).toMatchObject({ run: a.run, turn: 2 })
+  expect(c.events[0]).toMatchObject({ type: 'tool_result', callId: 'c1' })
+})
+
+test('the core reads no request body field itself', () => {
+  for (const f of ['sessions.ts', 'server.ts']) expect(readFileSync(`src/core/proxy/${f}`, 'utf8')).not.toMatch(/payload\.(messages|model)\b|as \{ (messages|model)\??:/)
+})

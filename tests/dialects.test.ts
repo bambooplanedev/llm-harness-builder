@@ -27,3 +27,24 @@ test('partial empty values', async () => {
   expect(await openaiChat.partial([], 'text/event-stream')).toBe('')
   expect(await anthropic.partial([], 'text/event-stream')).toBeUndefined()
 })
+
+test('keyOf gives the message count and the model', () => {
+  const msgs = [{ role: 'system', content: 's' }, { role: 'user', content: 'u' }, { role: 'assistant', content: 'a' }]
+  for (const d of [openaiChat, anthropic]) {
+    expect(d.keyOf({ model: 'm', messages: msgs })).toMatchObject({ len: 3, model: 'm' })
+    expect(d.keyOf({ messages: msgs }).model).toBe('')
+    expect(d.keyOf({}).len).toBe(0)
+  }
+})
+
+const call = { callId: 'c1', name: 'read_file', args: {}, backendId: 'x1' }
+test('openaiChat toolResults reads the payload after its last assistant message', () => {
+  const messages = [{ role: 'user', content: 'u' }, { role: 'assistant', tool_calls: [{ id: 'old' }] }, { role: 'assistant', tool_calls: [{ id: 'x1' }] }, { role: 'tool', tool_call_id: 'x1', content: 'AAA' }]
+  expect(openaiChat.toolResults({ messages }, [call])).toEqual([{ call, output: 'AAA' }])
+  expect(openaiChat.toolResults({ messages: [{ role: 'user', content: 'u' }] }, [call])).toEqual([])
+})
+test('anthropic toolResults reads the payload after its last assistant message', () => {
+  const messages = [{ role: 'user', content: 'u' }, { role: 'assistant', content: [] }, { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'x1', content: 'AAA', is_error: true }] }]
+  expect(anthropic.toolResults({ messages }, [call])).toEqual([{ call, output: 'AAA', error: true }])
+  expect(anthropic.toolResults({ messages: [{ role: 'user', content: 'u' }] }, [call])).toEqual([])
+})
