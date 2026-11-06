@@ -1099,7 +1099,7 @@ async function cmdProxy(argv: string[]) {
   const parent = Number(process.env.LHB_SERVE_PID)
   if (Number.isInteger(parent) && parent > 0) {
     const gone = () => { try { process.kill(parent, 0); return false } catch (e) { return (e as NodeJS.ErrnoException).code === 'ESRCH' } }
-    setInterval(() => { if (gone()) stop() }, 1000).unref()
+    setInterval(() => { if (!stopping && gone()) stop() }, 1000).unref()
   }
 }
 

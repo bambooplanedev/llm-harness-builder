@@ -706,8 +706,8 @@ test('proxy --dialect relative.mjs dies naming the flag value; own files are ann
   const tail = `dialect no-messages from ${dialect}\nconnection claude-code from ${connection} (replaces built-in)\n`
   await new Promise<void>(done => p.stderr!.on('data', (b: Buffer) => { err += b; if (err.includes('(replaces built-in)\n')) done() }))
   await new Promise(done => { p.on('exit', done); p.kill('SIGINT') })
-  expect(err).toMatch(/^proxy on .*give the agent that base URL\n/)
-  expect(err.endsWith(tail)).toBe(true)
+  expect(err.replace(/^proxy on .*give the agent that base URL\n/, '')).toBe(tail)
+  expect(err).toMatch(/^proxy on /)
 }, 30_000)
 
 test('proxy exits 0 when the pid in LHB_SERVE_PID is gone, and its run is closed', async () => {
@@ -723,9 +723,11 @@ test('proxy exits 0 when the pid in LHB_SERVE_PID is gone, and its run is closed
   const port = await new Promise<number>(done => p.stderr!.on('data', (b: Buffer) => { err += b; const m = /proxy on http:\/\/127\.0\.0\.1:(\d+)\/v1/.exec(err); if (m) done(Number(m[1])) }))
   await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, { method: 'POST', body: JSON.stringify({ model: 'm', messages: [{ role: 'user', content: 'hello' }] }) }).then(r => r.text())
   const exited = new Promise<number | null>(done => p.on('exit', done))
-  sleeper.kill()
-  const code = await Promise.race([exited, new Promise<string>(done => setTimeout(() => done('timeout'), 3000))])
-  if (code === 'timeout') p.kill('SIGKILL')
+  let code: number | null | string
+  try {
+    sleeper.kill()
+    code = await Promise.race([exited, new Promise<string>(done => setTimeout(() => done('timeout'), 3000))])
+  } finally { sleeper.kill(); if (p.exitCode === null) p.kill('SIGKILL') }
   up.close()
   expect(code).toBe(0)
   const files = await readdir(join(cwd, 'runs'))
