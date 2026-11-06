@@ -12,7 +12,7 @@ function hook() {
   if (hooked) return
   hooked = true
   process.on('exit', killAll)
-  for (const [sig, code] of [['SIGINT', 130], ['SIGTERM', 143]] as const) {
+  for (const [sig, code] of [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129]] as const) {
     // Decide now, not when the signal fires: a `once` listener (e.g. bench's) removes itself
     // from the registry before later listeners run, so a fire-time count cannot tell "I am
     // alone" from "a peer's handler already fired and its async work is still in flight".
