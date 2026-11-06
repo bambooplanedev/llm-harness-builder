@@ -47,10 +47,11 @@ harness writes into the request.
 |---|---|
 | A top-level `system`, or leading `system`/`developer` messages | `harness` · `system prompt` |
 | `tools` | `harness` · `N tools` |
-| A user text block that does not start with `<` | `you` |
+| A user text block that does not start with `<`, in a message without tool results | `you` |
 | A text block that starts with any other `<tag>` | `harness` · `reminder` |
-| A `<system-reminder>` block with lines of the form `Contents of /abs/path (what it is):` | each section: `file` · its file name |
-| Tool calls, results and the model's replies | `history` |
+| A block that starts with `<system-reminder>` and has lines of the form `Contents of /abs/path (what it is):` | each section: `file` · its file name |
+| Tool calls, the model's replies, and user text next to tool results | `history` |
+| Tool results | `history` · `result of <tool>` |
 | Claude Code's SessionStart hook, `# Environment`, skills list, `Skill` tool | `hook`, `skill <name>`, `environment`, … |
 
 The last row is specific to Claude Code. For another harness, the text it adds from your files (its rules file,
@@ -72,7 +73,9 @@ memory, skills) is labelled `harness` or `you`, not with a file name. Two things
 - **A harness you can't change:** find what a file contributes with the group comparison. Record a few runs
   without the file (or with its old text) and mark them A, then a few with it and mark them B. "compare groups"
   shows only the lines that every run of one side has and no run of the other, so the file's lines show up there,
-  even when they carry no label.
+  labelled with the chunk they sit in (for another harness usually `reminder` or `you`, not the file name). It
+  compares whole lines: a one-word edit shows as the whole changed line, and a line the other side also has is
+  not shown.
 
 ## The dialect file
 
