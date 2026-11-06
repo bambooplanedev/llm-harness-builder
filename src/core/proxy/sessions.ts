@@ -36,13 +36,12 @@ export class Sessions {
   }
 
   /**
-   * One request: the run it continues, or a new one. A run is keyed by its first system-like message and its
-   * first user message; a request joins the most recently joined open run with that key whose last request had
-   * no more messages than this one. Call it before any await, so two requests of one run keep their seq order.
+   * One request: the run it continues, or a new one. A run is keyed by `dialect.keyOf(payload)`; a request joins
+   * the most recently joined open run with that key whose last request had no more messages than this one.
+   * Call it before any await, so two requests of one run keep their seq order.
    * `dialect` comes from the route the request took and reads the key and the task text off the body.
    * `picked` is the connection the request's headers chose and its hints. With a session hint the key is the
-   * connection, the session and the agent, with no length rule: a compaction
-   * rewrites the history. An auxiliary request (a title, a summary) gets no turn: it is a note in the session's main run,
+   * connection name, the session and the agent, with no length rule: a compaction rewrites the history. An auxiliary request (a title, a summary) gets no turn: it is a note in the session's main run,
    * written by onReply with the `side` returned here. Before the session's first main request those notes wait: the main
    * run's meta (with the real task) and the notes come with that request. A compaction is a turn of its agent's run, marked by a note.
    */

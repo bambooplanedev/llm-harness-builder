@@ -702,6 +702,7 @@ test('proxy ignores a connections folder in its cwd', async () => {
   const cwd = tmpSync('lhb-cwd-')
   mkdirSync(join(cwd, 'connections'))
   writeFileSync(join(cwd, 'connections', 'evil.json'), '{"name":"evil","hints":{"session":"x-evil"},"taskStrip":[]}')
+  writeFileSync(join(cwd, 'connections', 'generic.json'), '{"name":"generic","hints":{},"taskStrip":[]}')
   const p = spawnCli(['proxy', '--upstream', `http://127.0.0.1:${(up.address() as { port: number }).port}`, '--port', '0', '--name', 'cli'], { cwd })
   let err = ''
   const port = await new Promise<number>(done => p.stderr.on('data', (b: Buffer) => { err += b; const m = /proxy on http:\/\/127\.0\.0\.1:(\d+)\/v1/.exec(err); if (m) done(Number(m[1])) }))
