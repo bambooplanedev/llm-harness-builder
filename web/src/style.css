@@ -199,3 +199,6 @@ button.link:hover:not(:disabled) { background: none; }
 .reqdiff .rd-add { color: var(--ok); }
 .reqdiff .rd-del { color: var(--err); }
 .reqdiff .rd-neutral { color: var(--muted); }
+.sources { margin: 6px 0; font: 12px/1.5 var(--mono, monospace); }
+.sources .src-row { display: block; width: 100%; text-align: left; background: none; border: 0; padding: 1px 0; font: inherit; color: inherit; cursor: pointer; }
+.sources .src-row:disabled { cursor: default; }

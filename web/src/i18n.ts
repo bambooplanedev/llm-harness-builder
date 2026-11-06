@@ -57,6 +57,7 @@ export const en = {
   'trace.anatomyThinking': 'Thinking blocks in this request are not counted in any layer.',
   'trace.reqDiff': 'What this request changed against the previous one: system prompt, tools, history and parameters. Green = added, red = removed.',
   'trace.reqDiffVs': 'How this request differs from the same-numbered request of the other run. Green = only in this run, red = only in the other run.',
+  'trace.sources': 'Where each part of this request came from: your words, a file (by name), a skill, a hook, the harness, or the conversation so far. Click a row to see its text.',
   'trace.askRun': 'run {cmd}?',
   'trace.autoApproved': 'bench: auto-approved',
   'trace.checkFailed': 'failed, the run goes on',

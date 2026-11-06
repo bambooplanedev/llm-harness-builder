@@ -3,12 +3,17 @@ import { computed } from 'vue'
 import { t } from './i18n'
 import { isNoChange, type ReqDiff } from '../../src/core/diff'
 import { MAX_DIFF_LINES } from './reqDiffs'
-const props = defineProps<{ diff: ReqDiff; title: string; hint?: string }>()
+/** labelsA/labelsB: line → where it came from, in the old/new body; a labelled line says so instead of `system`, after its `#n`. */
+const props = defineProps<{ diff: ReqDiff; title: string; hint?: string; labelsA?: Map<string, string>; labelsB?: Map<string, string> }>()
 type Line = { kind: 'add' | 'del' | 'neutral'; text: string }
+const named = (kind: 'add' | 'del', s: string, plain: string, at = ''): Line => {
+  const label = (kind === 'add' ? props.labelsB : props.labelsA)?.get(s.trim())
+  return { kind, text: label ? `${at}${kind === 'add' ? '+' : '−'} ${label}: ${s}` : plain }
+}
 const lines = computed<Line[]>(() => {
   const d = props.diff, out: Line[] = []
-  for (const s of d.system.added) out.push({ kind: 'add', text: `+ system: ${s}` })
-  for (const s of d.system.removed) out.push({ kind: 'del', text: `− system: ${s}` })
+  for (const s of d.system.added) out.push(named('add', s, `+ system: ${s}`))
+  for (const s of d.system.removed) out.push(named('del', s, `− system: ${s}`))
   for (const n of d.tools.added) out.push({ kind: 'add', text: `+ tool ${n}` })
   for (const n of d.tools.removed) out.push({ kind: 'del', text: `− tool ${n}` })
   for (const n of d.tools.changed) out.push({ kind: 'neutral', text: `~ tool ${n}` })
@@ -17,8 +22,8 @@ const lines = computed<Line[]>(() => {
   else {
     out.push({ kind: 'neutral', text: `history changed from #${m.from}` })
     for (const c of m.changed) {
-      for (const s of c.added) out.push({ kind: 'add', text: `#${c.n}: + ${s}` })
-      for (const s of c.removed) out.push({ kind: 'del', text: `#${c.n}: − ${s}` })
+      for (const s of c.added) out.push(named('add', s, `#${c.n}: + ${s}`, `#${c.n}: `))
+      for (const s of c.removed) out.push(named('del', s, `#${c.n}: − ${s}`, `#${c.n}: `))
     }
     if (m.added) out.push({ kind: 'add', text: `+${m.added} appended` })
     if (m.removed) out.push({ kind: 'del', text: `−${m.removed} removed` })
