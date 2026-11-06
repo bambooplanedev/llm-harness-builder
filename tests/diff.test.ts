@@ -272,3 +272,8 @@ test('requestDiff: top-level metadata is not a param', () => {
   expect(d.params).toEqual([])
   expect(isNoChange(d)).toBe(true)
 })
+
+test('skeleton: the detail prefers file_path (Claude Code tools) over path and command', () => {
+  const t = skeleton([ev(1, { type: 'tool_call', call: { callId: 'c1', name: 'Read', args: { file_path: '/w/a.ts', path: '/w', command: 'ls' } } })])
+  expect(t[0].chips[0].detail).toBe('/w/a.ts')
+})

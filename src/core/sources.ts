@@ -1,5 +1,6 @@
 // src/core/sources.ts — where each part of a recorded request body came from. Pure, browser-safe.
-import { isObj, clean, partLine, messageText, stable, leadingSystem, type Obj } from './diff.js'
+import { isObj, clean, partLine, messageText, stable, leadingSystem, toolName, requestParams, showParam, skeleton, type Obj, type Chip } from './diff.js'
+import type { HarnessEvent } from './events.js'
 
 export type SourceKind = 'you' | 'file' | 'skill' | 'hook' | 'harness' | 'history'
 export type Source = { where: string; kind: SourceKind; label: string; chars: number; text: string }
@@ -180,4 +181,58 @@ export function lineLabels(sources: Source[]): Map<string, string> {
     }
   }
   return map
+}
+
+export type GroupLine = { line: string; label?: string }
+export type GroupDiff = { onlyA: GroupLine[]; onlyB: GroupLine[]; params: { path: string; a: string; b: string }[] }
+
+/** One run's lines (first appearance first, label from the request it first shows up in) and its first readable request's params. */
+function runLines(payloads: unknown[]) {
+  const lines = new Map<string, string | undefined>()
+  let params: Map<string, string> | undefined
+  for (const p of payloads) {
+    const s = requestSources(p)
+    if (!s) continue
+    params ??= requestParams(clean(p) as Obj)
+    const labels = lineLabels(s)
+    const add = (l: string) => { if (!lines.has(l)) lines.set(l, labels.get(l)) }
+    // the tools chunk is one JSON line; tool names stand for it
+    for (const c of s) if (c.where !== 'tools') for (const raw of c.text.split('\n')) { const l = raw.trim(); if (l) add(l) }
+    for (const t of Array.isArray((p as Obj).tools) ? ((p as Obj).tools as unknown[]) : []) { const n = toolName(t); if (n) add(`tool ${n}`) }
+  }
+  return { lines, params: params ?? new Map<string, string>() }
+}
+
+/**
+ * What stably differs between two groups of runs. a, b: per run, the payloads of all its llm_request events.
+ * A line counts when every run of one group has it and no run of the other; a param when each group agrees on
+ * its value and the two values differ. What varies inside a group (dates, billing header) never counts.
+ */
+export function groupDiff(a: unknown[][], b: unknown[][]): GroupDiff {
+  const [ra, rb] = [a.map(runLines), b.map(runLines)]
+  const only = (side: typeof ra, other: typeof ra): GroupLine[] => !side.length ? [] : [...side[0].lines]
+    .filter(([l]) => side.every(r => r.lines.has(l)) && !other.some(r => r.lines.has(l)))
+    .map(([line, label]) => (label === undefined ? { line } : { line, label }))
+  const agreed = (side: typeof ra, path: string) => {
+    const vs = new Set(side.map(r => r.params.get(path)))
+    return vs.size === 1 ? { v: [...vs][0] } : undefined
+  }
+  const params = !ra.length || !rb.length ? [] : [...new Set([...ra, ...rb].flatMap(r => [...r.params.keys()]))].flatMap(path => {
+    const [x, y] = [agreed(ra, path), agreed(rb, path)]
+    return x && y && x.v !== y.v ? [{ path, a: showParam(x.v), b: showParam(y.v) }] : []
+  })
+  return { onlyA: only(ra, rb), onlyB: only(rb, ra), params }
+}
+
+export type RunView = { chips: Chip[]; result: string; reasoning: string; empty: boolean }
+
+/** A run's answer side: its calls in order, its last answer, the reasoning it recorded. */
+export function runSummary(events: HarnessEvent[]): RunView {
+  const res = events.flatMap(e => (e.type === 'llm_response' ? [e] : []))
+  return {
+    chips: skeleton(events).flatMap(t => t.chips),
+    result: res.at(-1)?.content ?? '',
+    reasoning: res.flatMap(r => (r.reasoning ? [r.reasoning] : [])).join('\n\n'),
+    empty: !res.length || !events.some(e => e.type === 'llm_request'),
+  }
 }
