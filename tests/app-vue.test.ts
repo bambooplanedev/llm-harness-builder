@@ -544,3 +544,35 @@ test('a Start with a yes that comes back with consent again says the commands ch
   expect(d).toContain(said); expect(d).toContain('COMMANDS 2')
   expect(d.indexOf(said)).toBeLessThan(d.indexOf('COMMANDS 2'))
 })
+
+const COMPARE_HINT = 'Set each request of this run against the same-numbered request of another of your runs.'
+test('compare with…: lists the other own runs, closes its stream when the pick changes, another run opens, or on unmount', async () => {
+  const runs = [{ id: 'r1', task: 'first task', active: false }, { id: 'r2', task: 'second task', active: false }, { id: 'r3', task: 'third', active: false }]
+  const app = await mount({ '/api/harnesses': [], '/api/runs': runs, '/api/models': [] })
+  const streams: { url: string; closed: boolean; onmessage?: (m: { data: string }) => void; onerror?: () => void }[] = []
+  const savedES = globalThis.EventSource
+  globalThis.EventSource = class { static CLOSED = 2; s: (typeof streams)[number]; constructor(url: string) { this.s = { url, closed: false }; streams.push(this.s) }
+    set onmessage(f: (m: { data: string }) => void) { this.s.onmessage = f } set onerror(f: () => void) { this.s.onerror = f } addEventListener() {} close() { this.s.closed = true } } as unknown as typeof EventSource
+  try {
+    const sel = () => all(app.root).find(n => n.tag === 'select' && n.props.title === COMPARE_HINT)
+    expect(sel()).toBeUndefined() // no run open
+    all(app.root).find(n => n.tag === 'div' && n.props.onClick && textOf(n).includes('first task'))!.props.onClick(); await settle()
+    expect(streams.map(s => s.url)).toEqual(['/api/runs/r1/events'])
+    const opts = all(sel()!).filter(n => n.tag === 'option')
+    expect(opts.map(o => o.props.value)).toEqual(['', 'r2', 'r3'])
+    sel()!.props.onChange({ target: { value: 'r2' } }); await settle()
+    expect(streams.map(s => s.url)).toEqual(['/api/runs/r1/events', '/api/runs/r2/events'])
+    sel()!.props.onChange({ target: { value: 'r3' } }); await settle()
+    expect(streams[1].closed).toBe(true)
+    expect(streams[2].url).toBe('/api/runs/r3/events')
+    // opening another run closes the compare stream and resets the pick
+    all(app.root).find(n => n.tag === 'div' && n.props.onClick && textOf(n).includes('second task'))!.props.onClick(); await settle()
+    expect(streams[2].closed).toBe(true)
+    expect(sel()!.props.value ?? '').toBe('')
+    expect(all(sel()!).filter(n => n.tag === 'option').map(o => o.props.value)).toEqual(['', 'r1', 'r3'])
+    sel()!.props.onChange({ target: { value: 'r1' } }); await settle()
+    const last = streams.at(-1)!
+    apps.splice(0).forEach(a => a.unmount())
+    expect(last.closed).toBe(true)
+  } finally { globalThis.EventSource = savedES }
+})

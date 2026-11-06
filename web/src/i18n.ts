@@ -49,6 +49,7 @@ export const en = {
   'form.bashEnv': 'bash gets from your environment: {list}',
   'trace.askMcp': 'start mcp server {name}: {cmd}?',
   'trace.askUntil': 'run {cmd} each time the model says it is done, on files the model has written?',
+  'trace.compare': "Set each request of this run against the same-numbered request of another of your runs.",
   'trace.anatomySplit': "Shares are split by characters and scaled to the server's prompt_tokens: approximate per layer, exact in total.",
   'trace.anatomyEstimate': '≈: the server sent no usage for this turn, so the total is characters / 4.',
   'trace.anatomyToolsInSystem': 'No tools[] in this request: if the harness describes tools in its prompt (prompted mode), they are counted in system.',

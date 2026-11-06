@@ -6,17 +6,17 @@ import { t, tn, T } from './i18n'
 import type { Delta, HarnessEvent } from './api'
 import { mcpApprovalServer, mcpCounts, UNTIL_BASH } from '../../src/core/events'
 import { analyzeTrace, summaryLine } from '../../src/core/analyze'
-import { diffsBySeq } from './reqDiffs'
+import { diffsBySeq, versusBySeq } from './reqDiffs'
 import { anatomies, anatomyLine } from '../../src/core/anatomy'
 import { film, filmDeep, namesIn, shown, type FilmNames } from './film'
 // approvable is a Boolean-typed prop, so Vue casts an ABSENT value to `false` (not `undefined`).
 // App.vue's live Workbench never passes this prop and needs the opposite default -- only a
 // finished/replayed trace (Bench.vue, Diff.vue) opts out by passing `false` explicitly.
 // `live` is only ever set by the live Workbench; a replayed trace (Bench.vue, Diff.vue) omits it.
-const props = withDefaults(defineProps<{ events: HarnessEvent[]; live?: Delta; task?: string; approvable?: boolean; bars?: boolean; names?: FilmNames }>(), { approvable: true, bars: true, live: () => ({}) })
+const props = withDefaults(defineProps<{ events: HarnessEvent[]; live?: Delta; task?: string; approvable?: boolean; bars?: boolean; names?: FilmNames; compareEvents?: HarnessEvent[]; compareId?: string }>(), { approvable: true, bars: true, live: () => ({}) })
 const emit = defineEmits<{ approve: [callId: string, ok: boolean] }>()
 /** `names`: the models and servers the page knows of (the trace names no server, and a live run's knobs_off comes before its first model). */
-const names = computed(() => ({ models: [...namesIn(props.events).models, ...props.names?.models ?? []], urls: props.names?.urls ?? [] }))
+const names = computed(() => ({ models: [...namesIn(props.events).models, ...props.compareEvents ? namesIn(props.compareEvents).models : [], ...props.names?.models ?? []], urls: props.names?.urls ?? [] }))
 /** What the screen shows: in film mode a copy with model names, servers and paths replaced. */
 const shownEvents = computed(() => film.value ? filmDeep(props.events, names.value) : props.events)
 /** A live approval shows the command exactly as it will run, film mode or not: you approve what executes. */
@@ -68,6 +68,11 @@ function pick(turn: number) {
 const diffBySeq = computed(() => {
   const m = diffsBySeq(props.events)
   return film.value ? new Map([...m].map(([k, d]) => [k, filmDeep(d, names.value)])) : m
+})
+/** The same against the other run's same-numbered request; the bodies are read as recorded, only the result is filmed. */
+const versusBySeqM = computed(() => {
+  const m = props.compareEvents ? versusBySeq(props.events, props.compareEvents) : new Map()
+  return film.value ? new Map([...m].map(([k, v]) => [k, v.diff ? { ...v, diff: filmDeep(v.diff, names.value) } : v])) : m
 })
 const anatBySeq = computed(() => new Map(anat.value.map(x => [x.seq, x.a])))
 // The current turn is "open" from its llm_request until its llm_response; the live bubble shows the streamed text meanwhile,
@@ -127,7 +132,9 @@ const liveTok = computed(() => Math.ceil(liveText.value.length / 4))
         <template v-if="e.type === 'llm_request'"><template v-if="anatBySeq.get(e.seq)"><div class="hint" :title="t('trace.anatomySplit')">{{ anatomyLine(anatBySeq.get(e.seq)!) }}</div>
           <div v-if="!anatBySeq.get(e.seq)!.exact" class="hint">{{ t('trace.anatomyEstimate') }}</div>
           <div v-if="anatBySeq.get(e.seq)!.toolsInSystem" class="hint">{{ t('trace.anatomyToolsInSystem') }}</div>
-          <div v-if="anatBySeq.get(e.seq)!.thinkingBlocks" class="hint">{{ t('trace.anatomyThinking') }}</div></template><ReqDiff v-if="diffBySeq.get(e.seq)" :diff="diffBySeq.get(e.seq)!" title="changes since the previous request" /><pre>{{ raw(e) }}</pre></template>
+          <div v-if="anatBySeq.get(e.seq)!.thinkingBlocks" class="hint">{{ t('trace.anatomyThinking') }}</div></template><ReqDiff v-if="diffBySeq.get(e.seq)" :diff="diffBySeq.get(e.seq)!" title="changes since the previous request" />
+          <template v-if="versusBySeqM.get(e.seq)"><div v-if="versusBySeqM.get(e.seq)!.missing" class="muted">no request {{ versusBySeqM.get(e.seq)!.k }} there</div>
+            <ReqDiff v-else :diff="versusBySeqM.get(e.seq)!.diff!" :title="`vs ${compareId} request ${versusBySeqM.get(e.seq)!.k}`" /></template><pre>{{ raw(e) }}</pre></template>
         <pre v-if="e.type === 'llm_response'">{{ raw(e) }}</pre>
       </template>
     </details>

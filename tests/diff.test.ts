@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest'
-import { skeleton, turnsOf, configDiff, lineDiff, requestDiff, isNoChange } from '../src/core/diff'
+import { skeleton, turnsOf, configDiff, lineDiff, requestDiff, isNoChange, nthRequest } from '../src/core/diff'
 import type { HarnessEvent } from '../src/core/events'
 import type { HarnessConfig } from '../src/core/config'
 
@@ -265,4 +265,13 @@ test('requestDiff: b a strict prefix of a is history changed from n+1 with the r
   const a = { messages: [u('x'), as('y'), u('z')] }
   const b = { messages: [u('x')] }
   expect(requestDiff(a, b)!.messages).toEqual({ from: 2, changed: [], added: 0, removed: 2 })
+})
+
+test('nthRequest: the payload of the k-th llm_request, 1-based, across turns', () => {
+  const rq = (seq: number, turn: number, payload: unknown) => ({ seq, turn, ts: 0, type: 'llm_request', payload }) as HarnessEvent
+  const evs = [rq(0, 1, 'a'), { seq: 1, turn: 1, ts: 0, type: 'done', reason: 'final' } as HarnessEvent, rq(2, 2, 'b')]
+  expect(nthRequest(evs, 1)).toBe('a')
+  expect(nthRequest(evs, 2)).toBe('b')
+  expect(nthRequest(evs, 3)).toBeUndefined()
+  expect(nthRequest(evs, 0)).toBeUndefined()
 })

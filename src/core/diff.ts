@@ -215,3 +215,8 @@ export function requestDiff(a: unknown, b: unknown): ReqDiff | undefined {
 export function isNoChange(d: ReqDiff): boolean {
   return 'appended' in d.messages && !d.system.added.length && !d.system.removed.length && !d.tools.added.length && !d.tools.removed.length && !d.tools.changed.length && !d.params.length
 }
+
+/** The payload of the k-th llm_request (1-based, across turns), or undefined when the run has fewer. */
+export function nthRequest(events: HarnessEvent[], k: number): unknown | undefined {
+  return events.filter(e => e.type === 'llm_request')[k - 1]?.payload
+}

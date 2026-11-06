@@ -249,3 +249,28 @@ test('request diff: an unreadable request between valid ones gives no block for 
   const html = await render({ approvable: false, events: [reqEv(0, 1, { model: 'm1' }), reqEv(1, 2, body('a'))] })
   expect(html).not.toContain('changes since')
 })
+
+test('compare: the k-th request against the other run, titled with its id', async () => {
+  const html = await render({ approvable: false, compareId: 'abc', compareEvents: [reqEv(0, 1, body('other prompt'))], events: [reqEv(0, 1, body('be long'))] })
+  expect(inspector(html, 1)).toContain('vs abc request 1')
+  expect(inspector(html, 1)).toContain('+ system: be long')
+  expect(inspector(html, 1)).toContain('− system: other prompt')
+})
+
+test('compare: no k-th request there is a muted line; an unreadable body gives no block', async () => {
+  const evs = [reqEv(0, 1, body('a')), reqEv(1, 2, body('a'))]
+  const html = await render({ approvable: false, compareId: 'abc', compareEvents: [reqEv(0, 1, body('b'))], events: evs })
+  expect(inspector(html, 2)).toContain('no request 2 there')
+  expect(inspector(html, 1)).toContain('vs abc request 1')
+  const bad = await render({ approvable: false, compareId: 'abc', compareEvents: [reqEv(0, 1, { model: 'm' })], events: [reqEv(0, 1, body('a'))] })
+  expect(bad).not.toContain('vs abc')
+  expect(bad).not.toContain('no request')
+})
+
+test('compare: nothing without a compare run; film hides names in the block', async () => {
+  expect(await render({ approvable: false, events: [reqEv(0, 1, body('a'))] })).not.toContain('vs ')
+  setFilm(true)
+  const html = await render({ approvable: false, compareId: 'abc', compareEvents: [reqEv(0, 1, body('x', 'qwen3:8b'))], events: [reqEv(0, 1, body('y', 'qwen3:8b-b'))] })
+  expect(html).toContain('vs abc request 1')
+  expect(html).not.toContain('qwen3')
+})
