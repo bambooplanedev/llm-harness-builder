@@ -4,6 +4,7 @@ import { readFileSync, realpathSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { Dialect } from './dialects/dialect.js'
+import { BackendError } from '../backends/types.js'
 import { ID, checkConnection, type Connection } from './connections.js'
 
 type Kind = 'dialect' | 'connection'
@@ -45,7 +46,8 @@ export async function loadOwnDialect(file: string): Promise<Dialect> {
  */
 function guard(d: Dialect): Dialect {
   const fail = (m: string, why: unknown): never => {
-    if (why instanceof Error) throw why
+    if (why instanceof BackendError || (why instanceof Error && (m === 'matches' || m === 'partial'))) throw why
+    if (why instanceof Error) throw new Error(`${m}: ${why.message}`, { cause: why })
     throw new Error(m === 'matches' || m === 'partial' ? String(why) : `${m}: ${String(why)}`)
   }
   const call = <M extends typeof METHODS[number]>(m: M, args: Parameters<Dialect[M]>): ReturnType<Dialect[M]> => {
@@ -80,13 +82,19 @@ function guard(d: Dialect): Dialect {
     },
     toolResults(...a) {
       const r = sync('toolResults', a)
-      if (!Array.isArray(r)) fail('toolResults', 'must return an array')
+      const [, calls] = a
+      const ok = (x: any) => x && typeof x === 'object' && calls.includes(x.call) && str(x.output) && (x.error === undefined || x.error === true)
+      if (!Array.isArray(r) || !r.every(ok)) fail('toolResults', 'must return an array of { call (one of the calls), output: string, error?: true }')
       return r as ReturnType<Dialect['toolResults']>
     },
     async readReply(...a) {
       const r = await awaited('readReply', a)
-      if (!r || typeof r !== 'object' || !str(r.content) || !Array.isArray(r.toolCalls)) fail('readReply', 'must resolve to { content: string, toolCalls: [] }')
-      return r
+      const ok = (c: any) => c && typeof c === 'object' && str(c.name) && c.args && typeof c.args === 'object' && !Array.isArray(c.args)
+      if (!r || typeof r !== 'object' || !str(r.content) || !Array.isArray(r.toolCalls) || !r.toolCalls.every(ok)) {
+        fail('readReply', 'must resolve to { content: string, toolCalls: [{ name: string, args: object }] }')
+      }
+      // Plain data from here on: the scrubber walks plain objects, not what a toJSON or a getter would write later.
+      return JSON.parse(JSON.stringify(r))
     },
     async partial(...a) {
       const r = await awaited('partial', a)

@@ -115,7 +115,7 @@ A `.json` object that says how to recognise one agent and clean its task text:
   tags included, is cut from the task text (an unclosed one runs to the end).
 - `auxiliary`, `compaction` (optional strings): the values of the `requestClass` header that mark a side request
   (a title, a summary: a note in the session's main run, no turn) and a context compaction (a turn marked by a
-  note). They only matter together with `hints.requestClass` and `hints.session`.
+  note). `auxiliary` needs `hints.requestClass` and `hints.session`; `compaction` needs only `hints.requestClass`.
 - `hint` (optional string): a line printed at start for people; `{port}` is replaced with the proxy's port.
 
 Any other key is refused, naming it.

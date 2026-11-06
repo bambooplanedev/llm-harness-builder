@@ -249,3 +249,77 @@ test('the examples are self-contained, and my-harness.json passes the strict che
   expect(c.name).not.toBe('generic')
   expect(Object.keys(c.hints).length).toBeGreaterThan(0)
 })
+
+const KEY = "({ key: 'k', taskText: 't', len: 1, model: '' })"
+const events = (runsDir: string) => readdirSync(runsDir).filter(f => f.endsWith('.jsonl')).flatMap(f => readFileSync(join(runsDir, f), 'utf8').trim().split('\n').map(l => JSON.parse(l)))
+
+test('I1: an Error from keyOf is logged with the method', async () => {
+  const p = join(dir({ 'a.mjs': dialectSrc({ matches: '() => true', keyOf: "() => { throw new Error('boom') }" }) }), 'a.mjs')
+  const { post, reply, lines } = await overUpstream([p])
+  expect(await post()).toBe(reply)
+  expect(lines).toContain('not recorded: dialect mine: keyOf: boom')
+})
+
+test('I2: a readReply with a bad tool call is an error event, with no gap in seq', async () => {
+  for (const bad of ['[null]', "[{ name: 5, args: {} }]", "[{ name: 'x' }]"]) {
+    const p = join(dir({ 'a.mjs': dialectSrc({ matches: '() => true', readReply: `async () => ({ content: 'c', toolCalls: ${bad} })` }) }), 'a.mjs')
+    const { px, post, reply, runsDir } = await overUpstream([p])
+    expect(await post(), bad).toBe(reply)
+    await px.stop()
+    const ev = events(runsDir).slice(1)
+    expect(ev.map(e => e.type), bad).toEqual(['llm_request', 'error', 'done'])
+    expect(ev[1].message, bad).toMatch(/readReply/)
+    expect(ev.map(e => e.seq), bad).toEqual([0, 1, 2])
+  }
+})
+
+test('I2: a toolResults with a bad item writes nothing and leaves the session as it was', async () => {
+  const bads = ['[{}]', '[null]', "[{ call: { callId: 'other', name: 'n', args: {} }, output: 'x' }]", '[{ call: calls[0], output: 5 }]', "[{ call: calls[0], output: 'x', error: 1 }]"]
+  for (const bad of bads) {
+    const readReply = "async () => ({ content: '', toolCalls: [{ name: 'n', args: {} }] })"
+    const p = join(dir({ 'a.mjs': dialectSrc({ matches: '() => true', keyOf: `() => ${KEY}`, readReply, toolResults: `(p, calls) => ${bad}` }) }), 'a.mjs')
+    const { px, post, lines, runsDir } = await overUpstream([p])
+    for (let i = 0; i < 3; i++) { await post(); await new Promise(r => setTimeout(r, 50)) } // the reply is recorded just after the agent has it
+    await px.stop()
+    expect(lines.filter(l => l.startsWith('not recorded: dialect mine: toolResults')), bad).toHaveLength(2)
+    const ev = events(runsDir)
+    expect(ev.filter(e => e.type === 'tool_result'), bad).toEqual([])
+    expect(ev.filter(e => e.meta), bad).toHaveLength(1) // one run: the unrecorded requests did not touch it
+    expect(ev.filter(e => e.type === 'llm_request'), bad).toHaveLength(1)
+  }
+})
+
+test('M1: a readReply result is plain data before it is scrubbed (a toJSON cannot carry a key past the scrubber)', async () => {
+  const SECRET = 'sk-secret-value-123456'
+  const readReply = `async () => ({ content: 'c', toolCalls: [], raw: { toJSON: () => ({ echo: '${SECRET}' }) } })`
+  const p = join(dir({ 'a.mjs': dialectSrc({ matches: '() => true', readReply }) }), 'a.mjs')
+  const { px, runsDir } = await overUpstream([p])
+  await fetch(`http://127.0.0.1:${px.port}/v1/chat/completions`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${SECRET}` }, body: JSON.stringify({ model: 'm', messages: [{ role: 'user', content: 'do it' }] }) }).then(r => r.text())
+  await px.stop()
+  const files = readdirSync(runsDir)
+  expect(files.length).toBeGreaterThan(0)
+  for (const f of files) expect(readFileSync(join(runsDir, f), 'utf8')).not.toContain(SECRET)
+})
+
+test('M3: an own openai-chat and an own claude-code.json replace the built-ins in a real request', async () => {
+  const d = dir({
+    'oc.mjs': dialectSrc({ id: "'openai-chat'", matches: '() => true', keyOf: "() => ({ key: 'k', taskText: 'MARKER', len: 0, model: '' })" }),
+    'claude-code.json': conn({ name: 'claude-code', hints: { session: 'x-my-cc' }, taskStrip: [['<a>', '</a>']] }),
+  })
+  const reply = JSON.stringify({ choices: [{ index: 0, message: { role: 'assistant', content: 'up' }, finish_reason: 'stop' }] })
+  const up = http.createServer((q, res) => { q.resume(); q.on('end', () => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(reply) }) })
+  await new Promise<void>(r => up.listen(0, '127.0.0.1', r))
+  cleanups.push(() => { up.closeAllConnections(); up.close() })
+  const runsDir = tmpSync('lhb-own-runs-')
+  const px = await startProxy({ upstream: `http://127.0.0.1:${(up.address() as { port: number }).port}`, port: 0, runsDir, harness: 't', dialectFiles: [join(d, 'oc.mjs')], connectionFiles: [join(d, 'claude-code.json')] })
+  const body = (text: string) => JSON.stringify({ model: 'm', messages: [{ role: 'user', content: text }] })
+  await fetch(`http://127.0.0.1:${px.port}/v1/chat/completions`, { method: 'POST', body: body('plain') }).then(r => r.text())
+  await px.stop()
+  expect(events(runsDir)[0].meta.task).toBe('MARKER')
+  // the connection: its hint header is the own one, and its taskStrip shows in the task
+  const px2Dir = tmpSync('lhb-own-runs-')
+  const px2 = await startProxy({ upstream: `http://127.0.0.1:${(up.address() as { port: number }).port}`, port: 0, runsDir: px2Dir, harness: 't', connectionFiles: [join(d, 'claude-code.json')] })
+  await fetch(`http://127.0.0.1:${px2.port}/v1/chat/completions`, { method: 'POST', headers: { 'x-my-cc': 's1' }, body: body('keep<a>cut</a> this') }).then(r => r.text())
+  await px2.stop()
+  expect(events(px2Dir)[0].meta.task).toBe('keep this')
+})
