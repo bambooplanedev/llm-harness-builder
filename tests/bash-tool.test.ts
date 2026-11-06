@@ -47,14 +47,14 @@ test('multibyte output is decoded correctly across chunks', async () => {
   expect(out.split('€').length - 1).toBe(200000)
 })
 
-test('a running command dies with the parent process (SIGINT)', { timeout: 20_000 }, async () => {
+test.each(['SIGINT', 'SIGHUP'] as const)('a running command dies with the parent process (%s)', { timeout: 20_000 }, async sig => {
   const pidFile = join((await ctx()).workdir, 'pid')
   const parent = spawn(process.execPath, ['--import', 'tsx', 'tests/fixtures/bash-hold.ts', pidFile], { stdio: 'ignore' })
   const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
   let shPid = 0
   for (let i = 0; i < 100 && !shPid; i++) { await sleep(100); shPid = Number(await readFile(pidFile, 'utf8').catch(() => 0)) }
   expect(shPid).toBeGreaterThan(0)
-  parent.kill('SIGINT')
+  parent.kill(sig)
   await new Promise(r => parent.on('exit', r))
   for (let i = 0; i < 30; i++) { try { process.kill(shPid, 0) } catch { return }; await sleep(100) }
   throw new Error(`sh ${shPid} outlived its parent`)

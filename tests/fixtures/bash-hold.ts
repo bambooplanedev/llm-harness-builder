@@ -1,3 +1,8 @@
-// Holds a bash tool call open until killed; the bash-tool test SIGINTs this process and checks the shell died with it.
+// Holds a bash tool call open until killed; the bash-tool test signals this process and checks the shell died with it.
+// The shell writes its pid only after `<pid file>.armed` exists, which this file writes once bash() has spawned the
+// shell and set up the signal handling: a signal sent on seeing the pid can then never beat that setup.
+import { writeFileSync } from 'node:fs'
 import { bash } from '../../src/core/tools/bash.js'
-void bash({ command: `echo $$ > "${process.argv[2]}"; sleep 60` }, { workdir: process.cwd() })
+const f = process.argv[2]
+void bash({ command: `while [ ! -e "${f}.armed" ]; do sleep 0.01; done; echo $$ > "${f}"; sleep 60` }, { workdir: process.cwd() })
+writeFileSync(`${f}.armed`, '')
