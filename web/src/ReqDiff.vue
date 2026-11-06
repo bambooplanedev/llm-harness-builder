@@ -31,6 +31,6 @@ const none = computed(() => isNoChange(props.diff) ? `no change${'appended' in p
   <div class="reqdiff">
     <div class="hint" :title="t('trace.reqDiff')">{{ title }}</div>
     <div v-if="none" class="rd-neutral">{{ none }}</div>
-    <div v-else v-for="(l, i) in lines" :key="i" :class="'rd-' + l.kind">{{ l.text }}</div>
+    <template v-else><div v-for="(l, i) in lines" :key="i" :class="'rd-' + l.kind">{{ l.text }}</div></template>
   </div>
 </template>

@@ -229,3 +229,23 @@ test('request diff: film mode hides the model name in the block', async () => {
   expect(html).toContain('changes since the previous request')
   expect(html).not.toContain('qwen3')
 })
+
+test('request diff: film mode replaces a model name inside a changed system line', async () => {
+  setFilm(true)
+  const evs = [reqEv(0, 1, body('using qwen3:8b', 'qwen3:8b')), reqEv(1, 2, body('now using qwen3:8b', 'qwen3:8b'))]
+  const html = await render({ approvable: false, events: evs })
+  expect(inspector(html, 2)).toContain('+ system: now using')
+  expect(html).not.toContain('qwen3')
+})
+
+test('request diff: tool, history and param lines have their exact formats', async () => {
+  const a = { model: 'm1', temperature: 0.2, tools: [{ name: 'gone' }, { name: 'edit', v: 1 }], messages: [{ role: 'user', content: 'one' }, { role: 'assistant', content: 'two' }, { role: 'user', content: 'three' }] }
+  const b = { model: 'm1', temperature: 0.7, tools: [{ name: 'edit', v: 2 }, { name: 'new' }], messages: [{ role: 'user', content: 'one' }, { role: 'assistant', content: 'TWO' }] }
+  const html = await render({ approvable: false, events: [reqEv(0, 1, a), reqEv(1, 2, b)] })
+  for (const s of ['+ tool new', '− tool gone', '~ tool edit', 'history changed from #2', '#2: + TWO', '#2: − two', '−1 removed', 'temperature: 0.2 → 0.7']) expect(html).toContain(s)
+})
+
+test('request diff: an unreadable request between valid ones gives no block for either', async () => {
+  const html = await render({ approvable: false, events: [reqEv(0, 1, { model: 'm1' }), reqEv(1, 2, body('a'))] })
+  expect(html).not.toContain('changes since')
+})

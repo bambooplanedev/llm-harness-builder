@@ -6,7 +6,7 @@ import { t, tn, T } from './i18n'
 import type { Delta, HarnessEvent } from './api'
 import { mcpApprovalServer, mcpCounts, UNTIL_BASH } from '../../src/core/events'
 import { analyzeTrace, summaryLine } from '../../src/core/analyze'
-import { requestDiff } from '../../src/core/diff'
+import { diffsBySeq } from './reqDiffs'
 import { anatomies, anatomyLine } from '../../src/core/anatomy'
 import { film, filmDeep, namesIn, shown, type FilmNames } from './film'
 // approvable is a Boolean-typed prop, so Vue casts an ABSENT value to `false` (not `undefined`).
@@ -64,17 +64,10 @@ function pick(turn: number) {
   if (d) d.open = true
   el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
-/** seq of an llm_request → what it changed against the previous llm_request of the shown trace (any turn). */
+/** Computed from the events as recorded (cached per event), then filmed: the result is small, the bodies are not. */
 const diffBySeq = computed(() => {
-  const m = new Map<number, NonNullable<ReturnType<typeof requestDiff>>>()
-  let prev: unknown, seen = false
-  for (const e of shownEvents.value) {
-    if (e.type !== 'llm_request') continue
-    const d = seen ? requestDiff(prev, e.payload) : undefined
-    if (d) m.set(e.seq, d)
-    prev = e.payload; seen = true
-  }
-  return m
+  const m = diffsBySeq(props.events)
+  return film.value ? new Map([...m].map(([k, d]) => [k, filmDeep(d, names.value)])) : m
 })
 const anatBySeq = computed(() => new Map(anat.value.map(x => [x.seq, x.a])))
 // The current turn is "open" from its llm_request until its llm_response; the live bubble shows the streamed text meanwhile,
