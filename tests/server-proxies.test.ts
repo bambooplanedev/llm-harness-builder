@@ -1,6 +1,8 @@
 import { test, expect } from 'vitest'
 import { spawn, type ChildProcess } from 'node:child_process'
 import http from 'node:http'
+import { readFile, readdir } from 'node:fs/promises'
+import { join } from 'node:path'
 import { startServer, type ServerOpts } from '../src/server/index.js'
 import { tmp, spawnCli } from './helpers.js'
 
@@ -178,6 +180,59 @@ test('close() stops every proxy, the stubborn ones too', async () => {
   await waitFor(() => children.every(c => !alive(c.pid!)))
 })
 
+/** A fake proxy that appends a line to `log` on every SIGINT and exits 0 a little later, as cmdProxy's graceful stop. */
+const counting = (log: string, settleMs = 150) => spawn(process.execPath, ['-e', `
+  process.on('SIGINT', () => { require('fs').appendFileSync(${JSON.stringify(log)}, 'int\\n'); setTimeout(() => process.exit(0), ${settleMs}) })
+  process.stderr.write('proxy on http://127.0.0.1:41005/v1 -> x  (runs: r)\\n'); setInterval(() => {}, 1000)`], { stdio: ['ignore', 'pipe', 'pipe'] })
+const sigints = async (log: string) => (await readFile(log, 'utf8').catch(() => '')).split('\n').filter(Boolean).length
+
+test('two Stops at once, and close() during a Stop, send one SIGINT: a second one is how the CLI is told it is stuck', async () => {
+  const dir = await tmp('lhb-proxies-sig-')
+  const log = join(dir, 'a.log')
+  const { srv, start, stop, list } = await serve(() => counting(log))
+  try {
+    const { id } = await (await start(ok)).json()
+    const [a, b] = await Promise.all([stop(id), stop(id)])
+    expect([a.status, b.status]).toEqual([200, 200])
+    expect((await a.json()).exit).toEqual({ code: 0, signal: null })
+    expect(await sigints(log)).toBe(1)
+    expect(await list()).toEqual([])
+  } finally { await srv.close() }
+  const log2 = join(dir, 'b.log')
+  const children: ChildProcess[] = []
+  const s = await serve(() => { const c = counting(log2, 300); children.push(c); return c }, { proxyKillMs: 2000 })
+  const { id } = await (await s.start(ok)).json()
+  const pending = s.stop(id).catch(() => {}) // closing serve drops this connection
+  await waitFor(async () => await sigints(log2) === 1)
+  await s.srv.close()
+  await pending
+  await waitFor(() => children[0].exitCode !== null)
+  expect(children[0].exitCode).toBe(0)
+  expect(await sigints(log2)).toBe(1)
+})
+
+test('two starts with one name at once: one is 201, the other 409', async () => {
+  const { srv, start, calls } = await serve(() => ({}))
+  try {
+    const rs = await Promise.all([start(ok), start(ok)])
+    expect(rs.map(r => r.status).sort()).toEqual([201, 409])
+    expect(calls).toHaveLength(1)
+  } finally { await srv.close() }
+})
+
+test('close() while a proxy is still starting signals that child too', async () => {
+  const children: ChildProcess[] = []
+  let printed!: Promise<unknown>
+  const { srv, start } = await serve(args => { const c = fakeChild(args, {}); children.push(c); printed = new Promise(r => c.stderr!.once('data', r)); return c })
+  const pending = start(ok).catch(() => {})
+  await waitFor(() => children.length === 1)
+  await printed // the ready line is in: the start is in its 300 ms settle window
+  await srv.close()
+  await pending
+  await waitFor(() => !alive(children[0].pid!))
+  expect(children[0].signalCode).toBe('SIGINT')
+})
+
 test('a server without a way to start the CLI has no proxy routes', async () => {
   const srv = await startServer({ port: 0, runsDir, harnessesDir })
   const u = `http://127.0.0.1:${srv.port}`
@@ -187,12 +242,16 @@ test('a server without a way to start the CLI has no proxy routes', async () => 
   } finally { await srv.close() }
 })
 
-test('the real CLI: runs in the given cwd, refuses a plain-http remote upstream and a port in use, each as 502 with its stderr', async () => {
+test('the real CLI: its runs land in the runs dir serve reads; it refuses a plain-http remote upstream and a port in use, each as 502 with its stderr', async () => {
   const cwd = await tmp('lhb-proxies-cwd-')
-  const up = http.createServer((_q, s) => s.end('{}')).listen(0, '127.0.0.1')
+  const up = http.createServer((req, res) => {
+    req.resume()
+    req.on('end', () => { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: 'hi' }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`) })
+  }).listen(0, '127.0.0.1')
   await new Promise(r => up.once('listening', r))
   const upUrl = `http://127.0.0.1:${(up.address() as { port: number }).port}`
-  const { srv, start, list, stop } = await serve(args => spawnCli(args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] }), { proxyKillMs: 5000 })
+  // as cmdServe does: the child runs in serve's cwd, whose runs/ is serve's runsDir
+  const { srv, start, list, stop } = await serve(args => spawnCli(args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] }), { proxyKillMs: 5000, runsDir: join(cwd, 'runs') })
   try {
     const remote = await start({ ...ok, upstream: 'http://example.com' })
     expect(remote.status).toBe(502)
@@ -201,6 +260,8 @@ test('the real CLI: runs in the given cwd, refuses a plain-http remote upstream 
     expect(r.status).toBe(201)
     const p = await r.json()
     expect(p.port).toBeGreaterThan(0)
+    const reply = await fetch(`http://127.0.0.1:${p.port}/v1/chat/completions`, { method: 'POST', body: JSON.stringify({ model: 'm', stream: true, messages: [{ role: 'user', content: 'hello' }] }) })
+    expect(await reply.text()).toContain('"hi"')
     const busy = await start({ ...ok, upstream: upUrl, name: 'busy', port: p.port })
     expect(busy.status).toBe(502)
     expect((await busy.json()).error).toMatch(/EADDRINUSE/)
@@ -208,6 +269,8 @@ test('the real CLI: runs in the given cwd, refuses a plain-http remote upstream 
     const s = await stop(p.id)
     expect(s.status).toBe(200)
     expect((await s.json()).exit.code).toBe(0)
+    const files = await readdir(join(cwd, 'runs'))
+    expect(files).toEqual([expect.stringMatching(/^[0-9a-f]{8}\.jsonl$/)])
+    expect(JSON.parse((await readFile(join(cwd, 'runs', files[0]), 'utf8')).split('\n')[0]).meta).toMatchObject({ harness: 'real', task: 'hello' })
   } finally { await srv.close(); up.close() }
 }, 30000)
-

@@ -25,9 +25,13 @@ const plain = (v: unknown): v is string => typeof v === 'string' && !CONTROL.tes
 const absList = (v: unknown) => v === undefined ? [] : Array.isArray(v) && v.every(p => plain(p) && path.isAbsolute(p)) ? v as string[] : undefined
 
 export function proxies(cli: (args: string[]) => ChildProcess, killMs = 5000) {
-  const items = new Map<string, { item: ProxyItem; child: ChildProcess }>()
+  type Entry = { item: ProxyItem; child: ChildProcess; stopping?: Promise<unknown> }
+  const items = new Map<string, Entry>()
   /** Names whose start is still waiting for its ready line: they count against the cap and the name. */
   const starting = new Set<string>()
+  /** Their children, so a closing serve signals them too. */
+  const startingChildren = new Set<ChildProcess>()
+  let shutting = false
   const live = () => [...items.values()].filter(p => !p.item.exit)
 
   /** SIGINT, as Ctrl-C; SIGKILL if it is still there after killMs (a sync loop in an own dialect blocks the handler). */
@@ -36,6 +40,8 @@ export function proxies(cli: (args: string[]) => ChildProcess, killMs = 5000) {
     const t = setTimeout(() => child.kill('SIGKILL'), killMs)
     child.once('exit', () => clearTimeout(t))
   }
+  /** One stop per proxy: a second SIGINT tells cmdProxy its graceful stop is stuck, and it exits 130 without `done`. */
+  const halt = (p: Entry) => p.stopping ??= new Promise(r => { p.child.once('exit', r); kill(p.child) })
 
   async function start(body: Record<string, unknown>): Promise<Result> {
     const { upstream, port, name } = body
@@ -48,10 +54,12 @@ export function proxies(cli: (args: string[]) => ChildProcess, killMs = 5000) {
     if (starting.has(name) || live().some(p => p.item.name === name)) return { status: 409, body: { error: `a proxy named "${name}" is already running` } }
 
     starting.add(name)
+    let spawned: ChildProcess | undefined
     try {
-      const child = cli(['proxy', `--upstream=${upstream}`, `--port=${port}`, `--name=${name}`,
+      const child = spawned = cli(['proxy', `--upstream=${upstream}`, `--port=${port}`, `--name=${name}`,
         ...dialects.map(d => `--dialect=${d}`), ...connections.map(c => `--connection=${c}`)])
       child.stdout?.resume() // nothing reads its stdout: a full pipe would stall it
+      startingChildren.add(child)
       const item: ProxyItem = { id: randomUUID(), name, upstream, port: 0, started: new Date().toISOString(), lines: [], tail: '' }
       let err = '' // all of stderr until it is listed: the 502 shows it
       let buf = '' // the part of a line not yet ended
@@ -70,34 +78,30 @@ export function proxies(cli: (args: string[]) => ChildProcess, killMs = 5000) {
           const m = READY.exec(line)
           if (!m) { phase = 'failed'; ready(false); return }
           item.port = Number(m[1]); phase = 'settle'
-          setTimeout(() => { phase = 'run'; if (buf) item.tail = buf.slice(-TAIL); buf = ''; ready(true) }, SETTLE_MS)
+          setTimeout(() => { phase = 'run'; if (buf) item.tail = (item.tail + buf).slice(-TAIL); buf = ''; ready(true) }, SETTLE_MS)
         }
       })
       child.once('exit', (code, signal) => { item.exit = { code, signal } })
       // close, not exit: exit may come before the last of stderr, the ready line included.
       const closed = new Promise<void>(r => child.once('close', () => { if (phase === 'wait') ready(false); r() }))
       child.once('error', e => { err ||= e.message; ready(false) })
-      if (!await answered) {
+      if (!await answered || shutting) {
         if (child.pid !== undefined) { // it spawned: stop it if it still runs, and take the rest of its stderr
-          if (!item.exit) kill(child)
+          if (!item.exit && !shutting) kill(child) // close() already signalled it
           await closed
         }
-        return { status: 502, body: { error: err.trim() || 'proxy exited before it was ready' } }
+        return { status: 502, body: { error: shutting ? 'serve is closing' : err.trim() || 'proxy exited before it was ready' } }
       }
       items.set(item.id, { item, child })
       return { status: 201, body: item }
-    } finally { starting.delete(name) }
+    } finally { starting.delete(name); if (spawned) startingChildren.delete(spawned) }
   }
 
   /** A live one is stopped and removed once it exits; a dead one is just removed. */
   async function stop(id: string): Promise<Result> {
     const p = items.get(id)
     if (!p) return { status: 404, body: { error: 'no such proxy' } }
-    if (!p.item.exit) {
-      const gone = new Promise(r => p.child.once('exit', r))
-      kill(p.child)
-      await gone
-    }
+    if (!p.item.exit) await halt(p)
     items.delete(id)
     return { status: 200, body: p.item }
   }
@@ -106,6 +110,10 @@ export function proxies(cli: (args: string[]) => ChildProcess, killMs = 5000) {
     list: () => [...items.values()].map(p => p.item),
     start, stop,
     /** Stops them all without waiting: serve is closing. */
-    close: () => { for (const p of live()) kill(p.child) },
+    close: () => {
+      shutting = true
+      for (const p of live()) void halt(p)
+      for (const c of startingChildren) if (c.exitCode === null && c.signalCode === null) kill(c)
+    },
   }
 }
