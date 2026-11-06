@@ -61,7 +61,7 @@ memory, skills) is labelled `harness` or `you`, not with a file name. Two things
 
   ```text
   <system-reminder>
-  Contents of /home/me/project/RULES.md (project rules):
+  Contents of /path/to/project/RULES.md (project rules):
   …the file's text…
   </system-reminder>
   ```

@@ -61,7 +61,7 @@
 
   ```text
   <system-reminder>
-  Contents of /home/me/project/RULES.md (project rules):
+  Contents of /path/to/project/RULES.md (project rules):
   …текст файла…
   </system-reminder>
   ```
