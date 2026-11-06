@@ -57,6 +57,7 @@ label[title], .label > span[title], .row > span[title], th[title], summary[title
 .label button { min-height: 24px; padding: 0 8px; font-size: 12px; font-weight: 500; }
 .runs b { font-weight: 600; }
 .muted { color: var(--muted); }
+.form-err { white-space: pre-wrap; }
 .warn { color: var(--warn); } .err { color: var(--err); }
 
 /* Trace: every event gets a kind tag in a left gutter, the text stays as it was. */
@@ -188,3 +189,9 @@ button.link:hover:not(:disabled) { background: none; }
 .evolve ul.notes li { display: flex; gap: 8px; justify-content: space-between; align-items: flex-start; padding: 6px 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
 .evolve ul.notes .muted { font: 12px var(--mono); }
 .evolve ul.changes { list-style: none; padding: 0; } .evolve ul.changes li { padding: 6px 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; } .evolve .line .chip { margin-right: 4px; }
+.proxy { padding: 8px 0; }
+.proxy-form { display: grid; grid-template-columns: max-content 1fr; gap: 6px 12px; align-items: start; max-width: 720px; }
+.proxy-form div { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; } .proxy-form div input { width: 100%; }
+.proxy-card { border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; margin: 8px 0; max-width: 720px; }
+.proxy-card pre { font: 12px var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; margin: 6px 0; }
+.proxy-card .chip { margin-left: 6px; }
