@@ -13,8 +13,7 @@ function realFile(file: string, kind: Kind, ext: string): string {
   const no = (why: string) => new Error(`${kind} ${file}: ${why}`)
   if (!path.isAbsolute(file)) throw no('the path must be absolute')
   let real: string
-  try { real = realpathSync(file) } catch (e) { throw no((e as Error).message) }
-  if (!statSync(real).isFile()) throw no('not a file')
+  try { real = realpathSync(file); if (!statSync(real).isFile()) throw new Error('not a file') } catch (e) { throw no((e as Error).message) }
   if (path.extname(real) !== ext) throw no(`not a ${ext} file: ${real}`)
   return real
 }
@@ -40,11 +39,26 @@ export async function loadOwnDialect(file: string): Promise<Dialect> {
   return guard(d as Dialect)
 }
 
-/** `d` with every call's return shape checked; anything thrown that is not an Error becomes one naming the method. */
+/**
+ * `d` with every call's return shape checked; anything thrown that is not an Error becomes one. Messages start with
+ * the method, except for matches and partial, whose log lines in the server name it already; the server names the id.
+ */
 function guard(d: Dialect): Dialect {
-  const fail = (m: string, why: unknown): never => { throw why instanceof Error ? why : new Error(`dialect ${d.id}: ${m}: ${String(why)}`) }
+  const fail = (m: string, why: unknown): never => {
+    if (why instanceof Error) throw why
+    throw new Error(m === 'matches' || m === 'partial' ? String(why) : `${m}: ${String(why)}`)
+  }
   const call = <M extends typeof METHODS[number]>(m: M, args: Parameters<Dialect[M]>): ReturnType<Dialect[M]> => {
     try { return (d[m] as (...a: unknown[]) => ReturnType<Dialect[M]>).apply(d, args) } catch (e) { return fail(m, e) }
+  }
+  /** A sync method's result; a thenable is a bad shape, and its later rejection must not go unhandled (it would end the process). */
+  const sync = (m: 'matches' | 'keyOf' | 'toolResults', args: unknown[]): unknown => {
+    const r = call(m, args as never) as unknown
+    if (r && typeof (r as { then?: unknown }).then === 'function') {
+      Promise.resolve(r).catch(() => {})
+      fail(m, 'must return synchronously, not a Promise')
+    }
+    return r
   }
   const awaited = async <M extends 'readReply' | 'partial'>(m: M, args: Parameters<Dialect[M]>) => {
     try { return await call(m, args) } catch (e) { return fail(m, e) }
@@ -52,18 +66,22 @@ function guard(d: Dialect): Dialect {
   const str = (v: unknown) => typeof v === 'string'
   return {
     id: d.id, label: d.label,
-    matches: (...a) => call('matches', a),
+    matches(...a) {
+      const r = sync('matches', a)
+      if (typeof r !== 'boolean') fail('matches', 'must return a boolean, synchronously')
+      return r as boolean
+    },
     keyOf(...a) {
-      const r = call('keyOf', a) as unknown as Record<string, unknown>
-      if (!r || typeof r !== 'object' || typeof r.then === 'function' || !str(r.key) || !str(r.taskText) || !str(r.model) || !Number.isInteger(r.len) || (r.len as number) < 0) {
+      const r = sync('keyOf', a) as Record<string, unknown>
+      if (!r || typeof r !== 'object' || !str(r.key) || !str(r.taskText) || !str(r.model) || !Number.isInteger(r.len) || (r.len as number) < 0) {
         fail('keyOf', 'must return { key, taskText, model } strings and len, an integer >= 0, synchronously')
       }
       return r as ReturnType<Dialect['keyOf']>
     },
     toolResults(...a) {
-      const r = call('toolResults', a)
+      const r = sync('toolResults', a)
       if (!Array.isArray(r)) fail('toolResults', 'must return an array')
-      return r
+      return r as ReturnType<Dialect['toolResults']>
     },
     async readReply(...a) {
       const r = await awaited('readReply', a)
@@ -105,7 +123,7 @@ export function mergeConnections(files: string[], builtIn: Connection[]): { list
   const fallbacks = list.filter(c => !hinted(c))
   if (fallbacks.length !== 1) {
     // Only an own file changes the count: one with empty hints, or one that replaced the built-in fallback.
-    const culprit = own.find(o => !hinted(o.item) || builtIn.some(b => !hinted(b) && b.name === o.item.name))?.file ?? files[0]
+    const culprit = own.find(o => !hinted(o.item) || builtIn.some(b => !hinted(b) && b.name === o.item.name))!.file
     throw new Error(`connection ${culprit}: needs exactly one connection with empty hints after merging, found ${fallbacks.length} (an own fallback must be named generic)`)
   }
   return { list: [...list.filter(hinted), ...fallbacks], lines }

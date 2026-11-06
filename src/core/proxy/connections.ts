@@ -31,7 +31,7 @@ export function checkConnection(c: unknown, label: string): Connection {
   if (!isObject(c.hints)) throw no('hints must be an object')
   for (const [k, h] of Object.entries(c.hints)) {
     if (!HINT_KEYS.has(k)) throw no(`unknown hint ${JSON.stringify(k)}; allowed: ${[...HINT_KEYS].join(', ')}`)
-    if (typeof h !== 'string' || h !== h.toLowerCase() || SECRET.has(h)) throw no(`hint header ${JSON.stringify(h)} is not a lowercase header name that carries no key`)
+    if (typeof h !== 'string' || h === '' || h !== h.toLowerCase() || SECRET.has(h)) throw no(`hint header ${JSON.stringify(h)} is not a lowercase header name that carries no key`)
   }
   if (!Array.isArray(c.taskStrip) || !c.taskStrip.every(p => Array.isArray(p) && p.length === 2 && p.every(s => typeof s === 'string' && s !== ''))) {
     throw no('taskStrip must be a list of [open, close] pairs of non-empty strings')

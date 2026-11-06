@@ -45,10 +45,11 @@ test('path refusals name the file', async () => {
 
 test('dialect refusals', async () => {
   const d = dir({
-    'syntax.mjs': 'export default {', 'nodefault.mjs': 'export const x = 1\n',
-    'badid.mjs': dialectSrc({ id: "'Bad_ID'" }), 'nokey.mjs': dialectSrc({ keyOf: '1' }), 'nolabel.mjs': dialectSrc({ label: '2' }),
+    // Neutral names: a reason regex must not pass by matching the path.
+    'a.mjs': 'export default {', 'b.mjs': 'export const x = 1\n',
+    'c.mjs': dialectSrc({ id: "'Bad_ID'" }), 'd.mjs': dialectSrc({ keyOf: '1' }), 'e.mjs': dialectSrc({ label: '2' }),
   })
-  for (const [f, why] of [['syntax.mjs', /./], ['nodefault.mjs', /default/], ['badid.mjs', /id/], ['nokey.mjs', /keyOf/], ['nolabel.mjs', /label/]] as const) {
+  for (const [f, why] of [['a.mjs', /./], ['b.mjs', /default/], ['c.mjs', /id must/], ['d.mjs', /keyOf/], ['e.mjs', /label/]] as const) {
     const p = join(d, f)
     await expect(loadOwnDialect(p), f).rejects.toThrow(`dialect ${p}: `)
     await expect(loadOwnDialect(p), f).rejects.toThrow(why)
@@ -59,7 +60,7 @@ test('the same dialect file twice is a duplicate id, refused', async () => {
   const p = join(dir({ 'a.mjs': dialectSrc() }), 'a.mjs')
   const own = [{ item: await loadOwnDialect(p), file: p }, { item: await loadOwnDialect(p), file: p }]
   expect(() => mergeOwn(own, [...DIALECTS], d => d.id, 'dialect')).toThrow(`dialect ${p}: `)
-  expect(() => mergeOwn(own, [...DIALECTS], d => d.id, 'dialect')).toThrow(/mine/)
+  expect(() => mergeOwn(own, [...DIALECTS], d => d.id, 'dialect')).toThrow(/: mine is already loaded/)
 })
 
 test('the shape guard: a bad return names the method', async () => {
@@ -76,8 +77,8 @@ test('the shape guard: a bad return names the method', async () => {
   await expect((await load('reply.mjs')).readReply([], '')).rejects.toThrow(/readReply/)
   expect((await load('results.mjs')).toolResults.bind(null, {}, [])).toThrow(/toolResults/)
   const t = await load('thrown.mjs')
-  expect(t.keyOf.bind(null, {})).toThrow(new Error('dialect mine: keyOf: boom'))
-  await expect(t.readReply([], '')).rejects.toThrow(new Error('dialect mine: readReply: undefined'))
+  expect(t.keyOf.bind(null, {})).toThrow(new Error('keyOf: boom'))
+  await expect(t.readReply([], '')).rejects.toThrow(new Error('readReply: undefined'))
   // A good one passes its values through.
   const ok = await loadOwnDialect(NO_MESSAGES)
   expect(ok.keyOf({ prompt: 'p', history: ['a'], model: 'm' })).toEqual({ key: 'p', taskText: 'p', len: 1, model: 'm' })
@@ -87,8 +88,9 @@ test('connection refusals', () => {
   const d = dir({
     'bad.json': '{', 'top.json': conn({ extra: 1 }), 'hint.json': conn({ hints: { foo: 'x-foo' } }),
     'auth.json': conn({ hints: { session: 'authorization' } }), 'strip.json': conn({ taskStrip: [['a']] }),
+    'empty.json': conn({ hints: { session: '' } }),
   })
-  for (const [f, why] of [['bad.json', /JSON/], ['top.json', /extra/], ['hint.json', /foo/], ['auth.json', /authorization/], ['strip.json', /taskStrip/]] as const) {
+  for (const [f, why] of [['bad.json', /JSON/], ['top.json', /extra/], ['hint.json', /foo/], ['auth.json', /authorization/], ['strip.json', /taskStrip/], ['empty.json', /hint header ""/]] as const) {
     const p = join(d, f)
     expect(() => loadOwnConnection(p), f).toThrow(`connection ${p}: `)
     expect(() => loadOwnConnection(p), f).toThrow(why)
@@ -168,6 +170,46 @@ test('an own dialect whose keyOf is async: logged by method, the request still f
   cleanups.push(() => px.stop())
   const r = await fetch(`http://127.0.0.1:${px.port}/x`, { method: 'POST', body: '{}' })
   expect(await r.text()).toBe('ok')
-  expect(lines.join('\n')).toMatch(/not recorded: dialect mine: .*keyOf/)
+  expect(lines).toContain('not recorded: dialect mine: keyOf: must return synchronously, not a Promise')
   expect(readdirSync(runsDir)).toEqual([])
+})
+
+/** An upstream that answers every request with one OpenAI JSON reply; a proxy over it with `dialectFiles`. */
+async function overUpstream(dialectFiles: string[]) {
+  const reply = JSON.stringify({ choices: [{ index: 0, message: { role: 'assistant', content: 'up' }, finish_reason: 'stop' }] })
+  const up = http.createServer((q, res) => { q.resume(); q.on('end', () => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(reply) }) })
+  await new Promise<void>(r => up.listen(0, '127.0.0.1', r))
+  cleanups.push(() => { up.closeAllConnections(); up.close() })
+  const lines: string[] = []
+  const runsDir = tmpSync('lhb-own-runs-')
+  const px = await startProxy({ upstream: `http://127.0.0.1:${(up.address() as { port: number }).port}`, port: 0, runsDir, harness: 't', dialectFiles, log: l => lines.push(l) })
+  cleanups.push(() => px.stop())
+  const post = () => fetch(`http://127.0.0.1:${px.port}/v1/chat/completions`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model: 'm', messages: [{ role: 'user', content: 'do it' }] }) }).then(r => r.text())
+  return { px, post, reply, lines, runsDir }
+}
+
+test('an async keyOf or matches that rejects later: the agent gets the upstream reply, the proxy stays up', async () => {
+  const d = dir({
+    'k.mjs': dialectSrc({ matches: '() => true', keyOf: "async () => { throw new Error('later') }" }),
+    'm.mjs': dialectSrc({ id: "'other'", matches: "async () => { throw new Error('later') }" }),
+  })
+  for (const f of ['k.mjs', 'm.mjs']) {
+    const { post, reply } = await overUpstream([join(d, f)])
+    expect(await post(), f).toBe(reply)
+    await new Promise(r => setTimeout(r, 20)) // let a stray rejection surface
+    expect(await post(), f).toBe(reply)
+  }
+})
+
+test('an async matches is no match: the built-in openai-chat records the request', async () => {
+  const p = join(dir({ 'a.mjs': dialectSrc({ matches: 'async () => true' }), 'b.mjs': dialectSrc({ matches: '() => 1' }) }), 'a.mjs')
+  expect((await loadOwnDialect(p.replace(/a\.mjs$/, 'b.mjs'))).matches.bind(null, 'POST', '/')).toThrow(new Error('must return a boolean, synchronously'))
+  const { px, post, lines, runsDir } = await overUpstream([p])
+  await post()
+  await px.stop()
+  expect(lines).toContain('not recorded: dialect mine: matches: must return synchronously, not a Promise')
+  const files = readdirSync(runsDir).filter(f => f.endsWith('.jsonl'))
+  expect(files).toHaveLength(1)
+  const events = readFileSync(join(runsDir, files[0]), 'utf8').trim().split('\n').map(l => JSON.parse(l))
+  expect(events.find(e => e.type === 'llm_response')).toMatchObject({ content: 'up' })
 })
