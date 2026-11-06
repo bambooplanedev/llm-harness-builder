@@ -26,12 +26,7 @@ export function textOf(content: unknown): string {
   return ''
 }
 
-/** JSON with object keys sorted, so the same message serialized twice compares equal. */
-export function stable(v: unknown): string {
-  if (Array.isArray(v)) return `[${v.map(stable).join(',')}]`
-  if (v && typeof v === 'object') return `{${Object.keys(v).sort().map(k => `${JSON.stringify(k)}:${stable((v as Record<string, unknown>)[k])}`).join(',')}}`
-  return JSON.stringify(v) ?? 'null'
-}
+export { stable } from '../../diff.js'
 
 /** The `messages` array of a request body, [] when absent. */
 export function messagesOf(payload: object): any[] {

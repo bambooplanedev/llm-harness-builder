@@ -32,6 +32,14 @@ const runs = ref<RunSummary[]>([]); const runId = ref(''); const events = ref<Ha
 const mcpError = ref('')
 const live = ref<Delta>({}) // the current turn's streamed text; live-only, never in the trace
 let unsub: (() => void) | null = null
+/** The run picked in "compare with…": its own stream, closed whenever the pick changes, another run opens, or the page goes. Never stored in the browser. */
+const exampleOpen = ref(false) // an example trace on screen: no own run to compare it with
+const compareId = ref(''); const compareEvents = ref<HarnessEvent[]>([]); const compareError = ref('')
+let compareUnsub: (() => void) | null = null
+function compareWith(id: string) {
+  compareUnsub?.(); compareUnsub = null; compareId.value = id; compareEvents.value = []; compareError.value = ''
+  if (id) compareUnsub = api.events(id, e => compareEvents.value.push(e), msg => (compareError.value = msg))
+}
 /** The task of the run on screen; the form's textarea is the next run's, not this one's. */
 const runTask = ref('')
 /** The run this page started. Run is about it, not about any run opened from the list (a live proxy session among them). */
@@ -106,7 +114,7 @@ async function load(name: string, keepBackend = false) {
 }
 async function saveAs(name: string) { error.value = ''; try { config.value.name = name; await api.saveHarness(name, outbound(config.value)); await refreshLists() } catch (e) { error.value = (e as Error).message } }
 function open(id: string, runTaskText: string, active = false, example = false) {
-  unsub?.(); events.value = []; live.value = {}; verdict.value = ''; runId.value = id; runTask.value = runTaskText; openActive.value = active
+  compareWith(''); exampleOpen.value = example; unsub?.(); events.value = []; live.value = {}; verdict.value = ''; runId.value = id; runTask.value = runTaskText; openActive.value = active
   unsub = api.events(id,
     e => { events.value.push(e); if (e.type === 'done') refreshLists(); else if (e.type !== 'error') live.value = {} }, // keep partial text visible after an abort
     msg => (error.value = msg),
@@ -154,7 +162,7 @@ async function pollEvolve() {
   if (was && !evolve.value.running) refreshLists().catch(e => (error.value = e.message))
   if ((evolve.value.running || was) && !gone) evolveTimer = setTimeout(pollEvolve, 2000)
 }
-onUnmounted(() => { gone = true; clearTimeout(evolveTimer) })
+onUnmounted(() => { compareUnsub?.(); gone = true; clearTimeout(evolveTimer) })
 
 const settings = ref<HTMLDialogElement | null>(null)
 onMounted(async () => { void pollEvolve(); await refreshLists(); if (listsModelsByItself(config.value.backend)) await refreshModels() })
@@ -220,7 +228,15 @@ watch(() => config.value.backend.model, () => {
           <span v-if="verdict" :class="['chip', 'solid', verdict === 'PASS' ? 'ok' : 'err']">{{ verdict }}</span>
         </div>
         <ContextBar :events="events" :num-ctx="config.backend.kind === 'ollama' ? config.backend.numCtx : undefined" />
-        <Trace v-if="runId" :events="events" :live="live" :task="runTask" :names="names" @approve="approve" />
+        <div v-if="runId && !exampleOpen && runs.length > 1" class="row">
+          <span class="muted">compare with…</span>
+          <select :title="t('trace.compare')" :value="compareId" @change="compareWith(($event.target as HTMLSelectElement).value)">
+            <option value="">none</option>
+            <option v-for="r in runs.filter(r => r.id !== runId)" :key="r.id" :value="r.id">{{ r.id }} · {{ shown(r.task, names).slice(0, 40) }}</option>
+          </select>
+          <span v-if="compareError" class="muted">{{ compareError }}</span>
+        </div>
+        <Trace v-if="runId" :events="events" :live="live" :task="runTask" :names="names" :compare-events="compareId && !compareError ? compareEvents : undefined" :compare-id="compareId" @approve="approve" />
         <h4>Runs <button class="link" @click="openExamples">Examples</button></h4>
         <div v-if="!runs.length" class="start">
           <h5 class="group">{{ t('start.title') }}</h5>

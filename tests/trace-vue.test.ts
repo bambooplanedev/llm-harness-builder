@@ -199,3 +199,101 @@ test('notes_loaded and note_written render in the trace', async () => {
   expect(html).toContain('note: use npm test')
   expect(html).toContain('note not written: reply is not JSON')
 })
+
+const reqEv = (seq: number, turn: number, payload: unknown): HarnessEvent => ({ seq, turn, ts: seq, type: 'llm_request', payload })
+const body = (system: string, model = 'm1') => ({ model, messages: [{ role: 'system', content: system }, { role: 'user', content: 'go' }] })
+const inspector = (html: string, turn: number) => html.split('<div class="turn"').filter(s => s.includes(`turn ${turn} —`))[0] ?? ''
+
+test('request diff: shown from the second request, not the first', async () => {
+  const html = await render({ approvable: false, events: [reqEv(0, 1, body('be brief')), reqEv(1, 2, body('be long'))] })
+  expect(inspector(html, 2)).toContain('changes since the previous request')
+  expect(inspector(html, 2)).toContain('+ system: be long')
+  expect(inspector(html, 2)).toContain('− system: be brief')
+  expect(inspector(html, 1)).not.toContain('changes since')
+})
+
+test('request diff: an unreadable body gives no block', async () => {
+  const html = await render({ approvable: false, events: [reqEv(0, 1, body('a')), reqEv(1, 2, { model: 'm1' })] })
+  expect(html).not.toContain('changes since')
+})
+
+test('request diff: only appended messages is one muted line', async () => {
+  const b2 = { ...body('a'), messages: [...body('a').messages, { role: 'assistant', content: 'ok' }] }
+  const html = await render({ approvable: false, events: [reqEv(0, 1, body('a')), reqEv(1, 2, b2)] })
+  expect(html).toContain('no change besides +1 appended')
+})
+
+test('request diff: film mode hides the model name in the block', async () => {
+  setFilm(true)
+  const html = await render({ approvable: false, events: [reqEv(0, 1, body('x', 'qwen3:8b')), reqEv(1, 2, body('y', 'qwen3:8b-b'))] })
+  expect(html).toContain('changes since the previous request')
+  expect(html).not.toContain('qwen3')
+})
+
+test('request diff: film mode replaces a model name inside a changed system line', async () => {
+  setFilm(true)
+  const evs = [reqEv(0, 1, body('using qwen3:8b', 'qwen3:8b')), reqEv(1, 2, body('now using qwen3:8b', 'qwen3:8b'))]
+  const html = await render({ approvable: false, events: evs })
+  expect(inspector(html, 2)).toContain('+ system: now using')
+  expect(html).not.toContain('qwen3')
+})
+
+test('request diff: tool, history and param lines have their exact formats', async () => {
+  const a = { model: 'm1', temperature: 0.2, tools: [{ name: 'gone' }, { name: 'edit', v: 1 }], messages: [{ role: 'user', content: 'one' }, { role: 'assistant', content: 'two' }, { role: 'user', content: 'three' }] }
+  const b = { model: 'm1', temperature: 0.7, tools: [{ name: 'edit', v: 2 }, { name: 'new' }], messages: [{ role: 'user', content: 'one' }, { role: 'assistant', content: 'TWO' }] }
+  const html = await render({ approvable: false, events: [reqEv(0, 1, a), reqEv(1, 2, b)] })
+  for (const s of ['+ tool new', '− tool gone', '~ tool edit', 'history changed from #2', '#2: + TWO', '#2: − two', '−1 removed', 'temperature: 0.2 → 0.7']) expect(html).toContain(s)
+})
+
+test('request diff: an unreadable request between valid ones gives no block for either', async () => {
+  const html = await render({ approvable: false, events: [reqEv(0, 1, { model: 'm1' }), reqEv(1, 2, body('a'))] })
+  expect(html).not.toContain('changes since')
+})
+
+test('compare: the k-th request against the other run, titled with its id', async () => {
+  const html = await render({ approvable: false, compareId: 'abc', compareEvents: [reqEv(0, 1, body('other prompt'))], events: [reqEv(0, 1, body('be long'))] })
+  expect(inspector(html, 1)).toContain('vs abc request 1')
+  expect(inspector(html, 1)).toContain('+ system: be long')
+  expect(inspector(html, 1)).toContain('− system: other prompt')
+})
+
+test('compare: no k-th request there is a muted line; an unreadable body gives no block', async () => {
+  const evs = [reqEv(0, 1, body('a')), reqEv(1, 2, body('a'))]
+  const html = await render({ approvable: false, compareId: 'abc', compareEvents: [reqEv(0, 1, body('b'))], events: evs })
+  expect(inspector(html, 2)).toContain('no request 2 there')
+  expect(inspector(html, 1)).toContain('vs abc request 1')
+  const bad = await render({ approvable: false, compareId: 'abc', compareEvents: [reqEv(0, 1, { model: 'm' })], events: [reqEv(0, 1, body('a'))] })
+  expect(bad).not.toContain('vs abc')
+  expect(bad).not.toContain('no request')
+})
+
+test('compare: nothing without a compare run; film hides names in the block', async () => {
+  expect(await render({ approvable: false, events: [reqEv(0, 1, body('a'))] })).not.toContain('vs ')
+  setFilm(true)
+  const html = await render({ approvable: false, compareId: 'abc', compareEvents: [reqEv(0, 1, body('x', 'qwen3:8b'))], events: [reqEv(0, 1, body('y', 'qwen3:8b-b'))] })
+  expect(html).toContain('vs abc request 1')
+  expect(html).not.toContain('qwen3')
+})
+
+test('request diff: a block draws at most 100 lines and counts the rest', async () => {
+  const sys = (n: number) => ({ model: 'm1', messages: [{ role: 'system', content: Array.from({ length: n }, (_, i) => `line ${i}`).join('\n') }, { role: 'user', content: 'go' }] })
+  const html = await render({ approvable: false, events: [reqEv(0, 1, sys(0)), reqEv(1, 2, sys(150))] })
+  expect(html).toContain('+ system: line 99')
+  expect(html).not.toContain('+ system: line 100')
+  expect(html).toContain('… 50 more lines')
+})
+
+test('compare: the vs block carries the vs hint, the in-run block the in-run hint', async () => {
+  const html = await render({ approvable: false, compareId: 'abc', compareEvents: [reqEv(0, 1, body('a')), reqEv(1, 2, body('a'))], events: [reqEv(0, 1, body('b')), reqEv(1, 2, body('c'))] })
+  const vs = en['trace.reqDiffVs'], inRun = en['trace.reqDiff']
+  expect(html).toMatch(new RegExp(`title="${vs.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}">vs abc request 2`))
+  expect(html).toContain(`title="${inRun}">changes since`)
+  expect(uk['trace.reqDiffVs']).toBeTruthy()
+})
+
+test('film: a filmed diff is built once per diff object, not per render', async () => {
+  setFilm(true)
+  const html = await render({ approvable: false, events: [reqEv(0, 1, body('x', 'qwen3:8b')), reqEv(1, 2, body('y', 'qwen3:8b'))] })
+  expect(html).toContain('+ system: y')
+  expect(html).not.toContain('qwen3')
+})
