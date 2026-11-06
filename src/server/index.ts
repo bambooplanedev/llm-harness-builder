@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { RunStore, WorkdirBusyError, safeName } from './runs.js'
 import { refusal } from './origin.js'
+import { proxies as proxyRunner } from './proxies.js'
 import { validateConfig, backendErrors, keyProblem, type HarnessConfig, type RunParams } from '../core/config.js'
 import { validateWorkdir } from '../core/tools/sandbox.js'
 import { createBackend, type Backend } from '../core/backends/index.js'
@@ -18,9 +19,10 @@ import { loadRepoTasks, consentText, consentHash, hasConsent, saveConsent } from
 import { readNotes, removeNotes, notesPath, notesKey } from '../core/notes.js'
 import { splitSets, splitOf, runCount, MODES, neededFlips, referenceLabel, ALLOWED } from '../core/evolve.js'
 
-/** `cli` starts `llm-harness-builder <args>` (args[0] is `bench` or `evolve`) with stdout and stderr piped; without it the page cannot start a job.
+/** `cli` starts `llm-harness-builder <args>` (args[0] is `bench`, `evolve` or `proxy`) with stdout and stderr piped; without it the page cannot start a job.
+ *  `proxyKillMs`: how long Stop waits after SIGINT before SIGKILL (5000).
  *  `examplesDir`: recorded runs the three GET routes read with `?example=1`; nothing ever writes there. */
-export type ServerOpts = { port: number; runsDir: string; harnessesDir: string; examplesDir?: string; staticDir?: string; backendFactory?: (b: HarnessConfig['backend']) => Backend; cli?: (args: string[]) => ChildProcess }
+export type ServerOpts = { port: number; runsDir: string; harnessesDir: string; examplesDir?: string; staticDir?: string; backendFactory?: (b: HarnessConfig['backend']) => Backend; cli?: (args: string[]) => ChildProcess; proxyKillMs?: number }
 
 const MIME: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml' }
 const MAX_BODY_BYTES = 5e6
@@ -72,6 +74,8 @@ export async function startServer(opts: ServerOpts) {
   const busy = () => { const k = runningKind(); return k && `${k === 'bench' ? 'a' : 'an'} ${k} started from this page is still running` }
   /** Realpaths of the demo projects this server created: Check runs only in one of them, never in a folder the page names. */
   const demoDirs = new Set<string>()
+
+  const proxies = opts.cli && proxyRunner(opts.cli, opts.proxyKillMs)
 
   const exists = (f: string) => stat(f).then(() => true, () => false)
   /** The one bench start: 409 while one runs, else spawns `opts.cli([bench, --out, ...args])`; 201 once its JSON exists (past preflight), else 502 with its stderr. */
@@ -291,6 +295,17 @@ export async function startServer(opts: ServerOpts) {
         child.once('error', e => { if (job === j) job = undefined; lastEvolve = { harness: j.harness!, code: null, signal: null, err: String(e), out: '' } })
         return json(res, 201, {})
       }
+      if (proxies && m('GET', /^\/api\/proxies$/)) return json(res, 200, proxies.list())
+      if (proxies && m('POST', /^\/api\/proxies$/)) {
+        // Starting one runs the own files it names: only this page may, never a local client without Origin (curl, any process).
+        if (req.headers.origin !== `http://${req.headers.host}`) return json(res, 403, { error: 'forbidden origin' })
+        const { status, body } = await proxies.start(await readBody(req) ?? {})
+        return json(res, status, body)
+      }
+      if (proxies && (mm = m('POST', /^\/api\/proxies\/([^/]+)\/stop$/))) {
+        const { status, body } = await proxies.stop(mm[1])
+        return json(res, status, body)
+      }
       if (opts.cli && m('GET', /^\/api\/evolve$/)) {
         // No keys, no notes: the stderr of a child that gets the environment of serve, which redacts its own.
         const round = runningKind() === 'evolve' ? [...job!.err.matchAll(/^--- round (\d+)\/(\d+)$/gm)].pop() : undefined
@@ -404,5 +419,5 @@ export async function startServer(opts: ServerOpts) {
 
   await new Promise<void>(r => server.listen(opts.port, '127.0.0.1', r))
   const port = (server.address() as { port: number }).port
-  return { port, close: () => new Promise<void>(r => { job?.child.kill(); server.close(() => r()); server.closeAllConnections() }) }
+  return { port, close: () => new Promise<void>(r => { job?.child.kill(); proxies?.close(); server.close(() => r()); server.closeAllConnections() }) }
 }
