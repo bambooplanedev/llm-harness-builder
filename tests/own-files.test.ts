@@ -213,3 +213,39 @@ test('an async matches is no match: the built-in openai-chat records the request
   const events = readFileSync(join(runsDir, files[0]), 'utf8').trim().split('\n').map(l => JSON.parse(l))
   expect(events.find(e => e.type === 'llm_response')).toMatchObject({ content: 'up' })
 })
+
+const OLLAMA = fileURLToPath(new URL('../examples-dialects/ollama-chat.mjs', import.meta.url))
+
+test('the Ollama example records a tool round, streamed and not', async () => {
+  const ndjson = [
+    { model: 'm', message: { role: 'assistant', content: '', tool_calls: [{ function: { name: 'read', arguments: { path: 'a' } } }] }, done: false },
+    { model: 'm', message: { role: 'assistant', content: '' }, done: true, done_reason: 'stop', prompt_eval_count: 7, eval_count: 3 },
+  ].map(o => JSON.stringify(o)).join('\n') + '\n'
+  const last = { model: 'm', message: { role: 'assistant', content: 'done' }, done: true, done_reason: 'stop', prompt_eval_count: 9, eval_count: 1 }
+  const replies = [{ type: 'application/x-ndjson', body: ndjson }, { type: 'application/json', body: JSON.stringify(last) }]
+  const up = http.createServer((q, res) => { q.resume(); q.on('end', () => { const r = replies.shift()!; res.writeHead(200, { 'content-type': r.type }); res.end(r.body) }) })
+  await new Promise<void>(r => up.listen(0, '127.0.0.1', r))
+  cleanups.push(() => { up.closeAllConnections(); up.close() })
+  const runsDir = tmpSync('lhb-own-runs-')
+  const px = await startProxy({ upstream: `http://127.0.0.1:${(up.address() as { port: number }).port}`, port: 0, runsDir, harness: 't', dialectFiles: [OLLAMA] })
+  const send = (messages: object[], stream: boolean) => fetch(`http://127.0.0.1:${px.port}/api/chat`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model: 'm', messages, stream }) }).then(r => r.text())
+  const user = { role: 'user', content: 'read a' }
+  await send([user], true)
+  await send([user, { role: 'assistant', content: '', tool_calls: [{ function: { name: 'read', arguments: { path: 'a' } } }] }, { role: 'tool', tool_name: 'read', content: 'x' }], false)
+  await px.stop()
+  const files = readdirSync(runsDir).filter(f => f.endsWith('.jsonl'))
+  expect(files).toHaveLength(1)
+  const [meta, ...events] = readFileSync(join(runsDir, files[0]), 'utf8').trim().split('\n').map(l => JSON.parse(l))
+  expect(meta.meta.task).toBe('read a')
+  expect(events.find(e => e.type === 'tool_call')).toMatchObject({ call: { name: 'read', args: { path: 'a' } } })
+  expect(events.find(e => e.type === 'tool_result')).toMatchObject({ name: 'read', output: 'x' })
+  expect(events.filter(e => e.type === 'llm_response').map(e => e.content)).toEqual(['', 'done'])
+  expect(events.at(-1)).toMatchObject({ type: 'done', turns: 2 })
+})
+
+test('the examples are self-contained, and my-harness.json passes the strict check', () => {
+  expect(/\bfrom\s+['"][^'"]*(dist|src)|\bimport\s*\(|require\(/.test(readFileSync(OLLAMA, 'utf8'))).toBe(false)
+  const c = loadOwnConnection(fileURLToPath(new URL('../examples-dialects/my-harness.json', import.meta.url)))
+  expect(c.name).not.toBe('generic')
+  expect(Object.keys(c.hints).length).toBeGreaterThan(0)
+})

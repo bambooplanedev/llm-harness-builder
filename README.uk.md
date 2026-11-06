@@ -609,6 +609,8 @@ thinking чи id викликів. Жоден інструмент не вико
 
     llm-harness-builder proxy --upstream http://127.0.0.1:8080 --port 8090 --name opencode
 
+Власні формати API та підключення агентів додаються файлами: див. [Власні діалекти й підключення](https://github.com/bambooplanedev/llm-harness-builder/blob/main/docs/dialects.uk.md).
+
 Запускайте його в тій теці, де працює `serve` (обидва використовують `./runs`), і дайте агентові
 `http://127.0.0.1:8090/v1` як базовий URL OpenAI. `--upstream` — корінь сервера, а не його `/v1`.
 Проходить кожен шлях; записуються лише `POST …/chat/completions` і `POST /v1/messages`. Ctrl-C (або `kill`) закінчує кожен

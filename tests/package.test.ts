@@ -99,3 +99,10 @@ test('what evolve leaves in harnesses/ is not packed', () => {
   expect(paths.filter(p => p.startsWith('harnesses/h.'))).toEqual([])
   for (const f of readdirSync('harnesses').filter(f => !/\.evolve|\.v\d/.test(f))) expect(paths).toContain(`harnesses/${f}`)
 })
+
+test('the package ships the dialect examples, not the dialect docs', () => {
+  const out = execSync('npm pack --dry-run --json --ignore-scripts', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+  const paths: string[] = JSON.parse(out)[0].files.map((f: { path: string }) => f.path)
+  for (const f of ['ollama-chat.mjs', 'my-harness.json']) expect(paths).toContain(`examples-dialects/${f}`)
+  expect(paths.filter(p => /^docs\/dialects/.test(p))).toEqual([])
+})
