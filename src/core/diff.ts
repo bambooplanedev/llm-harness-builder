@@ -116,24 +116,24 @@ export type ReqDiff = {
   params: { path: string; a: string; b: string }[]
 }
 
-type Obj = Record<string, unknown>
-const isObj = (v: unknown): v is Obj => v !== null && typeof v === 'object' && !Array.isArray(v)
+export type Obj = Record<string, unknown>
+export const isObj = (v: unknown): v is Obj => v !== null && typeof v === 'object' && !Array.isArray(v)
 
 /** Drop every `cache_control` key, at any depth: it marks cache breakpoints, not content. */
-function clean(v: unknown): unknown {
+export function clean(v: unknown): unknown {
   if (Array.isArray(v)) return v.map(clean)
   if (isObj(v)) return Object.fromEntries(Object.entries(v).filter(([k]) => k !== 'cache_control').map(([k, x]) => [k, clean(x)]))
   return v
 }
 
 /** Text of a string or of a list of parts (text blocks only; used for tool_result content). */
-function plain(c: unknown): string {
+export function plain(c: unknown): string {
   if (typeof c === 'string') return c
   return Array.isArray(c) ? c.map(p => (typeof p === 'string' ? p : isObj(p) && typeof p.text === 'string' ? p.text : '')).filter(Boolean).join('\n') : ''
 }
 
 /** One content part as one line: text as is, a call as `call <name> <input>`, anything else as `[type]`. */
-function partLine(p: unknown): string {
+export function partLine(p: unknown): string {
   if (typeof p === 'string') return p
   if (!isObj(p)) return ''
   if (p.type === 'text' || (p.type === undefined && typeof p.text === 'string')) return String(p.text ?? '')
@@ -143,7 +143,7 @@ function partLine(p: unknown): string {
 }
 
 /** The text of one raw message: its content parts, then OpenAI tool_calls, one line each. */
-function messageText(m: Obj): string {
+export function messageText(m: Obj): string {
   const lines = Array.isArray(m.content) ? m.content.map(partLine) : typeof m.content === 'string' ? [m.content] : []
   if (Array.isArray(m.tool_calls)) {
     for (const t of m.tool_calls) {
@@ -159,6 +159,13 @@ function systemText(system: unknown): string {
   return typeof system === 'string' ? system : Array.isArray(system) ? system.map(partLine).filter(Boolean).join('\n') : ''
 }
 
+/** How many messages at the start are system/developer: requestDiff counts them as system, not as messages. */
+export function leadingSystem(msgs: Obj[]): number {
+  let lead = 0
+  while (lead < msgs.length && (msgs[lead].role === 'system' || msgs[lead].role === 'developer')) lead++
+  return lead
+}
+
 const toolName = (t: unknown) => (isObj(t) ? (typeof t.name === 'string' ? t.name : isObj(t.function) && typeof t.function.name === 'string' ? t.function.name : undefined) : undefined)
 
 /**
@@ -170,8 +177,7 @@ export function requestDiff(a: unknown, b: unknown): ReqDiff | undefined {
   const [ca, cb] = [clean(a) as Obj, clean(b) as Obj]
   const read = (body: Obj) => {
     const msgs = (body.messages as unknown[]).filter(isObj)
-    let lead = 0
-    while (lead < msgs.length && (msgs[lead].role === 'system' || msgs[lead].role === 'developer')) lead++
+    const lead = leadingSystem(msgs)
     const system = [systemText(body.system), ...msgs.slice(0, lead).map(messageText)].filter(Boolean).join('\n')
     const rest = msgs.slice(lead).map(m => ({ key: stable([m.role, messageText(m)]), text: messageText(m) }))
     const tools = new Map((Array.isArray(body.tools) ? body.tools : []).map(t => [toolName(t) ?? stable(t), stable(t)]))

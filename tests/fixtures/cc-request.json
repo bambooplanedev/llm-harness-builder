@@ -1,0 +1,155 @@
+{
+  "model": "claude-test",
+  "system": [
+    {
+      "type": "text",
+      "text": "x-anthropic-billing-header: cc_version=0.0.0; cch=0000;"
+    },
+    {
+      "type": "text",
+      "text": "You are a test agent.",
+      "cache_control": {
+        "type": "ephemeral"
+      }
+    },
+    {
+      "type": "text",
+      "text": "\nYou are an agent that helps with software tasks.\n\n# Tone\nBe brief."
+    }
+  ],
+  "tools": [
+    {
+      "name": "Tool0",
+      "description": "Does thing 0.",
+      "input_schema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "Tool1",
+      "description": "Does thing 1.",
+      "input_schema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "Tool2",
+      "description": "Does thing 2.",
+      "input_schema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "Tool3",
+      "description": "Does thing 3.",
+      "input_schema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "Tool4",
+      "description": "Does thing 4.",
+      "input_schema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "Tool5",
+      "description": "Does thing 5.",
+      "input_schema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "Tool6",
+      "description": "Does thing 6.",
+      "input_schema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "Tool7",
+      "description": "Does thing 7.",
+      "input_schema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "Tool8",
+      "description": "Does thing 8.",
+      "input_schema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "Tool9",
+      "description": "Does thing 9.",
+      "input_schema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "Tool10",
+      "description": "Does thing 10.",
+      "input_schema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "Tool11",
+      "description": "Does thing 11.",
+      "input_schema": {
+        "type": "object",
+        "properties": {}
+      }
+    }
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "<system-reminder>\nCodebase and user instructions are shown below. Be sure to adhere to these instructions.\n\nContents of /home/u/.claude/CLAUDE.md (user's private global instructions for all projects):\n\n# CLAUDE.md\n\nGlobal preferences for every project.\n\n## Style\n\nKeep diffs small.\nA note: see Contents of /home/u/x.md (old): for history.\nContents of /home/u/notes.txt\n\n---\n\nContents of /home/u/.claude/projects/-home-u-proj/memory/MEMORY.md (user's auto-memory, persists across conversations):\n\n- [Plan](plan.md) — next step is the parser\n- [Stand](stand.md) — window 2 is mine\n</system-reminder>"
+        },
+        {
+          "type": "text",
+          "text": "<system-reminder>\nAs you answer the user's questions, you can use the following context:\n# userEmail\nThe user's email address is (not set).\n# gitStatus\nCurrent branch: main\n</system-reminder>"
+        },
+        {
+          "type": "text",
+          "text": "<system-reminder>\nEnd commit messages with a short trailer line.\n</system-reminder>\n"
+        },
+        {
+          "type": "text",
+          "text": "Say hello in one word"
+        }
+      ]
+    },
+    {
+      "role": "system",
+      "content": [
+        {
+          "type": "text",
+          "text": "SessionStart hook additional context: <EXTREMELY_IMPORTANT>\nYou have superpowers.\n\n**Below is the full content of your 'superpowers:using-superpowers' skill - your introduction to using skills:**\n\n---\nname: using-superpowers\ndescription: Use when starting any conversation\n---\n\n# Using Skills\n\nCheck for a skill before acting.\n</EXTREMELY_IMPORTANT>\n\n# Environment\nYou have been invoked in the following environment: \n - Primary working directory: /home/u/proj\n - Platform: linux\n\nThe following deferred tools are now available via ToolSearch:\nWebFetch\n\n# MCP Server Instructions\n\nThe following MCP servers have provided instructions:\n\n## demo\nCall demo tools gently.\n\nThe following skills are available for use with the Skill tool:\n\n- superpowers:brainstorming: Use before creative work.\n- superpowers:using-superpowers: Use when starting any conversation.\n\nToday's date is 2026-01-01.",
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        }
+      ]
+    }
+  ],
+  "max_tokens": 1000,
+  "stream": true
+}
