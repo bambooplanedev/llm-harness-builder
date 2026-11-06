@@ -2,6 +2,7 @@
 // Pure: no sockets, no files, no clock of its own. Every event is read off the wire; nothing is inferred.
 import type { Ev, HarnessEvent, ToolCall } from '../events.js'
 import type { NormalizedResponse } from '../backends/types.js'
+import type { Dialect } from './dialects/dialect.js'
 
 /** The meta line of a proxy run; `proxy` marks the file as a transcription, `pid` lets serve tell a live writer from a killed one. */
 export type RunMeta = {
@@ -39,23 +40,9 @@ export function hintsOf(h: Record<string, string | string[] | undefined>): Proxy
   return out
 }
 
-/** Text of an OpenAI message `content`: a string, an array of parts (the text ones count), or null. */
-export function textOf(content: unknown): string {
-  if (typeof content === 'string') return content
-  if (Array.isArray(content)) return content.map(p => (p && typeof p.text === 'string' ? p.text : '')).filter(Boolean).join('\n')
-  return ''
-}
-
 /** The task as the agent typed it: Claude Code wraps context into the first user message as system-reminders; an unclosed one runs to the end. */
 function taskOf(text: string): string {
   return text.replace(/<system-reminder>[\s\S]*?(?:<\/system-reminder>|$)/g, '').trim()
-}
-
-/** JSON with object keys sorted, so the same message serialized twice compares equal. */
-function stable(v: unknown): string {
-  if (Array.isArray(v)) return `[${v.map(stable).join(',')}]`
-  if (v && typeof v === 'object') return `{${Object.keys(v).sort().map(k => `${JSON.stringify(k)}:${stable((v as Record<string, unknown>)[k])}`).join(',')}}`
-  return JSON.stringify(v) ?? 'null'
 }
 
 export class Sessions {
@@ -71,29 +58,18 @@ export class Sessions {
    * One request: the run it continues, or a new one. A run is keyed by its first system-like message and its
    * first user message; a request joins the most recently joined open run with that key whose last request had
    * no more messages than this one. Call it before any await, so two requests of one run keep their seq order.
-   * `api` comes from the route the request took. Anthropic: the key is text only, the top-level system without its first block (Claude Code's attribution
-   * block changes) and the first user text, since Claude Code moves cache_control markers between turns.
+   * `dialect` comes from the route the request took and reads the key and the task text off the body.
    * With a session hint (Claude Code's headers) the key is the session and the agent, with no length rule: a compaction
    * rewrites the history. An auxiliary request (a title, a summary) gets no turn: it is a note in the session's main run,
    * written by onReply with the `side` returned here. Before the session's first main request those notes wait: the main
    * run's meta (with the real task) and the notes come with that request. A compaction is a turn of its agent's run, marked by a note.
    */
-  onRequest(payload: object, api: 'openai' | 'anthropic' = 'openai', hints: ProxyHints = {}): { run: string; turn: number; meta?: RunMeta; events: HarnessEvent[]; side?: { model: string } } {
+  onRequest(payload: object, dialect: Dialect, hints: ProxyHints = {}): { run: string; turn: number; meta?: RunMeta; events: HarnessEvent[]; side?: { model: string } } {
     const raw = (payload as { messages?: unknown }).messages
     const msgs: any[] = Array.isArray(raw) ? raw : []
-    const anthropic = api === 'anthropic'
-    const user = msgs.find(m => m?.role === 'user')
-    let key: string, task: string
-    if (anthropic) {
-      const system = (payload as { system?: unknown }).system
-      const userText = textOf(Array.isArray(user?.content) ? user.content.filter((b: any) => b?.type === 'text') : user?.content)
-      key = stable([Array.isArray(system) ? textOf(system.slice(1)) : textOf(system), userText])
-      task = taskOf(userText)
-    } else {
-      const sys = msgs.find(m => m?.role === 'system' || m?.role === 'developer')
-      key = stable([sys ?? null, user ?? null])
-      task = taskOf(textOf(user?.content))
-    }
+    const k = dialect.keyOf(payload)
+    let key = k.key
+    const task = taskOf(k.taskText)
     const aux = hints.session !== undefined && hints.requestClass === 'auxiliary'
     const agent = aux ? 'main' : hints.agent ?? 'main'
     if (hints.session !== undefined) key = `cc\0${hints.session}\0${agent}`
@@ -123,7 +99,7 @@ export class Sessions {
     }
     run.len = msgs.length
     run.active = ++this.tick
-    events.push(...this.results(run, msgs, anthropic))
+    events.push(...this.results(run, msgs, dialect))
     const turn = ++run.turn
     if (hints.requestClass === 'compaction') events.push(this.ev(run, turn, { type: 'proxy_note', kind: 'compaction' }))
     events.push(this.ev(run, turn, { type: 'llm_request', payload }))
@@ -138,37 +114,19 @@ export class Sessions {
   }
 
   /**
-   * tool_result for each tool message after the request's last assistant message. The i-th call that message
-   * echoes is the i-th call recorded on the run's latest replied turn, so ids the agent invented (the server
-   * sent none) and ids reused across turns both match. A call already resulted is skipped: a retry repeats them.
-   * Anthropic: the tool_result blocks of the user messages after it, matched to the replied calls by tool_use_id.
+   * tool_result for each result the dialect finds after the request's last assistant message, matched to the
+   * calls of the run's latest replied turn. A call already resulted is skipped: a retry repeats them.
    */
-  private results(run: Run, msgs: any[], anthropic: boolean): HarnessEvent[] {
+  private results(run: Run, msgs: any[], dialect: Dialect): HarnessEvent[] {
     let last = -1
     for (let i = msgs.length - 1; i >= 0; i--) if (msgs[i]?.role === 'assistant') { last = i; break }
     const replied = run.replied
     if (last < 0 || !replied) return []
     const out: HarnessEvent[] = []
-    if (anthropic) {
-      for (const m of msgs.slice(last + 1)) {
-        if (m?.role !== 'user' || !Array.isArray(m.content)) continue
-        for (const b of m.content) {
-          const call = b?.type === 'tool_result' && b.tool_use_id !== undefined ? replied.calls.find(c => c.backendId === b.tool_use_id) : undefined
-          if (!call || run.resulted.has(call.callId)) continue
-          run.resulted.add(call.callId)
-          out.push(this.ev(run, replied.turn, { type: 'tool_result', callId: call.callId, name: call.name, output: textOf(b.content), ...(b.is_error === true ? { error: true } : {}) }))
-        }
-      }
-      return out
-    }
-    const echoed: unknown[] = Array.isArray(msgs[last].tool_calls) ? msgs[last].tool_calls.map((t: any) => t?.id) : []
-    for (const m of msgs.slice(last + 1)) {
-      if (m?.role !== 'tool') continue
-      const i = echoed.indexOf(m.tool_call_id)
-      const call = i < 0 ? undefined : replied.calls[i]
-      if (!call || run.resulted.has(call.callId)) continue
+    for (const { call, output, error } of dialect.toolResults(msgs[last], msgs.slice(last + 1), replied.calls)) {
+      if (run.resulted.has(call.callId)) continue
       run.resulted.add(call.callId)
-      out.push(this.ev(run, replied.turn, { type: 'tool_result', callId: call.callId, name: call.name, output: textOf(m.content) }))
+      out.push(this.ev(run, replied.turn, { type: 'tool_result', callId: call.callId, name: call.name, output, ...(error ? { error: true } : {}) }))
     }
     return out
   }
