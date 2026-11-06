@@ -243,3 +243,26 @@ test('requestDiff: a body without a messages array is unreadable', () => {
   expect(requestDiff({ messages: [] }, 'x')).toBeUndefined()
   expect(requestDiff(null, undefined)).toBeUndefined()
 })
+
+test('requestDiff: junk parts, content and tool_calls never throw', () => {
+  const a = { messages: [null, { role: 'user', content: [null, 5, { type: 'tool_result', content: 's' }, { type: 'text' }] }, { role: 'user', content: { a: 1 } }, { role: 'assistant', content: null, tool_calls: [null, { function: null }] }] }
+  const b = { messages: [{ role: 'user', content: [null, 5, { type: 'tool_result', content: 't' }, { type: 'text' }] }, { role: 'user', content: { a: 1 } }, { role: 'assistant', content: null, tool_calls: [null, { function: null }] }] }
+  expect(requestDiff(a, a)!.messages).toEqual({ appended: 0 })
+  expect(requestDiff(a, b)!.messages).toEqual({ from: 1, changed: [{ n: 1, added: ['t'], removed: ['s'] }], added: 0, removed: 0 })
+})
+
+test('requestDiff: params that are arrays of objects show as JSON', () => {
+  expect(requestDiff({ messages: [], mcp_servers: [{ a: 1 }] }, { messages: [], mcp_servers: [{ a: 2 }] })!.params).toEqual([{ path: 'mcp_servers', a: '[{"a":1}]', b: '[{"a":2}]' }])
+})
+
+test('requestDiff: a system message after the first user message stays in history', () => {
+  const a = { messages: [u('hi')] }
+  const b = { messages: [u('hi'), { role: 'system', content: 'late' }] }
+  expect(requestDiff(a, b)).toEqual({ ...none, messages: { appended: 1 } })
+})
+
+test('requestDiff: b a strict prefix of a is history changed from n+1 with the rest removed', () => {
+  const a = { messages: [u('x'), as('y'), u('z')] }
+  const b = { messages: [u('x')] }
+  expect(requestDiff(a, b)!.messages).toEqual({ from: 2, changed: [], added: 0, removed: 2 })
+})

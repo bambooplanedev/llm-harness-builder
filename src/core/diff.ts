@@ -137,7 +137,7 @@ function partLine(p: unknown): string {
   if (typeof p === 'string') return p
   if (!isObj(p)) return ''
   if (p.type === 'text' || (p.type === undefined && typeof p.text === 'string')) return String(p.text ?? '')
-  if (p.type === 'tool_use') return `call ${p.name} ${stable(p.input)}`
+  if (p.type === 'tool_use') return `call ${p.name ?? ''} ${stable(p.input)}`
   if (p.type === 'tool_result') return plain(p.content)
   return `[${p.type}]`
 }
@@ -148,10 +148,15 @@ function messageText(m: Obj): string {
   if (Array.isArray(m.tool_calls)) {
     for (const t of m.tool_calls) {
       const f = isObj(t) && isObj(t.function) ? t.function : {}
-      lines.push(`call ${f.name} ${typeof f.arguments === 'string' ? f.arguments : stable(f.arguments)}`)
+      lines.push(`call ${f.name ?? ''} ${typeof f.arguments === 'string' ? f.arguments : stable(f.arguments)}`)
     }
   }
   return lines.join('\n')
+}
+
+/** Top-level `system`: a string, or blocks whose texts are joined by newlines. */
+function systemText(system: unknown): string {
+  return typeof system === 'string' ? system : Array.isArray(system) ? system.map(partLine).filter(Boolean).join('\n') : ''
 }
 
 const toolName = (t: unknown) => (isObj(t) ? (typeof t.name === 'string' ? t.name : isObj(t.function) && typeof t.function.name === 'string' ? t.function.name : undefined) : undefined)
@@ -167,7 +172,7 @@ export function requestDiff(a: unknown, b: unknown): ReqDiff | undefined {
     const msgs = (body.messages as unknown[]).filter(isObj)
     let lead = 0
     while (lead < msgs.length && (msgs[lead].role === 'system' || msgs[lead].role === 'developer')) lead++
-    const system = [partsOf(body.system), ...msgs.slice(0, lead).map(messageText)].filter(Boolean).join('\n')
+    const system = [systemText(body.system), ...msgs.slice(0, lead).map(messageText)].filter(Boolean).join('\n')
     const rest = msgs.slice(lead).map(m => ({ key: stable([m.role, messageText(m)]), text: messageText(m) }))
     const tools = new Map((Array.isArray(body.tools) ? body.tools : []).map(t => [toolName(t) ?? stable(t), stable(t)]))
     return { system, rest, tools }
@@ -194,19 +199,16 @@ export function requestDiff(a: unknown, b: unknown): ReqDiff | undefined {
         removed: Math.max(0, ra.rest.length - rb.rest.length),
       }
 
+  // arrays and objects show as compact JSON; text() would print "[object Object]"
+  const show = (v: string) => (v !== 'undefined' && typeof JSON.parse(v) === 'object' && JSON.parse(v) !== null ? v : text(v))
   const own = (body: Obj) => new Map(leaves(Object.fromEntries(Object.entries(body).filter(([k]) => !['messages', 'system', 'tools'].includes(k)))).filter(([k]) => k))
   const [pa, pb] = [own(ca), own(cb)]
   const params = [...new Set([...pa.keys(), ...pb.keys()])].flatMap(path => {
     const [x, y] = [pa.get(path), pb.get(path)]
-    return x === y ? [] : [{ path, a: x === undefined ? '(none)' : text(x), b: y === undefined ? '(none)' : text(y) }]
+    return x === y ? [] : [{ path, a: x === undefined ? '(none)' : show(x), b: y === undefined ? '(none)' : show(y) }]
   })
 
   return { system: { added: sys.onlyB, removed: sys.onlyA }, tools, messages, params }
-}
-
-/** Top-level `system`: a string, or blocks whose texts are joined by newlines. */
-function partsOf(system: unknown): string {
-  return typeof system === 'string' ? system : Array.isArray(system) ? system.map(partLine).filter(Boolean).join('\n') : ''
 }
 
 /** True when only messages were appended, or nothing changed at all. */
