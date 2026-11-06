@@ -5,6 +5,8 @@ import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { startProxy, drained } from '../src/core/proxy/server.js'
 import { normalizeRequest } from '../src/core/normalize.js'
+import { openaiChat } from '../src/core/proxy/dialects/index.js'
+import type { Dialect } from '../src/core/proxy/dialects/dialect.js'
 import { tmp } from './helpers.js'
 import { textReply, toolReply } from './fake-anthropic.js'
 
@@ -27,7 +29,7 @@ async function upstream(h: (req: http.IncomingMessage, res: http.ServerResponse,
   return { url: `http://127.0.0.1:${(srv.address() as { port: number }).port}`, seen }
 }
 
-async function proxy(upstreamUrl: string, over: { recordCap?: number } = {}) {
+async function proxy(upstreamUrl: string, over: Partial<Parameters<typeof startProxy>[0]> = {}) {
   const runsDir = await tmp('lhb-proxy-runs-')
   const lines: string[] = []
   const p = await startProxy({ upstream: upstreamUrl, port: 0, runsDir, harness: 'test', log: l => lines.push(l), ...over })
@@ -487,4 +489,83 @@ test('anthropic: a stream cut before any delta has an error without body', async
   const err = (await traces(px.runsDir)).flatMap(t => t.events).find(e => e.type === 'error')
   expect(err).toBeDefined()
   expect('body' in err).toBe(false)
+})
+
+// A dialect that may throw anywhere (an own file can): forwarding never breaks, and the agent sees the upstream's reply.
+const REPLY = JSON.stringify({ choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] })
+const jsonUp = () => upstream((_q, res) => { res.writeHead(201, { 'content-type': 'application/json' }); res.end(REPLY) })
+const exact = async (r: Response) => { expect(r.status).toBe(201); expect(await r.text()).toBe(REPLY) }
+const turnsOf = async (runsDir: string) => (await traces(runsDir)).flatMap(t => t.events.filter(e => e.type === 'llm_request').map(e => e.turn))
+
+test('matches throws: the next dialect still records, the agent gets the upstream reply, the log names the dialect', async () => {
+  const up = await jsonUp()
+  const bad: Dialect = { ...openaiChat, id: 'bad-matches', matches: () => { throw new Error('boom') } }
+  const px = await proxy(up.url, { dialects: [bad, openaiChat] })
+  await exact(await post(px.base, chat()))
+  await px.stop()
+  expect(px.lines.some(l => l.includes('bad-matches'))).toBe(true)
+  expect((await traces(px.runsDir)).length).toBe(1)
+})
+
+test('keyOf throws: nothing is written, the next good request starts turn 1 of a fresh run', async () => {
+  const up = await jsonUp()
+  let bad = true
+  const d: Dialect = { ...openaiChat, id: 'bad-keyof', keyOf: p => { if (bad) throw new Error('boom'); return openaiChat.keyOf(p) } }
+  const px = await proxy(up.url, { dialects: [d] })
+  await exact(await post(px.base, chat()))
+  expect(px.lines).toContain('not recorded: dialect bad-keyof: boom')
+  bad = false
+  await exact(await post(px.base, chat()))
+  await px.stop()
+  expect((await traces(px.runsDir)).length).toBe(1)
+  expect(await turnsOf(px.runsDir)).toEqual([1])
+})
+
+test('toolResults throws: no turn 2, session unchanged, the next good request is turn 2', async () => {
+  let n = 0
+  const up = await upstream((_q, res) => { n++; res.writeHead(201, { 'content-type': n === 1 ? 'text/event-stream' : 'application/json' }); res.end(n === 1 ? TOOL_REPLY : REPLY) })
+  let bad = true
+  const d: Dialect = { ...openaiChat, id: 'bad-results', toolResults: (p, c) => { if (bad) throw new Error('boom'); return openaiChat.toolResults(p, c) } }
+  const px = await proxy(up.url, { dialects: [d] })
+  await post(px.base, chat()).then(r => r.text())
+  const second = chat([{ role: 'system', content: 's' }, { role: 'user', content: 'do it' },
+    { role: 'assistant', content: null, tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'read_file', arguments: '{"path":"a"}' } }] },
+    { role: 'tool', tool_call_id: 'call_1', content: 'file' }])
+  const r = await post(px.base, second)
+  expect(r.status).toBe(201); expect(await r.text()).toBe(REPLY)
+  expect(px.lines.some(l => l.startsWith('not recorded: dialect bad-results: boom'))).toBe(true)
+  bad = false
+  await exact(await post(px.base, second))
+  await px.stop()
+  expect(await turnsOf(px.runsDir)).toEqual([1, 2])
+})
+
+test('partial throws mid-stream: the run gets an error event without body', async () => {
+  const up = await upstream((req, res) => { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.write(HALF); setTimeout(() => req.socket.destroy(), 20) })
+  const d: Dialect = { ...openaiChat, id: 'bad-partial', partial: async () => { throw new Error('boom') } }
+  const px = await proxy(up.url, { dialects: [d] })
+  await expect(post(px.base, chat()).then(r => r.text())).rejects.toThrow()
+  await px.stop()
+  expect(px.lines.some(l => l.includes('bad-partial'))).toBe(true)
+  const err = (await traces(px.runsDir)).flatMap(t => t.events).find(e => e.type === 'error')
+  expect(err).toBeDefined()
+  expect('body' in err).toBe(false)
+})
+
+const SECRET_HEADERS = ['authorization', 'proxy-authorization', 'x-api-key', 'api-key', 'x-goog-api-key', 'cookie']
+test.each([...SECRET_HEADERS, '?key='])('scrubs %s: not in runs/, not seen by the dialect, still in the body and reply', async name => {
+  const secret = 'sk-secret-0123456789abcdef'
+  const up = await upstream((_q, res, body) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ choices: [{ index: 0, message: { role: 'assistant', content: `echo ${secret}` }, finish_reason: 'stop' }], body })) })
+  const seenByDialect: string[] = []
+  const d: Dialect = { ...openaiChat, id: 'spy', keyOf: p => { seenByDialect.push(JSON.stringify(p)); return openaiChat.keyOf(p) } }
+  const px = await proxy(up.url, { dialects: [d] })
+  const url = `${px.base}/v1/chat/completions` + (name === '?key=' ? `?key=${secret}` : '')
+  const headers: Record<string, string> = { 'content-type': 'application/json' }
+  if (name !== '?key=') headers[name] = name === 'authorization' ? `Bearer ${secret}` : secret
+  const r = await fetch(url, { method: 'POST', headers, body: chat([{ role: 'user', content: `use ${secret}` }], { stream: false }) })
+  expect(await r.text()).toContain(secret)
+  await px.stop()
+  expect(seenByDialect.length).toBe(1)
+  expect(seenByDialect[0]).not.toContain(secret)
+  for (const f of (await readdir(px.runsDir)).filter(f => f.endsWith('.jsonl'))) expect(await readFile(join(px.runsDir, f), 'utf8')).not.toContain(secret)
 })

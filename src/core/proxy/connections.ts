@@ -14,7 +14,7 @@ export type Picked = { conn: Connection; hints: ProxyHints }
 export const CONNECTIONS_DIR = fileURLToPath(new URL('../../../connections', import.meta.url))
 
 /** Header names a connection may not read: their values are keys, and a hint lands in the meta as it is. */
-const SECRET = new Set(['authorization', 'proxy-authorization', 'x-api-key', 'api-key', 'x-goog-api-key', 'cookie'])
+export const SECRET = new Set(['authorization', 'proxy-authorization', 'x-api-key', 'api-key', 'x-goog-api-key', 'cookie'])
 
 /** Every *.json of `dir`: the ones with hints by file name, then the one without (the fallback). Throws naming the file. */
 export function loadConnections(dir = CONNECTIONS_DIR): Connection[] {

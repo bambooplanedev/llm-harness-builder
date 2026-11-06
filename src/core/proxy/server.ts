@@ -11,7 +11,7 @@ import { Sessions, type ReplyOutcome, type RunMeta } from './sessions.js'
 import { redactor } from '../redact.js'
 import { DIALECTS } from './dialects/index.js'
 import type { Dialect } from './dialects/dialect.js'
-import { CONNECTIONS_DIR, loadConnections, pickConnection } from './connections.js'
+import { CONNECTIONS_DIR, SECRET, loadConnections, pickConnection, type Connection } from './connections.js'
 
 export type ProxyOpts = {
   /** Server root, e.g. http://127.0.0.1:8080; a path prefix, if any, is kept. */
@@ -26,6 +26,10 @@ export type ProxyOpts = {
   recordCap?: number
   /** Where the connection files are read from; the package's own folder unless a test says otherwise. */
   connectionsDir?: string
+  /** The formats to record, first match wins; the built-in ones unless given. */
+  dialects?: readonly Dialect[]
+  /** Used instead of reading `connectionsDir`. */
+  connections?: Connection[]
 }
 /** `hints`: each connection's startup line, with its port, in pick order. */
 export type ProxyServer = { port: number; hints: string[]; stop(): Promise<void> }
@@ -65,11 +69,11 @@ export const drained = (res: http.ServerResponse) => new Promise<void>(resolve =
   res.on('drain', done); res.on('close', done)
 })
 
-/** Takes this request's x-api-key and bearer token out of whatever is recorded from it; headers themselves never are. */
-const scrubberOf = (h: http.IncomingHttpHeaders) => {
-  const key = redactor(String(h['x-api-key'] ?? ''), 'x-api-key')
-  const token = redactor(String(h.authorization ?? '').replace(/^Bearer\s+/i, ''), 'authorization')
-  return <T>(x: T): T => token.deep(key.deep(x))
+/** Takes every secret header's value (a bearer token without `Bearer`) and the `?key=` of the URL out of whatever is recorded from this request; headers themselves never are. */
+const scrubberOf = (h: http.IncomingHttpHeaders, url: URL) => {
+  const rs = [...SECRET].map(n => redactor(String(h[n] ?? '').replace(/^Bearer\s+/i, ''), n))
+  rs.push(redactor(url.searchParams.get('key') ?? '', 'key'))
+  return <T>(x: T): T => rs.reduce((v, r) => r.deep(v), x)
 }
 
 export async function startProxy(o: ProxyOpts): Promise<ProxyServer> {
@@ -77,7 +81,8 @@ export async function startProxy(o: ProxyOpts): Promise<ProxyServer> {
   const prefix = up.pathname.replace(/\/+$/, '')
   const log = o.log ?? (() => {})
   const cap = o.recordCap ?? 20e6
-  const conns = loadConnections(o.connectionsDir ?? CONNECTIONS_DIR)
+  const conns = o.connections ?? loadConnections(o.connectionsDir ?? CONNECTIONS_DIR)
+  const dialects = o.dialects ?? DIALECTS
   const sessions = new Sessions({ now: Date.now, newId: () => randomUUID().slice(0, 8), harness: o.harness, upstream: o.upstream, pid: process.pid })
   const writers = new Map<string, { t: TraceWriter; chain: Promise<void> }>()
   const inflight = new Set<AbortController>()
@@ -115,8 +120,10 @@ export async function startProxy(o: ProxyOpts): Promise<ProxyServer> {
 
     let rec: { run: string; turn: number; dialect: Dialect; side?: { model: string } } | undefined
     // The format a request is recorded as, if any: /v1/messages/count_tokens and the rest pass through unrecorded.
-    const dialect = DIALECTS.find(d => d.matches(req.method, target.pathname))
-    const scrub = scrubberOf(req.headers)
+    const dialect = dialects.find(d => {
+      try { return d.matches(req.method, target.pathname) } catch (e) { log(`not recorded: dialect ${d.id}: matches: ${(e as Error).message}`); return false }
+    })
+    const scrub = scrubberOf(req.headers, target)
     if (dialect) {
       let payload: unknown
       if (body.length > cap) log(`not recorded: a ${body.length}-byte request is over the ${cap}-byte cap`)
@@ -124,10 +131,13 @@ export async function startProxy(o: ProxyOpts): Promise<ProxyServer> {
       if (payload && typeof payload === 'object') {
         // Only the hint headers, scrubbed like the body: Sessions never sees req.headers.
         const picked = pickConnection(conns, req.headers)
-        const out = sessions.onRequest(scrub(payload), dialect, { conn: picked.conn, hints: scrub(picked.hints) })
-        if (out.meta) log(`run ${out.run}: ${out.meta.task.slice(0, 80).replace(/\n/g, ' ')}`)
-        record(out.run, out.events, out.meta)
-        rec = { run: out.run, turn: out.turn, dialect, side: out.side }
+        // keyOf and toolResults run first inside onRequest: a throw there leaves the sessions unchanged.
+        try {
+          const out = sessions.onRequest(scrub(payload), dialect, { conn: picked.conn, hints: scrub(picked.hints) })
+          if (out.meta) log(`run ${out.run}: ${out.meta.task.slice(0, 80).replace(/\n/g, ' ')}`)
+          record(out.run, out.events, out.meta)
+          rec = { run: out.run, turn: out.turn, dialect, side: out.side }
+        } catch (e) { log(`not recorded: dialect ${dialect.id}: ${(e as Error).message}`) }
       }
     }
 
@@ -171,7 +181,8 @@ export async function startProxy(o: ProxyOpts): Promise<ProxyServer> {
 
     if (!rec) return
     // A cut reply's body is the text the dialect decodes from it, never the raw SSE (a key echoed in pieces would pass the scrubber).
-    const partial = () => rec.dialect.partial(chunks, contentType)
+    const partial = () => Promise.resolve().then(() => rec.dialect.partial(chunks, contentType))
+      .catch(e => { log(`dialect ${rec.dialect.id}: partial: ${(e as Error).message}`); return undefined })
     let outcome: ReplyOutcome
     if (stoppedByUs.has(ac) && failure !== undefined) outcome = { ok: false, message: 'the proxy stopped before the reply ended', body: await partial() }
     else if (clientClosed) outcome = { ok: false, message: 'client closed the connection', body: await partial() }
