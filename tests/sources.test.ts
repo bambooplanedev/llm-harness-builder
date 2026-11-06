@@ -12,7 +12,7 @@ const pairs = (s: Source[]) => s.map(x => [x.kind, x.label])
 test('a Claude Code request: every part gets its origin, in order', () => {
   const want = [
     ['harness', 'billing header'], ['harness', 'system prompt'], ['harness', '12 tools'],
-    ['file', 'CLAUDE.md'], ['file', 'MEMORY.md'],
+    ['file', '.claude/CLAUDE.md'], ['file', 'MEMORY.md'],
     ['harness', 'reminder: userEmail'], ['harness', 'reminder'], ['you', 'you'],
     ['hook', 'hook'], ['skill', 'using-superpowers'],
     ['harness', 'environment'], ['harness', 'MCP instructions'], ['harness', 'skills list'],
@@ -43,8 +43,8 @@ test('chunks of a block join back to the block text, and chars is the length', (
 
 test('"Contents of" inside a file and "# CLAUDE.md" inside a file open nothing', () => {
   const s = requestSources(fx)!
-  expect(s.filter(c => c.kind === 'file').map(c => c.label)).toEqual(['CLAUDE.md', 'MEMORY.md'])
-  const md = s.find(c => c.label === 'CLAUDE.md')!
+  expect(s.filter(c => c.kind === 'file').map(c => c.label)).toEqual(['.claude/CLAUDE.md', 'MEMORY.md'])
+  const md = s.find(c => c.label === '.claude/CLAUDE.md')!
   expect(md.text).toContain('see Contents of /home/u/x.md (old): for history.')
   expect(md.text).toContain('\nContents of /home/u/notes.txt\n')
   expect(s.some(c => c.label === 'reminder: CLAUDE.md')).toBe(false)
@@ -72,6 +72,56 @@ test('a Skill tool result is the skill; another tool result is history with its 
     ['#3 block 1', 'history', 'result of Read'],
     ['#3 block 2', 'history', 'history'],
   ])
+})
+
+test('a file in a dot folder keeps the folder in its label, so the global and project CLAUDE.md differ', () => {
+  const t = '<system-reminder>\nContents of /home/u/.claude/CLAUDE.md (global):\n\nA\nContents of /home/u/proj/CLAUDE.md (project):\n\nB\nContents of ~/.config/x/notes.md (n):\n\nC\n</system-reminder>'
+  const s = requestSources({ messages: [{ role: 'user', content: [{ type: 'text', text: t }] }] })!
+  expect(s.filter(c => c.kind === 'file').map(c => c.label)).toEqual(['.claude/CLAUDE.md', 'CLAUDE.md', 'notes.md'])
+})
+
+test('a successful Skill call: the skill text Claude Code puts next to the result is the skill', () => {
+  const s = requestSources({
+    messages: [
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'Skill', input: { skill: 'superpowers:brainstorming' } }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'Launching skill: superpowers:brainstorming' }, { type: 'text', text: 'Base directory for this skill: /home/u/s\n\nAsk one question at a time.' }] },
+      { role: 'user', content: [{ type: 'text', text: 'Base directory for this skill: /home/u/t\n\nnot after a Skill call' }] },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 't2', name: 'Skill', input: { skill: 'keys' } }] },
+      // a built-in skill has no base directory; a reminder before its text stays the harness's, and only one block is the skill
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't2', content: 'Launching skill: keys' }, { type: 'text', text: '<system-reminder>\nnote\n</system-reminder>' }, { type: 'text', text: '# Keys\n\nbind' }, { type: 'text', text: 'more' }] },
+    ],
+  })!
+  expect(s.map(c => [c.where, c.kind, c.label])).toEqual([
+    ['#1 block 0', 'you', 'you'],
+    ['#2 block 0', 'history', 'history'],
+    ['#3 block 0', 'skill', 'brainstorming'],
+    ['#3 block 1', 'skill', 'brainstorming'],
+    ['#4 block 0', 'you', 'you'],
+    ['#5 block 0', 'history', 'history'],
+    ['#6 block 0', 'skill', 'keys'],
+    ['#6 block 1', 'harness', 'reminder'],
+    ['#6 block 2', 'skill', 'keys'],
+    ['#6 block 3', 'history', 'history'],
+  ])
+  expect(lineLabels(s).get('Ask one question at a time.')).toBe('brainstorming')
+})
+
+test('a failed Skill call is the harness reply, history, not the skill', () => {
+  const s = requestSources({
+    messages: [
+      { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'Skill', input: { skill: 'nope' } }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', is_error: true, content: 'Unknown skill: nope' }] },
+    ],
+  })!
+  expect(s.map(c => [c.kind, c.label])).toEqual([['history', 'history'], ['history', 'result of Skill']])
+})
+
+test('a system message that starts with # Environment is split like the attachments after the hook', () => {
+  const t = '# Environment\nYou run on linux.\n# MCP Server Instructions\nUse x.\nThe following skills are available:\n- a: one\n- b: two\nToday is Monday.'
+  const s = requestSources({ messages: [{ role: 'user', content: 'hi' }, { role: 'system', content: t }] })!
+  expect(s.map(c => [c.kind, c.label])).toEqual([['you', 'you'], ['harness', 'environment'], ['harness', 'MCP instructions'], ['harness', 'skills list'], ['harness', 'reminder']])
+  expect(s.slice(1).map(c => c.text).join('')).toBe(t)
 })
 
 test('an OpenAI body without markers', () => {
@@ -106,7 +156,7 @@ test('malformed input does not throw, and an unreadable body is undefined', () =
 
 test('lineLabels: a line maps to its one source; a line two sources share maps to nothing', () => {
   const m = lineLabels(requestSources(fx)!)
-  expect(m.get('Keep diffs small.')).toBe('CLAUDE.md')
+  expect(m.get('Keep diffs small.')).toBe('.claude/CLAUDE.md')
   expect(m.get('Check for a skill before acting.')).toBe('using-superpowers')
   expect(m.get('- [Stand](stand.md) — window 2 is mine')).toBe('MEMORY.md')
   expect(m.get('Say hello in one word')).toBe('you')

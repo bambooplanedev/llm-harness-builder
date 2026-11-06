@@ -41,8 +41,10 @@ function reminder(t: string): Part[] {
       const line = t.slice(i + CONTENTS.length, nl)
       const paren = line.indexOf(' (')
       const path = paren < 0 ? '' : line.slice(0, paren)
-      const name = path.slice(path.lastIndexOf('/') + 1)
-      if ((path.startsWith('/') || path.startsWith('~')) && name) cuts.push([i, name])
+      const slash = path.lastIndexOf('/'), name = path.slice(slash + 1)
+      const parent = slash < 1 ? '' : path.slice(path.lastIndexOf('/', slash - 1) + 1, slash)
+      // a dot folder (`.claude`) tells the global CLAUDE.md from the project's and names no person
+      if ((path.startsWith('/') || path.startsWith('~')) && name) cuts.push([i, parent.startsWith('.') ? `${parent}/${name}` : name])
     }
     i = nl + 1
   }
@@ -96,6 +98,7 @@ function hook(t: string): Part[] {
 function tagged(t: string): Part[] | undefined {
   if (t.startsWith(REMINDER)) return reminder(t)
   if (t.startsWith(HOOK)) return hook(t)
+  if (t.startsWith('# Environment')) return attachments(t)
   if (t.trimStart().startsWith('<')) return [['harness', 'reminder', t]]
 }
 
@@ -126,9 +129,12 @@ export function requestSources(payload: unknown): Source[] | undefined {
   msgs.slice(lead).forEach((m, i) => {
     const where = (j: number) => `#${i + 1} block ${j}`
     const blocks: unknown[] = Array.isArray(m.content) ? m.content : typeof m.content === 'string' ? [m.content] : []
-    const result = (id: unknown): Part => {
+    let skill = '' // a successful Skill result in this message: Claude Code sends the skill's text as the next non-reminder text block
+    const result = (id: unknown, err: boolean): Part => {
       const c = typeof id === 'string' ? calls.get(id) : undefined
-      return c?.name === 'Skill' && c.skill ? ['skill', c.skill.slice(c.skill.lastIndexOf(':') + 1), ''] : ['history', c ? `result of ${c.name}` : 'history', '']
+      if (c?.name !== 'Skill' || !c.skill || err) return ['history', c ? `result of ${c.name}` : 'history', '']
+      skill = c.skill.slice(c.skill.lastIndexOf(':') + 1)
+      return ['skill', skill, '']
     }
     if (m.role === 'assistant') {
       blocks.forEach((b, j) => {
@@ -144,15 +150,16 @@ export function requestSources(payload: unknown): Source[] | undefined {
       return
     }
     if (m.role === 'tool') {
-      const [kind, label] = result(m.tool_call_id)
+      const [kind, label] = result(m.tool_call_id, false)
       return add(where(0), [[kind, label, messageText(m)]])
     }
     const hasResult = blocks.some(b => isObj(b) && b.type === 'tool_result')
     blocks.forEach((b, j) => {
       const t = partLine(b)
-      if (isObj(b) && b.type === 'tool_result') { const [kind, label] = result(b.tool_use_id); return add(where(j), [[kind, label, t]]) }
+      if (isObj(b) && b.type === 'tool_result') { const [kind, label] = result(b.tool_use_id, b.is_error === true); return add(where(j), [[kind, label, t]]) }
       const text = typeof b === 'string' || (isObj(b) && (b.type === 'text' || (b.type === undefined && b.text !== undefined)))
       if (!text) return add(where(j), [['history', 'history', t]])
+      if (skill && !t.startsWith(REMINDER)) { const name = skill; skill = ''; return add(where(j), [['skill', name, t]]) }
       add(where(j), tagged(t) ?? [m.role !== 'user' ? ['harness', 'system prompt', t] : hasResult ? ['history', 'history', t] : ['you', 'you', t]])
     })
   })

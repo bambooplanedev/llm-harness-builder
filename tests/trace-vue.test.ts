@@ -321,7 +321,7 @@ async function opened(evs: HarnessEvent[]) {
   const sources = () => all(root).find(n => n.props.class === 'sources')
   const row = (label: string) => all(sources()!).find(n => n.tag === 'button' && textOf(n).includes(label))!
   const click = async (label: string) => { row(label).props.onClick({}); await nextTick() }
-  return { text: () => textOf(root), sources, click }
+  return { text: () => textOf(root), sources, click, row }
 }
 const cc = JSON.parse(readFileSync('tests/fixtures/cc-request.json', 'utf8'))
 /** A user message that carries project files the way Claude Code does, then the person's words. */
@@ -334,8 +334,10 @@ test('sources: an open inspector lists where each part of a readable request cam
   const v = await opened([reqEv(0, 1, cc)])
   expect(v.sources()).toBeDefined()
   const s = textOf(v.sources()!)
-  for (const x of ['sources', 'CLAUDE.md', 'you', 'billing header']) expect(s).toContain(x)
+  for (const x of ['sources', '.claude/CLAUDE.md', 'you', 'billing header']) expect(s).toContain(x)
+  expect(s).not.toMatch(/you\s+you/) // a label equal to its kind is said once
   expect((await opened([reqEv(0, 1, { model: 'm1' })])).sources()).toBeUndefined()
+  expect((await opened([reqEv(0, 1, { model: 'm1', messages: [] })])).sources()).toBeUndefined() // no parts, no block
 })
 
 test('sources: closed inspectors show no block', async () => {
@@ -346,7 +348,9 @@ test('sources: closed inspectors show no block', async () => {
 test('sources: a row opens to its text; a long one is cut and counted', async () => {
   const v = await opened([reqEv(0, 1, { model: 'm1', messages: [{ role: 'user', content: 'y'.repeat(30000) }] })])
   expect(textOf(v.sources()!)).not.toContain('yyy')
+  expect(v.row('you').props['aria-expanded']).toBe(false)
   await v.click('you')
+  expect(v.row('you').props['aria-expanded']).toBe(true)
   expect(textOf(v.sources()!)).toContain('y'.repeat(20000))
   expect(textOf(v.sources()!)).not.toContain('y'.repeat(20001))
   expect(textOf(v.sources()!)).toContain('… 10000 more chars')
@@ -355,7 +359,7 @@ test('sources: a row opens to its text; a long one is cut and counted', async ()
 test('request diff: a line added to CLAUDE.md is named by its file', async () => {
   const a = files([['/home/u/proj/CLAUDE.md', 'keep it short']]), b = files([['/home/u/proj/CLAUDE.md', 'keep it short\nuse tabs']])
   const t = (await opened([reqEv(0, 1, a), reqEv(1, 2, b)])).text()
-  expect(t).toContain('+ CLAUDE.md: use tabs')
+  expect(t).toContain('#1: + CLAUDE.md: use tabs') // a labelled message line keeps its place
   expect(t).not.toContain('#1: + use tabs')
 })
 
@@ -374,7 +378,15 @@ test('sources, film mode: a file is its name only, rows do not open, a model ins
   expect(textOf(v.sources()!)).toContain('CLAUDE.md')
   expect(v.text()).not.toContain('/home/u')
   await v.click('CLAUDE.md')
+  expect(v.row('CLAUDE.md').props['aria-expanded']).toBe(false)
   expect(textOf(v.sources()!)).not.toContain('keep it short')
-  expect(v.text()).toContain('+ CLAUDE.md: use model')
+  expect(v.text()).toContain('#1: + CLAUDE.md: use model')
   expect(v.text()).not.toContain('qwen3')
+})
+
+test('request diff: a labelled system line stays `+ <label>: line`', async () => {
+  const sys = (t: string) => ({ model: 'm1', messages: [{ role: 'system', content: `<system-reminder>\nContents of /home/u/proj/CLAUDE.md (project):\n\n${t}\n</system-reminder>` }, { role: 'user', content: 'go' }] })
+  const t = (await opened([reqEv(0, 1, sys('one')), reqEv(1, 2, sys('one\nuse tabs'))])).text()
+  expect(t).toContain('+ CLAUDE.md: use tabs')
+  expect(t).not.toContain(': + CLAUDE.md: use tabs')
 })

@@ -169,7 +169,7 @@ const liveTok = computed(() => Math.ceil(liveText.value.length / 4))
         <template v-if="e.type === 'llm_request'"><template v-if="anatBySeq.get(e.seq)"><div class="hint" :title="t('trace.anatomySplit')">{{ anatomyLine(anatBySeq.get(e.seq)!) }}</div>
           <div v-if="!anatBySeq.get(e.seq)!.exact" class="hint">{{ t('trace.anatomyEstimate') }}</div>
           <div v-if="anatBySeq.get(e.seq)!.toolsInSystem" class="hint">{{ t('trace.anatomyToolsInSystem') }}</div>
-          <div v-if="anatBySeq.get(e.seq)!.thinkingBlocks" class="hint">{{ t('trace.anatomyThinking') }}</div></template><Sources v-if="openTurns.has(turn) && sourcesAt(e.seq)" :sources="sourcesAt(e.seq)!" />
+          <div v-if="anatBySeq.get(e.seq)!.thinkingBlocks" class="hint">{{ t('trace.anatomyThinking') }}</div></template><Sources v-if="openTurns.has(turn) && sourcesAt(e.seq)?.length" :sources="sourcesAt(e.seq)!" />
           <ReqDiff v-if="diffBySeq.get(e.seq)" :diff="diffBySeq.get(e.seq)!" title="changes since the previous request"
             :labels-a="openTurns.has(turn) ? labelsAt(prevReq.get(e.seq)) : undefined" :labels-b="openTurns.has(turn) ? labelsAt(e.seq) : undefined" />
           <template v-if="versusBySeqM.get(e.seq)"><div v-if="versusBySeqM.get(e.seq)!.missing" class="muted">no request {{ versusBySeqM.get(e.seq)!.k }} there</div>
