@@ -199,3 +199,33 @@ test('notes_loaded and note_written render in the trace', async () => {
   expect(html).toContain('note: use npm test')
   expect(html).toContain('note not written: reply is not JSON')
 })
+
+const reqEv = (seq: number, turn: number, payload: unknown): HarnessEvent => ({ seq, turn, ts: seq, type: 'llm_request', payload })
+const body = (system: string, model = 'm1') => ({ model, messages: [{ role: 'system', content: system }, { role: 'user', content: 'go' }] })
+const inspector = (html: string, turn: number) => html.split('<div class="turn"').filter(s => s.includes(`turn ${turn} —`))[0] ?? ''
+
+test('request diff: shown from the second request, not the first', async () => {
+  const html = await render({ approvable: false, events: [reqEv(0, 1, body('be brief')), reqEv(1, 2, body('be long'))] })
+  expect(inspector(html, 2)).toContain('changes since the previous request')
+  expect(inspector(html, 2)).toContain('+ system: be long')
+  expect(inspector(html, 2)).toContain('− system: be brief')
+  expect(inspector(html, 1)).not.toContain('changes since')
+})
+
+test('request diff: an unreadable body gives no block', async () => {
+  const html = await render({ approvable: false, events: [reqEv(0, 1, body('a')), reqEv(1, 2, { model: 'm1' })] })
+  expect(html).not.toContain('changes since')
+})
+
+test('request diff: only appended messages is one muted line', async () => {
+  const b2 = { ...body('a'), messages: [...body('a').messages, { role: 'assistant', content: 'ok' }] }
+  const html = await render({ approvable: false, events: [reqEv(0, 1, body('a')), reqEv(1, 2, b2)] })
+  expect(html).toContain('no change besides +1 appended')
+})
+
+test('request diff: film mode hides the model name in the block', async () => {
+  setFilm(true)
+  const html = await render({ approvable: false, events: [reqEv(0, 1, body('x', 'qwen3:8b')), reqEv(1, 2, body('y', 'qwen3:8b-b'))] })
+  expect(html).toContain('changes since the previous request')
+  expect(html).not.toContain('qwen3')
+})

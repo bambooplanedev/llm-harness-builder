@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import Anatomy from './Anatomy.vue'
+import ReqDiff from './ReqDiff.vue'
 import { t, tn, T } from './i18n'
 import type { Delta, HarnessEvent } from './api'
 import { mcpApprovalServer, mcpCounts, UNTIL_BASH } from '../../src/core/events'
 import { analyzeTrace, summaryLine } from '../../src/core/analyze'
+import { requestDiff } from '../../src/core/diff'
 import { anatomies, anatomyLine } from '../../src/core/anatomy'
 import { film, filmDeep, namesIn, shown, type FilmNames } from './film'
 // approvable is a Boolean-typed prop, so Vue casts an ABSENT value to `false` (not `undefined`).
@@ -62,6 +64,18 @@ function pick(turn: number) {
   if (d) d.open = true
   el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
+/** seq of an llm_request → what it changed against the previous llm_request of the shown trace (any turn). */
+const diffBySeq = computed(() => {
+  const m = new Map<number, NonNullable<ReturnType<typeof requestDiff>>>()
+  let prev: unknown, seen = false
+  for (const e of shownEvents.value) {
+    if (e.type !== 'llm_request') continue
+    const d = seen ? requestDiff(prev, e.payload) : undefined
+    if (d) m.set(e.seq, d)
+    prev = e.payload; seen = true
+  }
+  return m
+})
 const anatBySeq = computed(() => new Map(anat.value.map(x => [x.seq, x.a])))
 // The current turn is "open" from its llm_request until its llm_response; the live bubble shows the streamed text meanwhile,
 // and stays (without the cursor) if the run ended first, since that text is not in the trace.
@@ -120,7 +134,7 @@ const liveTok = computed(() => Math.ceil(liveText.value.length / 4))
         <template v-if="e.type === 'llm_request'"><template v-if="anatBySeq.get(e.seq)"><div class="hint" :title="t('trace.anatomySplit')">{{ anatomyLine(anatBySeq.get(e.seq)!) }}</div>
           <div v-if="!anatBySeq.get(e.seq)!.exact" class="hint">{{ t('trace.anatomyEstimate') }}</div>
           <div v-if="anatBySeq.get(e.seq)!.toolsInSystem" class="hint">{{ t('trace.anatomyToolsInSystem') }}</div>
-          <div v-if="anatBySeq.get(e.seq)!.thinkingBlocks" class="hint">{{ t('trace.anatomyThinking') }}</div></template><pre>{{ raw(e) }}</pre></template>
+          <div v-if="anatBySeq.get(e.seq)!.thinkingBlocks" class="hint">{{ t('trace.anatomyThinking') }}</div></template><ReqDiff v-if="diffBySeq.get(e.seq)" :diff="diffBySeq.get(e.seq)!" title="changes since the previous request" /><pre>{{ raw(e) }}</pre></template>
         <pre v-if="e.type === 'llm_response'">{{ raw(e) }}</pre>
       </template>
     </details>

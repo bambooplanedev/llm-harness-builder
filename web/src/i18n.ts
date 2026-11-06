@@ -54,6 +54,7 @@ export const en = {
   'trace.anatomyToolsInSystem': 'No tools[] in this request: if the harness describes tools in its prompt (prompted mode), they are counted in system.',
   'trace.anatomyHow': 'Each column is one request: height = its prompt tokens, colours = its layers. Click a column to open that turn.',
   'trace.anatomyThinking': 'Thinking blocks in this request are not counted in any layer.',
+  'trace.reqDiff': 'What this request changed against the previous one: system prompt, tools, history and parameters. Green = added, red = removed.',
   'trace.askRun': 'run {cmd}?',
   'trace.autoApproved': 'bench: auto-approved',
   'trace.checkFailed': 'failed, the run goes on',

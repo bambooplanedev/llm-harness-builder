@@ -195,3 +195,7 @@ button.link:hover:not(:disabled) { background: none; }
 .proxy-card { border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; margin: 8px 0; max-width: 720px; }
 .proxy-card pre { font: 12px var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; margin: 6px 0; }
 .proxy-card .chip { margin-left: 6px; }
+.reqdiff { max-height: 160px; overflow: auto; margin: 6px 0; font: 12px/1.5 var(--mono, monospace); white-space: pre-wrap; overflow-wrap: anywhere; }
+.reqdiff .rd-add { color: var(--ok); }
+.reqdiff .rd-del { color: var(--err); }
+.reqdiff .rd-neutral { color: var(--muted); }
