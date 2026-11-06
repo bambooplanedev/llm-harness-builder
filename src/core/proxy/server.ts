@@ -69,9 +69,16 @@ export const drained = (res: http.ServerResponse) => new Promise<void>(resolve =
   res.on('drain', done); res.on('close', done)
 })
 
+const why = (e: unknown) => e instanceof Error ? e.message : String(e)
+
 /** Takes every secret header's value (a bearer token without `Bearer`) and the `?key=` of the URL out of whatever is recorded from this request; headers themselves never are. */
 const scrubberOf = (h: http.IncomingHttpHeaders, url: URL) => {
-  const rs = [...SECRET].map(n => redactor(String(h[n] ?? '').replace(/^Bearer\s+/i, ''), n))
+  // Node joins repeated headers with ', ' and a cookie header holds name=value pairs: each part is a secret too.
+  const rs = [...SECRET].flatMap(n => {
+    const v = String(h[n] ?? '').replace(/^Bearer\s+/i, '')
+    const parts = n === 'cookie' ? v.split(';').map(c => c.slice(c.indexOf('=') + 1)) : v.split(',')
+    return [v, ...parts.map(x => x.trim().replace(/^Bearer\s+/i, ''))].map(x => redactor(x, n))
+  })
   rs.push(redactor(url.searchParams.get('key') ?? '', 'key'))
   return <T>(x: T): T => rs.reduce((v, r) => r.deep(v), x)
 }
@@ -121,7 +128,7 @@ export async function startProxy(o: ProxyOpts): Promise<ProxyServer> {
     let rec: { run: string; turn: number; dialect: Dialect; side?: { model: string } } | undefined
     // The format a request is recorded as, if any: /v1/messages/count_tokens and the rest pass through unrecorded.
     const dialect = dialects.find(d => {
-      try { return d.matches(req.method, target.pathname) } catch (e) { log(`not recorded: dialect ${d.id}: matches: ${(e as Error).message}`); return false }
+      try { return d.matches(req.method, target.pathname) } catch (e) { log(`not recorded: dialect ${d.id}: matches: ${why(e)}`); return false }
     })
     const scrub = scrubberOf(req.headers, target)
     if (dialect) {
@@ -137,7 +144,7 @@ export async function startProxy(o: ProxyOpts): Promise<ProxyServer> {
           if (out.meta) log(`run ${out.run}: ${out.meta.task.slice(0, 80).replace(/\n/g, ' ')}`)
           record(out.run, out.events, out.meta)
           rec = { run: out.run, turn: out.turn, dialect, side: out.side }
-        } catch (e) { log(`not recorded: dialect ${dialect.id}: ${(e as Error).message}`) }
+        } catch (e) { log(`not recorded: dialect ${dialect.id}: ${why(e)}`) }
       }
     }
 
@@ -182,7 +189,7 @@ export async function startProxy(o: ProxyOpts): Promise<ProxyServer> {
     if (!rec) return
     // A cut reply's body is the text the dialect decodes from it, never the raw SSE (a key echoed in pieces would pass the scrubber).
     const partial = () => Promise.resolve().then(() => rec.dialect.partial(chunks, contentType))
-      .catch(e => { log(`dialect ${rec.dialect.id}: partial: ${(e as Error).message}`); return undefined })
+      .catch(e => { log(`dialect ${rec.dialect.id}: partial: ${why(e)}`); return undefined })
     let outcome: ReplyOutcome
     if (stoppedByUs.has(ac) && failure !== undefined) outcome = { ok: false, message: 'the proxy stopped before the reply ended', body: await partial() }
     else if (clientClosed) outcome = { ok: false, message: 'client closed the connection', body: await partial() }

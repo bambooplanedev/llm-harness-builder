@@ -564,8 +564,47 @@ test.each([...SECRET_HEADERS, '?key='])('scrubs %s: not in runs/, not seen by th
   if (name !== '?key=') headers[name] = name === 'authorization' ? `Bearer ${secret}` : secret
   const r = await fetch(url, { method: 'POST', headers, body: chat([{ role: 'user', content: `use ${secret}` }], { stream: false }) })
   expect(await r.text()).toContain(secret)
+  expect(name === '?key=' ? up.seen[0].url : up.seen[0].body).toContain(secret)
   await px.stop()
   expect(seenByDialect.length).toBe(1)
   expect(seenByDialect[0]).not.toContain(secret)
-  for (const f of (await readdir(px.runsDir)).filter(f => f.endsWith('.jsonl'))) expect(await readFile(join(px.runsDir, f), 'utf8')).not.toContain(secret)
+  const files = (await readdir(px.runsDir)).filter(f => f.endsWith('.jsonl'))
+  expect(files.length).toBeGreaterThan(0)
+  for (const f of files) expect(await readFile(join(px.runsDir, f), 'utf8')).not.toContain(secret)
 })
+
+test.each([undefined, null])('matches throwing %s: the agent still gets the upstream reply', async v => {
+  const up = await jsonUp()
+  const bad: Dialect = { ...openaiChat, id: 'bad-nonerror', matches: () => { throw v } }
+  const px = await proxy(up.url, { dialects: [bad, openaiChat] })
+  await exact(await post(px.base, chat()))
+  expect(px.lines.some(l => l.includes('bad-nonerror'))).toBe(true)
+})
+
+test('keyOf throwing null: the agent still gets the upstream reply', async () => {
+  const up = await jsonUp()
+  const d: Dialect = { ...openaiChat, id: 'null-keyof', keyOf: () => { throw null } }
+  const px = await proxy(up.url, { dialects: [d] })
+  await exact(await post(px.base, chat()))
+  expect(px.lines).toContain('not recorded: dialect null-keyof: null')
+})
+
+async function leaks(headers: Record<string, string | string[]>, leaked: string) {
+  const up = await jsonUp()
+  const seen: string[] = []
+  const d: Dialect = { ...openaiChat, id: 'spy', keyOf: p => { seen.push(JSON.stringify(p)); return openaiChat.keyOf(p) } }
+  const px = await proxy(up.url, { dialects: [d] })
+  const body = chat([{ role: 'user', content: `use ${leaked}` }], { stream: false })
+  await new Promise<void>((resolve, reject) => {
+    const r = http.request({ host: '127.0.0.1', port: px.p.port, path: '/v1/chat/completions', method: 'POST', headers: { 'content-type': 'application/json', ...headers } }, res => { res.resume(); res.on('end', resolve) })
+    r.on('error', reject); r.end(body)
+  })
+  await px.stop()
+  expect(seen.length).toBe(1)
+  expect(seen[0]).not.toContain(leaked)
+  const files = (await readdir(px.runsDir)).filter(f => f.endsWith('.jsonl'))
+  expect(files.length).toBeGreaterThan(0)
+  for (const f of files) expect(await readFile(join(px.runsDir, f), 'utf8')).not.toContain(leaked)
+}
+test('scrubs each of a repeated x-api-key header', () => leaks({ 'x-api-key': ['sk-first-0123456789abcdef', 'sk-second-0123456789abcdef'] }, 'sk-first-0123456789abcdef'))
+test('scrubs one value of a cookie header', () => leaks({ cookie: 'a=1; session=sess-0123456789abcdefgh' }, 'sess-0123456789abcdefgh'))
