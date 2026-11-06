@@ -273,5 +273,7 @@ test('the real CLI: its runs land in the runs dir serve reads; it refuses a plai
     const files = await readdir(join(cwd, 'runs'))
     expect(files).toEqual([expect.stringMatching(/^[0-9a-f]{8}\.jsonl$/)])
     expect(JSON.parse((await readFile(join(cwd, 'runs', files[0]), 'utf8')).split('\n')[0]).meta).toMatchObject({ harness: 'real', task: 'hello' })
+    const lastDone = (await readFile(join(cwd, 'runs', files[0]), 'utf8')).trim().split('\n').map(l => JSON.parse(l)).filter(e => e.type === 'done').pop()
+    expect(lastDone).toMatchObject({ reason: 'proxy_stopped' })
   } finally { await srv.close(); up.close() }
 }, 30000)

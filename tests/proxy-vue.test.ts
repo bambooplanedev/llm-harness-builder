@@ -123,3 +123,23 @@ test('a failed Stop shows its error on its card, not under the form', async () =
   expect(textOf(cards[0])).toContain('gone'); expect(textOf(cards[1])).not.toContain('gone')
   expect(all(m.root).filter(n => n.props.class === 'err form-err')).toHaveLength(0)
 })
+
+test('the stderr tail is muted, not red', async () => {
+  const m = await mount({ 'GET /api/proxies': [item({ tail: 'run abc: task' })], 'GET /api/runs': [] })
+  const pre = all(m.root).find(n => n.tag === 'pre' && textOf(n) === 'run abc: task')!
+  expect(pre.props.class).toBe('muted'); expect(pre.props.class).not.toContain('err')
+})
+
+test('an exited card stops listing sessions where a later proxy of the same name starts', async () => {
+  const a = item({ id: 'a', started: 1000, exit: { code: 1, signal: null } }), b = item({ id: 'b', started: 3000 })
+  const m = await mount({ 'GET /api/proxies': [a, b], 'GET /api/runs': [run({ id: 'run-old', started: 2000 }), run({ id: 'run-new', started: 3500 })] })
+  const [c1, c2] = all(m.root).filter(n => n.props.class === 'proxy-card').map(textOf)
+  expect(c1).toContain('run-old'); expect(c1).not.toContain('run-new')
+  expect(c2).toContain('run-new'); expect(c2).not.toContain('run-old')
+})
+
+test('a dead item offers Remove, a live one Stop', async () => {
+  const m = await mount({ 'GET /api/proxies': [item({ id: 'a', exit: { code: 1, signal: null } }), item({ id: 'b', name: 'two' })], 'GET /api/runs': [] })
+  expect(m.button('Remove')).toBeDefined(); expect(m.button('Stop')).toBeDefined()
+  expect(all(m.root).filter(n => n.tag === 'button' && textOf(n) === 'Stop')).toHaveLength(1)
+})

@@ -19,7 +19,11 @@ const dialects = ref(['']); const connections = ref([''])
 const starting = ref(false)
 
 /** A session of a proxy is a run it recorded: its harness is the proxy's name, started after the proxy did. */
-const sessions = (p: ProxyItem) => runs.value.filter(r => r.harness === p.name && r.started >= p.started)
+const sessions = (p: ProxyItem) => {
+  // An exited card ends where a later proxy of the same name begins.
+  const end = p.exit ? Math.min(...items.value.filter(o => o.name === p.name && o.started > p.started).map(o => o.started)) : Infinity
+  return runs.value.filter(r => r.harness === p.name && r.started >= p.started && r.started < end)
+}
 const exited = (p: ProxyItem) => `exited ${p.exit!.code ?? '-'}${p.exit!.signal ? ` (${p.exit!.signal})` : ''}`
 
 async function refresh() {
@@ -71,7 +75,7 @@ onUnmounted(() => clearInterval(timer))
       <p v-if="!items.length" class="muted">{{ t('proxy.none') }}</p>
       <div v-for="p in items" :key="p.id" class="proxy-card">
         <div class="line"><span><b>{{ p.name }}</b> · {{ p.upstream }} · :{{ p.port }}<span v-if="p.exit" class="chip err">{{ exited(p) }}</span></span>
-          <button :disabled="stopping.has(p.id)" @click="stop(p.id)">{{ stopping.has(p.id) ? 'stopping…' : 'Stop' }}</button></div>
+          <button :disabled="stopping.has(p.id)" @click="stop(p.id)">{{ p.exit ? (stopping.has(p.id) ? 'removing…' : 'Remove') : (stopping.has(p.id) ? 'stopping…' : 'Stop') }}</button></div>
         <pre v-if="p.lines.length" class="muted">{{ p.lines.join('\n') }}</pre>
         <div class="runs">
           <div v-for="r in sessions(p)" :key="r.id" class="session" @click="emit('open', r)">
@@ -80,7 +84,7 @@ onUnmounted(() => clearInterval(timer))
           </div>
         </div>
         <div v-if="stopError[p.id]" class="err">{{ stopError[p.id] }}</div>
-        <pre v-if="p.tail" class="err">{{ p.tail }}</pre>
+        <pre v-if="p.tail" class="muted">{{ p.tail }}</pre>
       </div>
     </template>
   </div>

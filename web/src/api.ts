@@ -71,7 +71,7 @@ export const api = {
     return body as ProxyItem[]
   },
   startProxy: (body: { upstream: string; port: number; name: string; dialects: string[]; connections: string[] }) => j<ProxyItem>('/api/proxies', { method: 'POST', body: JSON.stringify(body) }),
-  stopProxy: (id: string) => j<{ ok: true }>(`/api/proxies/${id}/stop`, { method: 'POST' }),
+  stopProxy: (id: string) => j<ProxyItem>(`/api/proxies/${id}/stop`, { method: 'POST' }),
   demo: () => j<{ workdir: string }>('/api/demo', { method: 'POST' }),
   demoCheck: (workdir: string, config: HarnessConfig) => j<{ verdict: 'PASS' | 'FAIL' }>('/api/demo/check', { method: 'POST', body: JSON.stringify({ workdir, config }) }),
   startRun: (config: HarnessConfig, task: string, workdir: string) => j<{ runId: string }>('/api/runs', { method: 'POST', body: JSON.stringify({ config, task, workdir }) }),
