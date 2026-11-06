@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest'
-import { skeleton, turnsOf, configDiff, lineDiff } from '../src/core/diff'
+import { skeleton, turnsOf, configDiff, lineDiff, requestDiff, isNoChange } from '../src/core/diff'
 import type { HarnessEvent } from '../src/core/events'
 import type { HarnessConfig } from '../src/core/config'
 
@@ -150,4 +150,96 @@ test('a tool_result without flags (a proxy trace) marks nothing bad', () => {
     { seq: 1, turn: 1, ts: 0, type: 'tool_result', callId: 'c1', name: 'read_file', output: 'x' },
   ] as any)
   expect(t[0].chips).toEqual([{ label: 'read_file', bad: false, truncated: false }])
+})
+
+// ---- requestDiff ----
+const none = { system: { added: [], removed: [] }, tools: { added: [], removed: [], changed: [] }, params: [] }
+const u = (text: string) => ({ role: 'user', content: text })
+const as = (text: string) => ({ role: 'assistant', content: text })
+
+test('requestDiff: only appended messages', () => {
+  const a = { model: 'm', messages: [u('hi')] }
+  const b = { model: 'm', messages: [u('hi'), as('yo'), u('more')] }
+  expect(requestDiff(a, b)).toEqual({ ...none, messages: { appended: 2 } })
+  expect(isNoChange(requestDiff(a, b)!)).toBe(true)
+  expect(requestDiff(a, a)).toEqual({ ...none, messages: { appended: 0 } })
+  expect(isNoChange(requestDiff(a, a)!)).toBe(true)
+})
+
+test('requestDiff: system lines added and removed; Anthropic blocks join with a newline', () => {
+  const sys = (...t: string[]) => t.map(text => ({ type: 'text', text, cache_control: { type: 'ephemeral' } }))
+  const a = { system: sys('You are X.', 'Be brief.'), messages: [u('hi')] }
+  const b = { system: sys('You are X.', 'Be long.'), messages: [u('hi')] }
+  const d = requestDiff(a, b)!
+  expect(d.system).toEqual({ added: ['Be long.'], removed: ['Be brief.'] })
+  expect(d.messages).toEqual({ appended: 0 })
+  expect(requestDiff({ system: 'a\nb', messages: [] }, { system: sys('a', 'b'), messages: [] })!.system).toEqual({ added: [], removed: [] })
+})
+
+test('requestDiff: cache_control alone is no change', () => {
+  const a = { system: [{ type: 'text', text: 's' }], tools: [{ name: 't', cache_control: { type: 'ephemeral' } }], messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }] }
+  const b = { system: [{ type: 'text', text: 's', cache_control: { type: 'ephemeral' } }], tools: [{ name: 't' }], messages: [{ role: 'user', content: [{ type: 'text', text: 'hi', cache_control: { type: 'ephemeral' } }] }] }
+  expect(requestDiff(a, b)).toEqual({ ...none, messages: { appended: 0 } })
+})
+
+test('requestDiff: tool added, removed, changed (Anthropic and OpenAI names)', () => {
+  const a = { messages: [], tools: [{ name: 'read', input_schema: { a: 1 } }, { type: 'function', function: { name: 'bash' } }, { name: 'old' }] }
+  const b = { messages: [], tools: [{ name: 'read', input_schema: { a: 2 } }, { type: 'function', function: { name: 'bash' } }, { name: 'new' }] }
+  expect(requestDiff(a, b)!.tools).toEqual({ added: ['new'], removed: ['old'], changed: ['read'] })
+  // a nameless tool is keyed by its JSON
+  expect(requestDiff({ messages: [] }, { messages: [], tools: [{ x: 1 }] })!.tools.added).toEqual(['{"x":1}'])
+})
+
+test('requestDiff: compaction reports history changed from #1 and the lost messages', () => {
+  const a = { messages: [u('task'), as('a1'), u('r1'), as('a2')] }
+  const b = { messages: [u('summary of work')] }
+  const m = requestDiff(a, b)!.messages
+  expect(m).toMatchObject({ from: 1, added: 0, removed: 3 })
+  expect(m).toEqual({ from: 1, changed: [{ n: 1, added: ['summary of work'], removed: ['task'] }], added: 0, removed: 3 })
+  expect(isNoChange(requestDiff(a, b)!)).toBe(false)
+})
+
+test('requestDiff: a reminder block added to message #1 changes only #1', () => {
+  const a = { messages: [{ role: 'user', content: [{ type: 'text', text: 'task' }] }, as('a1')] }
+  const b = { messages: [{ role: 'user', content: [{ type: 'text', text: 'task' }, { type: 'text', text: '<system-reminder>x</system-reminder>' }] }, as('a1'), u('next')] }
+  expect(requestDiff(a, b)!.messages).toEqual({ from: 1, changed: [{ n: 1, added: ['<system-reminder>x</system-reminder>'], removed: [] }], added: 1, removed: 0 })
+})
+
+test('requestDiff: OpenAI system/developer messages are system, not history; content-part arrays are read', () => {
+  const a = { messages: [{ role: 'system', content: 'be X' }, { role: 'developer', content: 'dev' }, { role: 'user', content: [{ type: 'text', text: 'hi' }] }] }
+  const b = { messages: [{ role: 'system', content: 'be Y' }, { role: 'developer', content: 'dev' }, { role: 'user', content: [{ type: 'text', text: 'hi' }] }, as('ok')] }
+  expect(requestDiff(a, b)).toEqual({ ...none, system: { added: ['be Y'], removed: ['be X'] }, messages: { appended: 1 } })
+  const c = { messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }] }
+  const d = { messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }, { type: 'image_url', image_url: {} }] }] }
+  expect(requestDiff(c, d)!.messages).toEqual({ from: 1, changed: [{ n: 1, added: ['[image_url]'], removed: [] }], added: 0, removed: 0 })
+})
+
+test('requestDiff: same text, different call arguments is a changed message', () => {
+  const tu = (input: unknown) => ({ role: 'assistant', content: [{ type: 'text', text: 'run' }, { type: 'tool_use', name: 'bash', input }] })
+  const d = requestDiff({ messages: [u('x'), tu({ command: 'ls' })] }, { messages: [u('x'), tu({ command: 'pwd' })] })!
+  expect(d.messages).toEqual({ from: 2, changed: [{ n: 2, added: ['call bash {"command":"pwd"}'], removed: ['call bash {"command":"ls"}'] }], added: 0, removed: 0 })
+  const oc = (args: string) => ({ role: 'assistant', content: null, tool_calls: [{ id: '1', type: 'function', function: { name: 'bash', arguments: args } }] })
+  expect(requestDiff({ messages: [oc('{"a":1}')] }, { messages: [oc('{"a":2}')] })!.messages).toMatchObject({ from: 1 })
+  // tool_result text is read, key order of input does not matter
+  const tr = (t: string) => ({ role: 'user', content: [{ type: 'tool_result', tool_use_id: '1', content: [{ type: 'text', text: t }] }] })
+  expect(requestDiff({ messages: [tr('a')] }, { messages: [tr('b')] })!.messages).toMatchObject({ changed: [{ n: 1, added: ['b'], removed: ['a'] }] })
+  expect(requestDiff({ messages: [tu({ a: 1, b: 2 })] }, { messages: [tu({ b: 2, a: 1 })] })!.messages).toEqual({ appended: 0 })
+})
+
+test('requestDiff: params are real leaf changes only; a missing key is (none)', () => {
+  const a = { model: 'm1', temperature: 0.2, stop: ['a'], extra: { x: 1, y: 2 }, messages: [u('hi')], max_tokens: 9 }
+  const b = { max_tokens: 9, extra: { y: 2, x: 1 }, messages: [u('hi')], stop: ['a'], temperature: 0.7, model: 'm2', top_p: 0.9 }
+  expect(requestDiff(a, b)!.params).toEqual([
+    { path: 'model', a: 'm1', b: 'm2' },
+    { path: 'temperature', a: '0.2', b: '0.7' },
+    { path: 'top_p', a: '(none)', b: '0.9' },
+  ])
+  expect(requestDiff({ messages: [], seed: 1 }, { messages: [] })!.params).toEqual([{ path: 'seed', a: '1', b: '(none)' }])
+  expect(isNoChange(requestDiff({ messages: [], seed: 1 }, { messages: [] })!)).toBe(false)
+})
+
+test('requestDiff: a body without a messages array is unreadable', () => {
+  expect(requestDiff({ model: 'm' }, { messages: [] })).toBeUndefined()
+  expect(requestDiff({ messages: [] }, 'x')).toBeUndefined()
+  expect(requestDiff(null, undefined)).toBeUndefined()
 })
