@@ -158,6 +158,7 @@ h5.group { margin: 16px 0 4px; font: 600 11px var(--sans); letter-spacing: .06em
 .analysis { color: var(--muted); font: 12px var(--mono); margin: 0 0 8px; }
 .groups .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .groups .grun { border-top: 1px solid var(--line); padding: 6px 0; }
+.groups .chips { display: flex; flex-wrap: wrap; gap: 6px; } .groups .chip { white-space: normal; overflow-wrap: anywhere; }
 .groups .grun pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; font: 12px var(--mono); }
 .runs .marks { float: right; display: inline-flex; gap: 4px; }
 .runs .marks button { padding: 0 6px; font-size: 11px; }

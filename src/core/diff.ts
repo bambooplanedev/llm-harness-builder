@@ -45,8 +45,10 @@ export function skeleton(events: HarnessEvent[]): Turn[] {
         case 'final_check': chips.push({ label: e.passed ? 'check passed' : 'check failed', bad: !e.passed, truncated: false }); break
         case 'context_reset': chips.push({ label: 'context reset', bad: false, truncated: false }); break
         case 'tool_call': {
-          const d = e.call.args.file_path ?? e.call.args.path ?? e.call.args.command
-          const chip: Chip = { label: e.call.name, bad: false, truncated: false, ...typeof d === 'string' ? { detail: d.length > 40 ? `${d.slice(0, 39)}…` : d } : {} }
+          // a path stays whole: its file name is at the end, and film hides only a whole absolute path
+          const p = e.call.args.file_path ?? e.call.args.path, c = e.call.args.command
+          const d = typeof p === 'string' ? p : typeof c === 'string' ? (c.length > 40 ? `${c.slice(0, 39)}…` : c) : undefined
+          const chip: Chip = { label: e.call.name, bad: false, truncated: false, ...d === undefined ? {} : { detail: d } }
           byCall.set(e.call.callId, chip)
           chips.push(chip)
           break

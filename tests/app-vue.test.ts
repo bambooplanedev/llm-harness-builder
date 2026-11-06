@@ -617,22 +617,31 @@ test('A/B groups: only main runs can be marked; compare opens one stream per mar
     expect(streams).toEqual([]) // a mark is not a click on the row
     expect(compare()).toBeUndefined()
     await mark('main task', 'B')
+    // the toggle state is not colour-only
+    expect(all(row('main task')).filter(n => n.tag === 'button').map(n => n.props['aria-pressed'])).toEqual([false, true])
     // opening another run keeps the marks
     row('third task').props.onClick(); await settle()
     expect(streams.map(s => s.url)).toEqual(['/api/runs/r3/events'])
     compare()!.props.onClick(); await settle()
     expect(streams.map(s => s.url).slice(1).sort()).toEqual(['/api/runs/m1/events', '/api/runs/r1/events'])
     expect(textOf(app.root)).toContain('waiting for requests…')
-    // unmarking a run while the view is open closes its stream
+    // marking a run while the view is open opens its stream; unmarking it closes it
+    await mark('third task', 'A')
+    expect(streams.at(-1)!.url).toBe('/api/runs/r3/events')
     await mark('first task', 'A')
     expect(streams.find(s => s.url === '/api/runs/r1/events')!.closed).toBe(true)
-    await mark('first task', 'A')
-    const r1again = streams.at(-1)!
-    expect(r1again.url).toBe('/api/runs/r1/events')
-    all(app.root).find(n => n.tag === 'button' && n.props.title === 'close the comparison')!.props.onClick(); await settle()
+    expect(textOf(app.root)).toContain('waiting for requests…')
+    // unmarking the last run of a side closes the view: it would wait for requests that never come
+    await mark('third task', 'A')
     expect(streams.slice(1).every(s => s.closed)).toBe(true)
     expect(textOf(app.root)).not.toContain('waiting for requests…')
     expect(streams[0].closed).toBe(false) // the trace of r3 is still on screen
+    await mark('first task', 'A')
+    expect(streams.filter(s => !s.closed)).toHaveLength(1) // a mark alone opens nothing
+    compare()!.props.onClick(); await settle()
+    all(app.root).find(n => n.tag === 'button' && n.props.title === 'close the comparison')!.props.onClick(); await settle()
+    expect(streams.slice(1).every(s => s.closed)).toBe(true)
+    expect(textOf(app.root)).not.toContain('waiting for requests…')
     compare()!.props.onClick(); await settle()
     const open = streams.slice(-2)
     expect(open.every(s => !s.closed)).toBe(true)

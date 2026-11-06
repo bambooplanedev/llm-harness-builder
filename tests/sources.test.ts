@@ -231,9 +231,25 @@ test('groupDiff: a request already seen is not read again when a new one arrives
   expect(reads).toBe(once)
 })
 
+test('groupDiff: a new request folds into its run; earlier requests of the run are not walked again', () => {
+  const touched: number[] = []
+  const watched = (run: unknown[]) => new Proxy(run, { get: (t, k, r) => { if (typeof k === 'string' && /^\d+$/.test(k)) touched.push(Number(k)); return Reflect.get(t, k, r) } })
+  const runA: unknown[] = [], runB = [first('b1', 'Rule B')]
+  for (let i = 0; i < 20; i++) runA.push(first('a1', `Rule A\nline ${i}`))
+  groupDiff([watched(runA)], [runB])
+  runA.push(first('a1', 'Rule A\nline new'))
+  touched.length = 0
+  const d = groupDiff([watched(runA)], [runB])
+  expect(d.onlyA).toContainEqual({ line: 'line 0', label: 'CLAUDE.md' })
+  expect(d.onlyA).toContainEqual({ line: 'line new', label: 'CLAUDE.md' })
+  expect(new Set(touched).size).toBeLessThanOrEqual(3) // the run's key, its last known request, the new one
+})
+
 test('groupDiff: runs without readable requests give empty lists', () => {
   expect(groupDiff([[]], [[]])).toEqual({ onlyA: [], onlyB: [], params: [] })
-  expect(groupDiff([[{}, null]], [[first('b1', 'R')]]).onlyA).toEqual([])
+  // a side with nothing readable does not report the whole other side
+  expect(groupDiff([[{}, null]], [[first('b1', 'R', 0.7)]])).toEqual({ onlyA: [], onlyB: [], params: [] })
+  expect(groupDiff([[first('a1', 'R', 0.2)]], [[{ model: 'm' }]])).toEqual({ onlyA: [], onlyB: [], params: [] })
 })
 
 const ev = (turn: number, e: Record<string, unknown>) => ({ seq: 0, ts: 0, turn, ...e }) as HarnessEvent

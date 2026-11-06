@@ -48,7 +48,7 @@ const sides = computed(() => [{ tag: 'A', runs: props.a }, { tag: 'B', runs: pro
           <code>{{ r.id }}</code>
           <div v-if="r.v.empty" class="muted">nothing recorded yet</div>
           <template v-else>
-            <div><span v-for="(c, j) in r.v.chips" :key="j" :class="['chip', { err: c.bad }]">{{ c.label }}{{ c.detail ? ` ${shown(c.detail, names)}` : '' }}{{ c.truncated ? ' ↯' : '' }}</span></div>
+            <div class="chips"><span v-for="(c, j) in r.v.chips" :key="j" :class="['chip', { err: c.bad }]">{{ c.label }}{{ c.detail ? ` ${shown(c.detail, names)}` : '' }}{{ c.truncated ? ' ↯' : '' }}</span></div>
             <pre>{{ shown(r.v.result, names) }}</pre>
             <pre v-if="r.v.reasoning">{{ shown(r.v.reasoning, names) }}</pre>
             <div v-else class="muted">no reasoning recorded</div>

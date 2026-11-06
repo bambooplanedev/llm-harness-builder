@@ -49,3 +49,13 @@ test('film mode: no machine path and no model name in the comparison', async () 
   expect(html).toContain('CLAUDE.md: Read …/')
   expect(html).not.toMatch(/\/home\/u|claude-fixture-model/)
 })
+
+test('a long absolute path shows its file name; film still hides it whole', async () => {
+  const long = '/home/u/some-long-project-folder/src/components/forms/Widget.ts'
+  const props = { a: [run('a1', 'R')], b: [run('b1', 'R', [res('ok'), tool(long)])] }
+  expect(await render(props)).toContain(`Read ${long}`)
+  setFilm(true)
+  const html = await render(props)
+  expect(html).not.toContain('Widget.ts')
+  expect(html).toContain('Read …/')
+})

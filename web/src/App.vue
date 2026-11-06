@@ -58,6 +58,8 @@ function syncGroups() {
 }
 function mark(id: string, g: 'A' | 'B') {
   if (marks.value[id] === g) delete marks.value[id]; else marks.value[id] = g
+  // without a side there is nothing to compare: the view would wait for requests that never come
+  if (!groupA.value.length || !groupB.value.length) groupsOpen.value = false
   syncGroups()
 }
 const showGroups = (on: boolean) => { groupsOpen.value = on; syncGroups() }
@@ -272,7 +274,7 @@ watch(() => config.value.backend.model, () => {
         <div class="runs">
           <div v-for="{ r, head, sub } in listed" :key="r.id" :class="{ session: r.session, sub }" @click="open(r.id, r.task, r.active)">
             <div class="line"><span><b>{{ r.harness }}</b><template v-if="head"> · session {{ head.session.slice(0, 4) }}…</template><template v-if="sub"> · ↳ subagent {{ r.agentType ?? r.agent }}</template><template v-else-if="head"> · main</template> · {{ r.reason ?? 'running' }}</span><span><template v-if="head?.subagents">{{ head.subagents }} subagent{{ head.subagents === 1 ? '' : 's' }} · </template>{{ r.turns ?? '-' }} turns · {{ r.toolCallCount ?? '-' }} tool calls · {{ new Date(r.started).toLocaleTimeString(lang) }}</span></div>
-            <div class="muted">{{ shown(r.task, names).slice(0, 60) }}<span v-if="!r.agent || r.agent === 'main'" class="marks"><button v-for="g in (['A', 'B'] as const)" :key="g" :class="{ on: marks[r.id] === g }" :title="t(`runs.mark${g}`)" @click.stop="mark(r.id, g)">{{ g }}</button></span></div>
+            <div class="muted">{{ shown(r.task, names).slice(0, 60) }}<span v-if="!r.agent || r.agent === 'main'" class="marks"><button v-for="g in (['A', 'B'] as const)" :key="g" :class="{ on: marks[r.id] === g }" :aria-pressed="marks[r.id] === g" :title="t(`runs.mark${g}`)" @click.stop="mark(r.id, g)">{{ g }}</button></span></div>
           </div>
         </div>
       </div>

@@ -186,36 +186,35 @@ export function lineLabels(sources: Source[]): Map<string, string> {
 export type GroupLine = { line: string; label?: string }
 export type GroupDiff = { onlyA: GroupLine[]; onlyB: GroupLine[]; params: { path: string; a: string; b: string }[] }
 
-type ReqLines = { lines: [string, string | undefined][]; params: Map<string, string> }
-/** A request's lines (with labels) and params, worked out once per payload object: a new event in a group costs only its own request. */
-const reqCache = new WeakMap<object, ReqLines | undefined>()
-function requestLines(p: unknown): ReqLines | undefined {
-  if (!isObj(p)) return undefined
-  if (reqCache.has(p)) return reqCache.get(p)
-  const s = requestSources(p)
-  let out: ReqLines | undefined
-  if (s) {
-    const labels = lineLabels(s), lines: ReqLines['lines'] = []
-    // the tools chunk is one JSON line; tool names stand for it
-    for (const c of s) if (c.where !== 'tools') for (const raw of c.text.split('\n')) { const l = raw.trim(); if (l) lines.push([l, labels.get(l)]) }
-    for (const t of Array.isArray(p.tools) ? (p.tools as unknown[]) : []) { const n = toolName(t); if (n) lines.push([`tool ${n}`, undefined]) }
-    out = { lines, params: requestParams(clean(p) as Obj) }
-  }
-  reqCache.set(p, out)
-  return out
+type RunAcc = { n: number; last: unknown; lines: Map<string, string | undefined>; params?: Map<string, string> }
+/**
+ * Per run (keyed on its first payload object): the union of its requests' lines so far, and how many payloads it has
+ * folded. A new event in a group costs only its own request; memory is the run's distinct lines, not every request's.
+ */
+const runCache = new WeakMap<object, RunAcc>()
+
+/** Folds one request's lines (label from the request a line first shows up in) and, if it is the first readable one, its params. */
+function fold(acc: RunAcc, p: unknown) {
+  const s = isObj(p) ? requestSources(p) : undefined
+  if (!s) return
+  const labels = lineLabels(s)
+  const add = (l: string, label?: string) => { if (!acc.lines.has(l)) acc.lines.set(l, label) }
+  // the tools chunk is one JSON line; tool names stand for it
+  for (const c of s) if (c.where !== 'tools') for (const raw of c.text.split('\n')) { const l = raw.trim(); if (l) add(l, labels.get(l)) }
+  for (const t of Array.isArray((p as Obj).tools) ? ((p as Obj).tools as unknown[]) : []) { const n = toolName(t); if (n) add(`tool ${n}`) }
+  acc.params ??= requestParams(clean(p) as Obj)
 }
 
-/** One run's lines (first appearance first, label from the request it first shows up in) and its first readable request's params. */
+/** One run's lines (first appearance first) and its first readable request's params; undefined when no request is readable. */
 function runLines(payloads: unknown[]) {
-  const lines = new Map<string, string | undefined>()
-  let params: Map<string, string> | undefined
-  for (const p of payloads) {
-    const r = requestLines(p)
-    if (!r) continue
-    params ??= r.params
-    for (const [l, label] of r.lines) if (!lines.has(l)) lines.set(l, label)
-  }
-  return { lines, params: params ?? new Map<string, string>() }
+  const key = payloads.find(isObj)
+  if (!key) return undefined
+  let acc = runCache.get(key)
+  // a run only grows; anything else (shorter, a different payload where the last one was) starts over
+  if (!acc || acc.n > payloads.length || (acc.n && payloads[acc.n - 1] !== acc.last)) runCache.set(key, (acc = { n: 0, last: undefined, lines: new Map() }))
+  for (; acc.n < payloads.length; acc.n++) fold(acc, payloads[acc.n])
+  acc.last = payloads[acc.n - 1]
+  return acc.params && { lines: acc.lines, params: acc.params }
 }
 
 /**
@@ -224,15 +223,19 @@ function runLines(payloads: unknown[]) {
  * its value and the two values differ. What varies inside a group (dates, billing header) never counts.
  */
 export function groupDiff(a: unknown[][], b: unknown[][]): GroupDiff {
-  const [ra, rb] = [a.map(runLines), b.map(runLines)]
-  const only = (side: typeof ra, other: typeof ra): GroupLine[] => !side.length ? [] : [...side[0].lines]
+  const [la, lb] = [a.map(runLines), b.map(runLines)]
+  // a side with nothing readable would report the whole other side
+  if (!la.some(r => r) || !lb.some(r => r)) return { onlyA: [], onlyB: [], params: [] }
+  const none = { lines: new Map<string, string | undefined>(), params: new Map<string, string>() }
+  const [ra, rb] = [la.map(r => r ?? none), lb.map(r => r ?? none)]
+  const only = (side: typeof ra, other: typeof ra): GroupLine[] => [...side[0].lines]
     .filter(([l]) => side.every(r => r.lines.has(l)) && !other.some(r => r.lines.has(l)))
     .map(([line, label]) => (label === undefined ? { line } : { line, label }))
   const agreed = (side: typeof ra, path: string) => {
     const vs = new Set(side.map(r => r.params.get(path)))
     return vs.size === 1 ? { v: [...vs][0] } : undefined
   }
-  const params = !ra.length || !rb.length ? [] : [...new Set([...ra, ...rb].flatMap(r => [...r.params.keys()]))].flatMap(path => {
+  const params = [...new Set([...ra, ...rb].flatMap(r => [...r.params.keys()]))].flatMap(path => {
     const [x, y] = [agreed(ra, path), agreed(rb, path)]
     return x && y && x.v !== y.v ? [{ path, a: showParam(x.v), b: showParam(y.v) }] : []
   })
