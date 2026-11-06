@@ -45,8 +45,10 @@ export function skeleton(events: HarnessEvent[]): Turn[] {
         case 'final_check': chips.push({ label: e.passed ? 'check passed' : 'check failed', bad: !e.passed, truncated: false }); break
         case 'context_reset': chips.push({ label: 'context reset', bad: false, truncated: false }); break
         case 'tool_call': {
-          const d = e.call.args.path ?? e.call.args.command
-          const chip: Chip = { label: e.call.name, bad: false, truncated: false, ...typeof d === 'string' ? { detail: d.length > 40 ? `${d.slice(0, 39)}…` : d } : {} }
+          // a path stays whole: its file name is at the end, and film hides only a whole absolute path
+          const p = e.call.args.file_path ?? e.call.args.path, c = e.call.args.command
+          const d = typeof p === 'string' ? p : typeof c === 'string' ? (c.length > 40 ? `${c.slice(0, 39)}…` : c) : undefined
+          const chip: Chip = { label: e.call.name, bad: false, truncated: false, ...d === undefined ? {} : { detail: d } }
           byCall.set(e.call.callId, chip)
           chips.push(chip)
           break
@@ -166,7 +168,16 @@ export function leadingSystem(msgs: Obj[]): number {
   return lead
 }
 
-const toolName = (t: unknown) => (isObj(t) ? (typeof t.name === 'string' ? t.name : isObj(t.function) && typeof t.function.name === 'string' ? t.function.name : undefined) : undefined)
+export const toolName = (t: unknown) => (isObj(t) ? (typeof t.name === 'string' ? t.name : isObj(t.function) && typeof t.function.name === 'string' ? t.function.name : undefined) : undefined)
+
+/** A request body's own parameters as leaves: everything but messages, system, tools and metadata. */
+export const requestParams = (body: Obj) => new Map(leaves(Object.fromEntries(Object.entries(body).filter(([k]) => !['messages', 'system', 'tools', 'metadata'].includes(k)))).filter(([k]) => k))
+
+/** A parameter leaf as shown: missing is `(none)`; arrays and objects stay compact JSON, since text() would print "[object Object]". */
+export function showParam(v: string | undefined): string {
+  if (v === undefined) return '(none)'
+  return v !== 'undefined' && typeof JSON.parse(v) === 'object' && JSON.parse(v) !== null ? v : text(v)
+}
 
 /**
  * What changed between two request bodies. Not via normalizeRequest: that folds system into messages,
@@ -205,13 +216,10 @@ export function requestDiff(a: unknown, b: unknown): ReqDiff | undefined {
         removed: Math.max(0, ra.rest.length - rb.rest.length),
       }
 
-  // arrays and objects show as compact JSON; text() would print "[object Object]"
-  const show = (v: string) => (v !== 'undefined' && typeof JSON.parse(v) === 'object' && JSON.parse(v) !== null ? v : text(v))
-  const own = (body: Obj) => new Map(leaves(Object.fromEntries(Object.entries(body).filter(([k]) => !['messages', 'system', 'tools', 'metadata'].includes(k)))).filter(([k]) => k))
-  const [pa, pb] = [own(ca), own(cb)]
+  const [pa, pb] = [requestParams(ca), requestParams(cb)]
   const params = [...new Set([...pa.keys(), ...pb.keys()])].flatMap(path => {
     const [x, y] = [pa.get(path), pb.get(path)]
-    return x === y ? [] : [{ path, a: x === undefined ? '(none)' : show(x), b: y === undefined ? '(none)' : show(y) }]
+    return x === y ? [] : [{ path, a: showParam(x), b: showParam(y) }]
   })
 
   return { system: { added: sys.onlyB, removed: sys.onlyA }, tools, messages, params }

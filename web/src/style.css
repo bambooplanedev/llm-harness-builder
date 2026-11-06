@@ -156,6 +156,13 @@ h5.group { margin: 16px 0 4px; font: 600 11px var(--sans); letter-spacing: .06em
 .diff .split-label { padding: 8px 14px; border-top: 1px solid var(--line); background: var(--warn-bg); color: var(--warn); font: 12px var(--mono); }
 .diff .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 8px 14px 8px 74px; border-top: 1px solid var(--line); background: var(--bg); }
 .analysis { color: var(--muted); font: 12px var(--mono); margin: 0 0 8px; }
+.groups .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.groups .grun { border-top: 1px solid var(--line); padding: 6px 0; }
+.groups .chips { display: flex; flex-wrap: wrap; gap: 6px; } .groups .chip { white-space: normal; overflow-wrap: anywhere; }
+.groups .grun pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; font: 12px var(--mono); }
+.runs .marks { float: right; display: inline-flex; gap: 4px; }
+.runs .marks button { padding: 0 6px; font-size: 11px; }
+.runs .marks button.on { background: var(--accent-bg); color: var(--accent); }
 .stubbed { color: var(--stub); border: 1px dashed var(--stub); border-radius: 4px; padding: 0 5px; }
 /* The task box grows with its text (no JS); a browser without field-sizing keeps the min height and the resize handle. */
 textarea.task { field-sizing: content; min-height: 50px; }

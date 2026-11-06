@@ -597,3 +597,55 @@ test('compare with…: a compare stream error drops the compare events (no false
     expect(textOf(app.root)).not.toContain('no request 2 there')
   } finally { globalThis.EventSource = savedES }
 })
+
+test('A/B groups: only main runs can be marked; compare opens one stream per marked run, close and unmount close them; marks survive open()', async () => {
+  const runs = [{ id: 'r1', task: 'first task', active: false }, { id: 'm1', task: 'main task', session: 's1', agent: 'main', started: 1, active: false },
+    { id: 's1a', task: 'sub task', session: 's1', agent: 'a1', started: 2, active: false }, { id: 'r3', task: 'third task', active: false }]
+  const app = await mount({ '/api/harnesses': [], '/api/runs': runs, '/api/models': [] })
+  const streams: { url: string; closed: boolean }[] = []
+  const savedES = globalThis.EventSource
+  globalThis.EventSource = class { static CLOSED = 2; s: (typeof streams)[number]; constructor(url: string) { this.s = { url, closed: false }; streams.push(this.s) }
+    set onmessage(_: unknown) {} set onerror(_: unknown) {} addEventListener() {} close() { this.s.closed = true } } as unknown as typeof EventSource
+  const stop = { stopPropagation() {} }
+  const row = (task: string) => all(app.root).find(n => n.tag === 'div' && n.props.onClick && textOf(n).includes(task))!
+  const mark = async (task: string, g: 'A' | 'B') => { all(row(task)).find(n => n.tag === 'button' && textOf(n) === g)!.props.onClick(stop); await settle() }
+  const compare = () => all(app.root).find(n => n.tag === 'button' && textOf(n) === 'compare groups')
+  try {
+    expect(all(row('sub task')).some(n => n.tag === 'button')).toBe(false)
+    expect(all(row('main task')).filter(n => n.tag === 'button').map(textOf)).toEqual(['A', 'B'])
+    await mark('first task', 'A')
+    expect(streams).toEqual([]) // a mark is not a click on the row
+    expect(compare()).toBeUndefined()
+    await mark('main task', 'B')
+    // the toggle state is not colour-only
+    expect(all(row('main task')).filter(n => n.tag === 'button').map(n => n.props['aria-pressed'])).toEqual([false, true])
+    // opening another run keeps the marks
+    row('third task').props.onClick(); await settle()
+    expect(streams.map(s => s.url)).toEqual(['/api/runs/r3/events'])
+    compare()!.props.onClick(); await settle()
+    expect(streams.map(s => s.url).slice(1).sort()).toEqual(['/api/runs/m1/events', '/api/runs/r1/events'])
+    expect(textOf(app.root)).toContain('waiting for requests…')
+    // marking a run while the view is open opens its stream; unmarking it closes it
+    await mark('third task', 'A')
+    expect(streams.at(-1)!.url).toBe('/api/runs/r3/events')
+    await mark('first task', 'A')
+    expect(streams.find(s => s.url === '/api/runs/r1/events')!.closed).toBe(true)
+    expect(textOf(app.root)).toContain('waiting for requests…')
+    // unmarking the last run of a side closes the view: it would wait for requests that never come
+    await mark('third task', 'A')
+    expect(streams.slice(1).every(s => s.closed)).toBe(true)
+    expect(textOf(app.root)).not.toContain('waiting for requests…')
+    expect(streams[0].closed).toBe(false) // the trace of r3 is still on screen
+    await mark('first task', 'A')
+    expect(streams.filter(s => !s.closed)).toHaveLength(1) // a mark alone opens nothing
+    compare()!.props.onClick(); await settle()
+    all(app.root).find(n => n.tag === 'button' && n.props.title === 'close the comparison')!.props.onClick(); await settle()
+    expect(streams.slice(1).every(s => s.closed)).toBe(true)
+    expect(textOf(app.root)).not.toContain('waiting for requests…')
+    compare()!.props.onClick(); await settle()
+    const open = streams.slice(-2)
+    expect(open.every(s => !s.closed)).toBe(true)
+    apps.splice(0).forEach(a => a.unmount())
+    expect(open.every(s => s.closed)).toBe(true)
+  } finally { globalThis.EventSource = savedES }
+})

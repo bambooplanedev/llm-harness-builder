@@ -272,3 +272,19 @@ test('requestDiff: top-level metadata is not a param', () => {
   expect(d.params).toEqual([])
   expect(isNoChange(d)).toBe(true)
 })
+
+test('skeleton: the detail prefers file_path (Claude Code tools) over path and command', () => {
+  const t = skeleton([ev(1, { type: 'tool_call', call: { callId: 'c1', name: 'Read', args: { file_path: '/w/a.ts', path: '/w', command: 'ls' } } })])
+  expect(t[0].chips[0].detail).toBe('/w/a.ts')
+})
+
+test('skeleton: a long file path stays whole; only a long command is cut', () => {
+  const path = `/private/tmp/some-project-folder/src/components/${'x'.repeat(8)}/Widget.ts`
+  expect(path.length).toBeGreaterThan(60)
+  const t = skeleton([
+    ev(1, { type: 'tool_call', call: { callId: 'c1', name: 'Read', args: { file_path: path } } }),
+    ev(1, { type: 'tool_call', call: { callId: 'c2', name: 'Bash', args: { command: 'x'.repeat(60) } } }),
+  ])
+  expect(t[0].chips[0].detail).toBe(path)
+  expect(t[0].chips[1].detail).toBe(`${'x'.repeat(39)}…`)
+})

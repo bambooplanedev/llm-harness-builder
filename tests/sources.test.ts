@@ -3,7 +3,8 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { userInfo } from 'node:os'
 import { execFileSync } from 'node:child_process'
-import { requestSources, lineLabels, type Source } from '../src/core/sources'
+import { requestSources, lineLabels, groupDiff, runSummary, type Source } from '../src/core/sources'
+import type { HarnessEvent } from '../src/core/events'
 import { partLine, leadingSystem } from '../src/core/diff'
 
 const fx = JSON.parse(readFileSync('tests/fixtures/cc-request.json', 'utf8'))
@@ -174,4 +175,99 @@ test('fixtures carry no home paths, emails or account names', () => {
     expect(t, f).not.toMatch(/\/Users\/|[\w.+-]+@[\w-]+\.[\w.]+/)
     for (const n of names) expect(t.includes(n), `${f} contains an account name`).toBe(false)
   }
+})
+
+// ---- groupDiff / runSummary ----
+const md = (body: string) => `<system-reminder>\nContents of /home/u/proj/CLAUDE.md (project):\n\n${body}\n</system-reminder>`
+const body = (run: string, temperature: number, tools: string[], messages: unknown[]) => ({
+  model: 'm', temperature, metadata: { user_id: run },
+  system: [{ type: 'text', text: `x-anthropic-billing-header: cc_version=${run}` }, { type: 'text', text: 'You are a coding agent.' }],
+  tools: tools.map(name => ({ name, input_schema: {} })),
+  messages,
+})
+const first = (run: string, rules: string, temperature = 0.2, tools = ['Read']) => body(run, temperature, tools, [{ role: 'user', content: [{ type: 'text', text: md(rules) }, { type: 'text', text: 'fix it' }] }])
+/** A run whose third request carries a Skill result: the skill's text shows up only there. */
+const withSkill = (run: string, rules: string, temperature: number) => {
+  const msgs = [{ role: 'user', content: [{ type: 'text', text: md(rules) }, { type: 'text', text: 'fix it' }] }]
+  const call = { role: 'assistant', content: [{ type: 'tool_use', id: `s-${run}`, name: 'Skill', input: { skill: 'superpowers:brainstorming' } }] }
+  const result = { role: 'user', content: [{ type: 'tool_result', tool_use_id: `s-${run}`, content: 'Launching skill: superpowers:brainstorming' }, { type: 'text', text: 'Ask one question at a time.' }] }
+  return [
+    body(run, temperature, ['Read', 'Write'], msgs),
+    body(run, temperature, ['Read', 'Write'], [...msgs, { role: 'assistant', content: 'thinking' }, { role: 'user', content: 'go on' }]),
+    body(run, temperature, ['Read', 'Write'], [...msgs, call, result]),
+  ]
+}
+
+test('groupDiff: only what every run of one group has and no run of the other, with its source', () => {
+  const a = [[first('a1', 'Rule A\nflaky line')], [first('a2', 'Rule A')]]
+  const b = [withSkill('b1', 'Rule B', 0.7), withSkill('b2', 'Rule B', 0.7)]
+  const d = groupDiff(a, b)
+  expect(d.onlyA).toEqual([{ line: 'Rule A', label: 'CLAUDE.md' }])
+  expect(d.onlyB).toContainEqual({ line: 'Rule B', label: 'CLAUDE.md' })
+  expect(d.onlyB).toContainEqual({ line: 'tool Write' })
+  // the skill body is only in each B run's third request
+  expect(d.onlyB).toContainEqual({ line: 'Ask one question at a time.', label: 'brainstorming' })
+  expect(d.onlyB.map(l => l.line).indexOf('Rule B')).toBeLessThan(d.onlyB.map(l => l.line).indexOf('Ask one question at a time.'))
+  // differs per run inside each group: not a difference
+  expect([...d.onlyA, ...d.onlyB].some(l => l.line.startsWith('x-anthropic-billing-header'))).toBe(false)
+  expect(d.params).toEqual([{ path: 'temperature', a: '0.2', b: '0.7' }])
+})
+
+test('groupDiff: a param counts only when each group agrees on it; metadata never counts', () => {
+  const a = [[first('a1', 'R', 0.2)], [first('a2', 'R', 0.5)]]
+  const b = [[first('b1', 'R', 0.7)], [first('b2', 'R', 0.7)]]
+  expect(groupDiff(a, b).params).toEqual([])
+})
+
+test('groupDiff: a request already seen is not read again when a new one arrives', () => {
+  let reads = 0
+  const counted = (p: Record<string, unknown>) => { const { messages, ...rest } = p; return Object.defineProperty(rest, 'messages', { get: () => (reads++, messages), enumerable: true }) }
+  const a = [[counted(first('a1', 'Rule A'))]], b = [[counted(first('b1', 'Rule B'))]]
+  groupDiff(a, b)
+  const once = reads
+  expect(once).toBeGreaterThan(0)
+  a[0].push(first('a1', 'Rule A\nMore'))
+  expect(groupDiff(a, b).onlyA).toContainEqual({ line: 'Rule A', label: 'CLAUDE.md' })
+  expect(reads).toBe(once)
+})
+
+test('groupDiff: a new request folds into its run; earlier requests of the run are not walked again', () => {
+  const touched: number[] = []
+  const watched = (run: unknown[]) => new Proxy(run, { get: (t, k, r) => { if (typeof k === 'string' && /^\d+$/.test(k)) touched.push(Number(k)); return Reflect.get(t, k, r) } })
+  const runA: unknown[] = [], runB = [first('b1', 'Rule B')]
+  for (let i = 0; i < 20; i++) runA.push(first('a1', `Rule A\nline ${i}`))
+  groupDiff([watched(runA)], [runB])
+  runA.push(first('a1', 'Rule A\nline new'))
+  touched.length = 0
+  const d = groupDiff([watched(runA)], [runB])
+  expect(d.onlyA).toContainEqual({ line: 'line 0', label: 'CLAUDE.md' })
+  expect(d.onlyA).toContainEqual({ line: 'line new', label: 'CLAUDE.md' })
+  expect(new Set(touched).size).toBeLessThanOrEqual(3) // the run's key, its last known request, the new one
+})
+
+test('groupDiff: runs without readable requests give empty lists', () => {
+  expect(groupDiff([[]], [[]])).toEqual({ onlyA: [], onlyB: [], params: [] })
+  // a side with nothing readable does not report the whole other side
+  expect(groupDiff([[{}, null]], [[first('b1', 'R', 0.7)]])).toEqual({ onlyA: [], onlyB: [], params: [] })
+  expect(groupDiff([[first('a1', 'R', 0.2)]], [[{ model: 'm' }]])).toEqual({ onlyA: [], onlyB: [], params: [] })
+})
+
+const ev = (turn: number, e: Record<string, unknown>) => ({ seq: 0, ts: 0, turn, ...e }) as HarnessEvent
+
+test('runSummary: the path of calls, the last answer, the recorded reasoning', () => {
+  const v = runSummary([
+    ev(1, { type: 'llm_request', payload: {} }),
+    ev(1, { type: 'llm_response', raw: {}, content: 'reading', latencyMs: 1 }),
+    ev(1, { type: 'tool_call', call: { callId: 'c1', name: 'Read', args: { file_path: '/w/a.ts' } } }),
+    ev(2, { type: 'llm_request', payload: {} }),
+    ev(2, { type: 'llm_response', raw: {}, content: 'done', reasoning: 'r2', latencyMs: 1 }),
+    ev(2, { type: 'tool_call', call: { callId: 'c2', name: 'Bash', args: { command: 'ls' } } }),
+  ])
+  expect(v.chips.map(c => [c.label, c.detail])).toEqual([['Read', '/w/a.ts'], ['Bash', 'ls']])
+  expect(v).toMatchObject({ result: 'done', reasoning: 'r2', empty: false })
+})
+
+test('runSummary: nothing recorded is empty', () => {
+  expect(runSummary([])).toEqual({ chips: [], result: '', reasoning: '', empty: true })
+  expect(runSummary([ev(1, { type: 'llm_request', payload: {} })]).empty).toBe(true)
 })
