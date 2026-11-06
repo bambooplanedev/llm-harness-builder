@@ -1,0 +1,173 @@
+import { test, expect, afterEach } from 'vitest'
+import http from 'node:http'
+import { mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { loadOwnConnection, loadOwnDialect, mergeConnections, mergeOwn } from '../src/core/proxy/own.js'
+import { loadConnections, pickConnection } from '../src/core/proxy/connections.js'
+import { DIALECTS } from '../src/core/proxy/dialects/index.js'
+import { startProxy } from '../src/core/proxy/server.js'
+import { tmpSync } from './helpers.js'
+
+const NO_MESSAGES = fileURLToPath(new URL('./fixtures/dialects/no-messages.mjs', import.meta.url))
+const cleanups: (() => unknown)[] = []
+afterEach(async () => { for (const c of cleanups.splice(0).reverse()) await c() })
+
+/** `files` written into a fresh tmp dir; returns the dir. */
+const dir = (files: Record<string, string | object> = {}) => {
+  const d = tmpSync('lhb-own-')
+  for (const [f, v] of Object.entries(files)) writeFileSync(join(d, f), typeof v === 'string' ? v : JSON.stringify(v))
+  return d
+}
+/** A dialect module; `over` replaces whole members by their source text. */
+const dialectSrc = (over: Record<string, string> = {}) => {
+  const m: Record<string, string> = {
+    id: "'mine'", label: "'POST /x'", matches: '() => false',
+    keyOf: "() => ({ key: 'k', taskText: 't', len: 0, model: '' })", toolResults: '() => []',
+    readReply: "async () => ({ content: '', toolCalls: [] })", partial: 'async () => undefined', ...over,
+  }
+  return `export default { ${Object.entries(m).map(([k, v]) => `${k}: ${v}`).join(', ')} }\n`
+}
+const conn = (over: object = {}) => ({ name: 'mine', hints: { session: 'x-mine-session' }, taskStrip: [], ...over })
+
+test('path refusals name the file', async () => {
+  const d = dir({ 'x.js': dialectSrc(), 'y.txt': dialectSrc(), 'c.json': conn() })
+  mkdirSync(join(d, 'sub.mjs'))
+  symlinkSync(join(d, 'y.txt'), join(d, 'x.mjs'))
+  await expect(loadOwnDialect('relative.mjs')).rejects.toThrow(/^dialect relative\.mjs: .*absolute/)
+  for (const f of ['missing.mjs', 'sub.mjs', 'x.js#.mjs', 'x.mjs', 'c.json']) {
+    const p = join(d, f)
+    await expect(loadOwnDialect(p), f).rejects.toThrow(`dialect ${p}: `)
+  }
+  expect(() => loadOwnConnection('c.json')).toThrow(/^connection c\.json: .*absolute/)
+  expect(() => loadOwnConnection(join(d, 'x.js'))).toThrow(`connection ${join(d, 'x.js')}: `)
+})
+
+test('dialect refusals', async () => {
+  const d = dir({
+    'syntax.mjs': 'export default {', 'nodefault.mjs': 'export const x = 1\n',
+    'badid.mjs': dialectSrc({ id: "'Bad_ID'" }), 'nokey.mjs': dialectSrc({ keyOf: '1' }), 'nolabel.mjs': dialectSrc({ label: '2' }),
+  })
+  for (const [f, why] of [['syntax.mjs', /./], ['nodefault.mjs', /default/], ['badid.mjs', /id/], ['nokey.mjs', /keyOf/], ['nolabel.mjs', /label/]] as const) {
+    const p = join(d, f)
+    await expect(loadOwnDialect(p), f).rejects.toThrow(`dialect ${p}: `)
+    await expect(loadOwnDialect(p), f).rejects.toThrow(why)
+  }
+})
+
+test('the same dialect file twice is a duplicate id, refused', async () => {
+  const p = join(dir({ 'a.mjs': dialectSrc() }), 'a.mjs')
+  const own = [{ item: await loadOwnDialect(p), file: p }, { item: await loadOwnDialect(p), file: p }]
+  expect(() => mergeOwn(own, [...DIALECTS], d => d.id, 'dialect')).toThrow(`dialect ${p}: `)
+  expect(() => mergeOwn(own, [...DIALECTS], d => d.id, 'dialect')).toThrow(/mine/)
+})
+
+test('the shape guard: a bad return names the method', async () => {
+  const d = dir({
+    'async.mjs': dialectSrc({ keyOf: "async () => ({ key: 'k', taskText: 't', len: 0, model: '' })" }),
+    'nan.mjs': dialectSrc({ keyOf: "() => ({ key: 'k', taskText: 't', len: NaN, model: '' })" }),
+    'reply.mjs': dialectSrc({ readReply: "async () => ({ content: '' })" }),
+    'results.mjs': dialectSrc({ toolResults: '() => ({})' }),
+    'thrown.mjs': dialectSrc({ keyOf: "() => { throw 'boom' }", readReply: 'async () => { throw undefined }' }),
+  })
+  const load = (f: string) => loadOwnDialect(join(d, f))
+  expect((await load('async.mjs')).keyOf.bind(null, {})).toThrow(/keyOf/)
+  expect((await load('nan.mjs')).keyOf.bind(null, {})).toThrow(/keyOf/)
+  await expect((await load('reply.mjs')).readReply([], '')).rejects.toThrow(/readReply/)
+  expect((await load('results.mjs')).toolResults.bind(null, {}, [])).toThrow(/toolResults/)
+  const t = await load('thrown.mjs')
+  expect(t.keyOf.bind(null, {})).toThrow(new Error('dialect mine: keyOf: boom'))
+  await expect(t.readReply([], '')).rejects.toThrow(new Error('dialect mine: readReply: undefined'))
+  // A good one passes its values through.
+  const ok = await loadOwnDialect(NO_MESSAGES)
+  expect(ok.keyOf({ prompt: 'p', history: ['a'], model: 'm' })).toEqual({ key: 'p', taskText: 'p', len: 1, model: 'm' })
+})
+
+test('connection refusals', () => {
+  const d = dir({
+    'bad.json': '{', 'top.json': conn({ extra: 1 }), 'hint.json': conn({ hints: { foo: 'x-foo' } }),
+    'auth.json': conn({ hints: { session: 'authorization' } }), 'strip.json': conn({ taskStrip: [['a']] }),
+  })
+  for (const [f, why] of [['bad.json', /JSON/], ['top.json', /extra/], ['hint.json', /foo/], ['auth.json', /authorization/], ['strip.json', /taskStrip/]] as const) {
+    const p = join(d, f)
+    expect(() => loadOwnConnection(p), f).toThrow(`connection ${p}: `)
+    expect(() => loadOwnConnection(p), f).toThrow(why)
+  }
+})
+
+test('connections: two own with one name, and a second fallback, are refused at start', async () => {
+  const d = dir({ 'a.json': conn(), 'b.json': conn(), 'fb.json': { name: 'mine-fallback', hints: {}, taskStrip: [] } })
+  const start = (connectionFiles: string[]) => startProxy({ upstream: 'http://127.0.0.1:9', port: 0, runsDir: d, harness: 't', connectionFiles })
+  await expect(start([join(d, 'a.json'), join(d, 'b.json')])).rejects.toThrow(`connection ${join(d, 'b.json')}: `)
+  await expect(start([join(d, 'fb.json')])).rejects.toThrow(new RegExp(`^connection ${join(d, 'fb.json')}: .*empty hints`))
+})
+
+test('merge: an own openai-chat replaces the built-in, first in order', async () => {
+  const p = join(dir({ 'x.mjs': dialectSrc({ id: "'openai-chat'" }) }), 'x.mjs')
+  const own = await loadOwnDialect(p)
+  const { list, lines } = mergeOwn([{ item: own, file: p }], [...DIALECTS], d => d.id, 'dialect')
+  expect(list.map(d => d.id)).toEqual(['openai-chat', 'anthropic'])
+  expect(list[0]).toBe(own)
+  expect(lines).toEqual([`dialect openai-chat from ${p} (replaces built-in)`])
+  expect(mergeOwn([{ item: own, file: '/abs/x.mjs' }], [...DIALECTS], d => d.id, 'dialect').lines).toEqual(['dialect openai-chat from /abs/x.mjs (replaces built-in)'])
+})
+
+test('merge: an own claude-code.json replaces the built-in; pick order is own hinted, built-in hinted, fallback', async () => {
+  const d = dir({
+    'claude-code.json': conn({ name: 'claude-code', hints: { session: 'x-my-cc' } }),
+    'other.json': conn({ name: 'other', hints: { session: 'x-other' } }),
+  })
+  const builtIn = loadConnections()
+  builtIn.splice(1, 0, { name: 'zz', hints: { session: 'x-zz' }, taskStrip: [] }) // a second built-in with hints
+  const files = [join(d, 'other.json'), join(d, 'claude-code.json')]
+  const merged = mergeConnections(files, builtIn)
+  expect(merged.list.map(c => c.name)).toEqual(['other', 'claude-code', 'zz', 'generic'])
+  expect(merged.list[1].hints).toEqual({ session: 'x-my-cc' })
+  const px = await startProxy({ upstream: 'http://127.0.0.1:9', port: 0, runsDir: d, harness: 't', connections: builtIn, connectionFiles: files })
+  cleanups.push(() => px.stop())
+  expect(px.loaded).toEqual([`connection other from ${join(d, 'other.json')}`, `connection claude-code from ${join(d, 'claude-code.json')} (replaces built-in)`])
+})
+
+test('pickConnection over a merged list: own first, then built-in, then the fallback', () => {
+  const list = [conn({ name: 'a', hints: { session: 'x-s' } }), conn({ name: 'b', hints: { session: 'x-s' } }), { name: 'generic', hints: {}, taskStrip: [] }] as any
+  expect(pickConnection(list, { 'x-s': 'v' }).conn.name).toBe('a')
+  expect(pickConnection(list, {}).conn.name).toBe('generic')
+})
+
+test('end to end: an own dialect with no messages records a run, and its path stays out of runs/', async () => {
+  const replies = ['first', 'second']
+  const up = http.createServer((_q, res) => { _q.resume(); _q.on('end', () => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ text: replies.shift() })) }) })
+  await new Promise<void>(r => up.listen(0, '127.0.0.1', r))
+  cleanups.push(() => { up.closeAllConnections(); up.close() })
+  const runsDir = tmpSync('lhb-own-runs-')
+  const px = await startProxy({ upstream: `http://127.0.0.1:${(up.address() as { port: number }).port}`, port: 0, runsDir, harness: 't', dialectFiles: [NO_MESSAGES] })
+  expect(px.loaded).toEqual([`dialect no-messages from ${NO_MESSAGES}`])
+  const send = (history: string[]) => fetch(`http://127.0.0.1:${px.port}/api/complete`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model: 'm', prompt: 'write it', history }) }).then(r => r.json())
+  expect(await send([])).toEqual({ text: 'first' })
+  expect(await send(['write it', 'first'])).toEqual({ text: 'second' })
+  await px.stop()
+  const files = readdirSync(runsDir).filter(f => f.endsWith('.jsonl'))
+  expect(files).toHaveLength(1)
+  const text = readFileSync(join(runsDir, files[0]), 'utf8')
+  const [meta, ...events] = text.trim().split('\n').map(l => JSON.parse(l))
+  expect(meta.meta.task).toBe('write it')
+  expect(events.filter(e => e.type === 'llm_response').map(e => e.content)).toEqual(['first', 'second'])
+  expect(events.at(-1)).toMatchObject({ type: 'done', turns: 2 })
+  expect(text).not.toContain(NO_MESSAGES)
+  expect(text).not.toContain('no-messages.mjs')
+})
+
+test('an own dialect whose keyOf is async: logged by method, the request still forwarded', async () => {
+  const p = join(dir({ 'a.mjs': dialectSrc({ matches: '() => true', keyOf: "async () => ({ key: 'k', taskText: 't', len: 0, model: '' })" }) }), 'a.mjs')
+  const up = http.createServer((q, res) => { q.resume(); q.on('end', () => res.end('ok')) })
+  await new Promise<void>(r => up.listen(0, '127.0.0.1', r))
+  cleanups.push(() => { up.closeAllConnections(); up.close() })
+  const lines: string[] = []
+  const runsDir = tmpSync('lhb-own-runs-')
+  const px = await startProxy({ upstream: `http://127.0.0.1:${(up.address() as { port: number }).port}`, port: 0, runsDir, harness: 't', dialectFiles: [p], log: l => lines.push(l) })
+  cleanups.push(() => px.stop())
+  const r = await fetch(`http://127.0.0.1:${px.port}/x`, { method: 'POST', body: '{}' })
+  expect(await r.text()).toBe('ok')
+  expect(lines.join('\n')).toMatch(/not recorded: dialect mine: .*keyOf/)
+  expect(readdirSync(runsDir)).toEqual([])
+})

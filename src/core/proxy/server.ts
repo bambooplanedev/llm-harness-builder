@@ -12,6 +12,7 @@ import { redactor } from '../redact.js'
 import { DIALECTS } from './dialects/index.js'
 import type { Dialect } from './dialects/dialect.js'
 import { CONNECTIONS_DIR, SECRET, loadConnections, pickConnection, type Connection } from './connections.js'
+import { mergeConnections, mergeDialects } from './own.js'
 
 export type ProxyOpts = {
   /** Server root, e.g. http://127.0.0.1:8080; a path prefix, if any, is kept. */
@@ -30,9 +31,12 @@ export type ProxyOpts = {
   dialects?: readonly Dialect[]
   /** Used instead of reading `connectionsDir`. */
   connections?: Connection[]
+  /** The user's own dialect (.mjs) and connection (.json) files, absolute paths, over the built-ins in this order. */
+  dialectFiles?: string[]
+  connectionFiles?: string[]
 }
-/** `hints`: each connection's startup line, with its port, in pick order. */
-export type ProxyServer = { port: number; hints: string[]; stop(): Promise<void> }
+/** `hints`: each connection's startup line, with its port, in pick order. `loaded`: one line per own file, in flag order. */
+export type ProxyServer = { port: number; hints: string[]; loaded: string[]; stop(): Promise<void> }
 
 const HOP = ['connection', 'keep-alive', 'transfer-encoding', 'te', 'trailer', 'upgrade', 'proxy-authorization', 'proxy-authenticate']
 // A request also loses host (http.request sets the upstream's), accept-encoding (the reply and the copy we parse
@@ -88,8 +92,11 @@ export async function startProxy(o: ProxyOpts): Promise<ProxyServer> {
   const prefix = up.pathname.replace(/\/+$/, '')
   const log = o.log ?? (() => {})
   const cap = o.recordCap ?? 20e6
-  const conns = o.connections ?? loadConnections(o.connectionsDir ?? CONNECTIONS_DIR)
-  const dialects = o.dialects ?? DIALECTS
+  // Own files load before listening: a bad one rejects with no port bound.
+  const ownDialects = await mergeDialects(o.dialectFiles ?? [], o.dialects ?? DIALECTS)
+  const builtInConns = o.connections ?? loadConnections(o.connectionsDir ?? CONNECTIONS_DIR)
+  const ownConns = o.connectionFiles?.length ? mergeConnections(o.connectionFiles, builtInConns) : { list: builtInConns, lines: [] }
+  const conns = ownConns.list, dialects = ownDialects.list
   const sessions = new Sessions({ now: Date.now, newId: () => randomUUID().slice(0, 8), harness: o.harness, upstream: o.upstream, pid: process.pid })
   const writers = new Map<string, { t: TraceWriter; chain: Promise<void> }>()
   const inflight = new Set<AbortController>()
@@ -222,6 +229,7 @@ export async function startProxy(o: ProxyOpts): Promise<ProxyServer> {
   return {
     port,
     hints: conns.flatMap(c => c.hint === undefined ? [] : [c.hint.replaceAll('{port}', String(port))]),
+    loaded: [...ownDialects.lines, ...ownConns.lines],
     /** Aborts replies in flight, waits for them to be recorded, then ends every open run with done. */
     async stop() {
       for (const ac of inflight) { if (!ac.signal.aborted) stoppedByUs.add(ac); ac.abort() }
