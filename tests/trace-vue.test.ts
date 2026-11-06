@@ -1,5 +1,5 @@
 import { test, expect, afterEach } from 'vitest'
-import { createSSRApp } from 'vue'
+import { createSSRApp, createRenderer, nextTick, type App as VueApp } from 'vue'
 import { renderToString } from 'vue/server-renderer'
 // @ts-expect-error -- vue SFC, no .d.ts; typechecked separately by vue-tsc
 import Trace from '../web/src/Trace.vue'
@@ -296,4 +296,85 @@ test('film: a filmed diff is built once per diff object, not per render', async 
   const html = await render({ approvable: false, events: [reqEv(0, 1, body('x', 'qwen3:8b')), reqEv(1, 2, body('y', 'qwen3:8b'))] })
   expect(html).toContain('+ system: y')
   expect(html).not.toContain('qwen3')
+})
+
+// Sources need an open inspector, so these mount Trace on a DOM-less renderer (as app-vue.test.ts) and fire `toggle`.
+type N = { tag: string; text: string; props: Record<string, any>; children: N[]; parent?: N; open?: boolean }
+const node = (tag: string, text = ''): N => ({ tag, text, props: {}, children: [] })
+const all = (n: N): N[] => [n, ...n.children.flatMap(all)]
+const textOf = (n: N): string => n.tag === '#comment' ? '' : n.text + n.children.map(textOf).join('')
+const { createApp } = createRenderer<N, N>({
+  createElement: tag => node(tag), createText: t => node('#text', t), createComment: t => node('#comment', t),
+  setText: (n, t) => { n.text = t }, setElementText: (n, t) => { n.children = [node('#text', t)] },
+  insert: (c, p, anchor) => { c.parent?.children.splice(c.parent.children.indexOf(c), 1); c.parent = p; const i = anchor ? p.children.indexOf(anchor) : -1; i < 0 ? p.children.push(c) : p.children.splice(i, 0, c) },
+  remove: c => { c.parent?.children.splice(c.parent.children.indexOf(c), 1); c.parent = undefined },
+  parentNode: n => n.parent ?? null, nextSibling: n => n.parent?.children[n.parent.children.indexOf(n) + 1] ?? null,
+  patchProp: (n, k, _, v) => { n.props[k] = v },
+})
+const apps: VueApp[] = []
+afterEach(() => { apps.splice(0).forEach(a => a.unmount()) })
+/** Mounts Trace and opens every inspector, as a click on its summary would. */
+async function opened(evs: HarnessEvent[]) {
+  const root = node('root'), app = createApp(Trace, { events: evs, task: 'x', approvable: false, bars: false }); apps.push(app); app.mount(root)
+  for (const d of all(root).filter(n => n.tag === 'details')) { d.open = true; d.props.onToggle({ target: d }) }
+  await nextTick()
+  const sources = () => all(root).find(n => n.props.class === 'sources')
+  const row = (label: string) => all(sources()!).find(n => n.tag === 'button' && textOf(n).includes(label))!
+  const click = async (label: string) => { row(label).props.onClick({}); await nextTick() }
+  return { text: () => textOf(root), sources, click }
+}
+const cc = JSON.parse(readFileSync('tests/fixtures/cc-request.json', 'utf8'))
+/** A user message that carries project files the way Claude Code does, then the person's words. */
+const files = (fs: [path: string, text: string][], model = 'm1') => ({ model, messages: [{ role: 'user', content: [
+  { type: 'text', text: `<system-reminder>\n${fs.map(([p, t]) => `Contents of ${p} (project instructions):\n\n${t}\n`).join('')}</system-reminder>` },
+  { type: 'text', text: 'go' },
+] }] })
+
+test('sources: an open inspector lists where each part of a readable request came from', async () => {
+  const v = await opened([reqEv(0, 1, cc)])
+  expect(v.sources()).toBeDefined()
+  const s = textOf(v.sources()!)
+  for (const x of ['sources', 'CLAUDE.md', 'you', 'billing header']) expect(s).toContain(x)
+  expect((await opened([reqEv(0, 1, { model: 'm1' })])).sources()).toBeUndefined()
+})
+
+test('sources: closed inspectors show no block', async () => {
+  const root = node('root'), app = createApp(Trace, { events: [reqEv(0, 1, cc)], task: 'x', approvable: false, bars: false }); apps.push(app); app.mount(root)
+  expect(all(root).find(n => n.props.class === 'sources')).toBeUndefined()
+})
+
+test('sources: a row opens to its text; a long one is cut and counted', async () => {
+  const v = await opened([reqEv(0, 1, { model: 'm1', messages: [{ role: 'user', content: 'y'.repeat(30000) }] })])
+  expect(textOf(v.sources()!)).not.toContain('yyy')
+  await v.click('you')
+  expect(textOf(v.sources()!)).toContain('y'.repeat(20000))
+  expect(textOf(v.sources()!)).not.toContain('y'.repeat(20001))
+  expect(textOf(v.sources()!)).toContain('… 10000 more chars')
+})
+
+test('request diff: a line added to CLAUDE.md is named by its file', async () => {
+  const a = files([['/home/u/proj/CLAUDE.md', 'keep it short']]), b = files([['/home/u/proj/CLAUDE.md', 'keep it short\nuse tabs']])
+  const t = (await opened([reqEv(0, 1, a), reqEv(1, 2, b)])).text()
+  expect(t).toContain('+ CLAUDE.md: use tabs')
+  expect(t).not.toContain('#1: + use tabs')
+})
+
+test('request diff: a line found in two differently labelled parts stays unlabelled', async () => {
+  const a = files([['/home/u/proj/CLAUDE.md', 'one'], ['/home/u/proj/NOTES.md', 'two']])
+  const b = files([['/home/u/proj/CLAUDE.md', 'one\n---'], ['/home/u/proj/NOTES.md', 'two\n---']])
+  const t = (await opened([reqEv(0, 1, a), reqEv(1, 2, b)])).text()
+  expect(t).toContain('#1: + ---')
+  expect(t).not.toMatch(/\+ (CLAUDE|NOTES)\.md: ---/)
+})
+
+test('sources, film mode: a file is its name only, rows do not open, a model inside a labelled line is replaced', async () => {
+  setFilm(true)
+  const a = files([['/home/u/proj/CLAUDE.md', 'keep it short']], 'qwen3:8b'), b = files([['/home/u/proj/CLAUDE.md', 'keep it short\nuse qwen3:8b']], 'qwen3:8b')
+  const v = await opened([reqEv(0, 1, a), reqEv(1, 2, b)])
+  expect(textOf(v.sources()!)).toContain('CLAUDE.md')
+  expect(v.text()).not.toContain('/home/u')
+  await v.click('CLAUDE.md')
+  expect(textOf(v.sources()!)).not.toContain('keep it short')
+  expect(v.text()).toContain('+ CLAUDE.md: use model')
+  expect(v.text()).not.toContain('qwen3')
 })

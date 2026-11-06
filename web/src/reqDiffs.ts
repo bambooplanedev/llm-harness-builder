@@ -1,8 +1,19 @@
 import { requestDiff, type ReqDiff } from '../../src/core/diff'
+import { requestSources, type Source } from '../../src/core/sources'
 import type { HarnessEvent } from './api'
 
 /** Most lines one diff block renders; the rest is counted, not drawn. */
 export const MAX_DIFF_LINES = 100
+/** Most chars an opened source row shows; the rest is counted. */
+export const MAX_SOURCE_CHARS = 20000
+
+/** Where each part of a request came from, read once per event (undefined is cached too). */
+const srcCache = new WeakMap<object, Source[] | undefined>()
+export function sourcesOf(e: HarnessEvent): Source[] | undefined {
+  if (e.type !== 'llm_request') return undefined
+  if (!srcCache.has(e)) srcCache.set(e, requestSources(e.payload))
+  return srcCache.get(e)
+}
 
 /** The diff of a request against the previous one, once per (event, previous payload): events never change after they arrive. */
 const cache = new WeakMap<object, { prev: unknown; diff: ReqDiff | undefined }>()

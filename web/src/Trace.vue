@@ -1,15 +1,17 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, reactive } from 'vue'
 import Anatomy from './Anatomy.vue'
 import ReqDiff from './ReqDiff.vue'
+import Sources from './Sources.vue'
 import { t, tn, T } from './i18n'
 import type { Delta, HarnessEvent } from './api'
 import { mcpApprovalServer, mcpCounts, UNTIL_BASH } from '../../src/core/events'
 import { analyzeTrace, summaryLine } from '../../src/core/analyze'
-import { diffsBySeq, versusBySeq } from './reqDiffs'
+import { diffsBySeq, versusBySeq, sourcesOf } from './reqDiffs'
+import { lineLabels, type Source } from '../../src/core/sources'
 import type { ReqDiff as ReqDiffT } from '../../src/core/diff'
 import { anatomies, anatomyLine } from '../../src/core/anatomy'
-import { film, filmDeep, namesIn, shown, type FilmNames } from './film'
+import { film, filmDeep, filmText, namesIn, shown, type FilmNames } from './film'
 // approvable is a Boolean-typed prop, so Vue casts an ABSENT value to `false` (not `undefined`).
 // App.vue's live Workbench never passes this prop and needs the opposite default -- only a
 // finished/replayed trace (Bench.vue, Diff.vue) opts out by passing `false` explicitly.
@@ -66,12 +68,39 @@ function pick(turn: number) {
   el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 /** Computed from the events as recorded (cached per event), then filmed: the result is small, the bodies are not. */
-const filmed = new WeakMap<object, { key: string; out: ReqDiffT }>()
-/** filmDeep once per (diff object, names): a new event must not rebuild every block. */
-const filmedDiff = (d: ReqDiffT): ReqDiffT => {
-  const key = JSON.stringify(names.value), c = filmed.get(d)
-  if (c?.key === key) return c.out
-  const out = filmDeep(d, names.value); filmed.set(d, { key, out }); return out
+const filmed = new WeakMap<object, { key: string; out: unknown }>()
+/** f once per (object, names): a new event must not rebuild every block. */
+const filmOnce = <T extends object>(x: T, f: (x: T, n: FilmNames) => T): T => {
+  const key = JSON.stringify(names.value), c = filmed.get(x)
+  if (c?.key === key) return c.out as T
+  const out = f(x, names.value); filmed.set(x, { key, out }); return out
+}
+const filmedDiff = (d: ReqDiffT): ReqDiffT => filmOnce(d, filmDeep)
+/** Inspectors that are open, by turn: sources and line labels are read only for these. */
+const openTurns = reactive(new Set<number>())
+const onToggle = (turn: number, ev: Event) => { if ((ev.target as HTMLDetailsElement).open) openTurns.add(turn); else openTurns.delete(turn) }
+const eventBySeq = computed(() => new Map(props.events.map(e => [e.seq, e])))
+/** seq of an llm_request → seq of the llm_request before it (the pair diffsBySeq compares). */
+const prevReq = computed(() => {
+  const m = new Map<number, number>()
+  let p: number | undefined
+  for (const e of props.events) if (e.type === 'llm_request') { if (p !== undefined) m.set(e.seq, p); p = e.seq }
+  return m
+})
+const filmSources = (s: Source[], n: FilmNames): Source[] => s.map(x => ({ ...x, where: filmText(x.where, n), label: filmText(x.label, n), text: filmText(x.text, n) }))
+/** The sources of a request as recorded (cached per event), filmed once per array in film mode. */
+const sourcesAt = (seq: number | undefined): Source[] | undefined => {
+  const e = seq === undefined ? undefined : eventBySeq.value.get(seq), s = e && sourcesOf(e)
+  return s && film.value ? filmOnce(s, filmSources) : s
+}
+/** line → label, once per sources array; from filmed sources in film mode, so keys and labels match the filmed diff. */
+const labelCache = new WeakMap<Source[], Map<string, string>>()
+const labelsAt = (seq: number | undefined) => {
+  const s = sourcesAt(seq)
+  if (!s) return undefined
+  let m = labelCache.get(s)
+  if (!m) labelCache.set(s, m = lineLabels(s))
+  return m
 }
 const diffBySeq = computed(() => {
   const m = diffsBySeq(props.events)
@@ -135,12 +164,14 @@ const liveTok = computed(() => Math.ceil(liveText.value.length / 4))
       <small class="muted">{{ live.content ? 'answering' : 'thinking' }}…<span v-if="liveText"> ~{{ liveTok }} tok</span><span v-if="done"> · partial, not in the trace</span></small>
       <div v-if="live.reasoning" class="muted">thinking: {{ shown(live.reasoning, names) }}</div>{{ shown(live.content ?? '', names) }}<span v-if="!done">▍</span>
     </div>
-    <details class="inspector"><summary>{{ turn === 0 ? 'setup' : `turn ${turn}` }} — raw request / response</summary>
+    <details class="inspector" @toggle="onToggle(turn, $event)"><summary>{{ turn === 0 ? 'setup' : `turn ${turn}` }} — raw request / response</summary>
       <template v-for="e in evs" :key="'raw' + e.seq">
         <template v-if="e.type === 'llm_request'"><template v-if="anatBySeq.get(e.seq)"><div class="hint" :title="t('trace.anatomySplit')">{{ anatomyLine(anatBySeq.get(e.seq)!) }}</div>
           <div v-if="!anatBySeq.get(e.seq)!.exact" class="hint">{{ t('trace.anatomyEstimate') }}</div>
           <div v-if="anatBySeq.get(e.seq)!.toolsInSystem" class="hint">{{ t('trace.anatomyToolsInSystem') }}</div>
-          <div v-if="anatBySeq.get(e.seq)!.thinkingBlocks" class="hint">{{ t('trace.anatomyThinking') }}</div></template><ReqDiff v-if="diffBySeq.get(e.seq)" :diff="diffBySeq.get(e.seq)!" title="changes since the previous request" />
+          <div v-if="anatBySeq.get(e.seq)!.thinkingBlocks" class="hint">{{ t('trace.anatomyThinking') }}</div></template><Sources v-if="openTurns.has(turn) && sourcesAt(e.seq)" :sources="sourcesAt(e.seq)!" />
+          <ReqDiff v-if="diffBySeq.get(e.seq)" :diff="diffBySeq.get(e.seq)!" title="changes since the previous request"
+            :labels-a="openTurns.has(turn) ? labelsAt(prevReq.get(e.seq)) : undefined" :labels-b="openTurns.has(turn) ? labelsAt(e.seq) : undefined" />
           <template v-if="versusBySeqM.get(e.seq)"><div v-if="versusBySeqM.get(e.seq)!.missing" class="muted">no request {{ versusBySeqM.get(e.seq)!.k }} there</div>
             <ReqDiff v-else :diff="versusBySeqM.get(e.seq)!.diff!" :title="`vs ${compareId} request ${versusBySeqM.get(e.seq)!.k}`" :hint="t('trace.reqDiffVs')" /></template><pre>{{ raw(e) }}</pre></template>
         <pre v-if="e.type === 'llm_response'">{{ raw(e) }}</pre>
