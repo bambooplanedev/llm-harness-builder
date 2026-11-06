@@ -274,3 +274,26 @@ test('compare: nothing without a compare run; film hides names in the block', as
   expect(html).toContain('vs abc request 1')
   expect(html).not.toContain('qwen3')
 })
+
+test('request diff: a block draws at most 100 lines and counts the rest', async () => {
+  const sys = (n: number) => ({ model: 'm1', messages: [{ role: 'system', content: Array.from({ length: n }, (_, i) => `line ${i}`).join('\n') }, { role: 'user', content: 'go' }] })
+  const html = await render({ approvable: false, events: [reqEv(0, 1, sys(0)), reqEv(1, 2, sys(150))] })
+  expect(html).toContain('+ system: line 99')
+  expect(html).not.toContain('+ system: line 100')
+  expect(html).toContain('… 50 more lines')
+})
+
+test('compare: the vs block carries the vs hint, the in-run block the in-run hint', async () => {
+  const html = await render({ approvable: false, compareId: 'abc', compareEvents: [reqEv(0, 1, body('a')), reqEv(1, 2, body('a'))], events: [reqEv(0, 1, body('b')), reqEv(1, 2, body('c'))] })
+  const vs = en['trace.reqDiffVs'], inRun = en['trace.reqDiff']
+  expect(html).toMatch(new RegExp(`title="${vs.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}">vs abc request 2`))
+  expect(html).toContain(`title="${inRun}">changes since`)
+  expect(uk['trace.reqDiffVs']).toBeTruthy()
+})
+
+test('film: a filmed diff is built once per diff object, not per render', async () => {
+  setFilm(true)
+  const html = await render({ approvable: false, events: [reqEv(0, 1, body('x', 'qwen3:8b')), reqEv(1, 2, body('y', 'qwen3:8b'))] })
+  expect(html).toContain('+ system: y')
+  expect(html).not.toContain('qwen3')
+})

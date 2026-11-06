@@ -201,7 +201,7 @@ export function requestDiff(a: unknown, b: unknown): ReqDiff | undefined {
 
   // arrays and objects show as compact JSON; text() would print "[object Object]"
   const show = (v: string) => (v !== 'undefined' && typeof JSON.parse(v) === 'object' && JSON.parse(v) !== null ? v : text(v))
-  const own = (body: Obj) => new Map(leaves(Object.fromEntries(Object.entries(body).filter(([k]) => !['messages', 'system', 'tools'].includes(k)))).filter(([k]) => k))
+  const own = (body: Obj) => new Map(leaves(Object.fromEntries(Object.entries(body).filter(([k]) => !['messages', 'system', 'tools', 'metadata'].includes(k)))).filter(([k]) => k))
   const [pa, pb] = [own(ca), own(cb)]
   const params = [...new Set([...pa.keys(), ...pb.keys()])].flatMap(path => {
     const [x, y] = [pa.get(path), pb.get(path)]
@@ -214,9 +214,4 @@ export function requestDiff(a: unknown, b: unknown): ReqDiff | undefined {
 /** True when only messages were appended, or nothing changed at all. */
 export function isNoChange(d: ReqDiff): boolean {
   return 'appended' in d.messages && !d.system.added.length && !d.system.removed.length && !d.tools.added.length && !d.tools.removed.length && !d.tools.changed.length && !d.params.length
-}
-
-/** The payload of the k-th llm_request (1-based, across turns), or undefined when the run has fewer. */
-export function nthRequest(events: HarnessEvent[], k: number): unknown | undefined {
-  return events.filter(e => e.type === 'llm_request')[k - 1]?.payload
 }

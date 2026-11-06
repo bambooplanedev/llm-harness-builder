@@ -1,6 +1,9 @@
 import { requestDiff, type ReqDiff } from '../../src/core/diff'
 import type { HarnessEvent } from './api'
 
+/** Most lines one diff block renders; the rest is counted, not drawn. */
+export const MAX_DIFF_LINES = 100
+
 /** The diff of a request against the previous one, once per (event, previous payload): events never change after they arrive. */
 const cache = new WeakMap<object, { prev: unknown; diff: ReqDiff | undefined }>()
 

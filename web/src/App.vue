@@ -232,11 +232,11 @@ watch(() => config.value.backend.model, () => {
           <span class="muted">compare with…</span>
           <select :title="t('trace.compare')" :value="compareId" @change="compareWith(($event.target as HTMLSelectElement).value)">
             <option value="">none</option>
-            <option v-for="r in runs.filter(r => r.id !== runId)" :key="r.id" :value="r.id">{{ r.id }} · {{ shown(r.task.length > 40 ? r.task.slice(0, 39) + '…' : r.task, names) }}</option>
+            <option v-for="r in runs.filter(r => r.id !== runId)" :key="r.id" :value="r.id">{{ r.id }} · {{ shown(r.task, names).slice(0, 40) }}</option>
           </select>
           <span v-if="compareError" class="muted">{{ compareError }}</span>
         </div>
-        <Trace v-if="runId" :events="events" :live="live" :task="runTask" :names="names" :compare-events="compareId ? compareEvents : undefined" :compare-id="compareId" @approve="approve" />
+        <Trace v-if="runId" :events="events" :live="live" :task="runTask" :names="names" :compare-events="compareId && !compareError ? compareEvents : undefined" :compare-id="compareId" @approve="approve" />
         <h4>Runs <button class="link" @click="openExamples">Examples</button></h4>
         <div v-if="!runs.length" class="start">
           <h5 class="group">{{ t('start.title') }}</h5>

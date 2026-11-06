@@ -7,6 +7,7 @@ import type { Delta, HarnessEvent } from './api'
 import { mcpApprovalServer, mcpCounts, UNTIL_BASH } from '../../src/core/events'
 import { analyzeTrace, summaryLine } from '../../src/core/analyze'
 import { diffsBySeq, versusBySeq } from './reqDiffs'
+import type { ReqDiff as ReqDiffT } from '../../src/core/diff'
 import { anatomies, anatomyLine } from '../../src/core/anatomy'
 import { film, filmDeep, namesIn, shown, type FilmNames } from './film'
 // approvable is a Boolean-typed prop, so Vue casts an ABSENT value to `false` (not `undefined`).
@@ -65,14 +66,21 @@ function pick(turn: number) {
   el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 /** Computed from the events as recorded (cached per event), then filmed: the result is small, the bodies are not. */
+const filmed = new WeakMap<object, { key: string; out: ReqDiffT }>()
+/** filmDeep once per (diff object, names): a new event must not rebuild every block. */
+const filmedDiff = (d: ReqDiffT): ReqDiffT => {
+  const key = JSON.stringify(names.value), c = filmed.get(d)
+  if (c?.key === key) return c.out
+  const out = filmDeep(d, names.value); filmed.set(d, { key, out }); return out
+}
 const diffBySeq = computed(() => {
   const m = diffsBySeq(props.events)
-  return film.value ? new Map([...m].map(([k, d]) => [k, filmDeep(d, names.value)])) : m
+  return film.value ? new Map([...m].map(([k, d]) => [k, filmedDiff(d)])) : m
 })
 /** The same against the other run's same-numbered request; the bodies are read as recorded, only the result is filmed. */
 const versusBySeqM = computed(() => {
   const m = props.compareEvents ? versusBySeq(props.events, props.compareEvents) : new Map()
-  return film.value ? new Map([...m].map(([k, v]) => [k, v.diff ? { ...v, diff: filmDeep(v.diff, names.value) } : v])) : m
+  return film.value ? new Map([...m].map(([k, v]) => [k, v.diff ? { ...v, diff: filmedDiff(v.diff) } : v])) : m
 })
 const anatBySeq = computed(() => new Map(anat.value.map(x => [x.seq, x.a])))
 // The current turn is "open" from its llm_request until its llm_response; the live bubble shows the streamed text meanwhile,
@@ -134,7 +142,7 @@ const liveTok = computed(() => Math.ceil(liveText.value.length / 4))
           <div v-if="anatBySeq.get(e.seq)!.toolsInSystem" class="hint">{{ t('trace.anatomyToolsInSystem') }}</div>
           <div v-if="anatBySeq.get(e.seq)!.thinkingBlocks" class="hint">{{ t('trace.anatomyThinking') }}</div></template><ReqDiff v-if="diffBySeq.get(e.seq)" :diff="diffBySeq.get(e.seq)!" title="changes since the previous request" />
           <template v-if="versusBySeqM.get(e.seq)"><div v-if="versusBySeqM.get(e.seq)!.missing" class="muted">no request {{ versusBySeqM.get(e.seq)!.k }} there</div>
-            <ReqDiff v-else :diff="versusBySeqM.get(e.seq)!.diff!" :title="`vs ${compareId} request ${versusBySeqM.get(e.seq)!.k}`" /></template><pre>{{ raw(e) }}</pre></template>
+            <ReqDiff v-else :diff="versusBySeqM.get(e.seq)!.diff!" :title="`vs ${compareId} request ${versusBySeqM.get(e.seq)!.k}`" :hint="t('trace.reqDiffVs')" /></template><pre>{{ raw(e) }}</pre></template>
         <pre v-if="e.type === 'llm_response'">{{ raw(e) }}</pre>
       </template>
     </details>

@@ -576,3 +576,24 @@ test('compare with…: lists the other own runs, closes its stream when the pick
     expect(last.closed).toBe(true)
   } finally { globalThis.EventSource = savedES }
 })
+
+test('compare with…: a compare stream error drops the compare events (no false "no request")', async () => {
+  const runs = [{ id: 'r1', task: 'first task', active: false }, { id: 'r2', task: 'x'.repeat(60), active: false }]
+  const app = await mount({ '/api/harnesses': [], '/api/runs': runs, '/api/models': [] })
+  const streams: { url: string; onmessage?: (m: { data: string }) => void; onerror?: () => void }[] = []
+  const savedES = globalThis.EventSource
+  globalThis.EventSource = class { static CLOSED = 2; readyState = 2; s: (typeof streams)[number]; constructor(url: string) { this.s = { url }; streams.push(this.s) }
+    set onmessage(f: (m: { data: string }) => void) { this.s.onmessage = f } set onerror(f: () => void) { this.s.onerror = f } addEventListener() {} close() {} } as unknown as typeof EventSource
+  try {
+    all(app.root).find(n => n.tag === 'div' && n.props.onClick && textOf(n).includes('first task'))!.props.onClick(); await settle()
+    const sel = all(app.root).find(n => n.tag === 'select' && n.props.title === COMPARE_HINT)!
+    expect(all(sel).filter(n => n.tag === 'option')[1].children.map(textOf).join('').length).toBeLessThanOrEqual('r2 · '.length + 40)
+    const rq = (seq: number) => JSON.stringify({ seq, turn: 1, ts: 0, type: 'llm_request', payload: { model: 'm', messages: [{ role: 'user', content: 'go' }] } })
+    streams[0].onmessage!({ data: rq(0) }); streams[0].onmessage!({ data: rq(1).replace('"turn":1', '"turn":2') })
+    sel.props.onChange({ target: { value: 'r2' } }); await settle()
+    streams[1].onmessage!({ data: rq(0) }); await settle()
+    expect(textOf(app.root)).toContain('no request 2 there')
+    streams[1].onerror!(); await settle()
+    expect(textOf(app.root)).not.toContain('no request 2 there')
+  } finally { globalThis.EventSource = savedES }
+})

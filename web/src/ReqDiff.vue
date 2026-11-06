@@ -2,7 +2,8 @@
 import { computed } from 'vue'
 import { t } from './i18n'
 import { isNoChange, type ReqDiff } from '../../src/core/diff'
-const props = defineProps<{ diff: ReqDiff; title: string }>()
+import { MAX_DIFF_LINES } from './reqDiffs'
+const props = defineProps<{ diff: ReqDiff; title: string; hint?: string }>()
 type Line = { kind: 'add' | 'del' | 'neutral'; text: string }
 const lines = computed<Line[]>(() => {
   const d = props.diff, out: Line[] = []
@@ -25,12 +26,15 @@ const lines = computed<Line[]>(() => {
   for (const p of d.params) out.push({ kind: 'neutral', text: `${p.path}: ${p.a} → ${p.b}` })
   return out
 })
+const shownLines = computed(() => lines.value.slice(0, MAX_DIFF_LINES))
+const more = computed(() => lines.value.length - MAX_DIFF_LINES)
 const none = computed(() => isNoChange(props.diff) ? `no change${'appended' in props.diff.messages && props.diff.messages.appended ? ` besides +${props.diff.messages.appended} appended` : ''}` : '')
 </script>
 <template>
   <div class="reqdiff">
-    <div class="hint" :title="t('trace.reqDiff')">{{ title }}</div>
+    <div class="hint" :title="hint ?? t('trace.reqDiff')">{{ title }}</div>
     <div v-if="none" class="rd-neutral">{{ none }}</div>
-    <template v-else><div v-for="(l, i) in lines" :key="i" :class="'rd-' + l.kind">{{ l.text }}</div></template>
+    <template v-else><div v-for="(l, i) in shownLines" :key="i" :class="'rd-' + l.kind">{{ l.text }}</div>
+      <div v-if="more > 0" class="rd-neutral">… {{ more }} more lines</div></template>
   </div>
 </template>
