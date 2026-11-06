@@ -11,6 +11,7 @@ import Trace from './Trace.vue'
 import Bench from './Bench.vue'
 import Evolve from './Evolve.vue'
 import Proxy from './Proxy.vue'
+import Groups from './Groups.vue'
 import { t, T, lang, LANGS, langName, setLang } from './i18n'
 import { shown } from './film'
 
@@ -40,6 +41,26 @@ function compareWith(id: string) {
   compareUnsub?.(); compareUnsub = null; compareId.value = id; compareEvents.value = []; compareError.value = ''
   if (id) compareUnsub = api.events(id, e => compareEvents.value.push(e), msg => (compareError.value = msg))
 }
+/** Before (A) / after (B) marks on main runs: kept across open(), never stored. While the comparison is open, each marked run has its own stream. */
+const marks = ref<Record<string, 'A' | 'B'>>({})
+const groupsOpen = ref(false); const groupEvents = ref<Record<string, HarnessEvent[]>>({})
+const groupUnsubs = new Map<string, () => void>()
+const marked = (g: 'A' | 'B') => Object.keys(marks.value).filter(id => marks.value[id] === g).map(id => ({ id, events: groupEvents.value[id] ?? [] }))
+/** Computed, so the comparison is worked out again only when a mark or a marked run's events change, not on every render of the page. */
+const groupA = computed(() => marked('A')), groupB = computed(() => marked('B'))
+/** One stream per marked run while the comparison is open; none otherwise. */
+function syncGroups() {
+  for (const [id, stop] of groupUnsubs) if (!groupsOpen.value || !marks.value[id]) { stop(); groupUnsubs.delete(id); delete groupEvents.value[id] }
+  if (groupsOpen.value) for (const id of Object.keys(marks.value)) if (!groupUnsubs.has(id)) {
+    groupEvents.value[id] = []
+    groupUnsubs.set(id, api.events(id, e => groupEvents.value[id]?.push(e), msg => (error.value = msg)))
+  }
+}
+function mark(id: string, g: 'A' | 'B') {
+  if (marks.value[id] === g) delete marks.value[id]; else marks.value[id] = g
+  syncGroups()
+}
+const showGroups = (on: boolean) => { groupsOpen.value = on; syncGroups() }
 /** The task of the run on screen; the form's textarea is the next run's, not this one's. */
 const runTask = ref('')
 /** The run this page started. Run is about it, not about any run opened from the list (a live proxy session among them). */
@@ -114,7 +135,7 @@ async function load(name: string, keepBackend = false) {
 }
 async function saveAs(name: string) { error.value = ''; try { config.value.name = name; await api.saveHarness(name, outbound(config.value)); await refreshLists() } catch (e) { error.value = (e as Error).message } }
 function open(id: string, runTaskText: string, active = false, example = false) {
-  compareWith(''); exampleOpen.value = example; unsub?.(); events.value = []; live.value = {}; verdict.value = ''; runId.value = id; runTask.value = runTaskText; openActive.value = active
+  compareWith(''); showGroups(false); exampleOpen.value = example; unsub?.(); events.value = []; live.value = {}; verdict.value = ''; runId.value = id; runTask.value = runTaskText; openActive.value = active
   unsub = api.events(id,
     e => { events.value.push(e); if (e.type === 'done') refreshLists(); else if (e.type !== 'error') live.value = {} }, // keep partial text visible after an abort
     msg => (error.value = msg),
@@ -162,7 +183,7 @@ async function pollEvolve() {
   if (was && !evolve.value.running) refreshLists().catch(e => (error.value = e.message))
   if ((evolve.value.running || was) && !gone) evolveTimer = setTimeout(pollEvolve, 2000)
 }
-onUnmounted(() => { compareUnsub?.(); gone = true; clearTimeout(evolveTimer) })
+onUnmounted(() => { compareUnsub?.(); showGroups(false); gone = true; clearTimeout(evolveTimer) })
 
 const settings = ref<HTMLDialogElement | null>(null)
 onMounted(async () => { void pollEvolve(); await refreshLists(); if (listsModelsByItself(config.value.backend)) await refreshModels() })
@@ -236,7 +257,9 @@ watch(() => config.value.backend.model, () => {
           </select>
           <span v-if="compareError" class="muted">{{ compareError }}</span>
         </div>
-        <Trace v-if="runId" :events="events" :live="live" :task="runTask" :names="names" :compare-events="compareId && !compareError ? compareEvents : undefined" :compare-id="compareId" @approve="approve" />
+        <button v-if="!groupsOpen && groupA.length && groupB.length" :title="t('runs.compareGroups')" @click="showGroups(true)">compare groups</button>
+        <Groups v-if="groupsOpen" :a="groupA" :b="groupB" :names="names" @close="showGroups(false)" />
+        <Trace v-else-if="runId" :events="events" :live="live" :task="runTask" :names="names" :compare-events="compareId && !compareError ? compareEvents : undefined" :compare-id="compareId" @approve="approve" />
         <h4>Runs <button class="link" @click="openExamples">Examples</button></h4>
         <div v-if="!runs.length" class="start">
           <h5 class="group">{{ t('start.title') }}</h5>
@@ -249,7 +272,7 @@ watch(() => config.value.backend.model, () => {
         <div class="runs">
           <div v-for="{ r, head, sub } in listed" :key="r.id" :class="{ session: r.session, sub }" @click="open(r.id, r.task, r.active)">
             <div class="line"><span><b>{{ r.harness }}</b><template v-if="head"> · session {{ head.session.slice(0, 4) }}…</template><template v-if="sub"> · ↳ subagent {{ r.agentType ?? r.agent }}</template><template v-else-if="head"> · main</template> · {{ r.reason ?? 'running' }}</span><span><template v-if="head?.subagents">{{ head.subagents }} subagent{{ head.subagents === 1 ? '' : 's' }} · </template>{{ r.turns ?? '-' }} turns · {{ r.toolCallCount ?? '-' }} tool calls · {{ new Date(r.started).toLocaleTimeString(lang) }}</span></div>
-            <div class="muted">{{ shown(r.task, names).slice(0, 60) }}</div>
+            <div class="muted">{{ shown(r.task, names).slice(0, 60) }}<span v-if="!r.agent || r.agent === 'main'" class="marks"><button v-for="g in (['A', 'B'] as const)" :key="g" :class="{ on: marks[r.id] === g }" :title="t(`runs.mark${g}`)" @click.stop="mark(r.id, g)">{{ g }}</button></span></div>
           </div>
         </div>
       </div>
