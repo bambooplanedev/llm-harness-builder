@@ -21,9 +21,9 @@ export const openaiChat: Dialect = {
    * turn, so ids the agent invented (the server sent none) and ids reused across turns both match.
    */
   toolResults(payload, calls) {
-    const t = lastTurn(payload)
-    if (!t) return []
-    const { assistant, after } = t
+    const last = lastTurn(payload)
+    if (!last) return []
+    const { assistant, after } = last
     const out: ToolResultSeen[] = []
     const echoed: unknown[] = Array.isArray(assistant.tool_calls) ? assistant.tool_calls.map((t: any) => t?.id) : []
     for (const m of after) {
