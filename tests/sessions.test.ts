@@ -1,6 +1,7 @@
 import { test, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
-import { Sessions, hintsOf } from '../src/core/proxy/sessions.js'
+import { Sessions } from '../src/core/proxy/sessions.js'
+import { loadConnections, pickConnection } from '../src/core/proxy/connections.js'
 import { textOf } from '../src/core/proxy/dialects/dialect.js'
 import { openaiChat, anthropic } from '../src/core/proxy/dialects/index.js'
 import type { NormalizedResponse } from '../src/core/backends/types.js'
@@ -11,18 +12,20 @@ const tool = (id: string | undefined, content: unknown) => ({ role: 'tool', tool
 const reply = (calls: { id?: string; name?: string; args?: Record<string, unknown>; argsError?: string }[] = [], content = ''): NormalizedResponse =>
   ({ content, toolCalls: calls.map(c => ({ backendId: c.id, name: c.name ?? 'read_file', args: c.args ?? {}, ...(c.argsError ? { argsError: c.argsError } : {}) })), raw: {} })
 const ok = (res: NormalizedResponse) => ({ ok: true as const, res, latencyMs: 5 })
+const CONNS = loadConnections(), NO = pickConnection(CONNS, {})
+const pick = (h: Record<string, string | string[] | undefined>) => pickConnection(CONNS, h)
 const mk = () => { let t = 1000, n = 0; return new Sessions({ now: () => t++, newId: () => `run${++n}`, harness: 'oc', upstream: 'http://u', pid: 42 }) }
 
 test('a first request opens a run with its meta; the reply and the next request continue it', () => {
   const s = mk()
-  const a = s.onRequest({ messages: [S, U] }, openaiChat)
+  const a = s.onRequest({ messages: [S, U] }, openaiChat, NO)
   expect(a).toMatchObject({ run: 'run1', turn: 1 })
   expect(a.meta).toEqual({ id: 'run1', harness: 'oc', task: 'task one', workdir: '', started: 1000, proxy: { upstream: 'http://u', pid: 42 } })
   expect(a.events).toEqual([{ seq: 0, turn: 1, ts: expect.any(Number), type: 'llm_request', payload: { messages: [S, U] } }])
   const r = s.onReply('run1', 1, ok(reply([{ id: 'x1', args: { path: 'a' } }])))
   expect(r.map(e => e.type)).toEqual(['llm_response', 'tool_call'])
   expect(r[1]).toMatchObject({ seq: 2, turn: 1, call: { callId: 'c1', name: 'read_file', args: { path: 'a' }, backendId: 'x1' } })
-  const b = s.onRequest({ messages: [S, U, asst(['x1']), tool('x1', 'AAA')] }, openaiChat)
+  const b = s.onRequest({ messages: [S, U, asst(['x1']), tool('x1', 'AAA')] }, openaiChat, NO)
   expect(b).toMatchObject({ run: 'run1', turn: 2 }); expect(b.meta).toBeUndefined()
   expect(b.events[0]).toEqual({ seq: 3, turn: 1, ts: expect.any(Number), type: 'tool_result', callId: 'c1', name: 'read_file', output: 'AAA' })
   expect(b.events[1]).toMatchObject({ seq: 4, turn: 2, type: 'llm_request' })
@@ -30,57 +33,57 @@ test('a first request opens a run with its meta; the reply and the next request 
 
 test('run key: a new round, another system prompt and a compaction open runs; a retry stays', () => {
   const s = mk()
-  s.onRequest({ messages: [S, U] }, openaiChat); s.onReply('run1', 1, ok(reply([{ id: 'a' }])))
-  s.onRequest({ messages: [S, U, asst(['a']), tool('a', 'x')] }, openaiChat)
-  expect(s.onRequest({ messages: [S, U, asst(['a']), tool('a', 'x')] }, openaiChat).run).toBe('run1')          // retry, same length
-  expect(s.onRequest({ messages: [S, U] }, openaiChat).run).toBe('run2')                                         // new round: shorter
-  expect(s.onRequest({ messages: [{ role: 'system', content: 'title' }, U] }, openaiChat).run).toBe('run3')     // side request
-  expect(s.onRequest({ messages: [S, { role: 'user', content: 'summary of the above' }] }, openaiChat).run).toBe('run4') // compaction
+  s.onRequest({ messages: [S, U] }, openaiChat, NO); s.onReply('run1', 1, ok(reply([{ id: 'a' }])))
+  s.onRequest({ messages: [S, U, asst(['a']), tool('a', 'x')] }, openaiChat, NO)
+  expect(s.onRequest({ messages: [S, U, asst(['a']), tool('a', 'x')] }, openaiChat, NO).run).toBe('run1')          // retry, same length
+  expect(s.onRequest({ messages: [S, U] }, openaiChat, NO).run).toBe('run2')                                         // new round: shorter
+  expect(s.onRequest({ messages: [{ role: 'system', content: 'title' }, U] }, openaiChat, NO).run).toBe('run3')     // side request
+  expect(s.onRequest({ messages: [S, { role: 'user', content: 'summary of the above' }] }, openaiChat, NO).run).toBe('run4') // compaction
 })
 
 test('a turn with another system prompt (our repeatThinkTokens) is a one-turn run; the next turn rejoins', () => {
   const s = mk()
-  s.onRequest({ messages: [S, U] }, openaiChat); s.onReply('run1', 1, ok(reply([{ id: 'a' }])))
+  s.onRequest({ messages: [S, U] }, openaiChat, NO); s.onReply('run1', 1, ok(reply([{ id: 'a' }])))
   const h = [U, asst(['a']), tool('a', 'x')]
-  expect(s.onRequest({ messages: [{ role: 'system', content: 'sys /think' }, ...h] }, openaiChat).run).toBe('run2')
-  expect(s.onRequest({ messages: [S, ...h, { role: 'assistant', content: 'r' }, { role: 'user', content: 'go on' }] }, openaiChat)).toMatchObject({ run: 'run1', turn: 2 })
+  expect(s.onRequest({ messages: [{ role: 'system', content: 'sys /think' }, ...h] }, openaiChat, NO).run).toBe('run2')
+  expect(s.onRequest({ messages: [S, ...h, { role: 'assistant', content: 'r' }, { role: 'user', content: 'go on' }] }, openaiChat, NO)).toMatchObject({ run: 'run1', turn: 2 })
 })
 
 test('two sequential sessions of one task share the run of their identical side request (a known hole)', () => {
   const s = mk(), side = { messages: [{ role: 'system', content: 'title' }, U] }
-  expect(s.onRequest(side, openaiChat).run).toBe('run1'); expect(s.onRequest(side, openaiChat).run).toBe('run1')
+  expect(s.onRequest(side, openaiChat, NO).run).toBe('run1'); expect(s.onRequest(side, openaiChat, NO).run).toBe('run1')
 })
 
 test('a developer message counts as system; array content is read as text', () => {
   const s = mk()
-  const a = s.onRequest({ messages: [{ role: 'developer', content: 'd' }, { role: 'user', content: [{ type: 'text', text: 'part one' }, { type: 'image_url', image_url: {} }, { type: 'text', text: 'part two' }] }] }, openaiChat)
+  const a = s.onRequest({ messages: [{ role: 'developer', content: 'd' }, { role: 'user', content: [{ type: 'text', text: 'part one' }, { type: 'image_url', image_url: {} }, { type: 'text', text: 'part two' }] }] }, openaiChat, NO)
   expect(a.meta!.task).toBe('part one\npart two')
-  expect(s.onRequest({ messages: [{ role: 'developer', content: 'other' }, { role: 'user', content: 'x' }] }, openaiChat).run).toBe('run2')
+  expect(s.onRequest({ messages: [{ role: 'developer', content: 'other' }, { role: 'user', content: 'x' }] }, openaiChat, NO).run).toBe('run2')
   expect(textOf(null)).toBe(''); expect(textOf('s')).toBe('s')
 })
 
 test('tool results match through the ids the agent echoed, not the server ids', () => {
   const s = mk()
-  s.onRequest({ messages: [S, U] }, openaiChat)
+  s.onRequest({ messages: [S, U] }, openaiChat, NO)
   s.onReply('run1', 1, ok(reply([{ args: { path: 'a' } }, { args: { path: 'b' } }]))) // the server sent no ids
-  const b = s.onRequest({ messages: [S, U, asst(['inv_1', 'inv_2']), tool('inv_2', 'B'), tool('inv_1', 'A'), tool('nope', 'Z')] }, openaiChat)
+  const b = s.onRequest({ messages: [S, U, asst(['inv_1', 'inv_2']), tool('inv_2', 'B'), tool('inv_1', 'A'), tool('nope', 'Z')] }, openaiChat, NO)
   expect(b.events.filter(e => e.type === 'tool_result').map((e: any) => [e.callId, e.output, e.turn])).toEqual([['c2', 'B', 1], ['c1', 'A', 1]])
 })
 
 test('the same id on two turns maps to the latest call; a retried request does not repeat results', () => {
   const s = mk()
-  s.onRequest({ messages: [S, U] }, openaiChat); s.onReply('run1', 1, ok(reply([{ id: 'a' }])))
+  s.onRequest({ messages: [S, U] }, openaiChat, NO); s.onReply('run1', 1, ok(reply([{ id: 'a' }])))
   const h2 = [S, U, asst(['a']), tool('a', 'one')]
-  s.onRequest({ messages: h2 }, openaiChat)
-  expect(s.onRequest({ messages: h2 }, openaiChat).events.map(e => e.type)).toEqual(['llm_request']) // retry: no second result
+  s.onRequest({ messages: h2 }, openaiChat, NO)
+  expect(s.onRequest({ messages: h2 }, openaiChat, NO).events.map(e => e.type)).toEqual(['llm_request']) // retry: no second result
   s.onReply('run1', 3, ok(reply([{ id: 'a' }])))
-  const c = s.onRequest({ messages: [...h2, asst(['a']), tool('a', 'two')] }, openaiChat)
+  const c = s.onRequest({ messages: [...h2, asst(['a']), tool('a', 'two')] }, openaiChat, NO)
   expect(c.events[0]).toMatchObject({ type: 'tool_result', callId: 'c2', output: 'two', turn: 3 })
 })
 
 test('bad arguments give a tool_call with {} and nothing else; a length reply adds nothing', () => {
   const s = mk()
-  s.onRequest({ messages: [S, U] }, openaiChat)
+  s.onRequest({ messages: [S, U] }, openaiChat, NO)
   const r = s.onReply('run1', 1, ok({ ...reply([{ args: {}, argsError: 'Unexpected token: {bad' }]), truncated: true }))
   expect(r.map(e => e.type)).toEqual(['llm_response', 'tool_call'])
   expect((r[1] as any).call.args).toEqual({})
@@ -88,11 +91,11 @@ test('bad arguments give a tool_call with {} and nothing else; a length reply ad
 
 test('a failed reply is an error event; close() ends every open run with proxy_stopped, once', () => {
   const s = mk()
-  s.onRequest({ messages: [S, U] }, openaiChat); s.onReply('run1', 1, ok(reply([{ id: 'a' }, { id: 'b' }])))
-  s.onRequest({ messages: [S, U, asst(['a', 'b']), tool('a', '1'), tool('b', '2')] }, openaiChat)
+  s.onRequest({ messages: [S, U] }, openaiChat, NO); s.onReply('run1', 1, ok(reply([{ id: 'a' }, { id: 'b' }])))
+  s.onRequest({ messages: [S, U, asst(['a', 'b']), tool('a', '1'), tool('b', '2')] }, openaiChat, NO)
   expect(s.onReply('run1', 2, { ok: false, message: 'POST /chat/completions: 500', body: 'boom' })).toEqual([
     { seq: 7, turn: 2, ts: expect.any(Number), type: 'error', message: 'POST /chat/completions: 500', body: 'boom' }]) // 0 request, 1-3 reply, 4-5 results, 6 request
-  s.onRequest({ messages: [{ role: 'system', content: 'other' }, U] }, openaiChat)
+  s.onRequest({ messages: [{ role: 'system', content: 'other' }, U] }, openaiChat, NO)
   const closed = s.close()
   expect(closed.map(c => c.run)).toEqual(['run1', 'run2'])
   expect(closed[0].events).toEqual([{ seq: 8, turn: 2, ts: expect.any(Number), type: 'done', reason: 'proxy_stopped', turns: 2, toolCallCount: 2 }])
@@ -104,7 +107,7 @@ const ublk = (...texts: string[]) => ({ role: 'user', content: texts.map(text =>
 const tu = (id: string) => ({ role: 'assistant', content: [{ type: 'thinking', thinking: 'hm', signature: 's' }, { type: 'tool_use', id, name: 'Read', input: {} }] })
 const res = (id: string, content: unknown, is_error?: boolean) => ({ type: 'tool_result', tool_use_id: id, content, ...(is_error ? { is_error } : {}) })
 const tr = (...blocks: object[]) => ({ role: 'user', content: blocks })
-const ar = (s: Sessions, p: object) => s.onRequest(p, anthropic)
+const ar = (s: Sessions, p: object) => s.onRequest(p, anthropic, NO)
 
 test('anthropic without headers: key is system minus its first block plus the first user text; the task skips system-reminders', () => {
   const s = mk()
@@ -154,7 +157,7 @@ test('a Claude Code session from the fixture: one main run, one subagent run wit
   const steps: { headers: Record<string, string>; payload: any; reply: any }[] = JSON.parse(readFileSync('tests/fixtures/claude-code-session.json', 'utf8'))
   const s = mk(), metas: any[] = [], byRun: Record<string, any[]> = {}, runs: string[] = []
   for (const step of steps) {
-    const out = s.onRequest(step.payload, anthropic, hintsOf(step.headers))
+    const out = s.onRequest(step.payload, anthropic, pick(step.headers))
     if (out.meta) metas.push(out.meta)
     runs.push(out.run)
     ;(byRun[out.run] ??= []).push(...out.events, ...s.onReply(out.run, out.turn, ok({ ...step.reply, raw: {} }), out.side))
@@ -179,7 +182,7 @@ test('a Claude Code session from the fixture: one main run, one subagent run wit
 })
 
 test('auxiliary before main waits: the first main request writes the meta with its task, then the notes in order', () => {
-  const s = mk(), h = (c: string) => hintsOf({ 'x-claude-code-session-id': CC, 'x-claude-code-request-class': c })
+  const s = mk(), h = (c: string) => pick({ 'x-claude-code-session-id': CC, 'x-claude-code-request-class': c })
   const aux = s.onRequest(ccReq([{ role: 'user', content: 'title?' }], 'claude-haiku-fixture'), anthropic, h('auxiliary'))
   expect(aux).toMatchObject({ run: 'run1', turn: 0, events: [], side: { model: 'claude-haiku-fixture' } })
   expect(aux.meta).toBeUndefined()
@@ -201,7 +204,7 @@ test('auxiliary before main waits: the first main request writes the meta with i
 
 test('a session of auxiliary calls only: close() writes one main run, task empty, with its notes', () => {
   const s = mk()
-  const aux = s.onRequest(ccReq([{ role: 'user', content: 'title?' }], 'claude-haiku-fixture'), anthropic, hintsOf({ 'x-claude-code-session-id': CC, 'x-claude-code-request-class': 'auxiliary' }))
+  const aux = s.onRequest(ccReq([{ role: 'user', content: 'title?' }], 'claude-haiku-fixture'), anthropic, pick({ 'x-claude-code-session-id': CC, 'x-claude-code-request-class': 'auxiliary' }))
   s.onReply(aux.run, aux.turn, ok(ccOk('Title')), aux.side)
   const closed = s.close()
   expect(closed).toHaveLength(1)
@@ -211,7 +214,7 @@ test('a session of auxiliary calls only: close() writes one main run, task empty
 })
 
 test('an auxiliary reply between main turns keeps the main calls matched', () => {
-  const s = mk(), h = (c: string) => hintsOf({ 'x-claude-code-session-id': CC, 'x-claude-code-request-class': c })
+  const s = mk(), h = (c: string) => pick({ 'x-claude-code-session-id': CC, 'x-claude-code-request-class': c })
   const U1 = { role: 'user', content: 'do it' }
   s.onRequest(ccReq([U1]), anthropic, h('main'))
   s.onReply('run1', 1, ok(ccOk('', [{ id: 'toolu_a', name: 'Read' }])))
@@ -224,23 +227,23 @@ test('an auxiliary reply between main turns keeps the main calls matched', () =>
 
 test('a failed auxiliary call is a note with its error, not an error event', () => {
   const s = mk()
-  const aux = s.onRequest(ccReq([{ role: 'user', content: 'title?' }], 'claude-haiku-fixture'), anthropic, hintsOf({ 'x-claude-code-session-id': CC, 'x-claude-code-request-class': 'auxiliary' }))
+  const aux = s.onRequest(ccReq([{ role: 'user', content: 'title?' }], 'claude-haiku-fixture'), anthropic, pick({ 'x-claude-code-session-id': CC, 'x-claude-code-request-class': 'auxiliary' }))
   expect(s.onReply(aux.run, aux.turn, { ok: false, message: 'POST /v1/messages: 429', body: 'slow down' }, aux.side)).toEqual([])
   expect(s.close()[0].events[0]).toEqual({ seq: 0, turn: 0, ts: expect.any(Number), type: 'proxy_note', kind: 'auxiliary', model: 'claude-haiku-fixture', error: 'POST /v1/messages: 429' })
 })
 
-test('hintsOf takes only the whitelist, as single printable strings', () => {
+test('pickConnection takes only the whitelist, as single printable strings', () => {
   const bad = { 'x-claude-code-session-id': ['a', 'b'], 'x-claude-code-agent-id': 'x'.repeat(129), 'x-claude-code-agent-type': 'Ex\u0007', 'x-claude-code-request-class': 'main', 'x-api-key': 'k', authorization: 'Bearer t' }
-  expect(hintsOf(bad)).toEqual({ requestClass: 'main' })
-  expect(hintsOf({ 'x-claude-code-session-id': 'x'.repeat(128), 'x-claude-code-parent-agent-id': 'p', 'x-claude-code-agent-id': '' })).toEqual({ session: 'x'.repeat(128), parent: 'p' })
+  expect(pick(bad).hints).toEqual({ requestClass: 'main' })
+  expect(pick({ 'x-claude-code-session-id': 'x'.repeat(128), 'x-claude-code-parent-agent-id': 'p', 'x-claude-code-agent-id': '' }).hints).toEqual({ session: 'x'.repeat(128), parent: 'p' })
   const s = mk()
-  s.onRequest(ccReq([{ role: 'user', content: 'do it' }]), anthropic, hintsOf(bad))
-  const b = s.onRequest(ccReq([{ role: 'user', content: 'do it' }]), anthropic)
+  s.onRequest(ccReq([{ role: 'user', content: 'do it' }]), anthropic, pick(bad))
+  const b = s.onRequest(ccReq([{ role: 'user', content: 'do it' }]), anthropic, NO)
   expect(b).toMatchObject({ run: 'run1', turn: 2 })
 })
 
 // Characterization: pins today's exact output so the proxy refactor can prove nothing changed.
-const req = (s: Sessions, payload: object, api: 'openai' | 'anthropic' = 'openai', headers: Record<string, string> = {}) => s.onRequest(payload, api === 'anthropic' ? anthropic : openaiChat, hintsOf(headers))
+const req = (s: Sessions, payload: object, api: 'openai' | 'anthropic' = 'openai', headers: Record<string, string> = {}) => s.onRequest(payload, api === 'anthropic' ? anthropic : openaiChat, pickConnection(CONNS, headers))
 
 test('characterization: the Claude Code fixture, every event exact', () => {
   const steps: { headers: Record<string, string>; payload: any; reply: any }[] = JSON.parse(readFileSync('tests/fixtures/claude-code-session.json', 'utf8'))

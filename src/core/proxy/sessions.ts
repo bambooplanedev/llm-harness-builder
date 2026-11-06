@@ -3,15 +3,13 @@
 import type { Ev, HarnessEvent, ToolCall } from '../events.js'
 import type { NormalizedResponse } from '../backends/types.js'
 import type { Dialect } from './dialects/dialect.js'
+import { stripTask, type Picked } from './connections.js'
 
 /** The meta line of a proxy run; `proxy` marks the file as a transcription, `pid` lets serve tell a live writer from a killed one. */
 export type RunMeta = {
   id: string; harness: string; task: string; workdir: string; started: number; proxy: { upstream: string; pid: number }
   session?: string; agent?: string; parent?: string; agentType?: string
 }
-/** What Claude Code's x-claude-code-* headers say about a request; never the headers themselves. */
-export type ProxyHints = { session?: string; agent?: string; parent?: string; agentType?: string; requestClass?: string }
-
 export type SessionDeps = { now: () => number; newId: () => string; harness: string; upstream: string; pid: number }
 export type ReplyOutcome = { ok: true; res: NormalizedResponse; latencyMs: number } | { ok: false; message: string; body?: string }
 
@@ -28,23 +26,6 @@ type Run = {
   pending?: { meta: RunMeta; notes: { ts: number; e: Ev }[] }
 }
 
-const HINTS = { session: 'x-claude-code-session-id', agent: 'x-claude-code-agent-id', parent: 'x-claude-code-parent-agent-id', agentType: 'x-claude-code-agent-type', requestClass: 'x-claude-code-request-class' } as const
-
-/** The hint headers only; a value counts if it is one string of 1..128 printable ASCII characters, else that hint is absent. */
-export function hintsOf(h: Record<string, string | string[] | undefined>): ProxyHints {
-  const out: ProxyHints = {}
-  for (const [k, name] of Object.entries(HINTS) as [keyof ProxyHints, string][]) {
-    const v = h[name]
-    if (typeof v === 'string' && /^[\x21-\x7e]{1,128}$/.test(v)) out[k] = v
-  }
-  return out
-}
-
-/** The task as the agent typed it: Claude Code wraps context into the first user message as system-reminders; an unclosed one runs to the end. */
-function taskOf(text: string): string {
-  return text.replace(/<system-reminder>[\s\S]*?(?:<\/system-reminder>|$)/g, '').trim()
-}
-
 export class Sessions {
   private runs: Run[] = []
   private tick = 0
@@ -59,20 +40,23 @@ export class Sessions {
    * first user message; a request joins the most recently joined open run with that key whose last request had
    * no more messages than this one. Call it before any await, so two requests of one run keep their seq order.
    * `dialect` comes from the route the request took and reads the key and the task text off the body.
-   * With a session hint (Claude Code's headers) the key is the session and the agent, with no length rule: a compaction
+   * `picked` is the connection the request's headers chose and its hints. With a session hint the key is the
+   * connection, the session and the agent, with no length rule: a compaction
    * rewrites the history. An auxiliary request (a title, a summary) gets no turn: it is a note in the session's main run,
    * written by onReply with the `side` returned here. Before the session's first main request those notes wait: the main
    * run's meta (with the real task) and the notes come with that request. A compaction is a turn of its agent's run, marked by a note.
    */
-  onRequest(payload: object, dialect: Dialect, hints: ProxyHints = {}): { run: string; turn: number; meta?: RunMeta; events: HarnessEvent[]; side?: { model: string } } {
+  onRequest(payload: object, dialect: Dialect, { conn, hints }: Picked): { run: string; turn: number; meta?: RunMeta; events: HarnessEvent[]; side?: { model: string } } {
     const raw = (payload as { messages?: unknown }).messages
     const msgs: any[] = Array.isArray(raw) ? raw : []
     const k = dialect.keyOf(payload)
     let key = k.key
-    const task = taskOf(k.taskText)
-    const aux = hints.session !== undefined && hints.requestClass === 'auxiliary'
+    const task = stripTask(conn, k.taskText)
+    // A class the connection does not name is no class: `undefined === undefined` must not count.
+    const cls = hints.requestClass
+    const aux = hints.session !== undefined && cls !== undefined && cls === conn.auxiliary
     const agent = aux ? 'main' : hints.agent ?? 'main'
-    if (hints.session !== undefined) key = `cc\0${hints.session}\0${agent}`
+    if (hints.session !== undefined) key = `${conn.name}\0${hints.session}\0${agent}`
     let run = this.runs.filter(r => r.open && r.key === key && (hints.session !== undefined || r.len <= msgs.length)).sort((a, b) => b.active - a.active)[0]
     let meta: RunMeta | undefined
     const metaOf = (id: string): RunMeta => {
@@ -101,7 +85,7 @@ export class Sessions {
     run.active = ++this.tick
     events.push(...this.results(run, msgs, dialect))
     const turn = ++run.turn
-    if (hints.requestClass === 'compaction') events.push(this.ev(run, turn, { type: 'proxy_note', kind: 'compaction' }))
+    if (cls !== undefined && cls === conn.compaction) events.push(this.ev(run, turn, { type: 'proxy_note', kind: 'compaction' }))
     events.push(this.ev(run, turn, { type: 'llm_request', payload }))
     return { run: run.id, turn, meta, events }
   }

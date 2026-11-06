@@ -81,6 +81,7 @@ test('the package ships the polyglot set without its proofs', () => {
   const paths: string[] = JSON.parse(out)[0].files.map((f: { path: string }) => f.path)
   for (const p of ['set.json', 'expect.js', 'NOTICE.md', 'LICENSE-exercism-javascript', 'LICENSE-problem-specifications']) expect(paths).toContain(`examples-polyglot/${p}`)
   expect(paths.filter(p => /proof/.test(p))).toEqual([])
+  for (const f of ['claude-code.json', 'generic.json']) expect(paths).toContain(`connections/${f}`)
 })
 
 const packDirs: string[] = []

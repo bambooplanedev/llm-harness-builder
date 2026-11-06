@@ -1,0 +1,5 @@
+{
+  "name": "generic",
+  "hints": {},
+  "taskStrip": [["<system-reminder>", "</system-reminder>"]]
+}

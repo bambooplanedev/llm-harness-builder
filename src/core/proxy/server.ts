@@ -7,10 +7,11 @@ import { TraceWriter } from '../../server/runs.js'
 import { refusal } from '../../server/origin.js'
 import { BackendError } from '../backends/types.js'
 import type { HarnessEvent } from '../events.js'
-import { Sessions, hintsOf, type ReplyOutcome, type RunMeta } from './sessions.js'
+import { Sessions, type ReplyOutcome, type RunMeta } from './sessions.js'
 import { redactor } from '../redact.js'
 import { DIALECTS } from './dialects/index.js'
 import type { Dialect } from './dialects/dialect.js'
+import { CONNECTIONS_DIR, loadConnections, pickConnection } from './connections.js'
 
 export type ProxyOpts = {
   /** Server root, e.g. http://127.0.0.1:8080; a path prefix, if any, is kept. */
@@ -23,8 +24,11 @@ export type ProxyOpts = {
   log?: (line: string) => void
   /** Request bodies larger than this are forwarded but not recorded. */
   recordCap?: number
+  /** Where the connection files are read from; the package's own folder unless a test says otherwise. */
+  connectionsDir?: string
 }
-export type ProxyServer = { port: number; stop(): Promise<void> }
+/** `hints`: each connection's startup line, with its port, in pick order. */
+export type ProxyServer = { port: number; hints: string[]; stop(): Promise<void> }
 
 const HOP = ['connection', 'keep-alive', 'transfer-encoding', 'te', 'trailer', 'upgrade', 'proxy-authorization', 'proxy-authenticate']
 // A request also loses host (http.request sets the upstream's), accept-encoding (the reply and the copy we parse
@@ -73,6 +77,7 @@ export async function startProxy(o: ProxyOpts): Promise<ProxyServer> {
   const prefix = up.pathname.replace(/\/+$/, '')
   const log = o.log ?? (() => {})
   const cap = o.recordCap ?? 20e6
+  const conns = loadConnections(o.connectionsDir ?? CONNECTIONS_DIR)
   const sessions = new Sessions({ now: Date.now, newId: () => randomUUID().slice(0, 8), harness: o.harness, upstream: o.upstream, pid: process.pid })
   const writers = new Map<string, { t: TraceWriter; chain: Promise<void> }>()
   const inflight = new Set<AbortController>()
@@ -118,7 +123,8 @@ export async function startProxy(o: ProxyOpts): Promise<ProxyServer> {
       else try { payload = JSON.parse(body.toString('utf8')) } catch { log('not recorded: the request body is not JSON') }
       if (payload && typeof payload === 'object') {
         // Only the hint headers, scrubbed like the body: Sessions never sees req.headers.
-        const out = sessions.onRequest(scrub(payload), dialect, scrub(hintsOf(req.headers)))
+        const picked = pickConnection(conns, req.headers)
+        const out = sessions.onRequest(scrub(payload), dialect, { conn: picked.conn, hints: scrub(picked.hints) })
         if (out.meta) log(`run ${out.run}: ${out.meta.task.slice(0, 80).replace(/\n/g, ' ')}`)
         record(out.run, out.events, out.meta)
         rec = { run: out.run, turn: out.turn, dialect, side: out.side }
@@ -194,8 +200,10 @@ export async function startProxy(o: ProxyOpts): Promise<ProxyServer> {
     server.listen(o.port, '127.0.0.1', () => { server.off('error', reject); resolve() })
   })
 
+  const port = (server.address() as { port: number }).port
   return {
-    port: (server.address() as { port: number }).port,
+    port,
+    hints: conns.flatMap(c => c.hint === undefined ? [] : [c.hint.replaceAll('{port}', String(port))]),
     /** Aborts replies in flight, waits for them to be recorded, then ends every open run with done. */
     async stop() {
       for (const ac of inflight) { if (!ac.signal.aborted) stoppedByUs.add(ac); ac.abort() }

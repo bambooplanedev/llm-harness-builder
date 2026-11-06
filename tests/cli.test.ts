@@ -693,6 +693,29 @@ test('proxy records until SIGINT or SIGTERM, then exits 0 with done appended', a
   }
 }, 60_000)
 
+test('proxy ignores a connections folder in its cwd', async () => {
+  const up = http.createServer((req, res) => {
+    req.resume()
+    req.on('end', () => { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: 'hi' }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`) })
+  })
+  await listen(up)
+  const cwd = tmpSync('lhb-cwd-')
+  mkdirSync(join(cwd, 'connections'))
+  writeFileSync(join(cwd, 'connections', 'evil.json'), '{"name":"evil","hints":{"session":"x-evil"},"taskStrip":[]}')
+  const p = spawnCli(['proxy', '--upstream', `http://127.0.0.1:${(up.address() as { port: number }).port}`, '--port', '0', '--name', 'cli'], { cwd })
+  let err = ''
+  const port = await new Promise<number>(done => p.stderr.on('data', (b: Buffer) => { err += b; const m = /proxy on http:\/\/127\.0\.0\.1:(\d+)\/v1/.exec(err); if (m) done(Number(m[1])) }))
+  const r = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, { method: 'POST', headers: { 'x-evil': 's1' }, body: JSON.stringify({ model: 'm', stream: true, messages: [{ role: 'user', content: 'hello' }] }) })
+  await r.text()
+  const code = await new Promise(done => { p.on('exit', done); p.kill('SIGINT') })
+  up.close()
+  expect(code).toBe(0)
+  const files = await readdir(join(cwd, 'runs'))
+  const meta = JSON.parse((await readFile(join(cwd, 'runs', files[0]), 'utf8')).split('\n')[0]).meta
+  expect(meta.task).toBe('hello')
+  expect(meta.session).toBeUndefined()
+}, 60_000)
+
 test('a second SIGINT while proxy is stopping force-exits 130, not the graceful 0', async () => {
   const up = http.createServer(req => { req.resume() }) // accepts, never answers: every request stays in flight until aborted
   await listen(up)
