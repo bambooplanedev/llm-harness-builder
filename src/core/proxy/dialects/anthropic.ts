@@ -1,7 +1,7 @@
 // src/core/proxy/dialects/anthropic.ts — Anthropic messages, as the recording proxy reads them.
 import { collectAnthropic, fromAnthropicJson } from '../../backends/anthropic.js'
 import { jsonChunks } from '../../backends/types.js'
-import { stable, textOf, type Dialect, type ToolResultSeen } from './dialect.js'
+import { lastTurn, messagesOf, modelOf, stable, textOf, type Dialect, type ToolResultSeen } from './dialect.js'
 
 /** The text, thinking and tool-argument deltas of a Messages SSE text, joined in order; lines that do not parse are skipped. */
 const deltaText = (sse: string) => sse.split('\n').map(l => {
@@ -20,18 +20,17 @@ export const anthropic: Dialect = {
    * first user text, since Claude Code moves cache_control markers between turns.
    */
   keyOf(payload) {
-    const raw = (payload as { messages?: unknown }).messages
-    const msgs: any[] = Array.isArray(raw) ? raw : []
+    const msgs = messagesOf(payload)
     const user = msgs.find(m => m?.role === 'user')
     const system = (payload as { system?: unknown }).system
     const userText = textOf(Array.isArray(user?.content) ? user.content.filter((b: any) => b?.type === 'text') : user?.content)
-    return { key: stable([Array.isArray(system) ? textOf(system.slice(1)) : textOf(system), userText]), taskText: userText }
+    return { key: stable([Array.isArray(system) ? textOf(system.slice(1)) : textOf(system), userText]), taskText: userText, len: msgs.length, model: modelOf(payload) }
   },
 
   /** The tool_result blocks of the user messages after the assistant message, matched to the calls by tool_use_id. */
-  toolResults(_assistant, after, calls) {
+  toolResults(payload, calls) {
     const out: ToolResultSeen[] = []
-    for (const m of after) {
+    for (const m of lastTurn(payload)?.after ?? []) {
       if (m?.role !== 'user' || !Array.isArray(m.content)) continue
       for (const b of m.content) {
         const call = b?.type === 'tool_result' && b.tool_use_id !== undefined ? calls.find(c => c.backendId === b.tool_use_id) : undefined

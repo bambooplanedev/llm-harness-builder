@@ -1,0 +1,6 @@
+{
+  "name": "my-harness",
+  "hints": { "session": "x-my-harness-session" },
+  "taskStrip": [["<context>", "</context>"]],
+  "hint": "for my harness: send x-my-harness-session with every request"
+}

@@ -20,6 +20,7 @@
     "!harnesses/*.evolve*.jsonl",
     "!harnesses/*.v[0-9]*.json",
     "examples",
+    "examples-dialects",
     "examples-pool",
     "examples-polyglot",
     "examples-sift",

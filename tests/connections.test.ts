@@ -1,13 +1,17 @@
 import { test, expect } from 'vitest'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { loadConnections, pickConnection, stripTask } from '../src/core/proxy/connections.js'
+import { CONNECTIONS_DIR, checkConnection, loadConnections, pickConnection, stripTask } from '../src/core/proxy/connections.js'
 import { tmpSync } from './helpers.js'
 
 const CONNS = loadConnections()
 
 test('the shipped files load: claude-code first, generic last', () => {
   expect(CONNS.map(c => c.name)).toEqual(['claude-code', 'generic'])
+})
+
+test('the shipped files pass the strict check', () => {
+  for (const f of readdirSync(CONNECTIONS_DIR)) expect(() => checkConnection(JSON.parse(readFileSync(join(CONNECTIONS_DIR, f), 'utf8')), f)).not.toThrow()
 })
 
 test('pickConnection: any one valid Claude Code header picks it', () => {

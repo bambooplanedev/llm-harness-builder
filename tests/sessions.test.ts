@@ -297,3 +297,26 @@ test('one invalid hint drops only itself', () => {
   expect(a.meta).toMatchObject({ session: CC, agent: 'main' })
   expect(a.meta!.parent).toBeUndefined()
 })
+
+test('onRequest leaves no state behind when the dialect throws', () => {
+  const s = mk()
+  const boom = () => { throw new Error('boom') }
+  const a = s.onRequest({ messages: [S, U] }, openaiChat, NO)
+  s.onReply(a.run, 1, ok(reply([{ id: 'x1' }])))
+  // 6 messages: had len been set to 6 before the throw, the 4-message request below could not join the run.
+  const long = [S, U, asst(['x1']), tool('x1', 'AAA'), U, U]
+  expect(() => s.onRequest({ messages: long }, { ...openaiChat, toolResults: boom }, NO)).toThrow('boom')
+  const c = s.onRequest({ messages: [S, U, asst(['x1']), tool('x1', 'AAA')] }, openaiChat, NO)
+  expect(c).toMatchObject({ run: a.run, turn: 2 })
+  expect(c.events[0]).toMatchObject({ type: 'tool_result', callId: 'c1' })
+})
+
+test('onRequest leaves no state behind when keyOf throws', () => {
+  const s = mk()
+  expect(() => s.onRequest({ messages: [S, U] }, { ...openaiChat, keyOf: () => { throw new Error('boom') } }, NO)).toThrow('boom')
+  expect(s.onRequest({ messages: [S, U] }, openaiChat, NO)).toMatchObject({ run: 'run1', turn: 1 })
+})
+
+test('the core reads no request body field itself', () => {
+  for (const f of ['sessions.ts', 'server.ts']) expect(readFileSync(`src/core/proxy/${f}`, 'utf8')).not.toMatch(/payload\.(messages|model)\b|as \{ (messages|model)\??:/)
+})

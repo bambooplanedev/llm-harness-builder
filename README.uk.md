@@ -238,7 +238,7 @@ Ollama думає, якщо їй не сказати інакше, витрач�
     llm-harness-builder evolve <harness.json> [--tasks <repo>] [--task polyglot] [--mode <m>] [--size <N>] [--rounds <N>] [--proposer <harness.json>] [--max-usd <dollars>] [--timeout <s>] [--yes] [--report] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
     llm-harness-builder replay <run-id | trace.jsonl> [--turn <N>] [--n <n>] [--temperature <t>] [--max-tokens <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>] [--json]
     llm-harness-builder analyze <bench.json | run-id | trace.jsonl> ... [--json]
-    llm-harness-builder proxy [--upstream <url>] [--port <n>] [--name <label>]
+    llm-harness-builder proxy [--upstream <url>] [--port <n>] [--name <label>] [--dialect <abs.mjs>] [--connection <abs.json>]
 
 | команда | що робить |
 |---|---|
@@ -609,9 +609,11 @@ thinking чи id викликів. Жоден інструмент не вико
 
     llm-harness-builder proxy --upstream http://127.0.0.1:8080 --port 8090 --name opencode
 
+Власні формати API та підключення агентів додаються файлами: див. [Власні діалекти й підключення](https://github.com/bambooplanedev/llm-harness-builder/blob/main/docs/dialects.uk.md).
+
 Запускайте його в тій теці, де працює `serve` (обидва використовують `./runs`), і дайте агентові
 `http://127.0.0.1:8090/v1` як базовий URL OpenAI. `--upstream` — корінь сервера, а не його `/v1`.
-Проходить кожен шлях; записуються лише `POST …/chat/completions` і `POST /v1/messages`. Ctrl-C (або `kill`) закінчує кожен
+Проходить кожен шлях; із вбудованими діалектами записуються лише `POST …/chat/completions` і `POST /v1/messages`. Ctrl-C (або `kill`) закінчує кожен
 відкритий прогін з `done: proxy_stopped`: запис зупинено, і це нічого не каже про те, як упорався агент.
 Проксі відхиляє запити зі сторінки в браузері, відданої з іншого origin (включно з іншими портами
 `localhost`), як і `serve`; агенти, які не є сторінками браузера, не надсилають `Origin`, і їх це не

@@ -231,7 +231,7 @@ directory to browse them, and reload the list after a CLI run. On every start `s
     llm-harness-builder evolve <harness.json> [--tasks <repo>] [--task polyglot] [--mode <m>] [--size <N>] [--rounds <N>] [--proposer <harness.json>] [--max-usd <dollars>] [--timeout <s>] [--yes] [--report] [--model <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>]
     llm-harness-builder replay <run-id | trace.jsonl> [--turn <N>] [--n <n>] [--temperature <t>] [--max-tokens <m>] [--base-url <u>] [--kind <k>] [--api-key-env <NAME>] [--json]
     llm-harness-builder analyze <bench.json | run-id | trace.jsonl> ... [--json]
-    llm-harness-builder proxy [--upstream <url>] [--port <n>] [--name <label>]
+    llm-harness-builder proxy [--upstream <url>] [--port <n>] [--name <label>] [--dialect <abs.mjs>] [--connection <abs.json>]
 
 | command | what it does |
 |---|---|
@@ -601,9 +601,11 @@ then shows that agent's requests and replies, and `replay` takes any of its turn
 
     llm-harness-builder proxy --upstream http://127.0.0.1:8080 --port 8090 --name opencode
 
+Your own API formats and agent connections can be added with files: see [Own dialects and connections](https://github.com/bambooplanedev/llm-harness-builder/blob/main/docs/dialects.md).
+
 Start it in the directory `serve` runs in (both use `./runs`) and give the agent
 `http://127.0.0.1:8090/v1` as its OpenAI base URL. `--upstream` is the server root, not its `/v1`.
-Every path goes through; only `POST …/chat/completions` and `POST /v1/messages` are recorded. Ctrl-C (or `kill`) ends every
+Every path goes through; with the built-in dialects only `POST …/chat/completions` and `POST /v1/messages` are recorded. Ctrl-C (or `kill`) ends every
 open run with `done: proxy_stopped`: the recording stopped, which says nothing about how the agent did.
 The proxy refuses requests from a browser page served from another origin (other ports of
 `localhost` included), as `serve` does; agents that are not browser pages send no `Origin` and are

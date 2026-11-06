@@ -67,3 +67,8 @@ test('overOf: the exact JSON evolve pins, whatever order the flags came in; a fl
   expect(JSON.stringify(overOf({ kind: 'ollama' }))).toBe('{"kind":"ollama"}')
   expect(JSON.stringify(overOf({}))).toBe('{}')
 })
+
+test('proxy takes your own dialect and connection files, repeatable', () => {
+  expect(COMMANDS.proxy.options.dialect).toMatchObject({ multiple: true })
+  expect(COMMANDS.proxy.options.connection).toMatchObject({ multiple: true })
+})

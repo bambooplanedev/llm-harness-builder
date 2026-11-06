@@ -14,7 +14,31 @@ export type Picked = { conn: Connection; hints: ProxyHints }
 export const CONNECTIONS_DIR = fileURLToPath(new URL('../../../connections', import.meta.url))
 
 /** Header names a connection may not read: their values are keys, and a hint lands in the meta as it is. */
-const SECRET = new Set(['authorization', 'proxy-authorization', 'x-api-key', 'api-key', 'x-goog-api-key', 'cookie'])
+export const SECRET = new Set(['authorization', 'proxy-authorization', 'x-api-key', 'api-key', 'x-goog-api-key', 'cookie'])
+
+/** A dialect `id`, a connection `name`: lowercase, digits and dashes. */
+export const ID = /^[a-z0-9][a-z0-9-]{0,63}$/
+const KEYS = new Set(['name', 'hints', 'auxiliary', 'compaction', 'taskStrip', 'hint'])
+const HINT_KEYS = new Set<string>(['session', 'agent', 'parent', 'agentType', 'requestClass'])
+const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
+
+/** `c` as a connection, the same rules for the built-in files and the user's own; throws `${label}: <reason>`. */
+export function checkConnection(c: unknown, label: string): Connection {
+  const no = (why: string) => new Error(`${label}: ${why}`)
+  if (!isObject(c)) throw no('not a JSON object')
+  for (const k of Object.keys(c)) if (!KEYS.has(k)) throw no(`unknown key ${JSON.stringify(k)}; allowed: ${[...KEYS].join(', ')}`)
+  if (typeof c.name !== 'string' || !ID.test(c.name)) throw no(`name must match ${ID}`)
+  if (!isObject(c.hints)) throw no('hints must be an object')
+  for (const [k, h] of Object.entries(c.hints)) {
+    if (!HINT_KEYS.has(k)) throw no(`unknown hint ${JSON.stringify(k)}; allowed: ${[...HINT_KEYS].join(', ')}`)
+    if (typeof h !== 'string' || h === '' || h !== h.toLowerCase() || SECRET.has(h)) throw no(`hint header ${JSON.stringify(h)} is not a lowercase header name that carries no key`)
+  }
+  if (!Array.isArray(c.taskStrip) || !c.taskStrip.every(p => Array.isArray(p) && p.length === 2 && p.every(s => typeof s === 'string' && s !== ''))) {
+    throw no('taskStrip must be a list of [open, close] pairs of non-empty strings')
+  }
+  for (const k of ['auxiliary', 'compaction', 'hint']) if (c[k] !== undefined && typeof c[k] !== 'string') throw no(`${k} must be a string`)
+  return c as Connection
+}
 
 /** Every *.json of `dir`: the ones with hints by file name, then the one without (the fallback). Throws naming the file. */
 export function loadConnections(dir = CONNECTIONS_DIR): Connection[] {
@@ -22,15 +46,9 @@ export function loadConnections(dir = CONNECTIONS_DIR): Connection[] {
   try { names = readdirSync(dir).filter(f => f.endsWith('.json')).sort() } catch { throw new Error(`no connections folder at ${dir}`) }
   if (!names.length) throw new Error(`no connections (*.json) in ${dir}`)
   const all = names.map(f => {
-    let c: Connection
+    let c: unknown
     try { c = JSON.parse(readFileSync(path.join(dir, f), 'utf8')) } catch (e) { throw new Error(`connections/${f}: ${(e as Error).message}`) }
-    if (!c || typeof c !== 'object' || typeof c.name !== 'string' || !c.hints || typeof c.hints !== 'object' || !Array.isArray(c.taskStrip)) {
-      throw new Error(`connections/${f}: needs name, hints and taskStrip`)
-    }
-    for (const h of Object.values(c.hints)) {
-      if (typeof h !== 'string' || h !== h.toLowerCase() || SECRET.has(h)) throw new Error(`connections/${f}: hint header ${JSON.stringify(h)} is not a lowercase header name that carries no key`)
-    }
-    return c
+    return checkConnection(c, `connections/${f}`)
   })
   const hinted = all.filter(c => Object.keys(c.hints).length), fallback = all.filter(c => !Object.keys(c.hints).length)
   if (fallback.length !== 1) throw new Error(`${dir}: needs exactly one connection with empty hints, found ${fallback.length}`)
