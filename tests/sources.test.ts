@@ -219,6 +219,18 @@ test('groupDiff: a param counts only when each group agrees on it; metadata neve
   expect(groupDiff(a, b).params).toEqual([])
 })
 
+test('groupDiff: a request already seen is not read again when a new one arrives', () => {
+  let reads = 0
+  const counted = (p: Record<string, unknown>) => { const { messages, ...rest } = p; return Object.defineProperty(rest, 'messages', { get: () => (reads++, messages), enumerable: true }) }
+  const a = [[counted(first('a1', 'Rule A'))]], b = [[counted(first('b1', 'Rule B'))]]
+  groupDiff(a, b)
+  const once = reads
+  expect(once).toBeGreaterThan(0)
+  a[0].push(first('a1', 'Rule A\nMore'))
+  expect(groupDiff(a, b).onlyA).toContainEqual({ line: 'Rule A', label: 'CLAUDE.md' })
+  expect(reads).toBe(once)
+})
+
 test('groupDiff: runs without readable requests give empty lists', () => {
   expect(groupDiff([[]], [[]])).toEqual({ onlyA: [], onlyB: [], params: [] })
   expect(groupDiff([[{}, null]], [[first('b1', 'R')]]).onlyA).toEqual([])

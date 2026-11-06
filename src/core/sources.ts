@@ -186,19 +186,34 @@ export function lineLabels(sources: Source[]): Map<string, string> {
 export type GroupLine = { line: string; label?: string }
 export type GroupDiff = { onlyA: GroupLine[]; onlyB: GroupLine[]; params: { path: string; a: string; b: string }[] }
 
+type ReqLines = { lines: [string, string | undefined][]; params: Map<string, string> }
+/** A request's lines (with labels) and params, worked out once per payload object: a new event in a group costs only its own request. */
+const reqCache = new WeakMap<object, ReqLines | undefined>()
+function requestLines(p: unknown): ReqLines | undefined {
+  if (!isObj(p)) return undefined
+  if (reqCache.has(p)) return reqCache.get(p)
+  const s = requestSources(p)
+  let out: ReqLines | undefined
+  if (s) {
+    const labels = lineLabels(s), lines: ReqLines['lines'] = []
+    // the tools chunk is one JSON line; tool names stand for it
+    for (const c of s) if (c.where !== 'tools') for (const raw of c.text.split('\n')) { const l = raw.trim(); if (l) lines.push([l, labels.get(l)]) }
+    for (const t of Array.isArray(p.tools) ? (p.tools as unknown[]) : []) { const n = toolName(t); if (n) lines.push([`tool ${n}`, undefined]) }
+    out = { lines, params: requestParams(clean(p) as Obj) }
+  }
+  reqCache.set(p, out)
+  return out
+}
+
 /** One run's lines (first appearance first, label from the request it first shows up in) and its first readable request's params. */
 function runLines(payloads: unknown[]) {
   const lines = new Map<string, string | undefined>()
   let params: Map<string, string> | undefined
   for (const p of payloads) {
-    const s = requestSources(p)
-    if (!s) continue
-    params ??= requestParams(clean(p) as Obj)
-    const labels = lineLabels(s)
-    const add = (l: string) => { if (!lines.has(l)) lines.set(l, labels.get(l)) }
-    // the tools chunk is one JSON line; tool names stand for it
-    for (const c of s) if (c.where !== 'tools') for (const raw of c.text.split('\n')) { const l = raw.trim(); if (l) add(l) }
-    for (const t of Array.isArray((p as Obj).tools) ? ((p as Obj).tools as unknown[]) : []) { const n = toolName(t); if (n) add(`tool ${n}`) }
+    const r = requestLines(p)
+    if (!r) continue
+    params ??= r.params
+    for (const [l, label] of r.lines) if (!lines.has(l)) lines.set(l, label)
   }
   return { lines, params: params ?? new Map<string, string>() }
 }
