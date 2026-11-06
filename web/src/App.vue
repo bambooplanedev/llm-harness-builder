@@ -10,10 +10,11 @@ import ContextBar from './ContextBar.vue'
 import Trace from './Trace.vue'
 import Bench from './Bench.vue'
 import Evolve from './Evolve.vue'
+import Proxy from './Proxy.vue'
 import { t, T, lang, LANGS, langName, setLang } from './i18n'
 import { shown } from './film'
 
-const tab = ref<'workbench' | 'bench' | 'evolve'>('workbench')
+const tab = ref<'workbench' | 'bench' | 'evolve' | 'proxy'>('workbench')
 /** The Bench tab shows the recorded bench shipped with the package instead of ./runs: read-only, no model. */
 const benchExample = ref(false)
 const openExamples = () => { benchExample.value = true; tab.value = 'bench' }
@@ -177,10 +178,12 @@ watch(() => config.value.backend.model, () => {
       <button :class="{ on: tab === 'workbench' }" @click="tab = 'workbench'">Workbench</button>
       <button :class="{ on: tab === 'bench' }" @click="tab = 'bench'">Bench</button>
       <button :class="{ on: tab === 'evolve' }" @click="tab = 'evolve'">Evolve<span v-if="evolve.running" class="chip">running</span></button>
+      <button :class="{ on: tab === 'proxy' }" @click="tab = 'proxy'">Proxy</button>
       <button class="settings" @click="settings?.showModal()">⚙ {{ t('settings.title') }}</button>
     </div>
     <Bench v-if="tab === 'bench'" :key="String(benchExample)" :backend="config.backend" :example="benchExample" @example="v => (benchExample = v)" @to-workbench="toWorkbench" />
     <Evolve v-else-if="tab === 'evolve'" :harness-names="harnessNames" :current="config.name" :workdir="workdir" :notes-on="!!config.notes?.enabled" :status="evolve" @poll="pollEvolve" @use="(n, keep) => { tab = 'workbench'; void load(n, keep) }" />
+    <Proxy v-else-if="tab === 'proxy'" @open="r => { tab = 'workbench'; open(r.id, r.task, r.active) }" />
     <div class="layout" v-else>
       <div class="col left">
         <ConfigForm v-model="config" v-model:mcp-error="mcpError" :models="models" :models-error="modelsError" :model-info="modelInfo" :harness-names="harnessNames" @refresh-models="refreshModels" @load="load" @save-as="saveAs" />

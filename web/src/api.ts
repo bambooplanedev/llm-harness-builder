@@ -5,6 +5,8 @@ import type { Delta, ServerInfo } from '../../src/core/backends/types'
 import type { BenchFile, BenchResult, BenchHarness, BenchRun, ActiveTrace } from '../../src/core/bench'
 import type { AnalysisCells } from '../../src/core/analyze'
 import type { Note } from '../../src/core/notes'
+/** One recording proxy `serve` runs for the page (GET /api/proxies). */
+export type ProxyItem = { id: string; name: string; upstream: string; port: number; started: string; lines: string[]; tail: string; exit?: { code: number | null; signal: string | null } }
 export type { HarnessConfig, HarnessEvent, RunSummary, Delta, ServerInfo, BenchFile, BenchResult, BenchHarness, BenchRun, ActiveTrace, AnalysisCells, Note }
 
 /** GET /api/evolve. While `running` is there, `last` may be the job before it. */
@@ -61,6 +63,15 @@ export const api = {
   evolveStop: () => j<{ ok: true }>('/api/evolve/stop', { method: 'POST' }),
   /** POST, not GET: the server lists and deletes behind the same check. */
   notes: (repo: string, del?: string) => j<{ notes: Note[]; removed?: number }>('/api/notes', { method: 'POST', body: JSON.stringify({ repo, ...del === undefined ? {} : { delete: del } }) }),
+  /** null: this serve has no cli, so no proxy route (404). */
+  proxies: async (): Promise<ProxyItem[] | null> => {
+    const { r, body } = await send('/api/proxies')
+    if (r.status === 404) return null
+    if (!r.ok) throw failed(r, body)
+    return body as ProxyItem[]
+  },
+  startProxy: (body: { upstream: string; port: number; name: string; dialects: string[]; connections: string[] }) => j<ProxyItem>('/api/proxies', { method: 'POST', body: JSON.stringify(body) }),
+  stopProxy: (id: string) => j<{ ok: true }>(`/api/proxies/${id}/stop`, { method: 'POST' }),
   demo: () => j<{ workdir: string }>('/api/demo', { method: 'POST' }),
   demoCheck: (workdir: string, config: HarnessConfig) => j<{ verdict: 'PASS' | 'FAIL' }>('/api/demo/check', { method: 'POST', body: JSON.stringify({ workdir, config }) }),
   startRun: (config: HarnessConfig, task: string, workdir: string) => j<{ runId: string }>('/api/runs', { method: 'POST', body: JSON.stringify({ config, task, workdir }) }),

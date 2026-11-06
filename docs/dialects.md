@@ -28,6 +28,15 @@ The suffix appears when the file replaced a built-in of the same id or name. The
 The package ships a working pair in `examples-dialects/` (`ollama-chat.mjs`, for Ollama's native `/api/chat`, and
 `my-harness.json`). Copy them out of the package folder and edit the copies.
 
+## Proxy tab
+
+`serve` has a Proxy tab that starts the same proxy for you: fill in the upstream, a port (0 means any free port) and
+a name, add the absolute paths of your own dialect and connection files (one field each, `+ more` for another), and
+press Start. The rules are those of the CLI above, and the same trust applies: an own dialect runs with full trust.
+Each running proxy gets a card with its start lines, its recorded sessions (click one to open it in Workbench), the
+tail of its stderr, and Stop. A bad file shows its error under the form and starts nothing. The tab needs a `serve`
+started from the command line, as Bench does.
+
 ## The dialect file
 
 A `.mjs` file whose `export default` is an object:
