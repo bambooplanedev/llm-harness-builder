@@ -64,7 +64,7 @@ descriptions are part of the system prompt; each share is rounded on its own):
 - [Quick start](#quick-start)
 - [Usage](#usage) — [web UI](#web-ui) · [CLI](#cli) · [recording another agent](#recording-another-agent)
 - [Configuration](#configuration) — [harness file](#harness-file) · [backends](#backends) ·
-  [cloud](#cloud) · [Anthropic](#anthropic) · [model families](#model-families) · [MCP](#mcp)
+  [cloud](#cloud) · [Anthropic](#anthropic) · [model families](#model-families) · [MCP](#mcp) · [prompt hook](#prompt-hook)
 - [How to read the results](#how-to-read-the-results) · [Findings](#findings)
 - [Limitations](#limitations)
 - [Development](#development)
@@ -87,6 +87,7 @@ descriptions are part of the system prompt; each share is rounded on its own):
 - **Local and cloud.** Ollama, llama-server, LM Studio, vLLM, any OpenAI-compatible API with a key
   (OpenRouter), and the Anthropic Messages API.
 - **MCP.** Tools from MCP servers over stdio, beside or instead of the five built-in ones.
+- **Prompt hook.** One command before the first request; what it prints goes ahead of the task.
 
 ## Requirements
 
@@ -256,9 +257,9 @@ key cannot (see [Cloud](#cloud)), and for the refusal below. 130 for Ctrl-C in `
 
 **Approvals.** `run` without `--yes` asks before each command it may run. When stdin is not a
 terminal — a pipe, `/dev/null`, CI — nobody can answer, so a harness that may ask (`approveBash`
-with `bash` on, `loop.untilBash`, any `mcpServers`) is refused before the first request, and
+with `bash` on, `loop.untilBash`, `hooks.userPrompt`, any `mcpServers`) is refused before the first request, and
 `yes | run …` does not answer for you: pass `--yes`. `demo` and `bench` never ask: they approve the
-model's commands and the harness files' `mcpServers` and `loop.untilBash` alike, and say so on
+model's commands and the harness files' `mcpServers`, `loop.untilBash` and `hooks.userPrompt` alike, and say so on
 stderr. `bench --tasks` and `evolve` ask once, before the first run, to accept the commands of your
 `lhb-tasks.json` (`--yes` accepts without a terminal and prints the commands first, then saves the
 consent); after that they approve everything, like `demo`.
@@ -743,7 +744,7 @@ A harness is one JSON file: backend, prompts, tools, limits. Start from
 
 It is portable: no paths to your machine; `workdir` and the task are per-run parameters. A key the
 format does not have is an error that names it, at the top level, in every section and in each
-`mcpServers` entry: every optional knob is off when absent, so a misspelt one would otherwise be
+`mcpServers` entry and in `hooks.userPrompt`: every optional knob is off when absent, so a misspelt one would otherwise be
 silently off.
 
 | key | what it does |
@@ -777,6 +778,7 @@ silently off.
 | `loop.freshContext`, `repeatTemperature`, `repeatThinkTokens` | ways out of a loop — see [the findings](docs/findings.md#three-ways-out-of-a-loop) |
 | `loop.untilBash` | a final answer ends the run only once this command exits 0 |
 | `mcpServers` | tools from MCP servers — see [MCP](#mcp) |
+| `hooks.userPrompt` | a command run before the first request; its output goes ahead of the task — see [Prompt hook](#prompt-hook) |
 | `notes.enabled`, `notes.maxTokens` | notes from earlier runs on the same folder, up to this many tokens, sent after the task; written after each run by a separate call; `bench` reads them and never writes |
 
 **Context.** `context.maxToolOutputChars` and `context.budgetTokens` are optional, and so is
@@ -840,7 +842,8 @@ file never sets a value. Without it they get `PATH`, `HOME`, `LANG`, `LC_ALL`, `
 `LC_COLLATE`, `LC_MESSAGES`, `LC_MONETARY`, `LC_NUMERIC`, `LC_TIME`, `TERM` and `TMPDIR`, and nothing
 else: `TZ`, `HTTPS_PROXY`, `NODE_EXTRA_CA_CERTS`, `CI` and every key are gone unless named. MCP
 servers are not covered: they start with this process's whole environment, except the variable
-`backend.apiKeyEnv` names. `run`, `demo` and `bench` print the names on stderr when they start, and
+`backend.apiKeyEnv` names. The prompt hook gets the same list and `CLAUDE_PROJECT_DIR`, nothing
+more. `run`, `demo` and `bench` print the names on stderr when they start, and
 the UI shows them under the tools. A value a command prints lands in `runs/` and in the next request
 to the backend — the backend key's own value excepted, which is redacted (for the limits, see
 [Cloud](#cloud)). This keeps keys out of what a command prints by accident; it is not a sandbox —
@@ -904,7 +907,7 @@ command with exit code 2 before anything is sent.
 
 **Redaction.** The value of the key is replaced with `[redacted: OPENROUTER_API_KEY]` in tool
 output, `loop.untilBash` output and every event, before the history, the trace, the terminal or the
-UI see them, and MCP servers start without the variable. The [honest notes](docs/honest-notes.md)
+UI see them, and the prompt hook's context before it is cut; MCP servers start without the variable. The [honest notes](docs/honest-notes.md)
 list what that misses, among them an encoded key, one shorter than 20 characters, the live text of a
 turn and a command that sends the key somewhere itself.
 
@@ -1139,6 +1142,54 @@ five in the table is not a rate either; it says the runaway is sampling, not som
 prompts.
 
 </details>
+
+### Prompt hook
+
+A harness can run one command before the first request and put what it prints ahead of the task:
+
+    "hooks": { "userPrompt": { "command": "wiki", "args": ["hint", "--claude-hook"] } }
+
+It follows Claude Code's `UserPromptSubmit` hook. `command` is a name on `PATH` or an absolute path;
+a relative path with a `/` is refused by the config check, since it would run a file the project or
+the model controls, under an approval that shows only its name. `args` is a list of strings.
+
+The command is spawned directly, with no shell, in the run's `workdir`. Its stdin is one JSON object:
+
+    { "hook_event_name": "UserPromptSubmit", "prompt": "<the task>", "cwd": "<workdir>", "session_id": "<uuid>" }
+
+`prompt` is the task as given, before notes and not redacted; `session_id` is new for each run. Its
+environment is the short list under [Environment](#harness-file) (`PATH`, `HOME`, locale, `TERM`,
+`TMPDIR`) plus `CLAUDE_PROJECT_DIR`, set to the `workdir`: no key, and nothing from `tools.bashEnv`.
+
+What it prints:
+
+- Exit 0 and a JSON object: `hookSpecificOutput.additionalContext`, when it is a string, is the
+  context. An object without it adds nothing. `"decision": "block"` blocks (below).
+- Exit 0 and anything else: the trimmed stdout is the context.
+- Exit 2, or exit 0 with `"decision": "block"`: the run ends as `aborted`, with the error `the prompt
+  hook blocked the task` and the hook's `reason` (or its stderr) after it. No request is sent, so a
+  guard hook does not let a task go to a cloud backend. In `bench` that is a FAIL with that reason.
+- Any other exit code, a spawn error, the 30 s timeout or an empty output: no context, and the run
+  goes on with the task as it is. The trace says why.
+
+The context is redacted for the backend key, then cut to 10 000 characters, with a `[truncated: N
+more chars]` line after the cut. It becomes one user message, `<context>`, a blank line, the task, and
+then the notes as before. A `loop.freshContext` reset sends it again without running the hook again.
+Stdout is read up to 1 MB and stderr up to its last 8 KB; stderr goes into the `prompt_hook` event
+and never to the model. The event comes before the first request, also when the hook blocked or was
+aborted. Ctrl-C and abort kill the hook's whole process group.
+
+The hook asks for approval once, like `loop.untilBash`: after it and before any MCP server starts.
+`run` without `--yes` shows the command and the line `run before the task, with the task on stdin,
+its output sent to the model`; `demo` and `bench` never ask.
+
+**Where the hook finds its data.** A `bench --tasks` workdir is a fresh `git clone` at the pinned
+commit, and `setup` runs in a separate clone, so files git ignores are not there. `.wiki/` is one:
+`wiki hint --claude-hook` would print nothing in every run. Give the hook the place, for example
+`"args": ["hint", "--claude-hook", "--dir", "/abs/path/.wiki"]`. Two costs. The harness file becomes
+specific to your machine: do not commit it with a path from your home directory. And that `.wiki`
+reflects the source repo's tree now, not the pinned commit, so a hint can be stale. The `no context`
+line shows a missing wiki, not a stale one.
 
 ## How to read the results
 

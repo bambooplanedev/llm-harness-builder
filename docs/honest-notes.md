@@ -15,9 +15,9 @@ Limits of [llm-harness-builder](../README.md) and of what its [findings](finding
   bullets down. `run` without `--workdir` works in the current directory, so `runs/` lands inside
   the project the agent reads; pass `--workdir`. Point `workdir` at a scratch copy or a git repo.
   `run` asks before each `bash` command when `tools.approveBash` is on (every shipped harness has it
-  on), before starting each MCP server and before `loop.untilBash`, unless `--yes`; other tools and
-  MCP tool calls never ask; `demo` and `bench` approve everything, the harness files' `mcpServers`
-  and `loop.untilBash` included.
+  on), before starting each MCP server, before `loop.untilBash` and before `hooks.userPrompt`, unless `--yes`; other tools and
+  MCP tool calls never ask; `demo` and `bench` approve everything, the harness files' `mcpServers`,
+  `loop.untilBash` and `hooks.userPrompt` included.
 - A note (`notes.enabled`) is the model's own summary of a run, written from the names of its calls,
   argument keys, paths and verdicts (a name or path that is not a plain token of up to 64 characters is
   passed as `<odd>` — a plain file name can still carry words), never from file contents or tool
@@ -43,8 +43,10 @@ Limits of [llm-harness-builder](../README.md) and of what its [findings](finding
   there, or from the file you keep it in, and send it anywhere. Only approving each command
   (`tools.approveBash`) or a container stops that, and `demo` and `bench` approve everything.
 - MCP servers start with the whole environment of this process, except the variable
-  `backend.apiKeyEnv` names; `mcpServers` has no `env`.
-- The backend key is redacted by value: tool output, `loop.untilBash` output and every event carry
+  `backend.apiKeyEnv` names; `mcpServers` has no `env`. The prompt hook (`hooks.userPrompt`) gets less:
+  only the list above, without `tools.bashEnv`, plus `CLAUDE_PROJECT_DIR`. It still runs as you and
+  can read the same files and the process environment as any command.
+- The backend key is redacted by value: tool output, `loop.untilBash` output, the prompt hook's context and every event carry
   `[redacted: <NAME>]` instead, before the history, the trace, the terminal or the UI see them. It
   is not found encoded (base64, split in parts), when the value is shorter than 20 characters
   (`run`, `demo`, `bench` and `replay` say so on stderr; the UI does not), or in the live text of a
@@ -60,14 +62,20 @@ Limits of [llm-harness-builder](../README.md) and of what its [findings](finding
   which of your `*_API_KEY` variables goes along; the start line (`the key in … goes to …`)
   names the host. The key normally leaves with the first request, so it has gone by the time you
   read the line (with `bench`, with its preflight); in `run` without `--yes` a question about an
-  MCP server or `loop.untilBash` can come first. In the UI, opening a keyed harness or a bench run
+  MCP server, `loop.untilBash` or `hooks.userPrompt` can come first. In the UI, opening a keyed harness or a bench run
   sends nothing until you press ↻ or Run.
+- The prompt hook's output goes to the model ahead of the task, as the user's own words: the model
+  cannot tell it from what you typed. A hook that builds it from text in a repository you did not
+  write lets that text steer the model. In `bench --tasks` and `evolve` the model's `bash` is
+  approved for you, so that steering is not stopped by a question. The task goes to the hook as it
+  is, not redacted, and the hook can send it anywhere. The context is redacted for the backend key
+  and cut at 10 000 characters, but whatever else it holds reaches the backend and the trace.
 - `serve` listens on 127.0.0.1 and refuses other hosts and any page from another origin, other ports
   of localhost included, but trusts every local process: whatever can connect to its port can start
   runs, answer approvals and, with `apiKeyEnv`, make it send one of its `*_API_KEY` variables to a
   host it names. The recording proxy refuses other hosts and pages from another origin the same way.
 - `run` without `--yes` refuses to start when stdin is not a terminal and the harness may ask
-  (`approveBash` with `bash` on, `loop.untilBash`, `mcpServers`): nobody could answer.
+  (`approveBash` with `bash` on, `loop.untilBash`, `hooks.userPrompt`, `mcpServers`): nobody could answer.
 - A CLI run writes `runs/<id>.jsonl.part` and renames it when done, on Ctrl-C included (at the
   approval question too, where Ctrl-D does the same). Any other kill leaves one behind — SIGTERM
   (exit 143), SIGHUP (a closed terminal; 129 in a shell), SIGKILL — and so does Ctrl-C during
@@ -125,7 +133,9 @@ Limits of [llm-harness-builder](../README.md) and of what its [findings](finding
   think turns every response into a parse error; the run then ends as `parse_failed` after two.
 - Abort cannot interrupt a `bash` command that is already running (nor the `loop.untilBash` check,
   which runs the same way); the command returns within its 30 s timeout, then the run ends. An MCP
-  call in flight is interrupted: abort closes the server, and the call comes back as an error.
+  call in flight is interrupted: abort closes the server, and the call comes back as an error. A
+  running prompt hook is interrupted too: abort kills its whole process group, so a child it left
+  holding the output cannot stall the run, and the run ends as `aborted` before any request.
 - `demo --kind openai` needs `--base-url` (the default URL is Ollama's port).
 - The UI has no built-in workdir: run `demo` once and point the UI's workdir at the temp directory
   it prints (or at any `workdir` from a bench JSON), or at any scratch project.
