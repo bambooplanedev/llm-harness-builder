@@ -31,8 +31,8 @@ fully inside the container from Safety below (see its **terminal** path).
 
 ### Cloud
 
-No GPU: the same commands run on a hosted API, as in the README's
-[Cloud](https://github.com/bambooplanedev/llm-harness-builder#cloud) section. Add these four flags to
+No GPU: the same commands run on a hosted API, as in the
+[Cloud](https://github.com/bambooplanedev/llm-harness-builder/blob/main/docs/configuration.md#cloud) section of the docs. Add these four flags to
 `bench`:
 
     --kind openai --base-url https://openrouter.ai/api/v1 \

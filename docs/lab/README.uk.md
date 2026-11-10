@@ -32,7 +32,7 @@
 ### У хмарі
 
 Без GPU ті самі команди працюють на хмарному API, як у розділі
-[Хмара](https://github.com/bambooplanedev/llm-harness-builder/blob/main/README.uk.md#хмара) в README.
+[Хмара](https://github.com/bambooplanedev/llm-harness-builder/blob/main/docs/configuration.uk.md#хмара) документації.
 Додайте до `bench` ці чотири прапорці:
 
     --kind openai --base-url https://openrouter.ai/api/v1 \

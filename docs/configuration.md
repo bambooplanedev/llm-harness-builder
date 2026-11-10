@@ -199,7 +199,7 @@ public, so a wrong key passes the preflight and shows up as a 401 on the first r
 fails after its 200 (OpenRouter's `finish_reason: "error"`) is a `backend_error` with the provider's
 message, not an empty reply; a 5xx ends the run the same way and is not retried. A 429 is retried
 up to 3 times unless part of the reply has already streamed; one that lasts is a stop, and the run's
-check is skipped (see evolve above).
+check is skipped (see [evolve](cli.md#evolve)).
 `replay --api-key-env` sends the recorded request to a hosted API as it was recorded.
 
 **In the UI.** `serve` reads the variable from the environment it was started in. The form takes a
