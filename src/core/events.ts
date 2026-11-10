@@ -18,7 +18,7 @@ export type HarnessEvent = Base & (
   | { type: 'context_reset'; chars: number }
   | { type: 'final_check'; command: string; passed: boolean; output: string }
   | { type: 'mcp_server_start'; server: string; command: string; args: string[]
-      offered: number; tools: string[]; descriptionChars: number; schemaChars: number }
+      offered: number; tools: string[]; descriptionChars: number; schemaChars: number; instructions?: string }
   | { type: 'knobs_off'; off: KnobOff[] }
   | { type: 'error'; message: string; body?: string; status?: number; moderated?: boolean; midReply?: boolean }
   /** Notes sent after the task (notes.ts): which ones, and the length of their block. */
@@ -43,7 +43,7 @@ export const quitWithoutWork = (e: DoneEvent): boolean => e.reason === 'final' &
 
 /** What one mcp server cost, without the server name: the CLI and the UI put their own prefix in front. */
 export const mcpCounts = (e: McpStartEvent): string =>
-  `${e.offered} offered, ${e.tools.length} tools, ${e.descriptionChars} desc + ${e.schemaChars} schema chars`
+  `${e.offered} offered, ${e.tools.length} tools, ${e.descriptionChars} desc + ${e.schemaChars} schema chars${e.instructions ? ` + ${e.instructions.length} instructions chars` : ''}`
 
 /** The approval call for `loop.untilBash`: once before the run, and before every execution when `tools.approveBash` is on. */
 export const UNTIL_BASH = 'until_bash'

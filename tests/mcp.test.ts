@@ -49,6 +49,18 @@ test('servers info reports what was offered, what survived, and what it costs', 
   } finally { s.close() }
 })
 
+test('instructions are kept only under useInstructions, trimmed, and an empty one is dropped', async () => {
+  const run = async (args: string[], useInstructions?: boolean) => {
+    const s = await startServers({ fs: { ...fake(args).fs, ...useInstructions === undefined ? {} : { useInstructions } } }, await wd())
+    try { return s.servers[0].instructions } finally { s.close() }
+  }
+  expect(await run(['--instructions= Start with find. '], true)).toBe('Start with find.')
+  expect(await run(['--instructions=Start with find.'])).toBeUndefined()
+  expect(await run(['--instructions=Start with find.'], false)).toBeUndefined()
+  expect(await run(['--instructions=  '], true)).toBeUndefined()
+  expect(await run([], true)).toBeUndefined()
+})
+
 test('a name that is already taken is a collision, and the started server is cleaned up', async () => {
   await expect(startServers(fake(), await wd(), { taken: new Set(['echo']) }))
     .rejects.toThrow(/collision.*"echo".*mcp server "fs"/)

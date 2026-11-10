@@ -318,7 +318,7 @@ async function benchOnce(config: HarnessConfig, round: number, timeoutS: number,
           if (e.usage?.reasoningTokens !== undefined) reasoningTokens = (reasoningTokens ?? 0) + e.usage.reasoningTokens
           if (e.usage) { const t = e.usage.promptTokens + e.usage.completionTokens; peakTokens = Math.max(peakTokens ?? 0, t); tokens = (tokens ?? 0) + t }
         }
-        if (e.type === 'mcp_server_start') toolChars += e.descriptionChars + e.schemaChars
+        if (e.type === 'mcp_server_start') toolChars += e.descriptionChars + e.schemaChars + (e.instructions?.length ?? 0)
         if (e.type === 'tool_result') {
           toolCounts[e.name] = (toolCounts[e.name] ?? 0) + 1
           // A final newline ends a line, it does not start one.

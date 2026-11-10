@@ -1,12 +1,14 @@
 // Minimal MCP stdio server for tests. A real child process, not a mock.
 //   --die-after=N   exit(1) instead of answering the (N+1)-th tools/call
 //   --hang          never answer initialize (for the handshake-timeout test)
+//   --instructions=S  answer initialize with instructions S
 // Everything else is selected by the tool NAME the client calls, so one process covers every case.
 import { createInterface } from 'node:readline'
 
 const num = (k, d) => { const a = process.argv.find(x => x.startsWith(`--${k}=`)); return a ? Number(a.split('=')[1]) : d }
 const dieAfter = num('die-after', Infinity)
 const hang = process.argv.includes('--hang')
+const instructions = process.argv.find(x => x.startsWith('--instructions='))?.slice('--instructions='.length)
 
 const TOOLS = [
   { name: 'echo', description: 'Echo text back.', inputSchema: { $schema: 'http://json-schema.org/draft-07/schema#', type: 'object', properties: { text: { type: 'string' } }, required: ['text'] } },
@@ -30,7 +32,7 @@ createInterface({ input: process.stdin }).on('line', line => {
   let m; try { m = JSON.parse(line) } catch { return }
   if (m.method === 'initialize') {
     if (hang) return
-    return ok(m.id, { protocolVersion: '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'fake', version: '1' } })
+    return ok(m.id, { protocolVersion: '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'fake', version: '1' }, ...instructions === undefined ? {} : { instructions } })
   }
   if (m.method === 'notifications/initialized') return
   if (m.method === 'tools/list') return ok(m.id, { tools: TOOLS })

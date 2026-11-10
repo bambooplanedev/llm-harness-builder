@@ -1035,6 +1035,11 @@ names stay flat, with no server prefix; a name that collides with a built-in one
 the first request to the model. A server's `tools: [...]` is an allow-list; absent or empty means
 everything the server offers.
 
+A server may answer `initialize` with `instructions`, its own notes on how to use it. They are
+dropped unless the server has `"useInstructions": true`; then they go after `systemPrompt`, under
+`Instructions from MCP server "<name>":`, one block per server in the order of `mcpServers`. The
+`mcp_server_start` event keeps the text, and `toolChars` counts it.
+
 **Mind the allow-list.** The tool text is the first thing to eat the context window. Against
 `@modelcontextprotocol/server-filesystem@2026.8.31`:
 
