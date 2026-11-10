@@ -1,5 +1,5 @@
 import { NO_THINK_LINE, listsModelsByItself, type HarnessConfig, type RunParams } from './config.js'
-import { mcpApprovalName, UNTIL_BASH, type Ev, type HarnessEvent, type ToolCall, type DoneReason } from './events.js'
+import { mcpApprovalName, UNTIL_BASH, PROMPT_HOOK, type Ev, type HarnessEvent, type ToolCall, type DoneReason } from './events.js'
 import { createBackend, sendRetrying, isStop, BackendError, type Backend, type ChatMessage, type ChatRequest, type Delta, type NormalizedResponse, type Usage } from './backends/index.js'
 import { TOOL_SCHEMAS, READ_FILE_RANGES, runTool } from './tools/index.js'
 import { GUARD_BLOCKED } from './tools/errors.js'
@@ -14,6 +14,7 @@ import { keyRedactor } from './redact.js'
 import { costOf } from './cost.js'
 import { notesBlock } from './notes.js'
 import { knobsOff } from './knobs.js'
+import { runPromptHook, HOOK_TIMEOUT_MS } from './hooks.js'
 
 export type RunOpts = {
   signal?: AbortSignal
@@ -24,23 +25,30 @@ export type RunOpts = {
   retryMs?: number
   /** Seam for tests; defaults to the real stdio client. */
   mcp?: typeof startServers
+  /** Seam for tests; defaults to the real child process. */
+  promptHook?: typeof runPromptHook
+  /** hooks.userPrompt's timeout, for tests; absent = HOOK_TIMEOUT_MS. */
+  hookTimeoutMs?: number
 }
+
+// Claude Code's cap on a hook's context.
+const HOOK_CONTEXT_CAP = 10_000
 
 // loop.freshContext. Appended to the task, not sent as a second user message: no chat template sees two user turns in a row.
 // It does not name the call that looped: that would put the loop back into the new history.
 const FRESH_NOTE = 'Note: an earlier attempt at this task was cleared from this conversation. Files in the project may already have been changed. Look at their current state before editing.'
 
 /** Whether a run of this harness can stop at an approval: exactly the places below that call opts.approve —
- *  an mcp server to start, loop.untilBash before the run, bash under approveBash. The CLI asks this before a
+ *  an mcp server to start, loop.untilBash and hooks.userPrompt before the run, bash under approveBash. The CLI asks this before a
  *  trace exists or a request goes out, so a run nobody can answer is refused instead of left waiting. */
 export const mayAsk = (c: HarnessConfig): boolean =>
-  (c.tools.approveBash && c.tools.enabled.includes('bash')) || c.loop.untilBash !== undefined || Object.keys(c.mcpServers ?? {}).length > 0
+  (c.tools.approveBash && c.tools.enabled.includes('bash')) || c.loop.untilBash !== undefined || c.hooks?.userPrompt !== undefined || Object.keys(c.mcpServers ?? {}).length > 0
 
 export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGenerator<HarnessEvent> {
   const { config, workdir, answerSchema } = params
   // Notes ride on the task itself, so a freshContext reset sends them again with it.
   const block = notesBlock(params.notes ?? [])
-  const task = block ? params.task + '\n\n' + block : params.task
+  let task = block ? params.task + '\n\n' + block : params.task
   const backend = opts.backend ?? createBackend(config.backend)
   // The backend key's value never enters the history from tool or check output, and never reaches an event: that output
   // is cleaned before the history takes it, every event is a cleaned copy, and what goes to the server or to a tool is
@@ -92,6 +100,19 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
     return ok
   }
   if (config.loop.untilBash !== undefined && !(yield* approveUntil())) return
+  // hooks.userPrompt: the same question for the same reason, after untilBash and before any server starts.
+  const hook = config.hooks?.userPrompt
+  if (hook) {
+    if (opts.signal?.aborted) { yield done('aborted'); return }
+    const call: ToolCall = { callId: 'hook0', name: PROMPT_HOOK, args: { command: JSON.stringify([hook.command, ...(hook.args ?? [])]) } }
+    yield ev({ type: 'approval_required', call })
+    const ok = opts.approve ? await opts.approve(call) : false
+    if (opts.signal?.aborted) { yield done('aborted'); return }
+    if (!ok) {
+      yield ev({ type: 'error', message: opts.approve ? 'hooks.userPrompt was not approved' : 'hooks.userPrompt needs approval but no approval handler is available' })
+      yield done('aborted'); return
+    }
+  }
   if (mcpNames.length) {
     try {
       mcp = await (opts.mcp ?? startServers)(config.mcpServers!, workdir, {
@@ -115,6 +136,25 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
     const knobs = knobsOff(config, info, answerSchema), takes = info?.takes ?? {}
     if (knobs.refuse) { yield ev({ type: 'error', message: knobs.refuse }); yield done('backend_error'); return }
     if (knobs.off.length) yield ev({ type: 'knobs_off', off: knobs.off })
+    if (hook) {
+      // Once per run, on the task without notes. Its context goes on `task`, so a freshContext reset sends it again.
+      const r = await (opts.promptHook ?? runPromptHook)(hook, { task: params.task, workdir }, { signal: opts.signal, timeoutMs: opts.hookTimeoutMs ?? HOOK_TIMEOUT_MS })
+      // An abort during the drain after the hook exited is not reported by runPromptHook.
+      const error = opts.signal?.aborted ? 'aborted' : r.error
+      // Redacted first, then cut, so no part of the key is left at the cut. A block or an abort sends nothing.
+      const c = error ? '' : redact.text(r.context ?? '')
+      const sent = c.length > HOOK_CONTEXT_CAP ? c.slice(0, HOOK_CONTEXT_CAP) + `\n[truncated: ${c.length - HOOK_CONTEXT_CAP} more chars]` : c
+      yield ev({
+        type: 'prompt_hook', command: hook.command, args: hook.args ?? [], ms: r.ms, exitCode: r.exitCode, error, chars: sent.length,
+        ...(sent !== c ? { truncated: true } : {}), ...(r.stderr ? { stderr: r.stderr } : {}),
+      })
+      if (error === 'aborted') { yield done('aborted'); return }
+      if (error === 'blocked') {
+        yield ev({ type: 'error', message: `the prompt hook blocked the task${r.reason ? `: ${r.reason}` : ''}` })
+        yield done('aborted'); return
+      }
+      if (sent) task = sent + '\n\n' + task
+    }
     // Anthropic needs a max_tokens: absent from the harness, it is the model's own cap (knobsOff refused when neither is known).
     const maxTokens = config.backend.kind === 'anthropic' ? config.backend.maxTokens ?? info?.maxOutput : config.backend.maxTokens
 

@@ -48,6 +48,8 @@ export const en = {
   'form.familyNone': 'nothing to change, the form already matches it',
   'form.bashEnv': 'bash gets from your environment: {list}',
   'trace.askMcp': 'start mcp server {name}: {cmd}?',
+  'trace.askHook': 'run {cmd} before the task, with the task on stdin, and send its output to the model?',
+  'trace.promptHook': 'prompt hook: {what}',
   'trace.askUntil': 'run {cmd} each time the model says it is done, on files the model has written?',
   'trace.compare': "Set each request of this run against the same-numbered request of another of your runs.",
   'trace.anatomySplit': "Shares are split by characters and scaled to the server's prompt_tokens: approximate per layer, exact in total.",

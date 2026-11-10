@@ -60,7 +60,7 @@ test('demo prints PASS/FAIL per harness', async () => {
   expect(r.stdout).toMatch(/bare\s+FAIL/)
   expect(r.stdout).toMatch(/tuned-nothink\s+PASS/)
   expect(r.stdout).toMatch(/tuned-hermes\s+PASS/)
-  expect(r.stderr).toContain("demo approves everything without asking: the model's commands and the harness files' mcpServers and loop.untilBash, in fresh temp workdirs")
+  expect(r.stderr).toContain("demo approves everything without asking: the model's commands and the harness files' mcpServers, loop.untilBash and hooks.userPrompt, in fresh temp workdirs")
   expect(r.stdout).not.toContain('approves everything')
 }, 60_000)
 
@@ -101,6 +101,18 @@ test('run flags a final answer with zero tool calls', async () => {
   expect(r.status).toBe(0)
   expect(r.stderr).toMatch(/! final after 0 tool calls/)
 }, 30_000)
+
+test('run prints one prompt hook line: the context size, or no context and why', async () => {
+  const wd = await tmp('lhb-cli-')
+  const fixture = join(ROOT, 'tests', 'fixtures', 'prompt-hook.mjs')
+  for (const [mode, line] of [['plain', 'prompt hook: 8 chars of context'], ['fail', 'prompt hook: no context (exit 1)'], ['json-empty', 'prompt hook: no context (empty)']]) {
+    const h = join(wd, `${mode}.json`)
+    writeFileSync(h, JSON.stringify({ ...JSON.parse(readFileSync(harness('bare'), 'utf8')), hooks: { userPrompt: { command: process.execPath, args: [fixture, mode] } } }))
+    const r = cli(['run', h, '--workdir', wd, '--yes', 'x'], { LHB_FAKE_BACKEND: fakeFile(wd, [{ content: 'fin' }]) })
+    expect(r.status).toBe(0)
+    expect(r.stderr).toContain(line + '\n')
+  }
+}, 60_000)
 
 test('the tool_call line shows control and format characters of the arguments escaped, so a command cannot redraw the terminal', async () => {
   const wd = await tmp('lhb-cli-')
@@ -235,7 +247,7 @@ test('bench without files uses ./harnesses in demo order, round-robin', async ()
   const j = JSON.parse(await readFile(out, 'utf8'))
   expect(j.harnesses.map((h: any) => h.name)).toEqual(['bare', 'tuned-nothink', 'tuned-hermes'])
   expect(j.harnesses.flatMap((h: any) => h.runs.map((x: any) => x.reason))).toEqual(['final', 'final', 'final'])
-  expect(r.stderr).toContain("bench approves everything without asking: the model's commands and the harness files' mcpServers and loop.untilBash, in fresh temp workdirs")
+  expect(r.stderr).toContain("bench approves everything without asking: the model's commands and the harness files' mcpServers, loop.untilBash and hooks.userPrompt, in fresh temp workdirs")
   expect(r.stdout).not.toContain('approves everything')
 }, 90_000)
 

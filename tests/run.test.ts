@@ -1,9 +1,10 @@
 import { test, expect, vi } from 'vitest'
-import { writeFile, access } from 'node:fs/promises'
+import { writeFile, access, rm } from 'node:fs/promises'
+import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 import { runAgent, mayAsk } from '../src/core/run.js'
 import type { HarnessConfig, RunParams } from '../src/core/config.js'
-import type { HarnessEvent } from '../src/core/events.js'
+import { approvalPrompt, type HarnessEvent } from '../src/core/events.js'
 import { BackendError, sendRetrying } from '../src/core/backends/types.js'
 import { READ_FILE_RANGES } from '../src/core/tools/index.js'
 import { renderTools } from '../src/core/prompts.js'
@@ -1233,4 +1234,143 @@ test('readRanges on: {path}, {path, start: 1} and {path} are one call for maxRep
   const be = Fake([rd({}), rd({ start: 1 }), rd({}), { content: 'fin' }])
   const ev = await collect({ config: rr(true, { loop: { maxTurns: 10, maxRepeats: 1 } }), task: 'do', workdir: await wd() }, { backend: be })
   expect(last(ev).reason).toBe('repeat_loop')
+})
+
+const HOOK = fileURLToPath(new URL('./fixtures/prompt-hook.mjs', import.meta.url))
+const hooked = (mode: string, over: Partial<HarnessConfig> = {}, extra: string[] = []) =>
+  base({ hooks: { userPrompt: { command: process.execPath, args: [HOOK, mode, ...extra] } }, ...over })
+const hookEv = (ev: HarnessEvent[]) => ev.find(e => e.type === 'prompt_hook') as Extract<HarnessEvent, { type: 'prompt_hook' }>
+const firstUser = (be: { requests: { messages: { content: string }[] }[] }) => be.requests[0].messages[1].content
+
+test('prompt hook: the first user message is CONTEXT, blank line, TASK, blank line, NOTES', async () => {
+  const notes = [nt('a', 'one')]
+  for (const [mode, ctx] of [['plain', 'ctx line'], ['json-ctx', 'from json']]) {
+    const be = Fake([{ content: 'done' }])
+    const ev = await collect({ config: hooked(mode), task: 'TASK', workdir: await wd(), notes }, { backend: be, ...yes })
+    expect(firstUser(be)).toBe(ctx + '\n\nTASK\n\n' + notesBlock(notes))
+    expect(hookEv(ev)).toMatchObject({ command: process.execPath, args: [HOOK, mode], exitCode: 0, chars: ctx.length })
+  }
+})
+
+test('prompt hook: stdin prompt is the task without notes', async () => {
+  const be = Fake([{ content: 'done' }])
+  await collect({ config: hooked('echo-stdin'), task: 'TASK', workdir: await wd(), notes: [nt('a', 'one')] }, { backend: be, ...yes })
+  expect(JSON.parse(firstUser(be).split('\n')[0]).prompt).toBe('TASK')
+})
+
+test('prompt hook: failures leave the first message as today', async () => {
+  const notes = [nt('a', 'one')]
+  const plain = Fake([{ content: 'done' }])
+  await collect({ config: base(), task: 'TASK', workdir: await wd(), notes }, { backend: plain })
+  const cases: [HarnessConfig, object][] = [
+    [hooked('fail'), { exitCode: 1 }],
+    [hooked('hang'), { error: 'timeout' }],
+    [base({ hooks: { userPrompt: { command: '/nonexistent' } } }), { error: 'spawn' }],
+  ]
+  for (const [config, why] of cases) {
+    const be = Fake([{ content: 'done' }])
+    const ev = await collect({ config, task: 'TASK', workdir: await wd(), notes }, { backend: be, ...yes, hookTimeoutMs: 300 })
+    expect(firstUser(be)).toBe(firstUser(plain))
+    expect(hookEv(ev)).toMatchObject({ chars: 0, ...why })
+    expect(last(ev).reason).toBe('final')
+  }
+})
+
+test('prompt hook: a block ends the run before any request', async () => {
+  for (const [mode, reason] of [['exit2', 'no secrets please'], ['block', 'R']]) {
+    const be = Fake([{ content: 'done' }])
+    const ev = await collect({ config: hooked(mode), task: 'TASK', workdir: await wd() }, { backend: be, ...yes })
+    const err = ev.find(e => e.type === 'error') as Extract<HarnessEvent, { type: 'error' }>
+    expect(err.message).toContain('the prompt hook blocked the task')
+    expect(err.message).toContain(reason)
+    expect(hookEv(ev)).toMatchObject({ error: 'blocked', chars: 0, exitCode: mode === 'exit2' ? 2 : 0 })
+    expect(types(ev).slice(-3)).toEqual(['prompt_hook', 'error', 'done'])
+    expect(last(ev).reason).toBe('aborted')
+    expect(be.requests).toHaveLength(0)
+  }
+})
+
+test('prompt hook: key at the cut', () => withKey(async () => {
+  const be = Fake([{ content: 'done' }])
+  const context = 'x'.repeat(9990) + KEY + 'tail'
+  const ev = await collect({ config: keyed({ hooks: { userPrompt: { command: 'x' } } }), task: 'TASK', workdir: await wd() },
+    { backend: be, ...yes, promptHook: async () => ({ ms: 1, exitCode: 0, context }) })
+  const redacted = 'x'.repeat(9990) + MARK + 'tail'
+  const sent = firstUser(be)
+  expect(sent).toBe('x'.repeat(9990) + MARK.slice(0, 10) + `\n[truncated: ${redacted.length - 10_000} more chars]` + '\n\nTASK')
+  for (let i = 0; i + 9 <= KEY.length; i++) expect(sent).not.toContain(KEY.slice(i, i + 9))
+  expect(hookEv(ev)).toMatchObject({ truncated: true })
+}))
+
+test('prompt hook: stderr never reaches the model', async () => {
+  const be = Fake([{ content: 'done' }])
+  const ev = await collect({ config: hooked('stderr'), task: 'TASK', workdir: await wd() }, { backend: be, ...yes })
+  expect(JSON.stringify(be.requests)).not.toContain('MARKER-ERR')
+  expect(hookEv(ev).stderr).toContain('MARKER-ERR')
+  expect(firstUser(be)).toBe('ok\n\nTASK')
+})
+
+test('prompt hook: approval is asked with the hook text, refusal starts nothing', async () => {
+  const dir = await wd(), mark = join(dir, 'ran')
+  const config = hooked('plain', { mcpServers: { fs: { command: 'npx', args: ['.'] } }, loop: { maxTurns: 4, untilBash: 'true' } }, [mark])
+  const be = Fake([{ content: 'done' }])
+  const ev = await collect({ config, task: 'TASK', workdir: dir }, { backend: be, mcp: async () => fakeMcp(), ...yes })
+  expect(asked(ev).map(c => c.name)).toEqual(['mcp:fs', 'until_bash', 'prompt_hook'])
+  const call = asked(ev)[2]
+  expect(call.args).toEqual({ command: JSON.stringify([process.execPath, HOOK, 'plain', mark]) })
+  expect(approvalPrompt(call).startsWith('run before the task')).toBe(true)
+  await rm(mark)
+
+  let started = 0
+  const be2 = Fake([{ content: 'done' }])
+  const ev2 = await collect({ config, task: 'TASK', workdir: dir }, {
+    backend: be2, mcp: async () => { started++; return fakeMcp() }, approve: async (c: any) => c.name !== 'prompt_hook',
+  })
+  expect(started).toBe(0)
+  expect(types(ev2)).not.toContain('mcp_server_start'); expect(types(ev2)).not.toContain('llm_request')
+  expect(ev2.some(e => e.type === 'error' && e.message.includes('hooks.userPrompt was not approved'))).toBe(true)
+  await expect(access(mark)).rejects.toThrow()
+  expect(last(ev2).reason).toBe('aborted')
+})
+
+test('prompt hook: abort while the hook runs', async () => {
+  const ac = new AbortController(); setTimeout(() => ac.abort(), 100)
+  let closed = false
+  const ev = await collect({ config: hooked('hang', { mcpServers: { fs: { command: 'npx', args: ['.'] } } }), task: 'TASK', workdir: await wd() }, {
+    backend: Fake([{ content: 'done' }]), mcp: async () => fakeMcp({ close: () => { closed = true } }), ...yes, signal: ac.signal,
+  })
+  expect(last(ev).reason).toBe('aborted')
+  expect(types(ev)).not.toContain('llm_request')
+  expect(hookEv(ev)).toMatchObject({ error: 'aborted', chars: 0 })
+  expect(types(ev).slice(-2)).toEqual(['prompt_hook', 'done'])
+  expect(closed).toBe(true)
+})
+
+test('prompt hook: an abort that lands after the hook returned is aborted, its context is not sent', async () => {
+  const ac = new AbortController()
+  const be = Fake([{ content: 'done' }])
+  const ev = await collect({ config: base({ hooks: { userPrompt: { command: 'x' } } }), task: 'TASK', workdir: await wd() },
+    { backend: be, ...yes, signal: ac.signal, promptHook: async () => { ac.abort(); return { ms: 1, exitCode: 0, context: 'CTX' } } })
+  expect(hookEv(ev)).toMatchObject({ error: 'aborted', exitCode: 0, chars: 0 })
+  expect(types(ev).slice(-2)).toEqual(['prompt_hook', 'done'])
+  expect(last(ev).reason).toBe('aborted')
+  expect(be.requests).toHaveLength(0)
+})
+
+test('prompt hook: freshContext resends the context, the hook runs once', async () => {
+  let calls = 0
+  const be = Fake([readA, readA, readA, readA, readA, { content: 'never reached' }])
+  await collect({ config: base({ hooks: { userPrompt: { command: 'x' } }, loop: { maxTurns: 10, maxRepeats: 1, freshContext: 1 } }), task: 'do', workdir: await wd() },
+    { backend: be, ...yes, promptHook: async () => { calls++; return { ms: 1, exitCode: 0, context: 'CTX' } } })
+  const after = be.requests[2].messages[1].content
+  expect(after.startsWith('CTX\n\ndo\n\nNote: an earlier attempt')).toBe(true)
+  expect(after.endsWith('Look at their current state before editing.')).toBe(true)
+  expect(calls).toBe(1)
+})
+
+test('prompt hook: event order', async () => {
+  const ev = await collect({ config: hooked('plain'), task: 'TASK', workdir: await wd() }, { backend: Fake([{ content: 'done' }]), ...yes })
+  expect(types(ev).indexOf('prompt_hook')).toBeGreaterThanOrEqual(0)
+  expect(types(ev).indexOf('prompt_hook')).toBeLessThan(types(ev).indexOf('llm_request'))
+  expect(mayAsk(base({ tools: { enabled: [], approveBash: false }, hooks: { userPrompt: { command: 'x' } } }))).toBe(true)
 })

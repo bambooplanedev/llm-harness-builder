@@ -23,6 +23,8 @@ export type HarnessEvent = Base & (
   | { type: 'error'; message: string; body?: string; status?: number; moderated?: boolean; midReply?: boolean }
   /** Notes sent after the task (notes.ts): which ones, and the length of their block. */
   | { type: 'notes_loaded'; ids: string[]; chars: number }
+  /** hooks.userPrompt (hooks.ts), before the first request. `chars`: the context that reached the model, 0 when none. */
+  | { type: 'prompt_hook'; command: string; args: string[]; ms: number; exitCode?: number; error?: 'spawn' | 'timeout' | 'aborted' | 'blocked'; chars: number; truncated?: boolean; stderr?: string }
   /** The call after the run that writes notes (notes-run.ts): what it added, or why nothing. Not a turn. */
   | { type: 'note_written'; notes: { id: string; text: string }[]; usage?: Usage; costUsd?: number; error?: string }
   /** A proxy run only: a side call of the agent (a title, a summary) recorded beside the turn, or a compaction turn. */
@@ -47,6 +49,8 @@ export const mcpCounts = (e: McpStartEvent): string =>
 
 /** The approval call for `loop.untilBash`: once before the run, and before every execution when `tools.approveBash` is on. */
 export const UNTIL_BASH = 'until_bash'
+/** The approval call for `hooks.userPrompt`: once before the run. */
+export const PROMPT_HOOK = 'prompt_hook'
 
 /** Approval calls that start an mcp server are named `mcp:<server>`; run.ts writes the name, the CLI and the UI read it back. */
 const MCP_PREFIX = 'mcp:'
@@ -85,6 +89,7 @@ export function approvalPrompt(call: ToolCall): string {
   const command = showable(JSON.stringify(String(call.args.command ?? '')))
   const server = mcpApprovalServer(call.name)
   if (server !== null) return `start mcp server ${showable(JSON.stringify(server))}: ${command}`
+  if (call.name === PROMPT_HOOK) return `run before the task, with the task on stdin, its output sent to the model: ${command}`
   if (call.name === UNTIL_BASH) return `run each time the model says it is done, on files the model has written: ${command}`
   return `run bash: ${command}`
 }

@@ -126,7 +126,8 @@ async function loadUnasked(names: string[]) {
     try {
       const c = await api.harness(n)
       runsUnasked.value[n] = [...Object.entries(c.mcpServers ?? {}).map(([k, m]) => `mcpServers.${k}: ${[m.command, ...m.args ?? []].join(' ')}`),
-        ...c.loop?.untilBash ? [`loop.untilBash: ${c.loop.untilBash}`] : []]
+        ...c.loop?.untilBash ? [`loop.untilBash: ${c.loop.untilBash}`] : [],
+        ...c.hooks?.userPrompt ? [`hooks.userPrompt: ${[c.hooks.userPrompt.command, ...c.hooks.userPrompt.args ?? []].join(' ')}`] : []]
     } catch (e) { error.value = (e as Error).message }
   }
 }

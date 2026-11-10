@@ -200,6 +200,24 @@ test('notes_loaded and note_written render in the trace', async () => {
   expect(html).toContain('note not written: reply is not JSON')
 })
 
+test('a prompt_hook approval asks about the hook, not bash, and stops being clickable once a later event exists', async () => {
+  const ap: HarnessEvent = { seq: 0, turn: 0, ts: 0, type: 'approval_required', call: { callId: 'h1', name: 'prompt_hook', args: { command: 'node ctx.js' } } }
+  const html = await render({ events: [ap] })
+  expect(html).toContain('before the task, with the task on stdin')
+  expect(html).toContain('node ctx.js')
+  expect(html).not.toContain('run bash')
+  expect(html).toContain('<button>Run</button>')
+  const later = await render({ events: [ap, { seq: 1, turn: 0, ts: 0, type: 'llm_request', payload: {} }] })
+  expect(later).not.toContain('<button>Run</button>')
+})
+
+test('a prompt_hook event renders its chars or why there is no context', async () => {
+  const b = { turn: 0, ts: 0, type: 'prompt_hook', command: 'c', args: [], ms: 1 } as const
+  const html = await render({ events: [{ ...b, seq: 0, chars: 12 }, { ...b, seq: 1, chars: 0, error: 'timeout' }] })
+  expect(html).toContain('prompt hook: 12 chars of context')
+  expect(html).toContain('prompt hook: no context (timeout)')
+})
+
 const reqEv = (seq: number, turn: number, payload: unknown): HarnessEvent => ({ seq, turn, ts: seq, type: 'llm_request', payload })
 const body = (system: string, model = 'm1') => ({ model, messages: [{ role: 'system', content: system }, { role: 'user', content: 'go' }] })
 const inspector = (html: string, turn: number) => html.split('<div class="turn"').filter(s => s.includes(`turn ${turn} —`))[0] ?? ''

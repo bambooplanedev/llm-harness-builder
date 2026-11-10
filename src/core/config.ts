@@ -1,3 +1,4 @@
+import { isAbsolute } from 'node:path'
 import { isShowable } from './events.js'
 import type { Note } from './notes.js'
 
@@ -111,6 +112,9 @@ export const REASONING_EFFORTS: ReasoningEffort[] = ['low', 'medium', 'high']
 /** useInstructions: the server's `instructions` from initialize go to the end of the system prompt, under its name. Off when absent. */
 export type McpServerConfig = { command: string; args?: string[]; tools?: string[]; useInstructions?: boolean }
 
+/** A command run before the first model request; see the design in docs. A bare name is looked up on PATH, a path must be absolute. */
+export type PromptHookConfig = { command: string; args?: string[] }
+
 export type HarnessConfig = {
   name: string
   /** One line on what the harness is for; a label, so a diff ignores it. */
@@ -123,6 +127,7 @@ export type HarnessConfig = {
   context?: { maxToolOutputChars?: number; budgetTokens?: number }
   loop: { maxTurns: number; maxRepeats?: number; repeatTemperature?: number; repeatThinkTokens?: number; freshContext?: number; untilBash?: string }
   mcpServers?: Record<string, McpServerConfig>
+  hooks?: { userPrompt?: PromptHookConfig }
   /** Notes from earlier runs; see src/core/notes.ts. Absent = off. No path or command in it, on purpose. */
   notes?: { enabled: boolean; maxTokens: number }
 }
@@ -137,15 +142,17 @@ export const sendsAnswerSchema = (c: HarnessConfig): boolean =>
 
 // A misspelt key would be silently off, and every optional knob is off when absent. '' is the top level.
 const KEYS: Record<string, string[]> = {
-  '': ['name', 'description', 'backend', 'systemPrompt', 'tools', 'toolCalls', 'context', 'loop', 'mcpServers', 'notes'],
+  '': ['name', 'description', 'backend', 'systemPrompt', 'tools', 'toolCalls', 'context', 'loop', 'mcpServers', 'hooks', 'notes'],
   backend: ['kind', 'baseUrl', 'model', 'numCtx', 'maxTokens', 'think', 'reasoningEffort', 'temperature', 'apiKeyEnv', 'pricePerMTok'],
   tools: ['enabled', 'approveBash', 'requireReadBeforeEdit', 'readRanges', 'explainEditMiss', 'editMissEscalation', 'bashEnv', 'readMaxBytes', 'bashMaxBytes', 'bashTimeoutS'],
   toolCalls: ['mode', 'format', 'enforceSchema', 'promptedTemplate', 'parseErrorHint'],
   context: ['maxToolOutputChars', 'budgetTokens'],
   loop: ['maxTurns', 'maxRepeats', 'repeatTemperature', 'repeatThinkTokens', 'freshContext', 'untilBash'],
+  hooks: ['userPrompt'],
   notes: ['enabled', 'maxTokens'],
 }
 const MCP_SERVER_KEYS = ['command', 'args', 'tools', 'useInstructions']
+const HOOK_KEYS = ['command', 'args']
 const PRICE_KEYS = ['input', 'output', 'cacheRead', 'cacheWrite']
 /** The thinking switch `loop.repeatThinkTokens` flips: a line of its own, which is how the qwen3 family writes it. */
 export const NO_THINK_LINE = /^\/no_think$/m
@@ -264,6 +271,20 @@ export function validateConfig(c: unknown): string[] {
       if (v.args !== undefined && !strs(v.args)) e.push(`mcpServers.${k}.args must be an array of strings`)
       if (v.tools !== undefined && !strs(v.tools)) e.push(`mcpServers.${k}.tools must be an array of strings`)
       if (v.useInstructions !== undefined && typeof v.useInstructions !== 'boolean') e.push(`mcpServers.${k}.useInstructions must be a boolean`)
+    }
+  }
+  const h = c.hooks
+  if (h !== undefined) {
+    if (!isObj(h) || Array.isArray(h)) e.push('hooks must be an object')
+    else if (h.userPrompt !== undefined) {
+      const u = h.userPrompt
+      if (!isObj(u) || Array.isArray(u)) e.push('hooks.userPrompt must be an object')
+      else {
+        unknown(u, HOOK_KEYS, 'hooks.userPrompt.')
+        if (typeof u.command !== 'string' || !u.command) e.push('hooks.userPrompt.command must be a non-empty string')
+        else if (u.command.includes('/') && !isAbsolute(u.command)) e.push('hooks.userPrompt.command must be an absolute path or a bare name on PATH, not relative to the workdir')
+        if (u.args !== undefined && !(Array.isArray(u.args) && u.args.every((s: unknown) => typeof s === 'string'))) e.push('hooks.userPrompt.args must be an array of strings')
+      }
     }
   }
   return e
