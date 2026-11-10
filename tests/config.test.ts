@@ -461,3 +461,16 @@ test('tools.readRanges is optional and must be boolean', () => {
   bad.tools.readRanges = 'yes'
   expect(validateConfig(bad)).toContain('tools.readRanges must be boolean')
 })
+
+test('hooks.userPrompt: valid forms pass, every bad one is named', () => {
+  const ok = (h: unknown) => validateConfig({ ...structuredClone(validConfig), hooks: h })
+  expect(ok({ userPrompt: { command: 'wiki', args: ['hint', '--claude-hook'] } })).toEqual([])
+  expect(ok({ userPrompt: { command: '/abs/hook' } })).toEqual([])
+  expect(ok({})).toEqual([])
+  expect(ok({ userPrompt: { command: '' } })).toContain('hooks.userPrompt.command must be a non-empty string')
+  expect(ok({ userPrompt: { command: 'x', args: [1] } })).toContain('hooks.userPrompt.args must be an array of strings')
+  expect(ok({ userPrompt: { command: '.claude/hooks/h.sh' } })).toContain('hooks.userPrompt.command must be an absolute path or a bare name on PATH, not relative to the workdir')
+  expect(ok({ userPrompt: { command: 'x', shell: true } })).toContain('hooks.userPrompt.shell is not a known key')
+  expect(ok({ preTool: {} })).toContain('hooks.preTool is not a known key')
+  expect(ok([])).toContain('hooks must be an object')
+})
