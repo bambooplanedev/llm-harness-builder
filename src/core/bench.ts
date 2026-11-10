@@ -62,7 +62,7 @@ export type BenchFile = { file: string; date: string; model: string[]; complete:
 /** The run a `bench` process is executing right now, read from its still-unrenamed runs/<id>.jsonl.part. */
 export type ActiveTrace = { id: string; harness: string; round: number; started: number; events: HarnessEvent[] }
 
-/** demo and bench pass yes: true — that approves the harness files' mcpServers and loop.untilBash too, not only the model's commands. The Bench page shows the same words. */
+/** demo and bench pass yes: true — that approves the harness files' mcpServers, loop.untilBash and hooks.userPrompt too, not only the model's commands. The Bench page shows the same words. */
 export const autoApproves = (cmd: 'demo' | 'bench' | 'evolve') => `${cmd} approves everything without asking: the model's commands and the harness files' mcpServers, loop.untilBash and hooks.userPrompt, in fresh temp workdirs`
 
 /** The tasks `bench` runs and the largest size of each (0 = no sizes), for the page: tasks.ts reads files and cannot reach the browser. A test keeps the two equal. */

@@ -1167,7 +1167,7 @@ What it prints:
   context. An object without it adds nothing. `"decision": "block"` blocks (below).
 - Exit 0 and anything else: the trimmed stdout is the context.
 - Exit 2, or exit 0 with `"decision": "block"`: the run ends as `aborted`, with the error `the prompt
-  hook blocked the task` and the hook's `reason` (or its stderr) after it. No request is sent, so a
+  hook blocked the task` and the hook's `reason` (or its stderr) after it. The task is never sent to the backend, so a
   guard hook does not let a task go to a cloud backend. In `bench` that is a FAIL with that reason.
 - Any other exit code, a spawn error, the 30 s timeout or an empty output: no context, and the run
   goes on with the task as it is. The trace says why.
@@ -1177,7 +1177,7 @@ more chars]` line after the cut. It becomes one user message, `<context>`, a bla
 then the notes as before. A `loop.freshContext` reset sends it again without running the hook again.
 Stdout is read up to 1 MB and stderr up to its last 8 KB; stderr goes into the `prompt_hook` event
 and never to the model. The event comes before the first request, also when the hook blocked or was
-aborted. Ctrl-C and abort kill the hook's whole process group.
+aborted while it ran. Ctrl-C and abort kill the hook's whole process group.
 
 The hook asks for approval once, like `loop.untilBash`: after it and before any MCP server starts.
 `run` without `--yes` shows the command and the line `run before the task, with the task on stdin,
