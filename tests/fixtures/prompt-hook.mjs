@@ -27,6 +27,13 @@ switch (mode) {
     hang()
     break
   }
+  case 'background': {
+    const g = spawn('sleep', ['30'], { stdio: ['ignore', 'inherit', 'ignore'], detached: false })
+    g.unref()
+    process.stderr.write(`${g.pid}\n`)
+    out('ctx', () => process.exit(0))
+    break
+  }
   case 'no-read': process.exit(0)
   case 'flood': { const mb = 'x'.repeat(1 << 20); for (let i = 0; i < 50; i++) out(mb); break }
   case 'stderr': out('ok'); process.stderr.write('MARKER-ERR\n'); break

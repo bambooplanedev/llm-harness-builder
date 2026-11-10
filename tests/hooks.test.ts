@@ -2,6 +2,7 @@ import { test, expect } from 'vitest'
 import { fileURLToPath } from 'node:url'
 import { tmp } from './helpers.js'
 import { runPromptHook } from '../src/core/hooks.js'
+import { killTracked } from '../src/core/procs.js'
 
 const FIXTURE = fileURLToPath(new URL('./fixtures/prompt-hook.mjs', import.meta.url))
 const hook = (mode: string) => ({ command: process.execPath, args: [FIXTURE, mode] })
@@ -78,6 +79,21 @@ test('grandchild holding stdout', async () => {
   // SIGKILL is immediate, but the orphan is reaped by init a moment later.
   for (let i = 0; i < 50; i++) { try { process.kill(grandPid, 0) } catch { break } await new Promise(res => setTimeout(res, 20)) }
   expect(() => process.kill(grandPid, 0)).toThrow()
+})
+
+test('a hook that exits leaving a background child holding stdout settles at once, and the child stays tracked', async () => {
+  const t0 = Date.now()
+  const r = await run('background')
+  const grandPid = Number(r.stderr!.trim().split('\n')[0])
+  try {
+    expect(Date.now() - t0).toBeLessThan(1000)
+    expect(r).toMatchObject({ exitCode: 0, context: 'ctx' })
+    expect(r.error).toBeUndefined()
+    expect(() => process.kill(grandPid, 0)).not.toThrow()
+    await killTracked()
+    for (let i = 0; i < 50; i++) { try { process.kill(grandPid, 0) } catch { break } await new Promise(res => setTimeout(res, 20)) }
+    expect(() => process.kill(grandPid, 0)).toThrow()
+  } finally { try { process.kill(grandPid, 'SIGKILL') } catch {} }
 })
 
 test('exits without reading 2 MB', async () => {

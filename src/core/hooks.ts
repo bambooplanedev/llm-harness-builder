@@ -11,7 +11,9 @@ import { childEnv } from './tools/env.js'
 export const HOOK_TIMEOUT_MS = 30_000
 const READ_CAP = 1 << 20          // stdout, as bash's bashMaxBytes default
 const STDERR_TAIL = 8 << 10       // as MCP's
-const DRAIN_MS = 200              // after exit: how long to wait for what is still in the pipes
+// After exit: how long to wait for what is still in the pipes. Trades up to 200 ms per run whose hook leaves a
+// background child holding stdout, against losing output Node had not read yet when `exit` fired.
+const DRAIN_MS = 200
 
 export type PromptHookResult = {
   ms: number
@@ -74,7 +76,7 @@ export function runPromptHook(
       settled = true
       clearTimeout(timer); clearTimeout(drain)
       opts.signal?.removeEventListener('abort', onAbort)
-      if (pid) untrack(pid)
+      if (pid) untrack(pid, { keepIfAlive: !killed })  // as bash: a background child left behind dies with the run
       child.stdout.destroy(); child.stderr.destroy()     // a grandchild holding the pipes must not keep the loop alive
       resolve({ ms: Date.now() - t0, ...o, ...(stderr ? { stderr } : {}), ...(capped ? { readCapped: true } : {}) })
     }
