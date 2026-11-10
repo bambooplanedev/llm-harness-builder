@@ -110,7 +110,7 @@ Limits of [llm-harness-builder](../README.md) and of what its [findings](finding
   format, so a model that spent its whole window inside `<think>` gets the hint and a retry rather
   than having its thoughts accepted as the answer. If the cut-off text is in `content` and longer
   than the marker, the marker goes back instead of it (see the correction under
-  [MCP](../README.md#mcp)).
+  [MCP](mcp-and-hooks.md#mcp)).
 - That does not make a truncation recoverable in general. When the window was already full before
   the response — the `backend_error×1` of `rule-none` is one: a 207-character reply to an 8123-token
   prompt — the retry is still a 400. So are the two `backend_error` of `tuned` under [Explaining an
@@ -126,7 +126,7 @@ Limits of [llm-harness-builder](../README.md) and of what its [findings](finding
   close to the cap that in 2 of 9 runs the first try was cut off at 1024. `bare` has no cap because
   it thinks: the largest finished response of each of its two recorded runs was 592 and 1317 tokens
   (the median of all eight is 493), and another `bare` run has one of 3046. There a runaway costs
-  169 to 363 s in the four recorded (the 295 s under [MCP](../README.md#mcp) is `mcp-on`'s) before
+  169 to 363 s in the four recorded (the 295 s under [MCP](mcp-and-hooks.md#mcp) is `mcp-on`'s) before
   anything can react, and a second one after the clipped retry makes a ten-minute run that ends as
   `parse_failed`, or as `aborted` if the bench timeout comes first. The Bonsai 2 and `bare` figures
   above are from those traces as well, the 295 s excepted. A cap set below what a model needs to

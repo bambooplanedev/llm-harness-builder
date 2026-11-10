@@ -149,7 +149,8 @@ test('each doc twin has the same headings level by level, and its first line lin
   const { readFileSync } = await import('node:fs')
   const read = (f: string) => readFileSync(new URL(`../${f}`, import.meta.url), 'utf8')
   const levels = (f: string) => read(f).split('\n').filter(l => /^#+ /.test(l)).map(l => l.match(/^#+/)![0])
-  for (const [a, b] of [['README.md', 'README.uk.md'], ['docs/honest-notes.md', 'docs/honest-notes.uk.md'], ['docs/curator.md', 'docs/curator.uk.md']]) {
+  for (const [a, b] of [['README.md', 'README.uk.md'], ['docs/honest-notes.md', 'docs/honest-notes.uk.md'], ['docs/curator.md', 'docs/curator.uk.md'],
+    ['docs/cli.md', 'docs/cli.uk.md'], ['docs/configuration.md', 'docs/configuration.uk.md'], ['docs/mcp-and-hooks.md', 'docs/mcp-and-hooks.uk.md'], ['docs/recording.md', 'docs/recording.uk.md'], ['docs/web-ui.md', 'docs/web-ui.uk.md'], ['docs/install.md', 'docs/install.uk.md'], ['docs/development.md', 'docs/development.uk.md']]) {
     expect(levels(b), b).toEqual(levels(a))
     expect(read(a).split('\n')[0]).toContain(`(${b.split('/').at(-1)})`)
     expect(read(b).split('\n')[0]).toContain(`(${a.split('/').at(-1)})`)
