@@ -60,7 +60,7 @@ test('demo prints PASS/FAIL per harness', async () => {
   expect(r.stdout).toMatch(/bare\s+FAIL/)
   expect(r.stdout).toMatch(/tuned-nothink\s+PASS/)
   expect(r.stdout).toMatch(/tuned-hermes\s+PASS/)
-  expect(r.stderr).toContain("demo approves everything without asking: the model's commands and the harness files' mcpServers and loop.untilBash, in fresh temp workdirs")
+  expect(r.stderr).toContain("demo approves everything without asking: the model's commands and the harness files' mcpServers, loop.untilBash and hooks.userPrompt, in fresh temp workdirs")
   expect(r.stdout).not.toContain('approves everything')
 }, 60_000)
 
@@ -247,7 +247,7 @@ test('bench without files uses ./harnesses in demo order, round-robin', async ()
   const j = JSON.parse(await readFile(out, 'utf8'))
   expect(j.harnesses.map((h: any) => h.name)).toEqual(['bare', 'tuned-nothink', 'tuned-hermes'])
   expect(j.harnesses.flatMap((h: any) => h.runs.map((x: any) => x.reason))).toEqual(['final', 'final', 'final'])
-  expect(r.stderr).toContain("bench approves everything without asking: the model's commands and the harness files' mcpServers and loop.untilBash, in fresh temp workdirs")
+  expect(r.stderr).toContain("bench approves everything without asking: the model's commands and the harness files' mcpServers, loop.untilBash and hooks.userPrompt, in fresh temp workdirs")
   expect(r.stdout).not.toContain('approves everything')
 }, 90_000)
 

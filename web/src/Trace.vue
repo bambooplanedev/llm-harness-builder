@@ -5,7 +5,7 @@ import ReqDiff from './ReqDiff.vue'
 import Sources from './Sources.vue'
 import { t, tn, T } from './i18n'
 import type { Delta, HarnessEvent } from './api'
-import { mcpApprovalServer, mcpCounts, UNTIL_BASH } from '../../src/core/events'
+import { mcpApprovalServer, mcpCounts, UNTIL_BASH, PROMPT_HOOK } from '../../src/core/events'
 import { analyzeTrace, summaryLine } from '../../src/core/analyze'
 import { diffsBySeq, versusBySeq, sourcesOf } from './reqDiffs'
 import { lineLabels, type Source } from '../../src/core/sources'
@@ -25,6 +25,9 @@ const shownEvents = computed(() => film.value ? filmDeep(props.events, names.val
 /** A live approval shows the command exactly as it will run, film mode or not: you approve what executes. */
 const command = (seq: number) => (props.events.find(e => e.seq === seq) as Extract<HarnessEvent, { type: 'approval_required' }>).call.args.command
 
+/** The same words as the CLI line (cli.ts describe). */
+const hookWhat = (e: Extract<HarnessEvent, { type: 'prompt_hook' }>) => e.chars ? `${e.chars} chars of context`
+  : `no context (${e.error === 'spawn' ? 'spawn failed' : e.error ?? (e.exitCode ? `exit ${e.exitCode}` : 'empty')})`
 const turns = computed(() => {
   const map = new Map<number, HarnessEvent[]>()
   for (const e of shownEvents.value) { if (!map.has(e.turn)) map.set(e.turn, []); map.get(e.turn)!.push(e) }
@@ -40,7 +43,7 @@ const answered = computed(() => {
   }
   // Nor does an untilBash approval. The run waits on it, so any later event means it was answered.
   const lastSeq = props.events.length ? props.events[props.events.length - 1].seq : -1
-  for (const e of props.events) if (e.type === 'approval_required' && e.call.name === UNTIL_BASH && e.seq < lastSeq) ids.add(e.call.callId)
+  for (const e of props.events) if (e.type === 'approval_required' && (e.call.name === UNTIL_BASH || e.call.name === PROMPT_HOOK) && e.seq < lastSeq) ids.add(e.call.callId)
   return ids
 })
 const analysis = computed(() => analyzeTrace(shownEvents.value))
@@ -139,6 +142,7 @@ const liveTok = computed(() => Math.ceil(liveText.value.length / 4))
       <div v-else-if="e.type === 'approval_required' && !answered.has(e.call.callId)" class="ev approval">
         <template v-if="props.approvable !== false">
           <T v-if="mcpApprovalServer(e.call.name)" k="trace.askMcp"><template #name><code>{{ mcpApprovalServer(e.call.name) }}</code></template><template #cmd><code>{{ command(e.seq) }}</code></template></T>
+          <T v-else-if="e.call.name === PROMPT_HOOK" k="trace.askHook"><template #cmd><code>{{ command(e.seq) }}</code></template></T>
           <T v-else-if="e.call.name === UNTIL_BASH" k="trace.askUntil"><template #cmd><code>{{ command(e.seq) }}</code></template></T>
           <T v-else k="trace.askRun"><template #cmd><code>{{ command(e.seq) }}</code></template></T>
           <button @click="emit('approve', e.call.callId, true)">Run</button> <button @click="emit('approve', e.call.callId, false)">Deny</button>
@@ -151,6 +155,7 @@ const liveTok = computed(() => Math.ceil(liveText.value.length / 4))
         <template v-if="e.kind === 'compaction'">compaction · {{ t('trace.compaction') }}</template>
         <template v-else>auxiliary · {{ e.model }}<template v-if="e.error !== undefined"> · failed: {{ e.error }}</template><template v-else><template v-if="e.usage"> · {{ e.usage.promptTokens }}+{{ e.usage.completionTokens }} tok</template> · {{ e.latencyMs }}ms</template></template>
       </div>
+      <div v-else-if="e.type === 'prompt_hook'" class="ev muted">{{ t('trace.promptHook', { what: hookWhat(e) }) }}</div>
       <div v-else-if="e.type === 'notes_loaded'" class="ev muted">notes: {{ e.ids.length }} loaded · {{ e.chars }} chars</div>
       <div v-else-if="e.type === 'note_written'" class="ev muted"><template v-if="e.error !== undefined">note not written: {{ e.error }}</template><template v-else-if="e.notes.length"><template v-for="n in e.notes" :key="n.id">note: {{ n.text }}<br></template></template><template v-else>note: nothing new</template></div>
       <div v-else-if="e.type === 'mcp_server_start'" class="ev tool_call">
