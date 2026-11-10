@@ -140,18 +140,19 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
       // Once per run, on the task without notes. Its context goes on `task`, so a freshContext reset sends it again.
       const r = await (opts.promptHook ?? runPromptHook)(hook, { task: params.task, workdir }, { signal: opts.signal, timeoutMs: opts.hookTimeoutMs ?? HOOK_TIMEOUT_MS })
       // An abort during the drain after the hook exited is not reported by runPromptHook.
-      if (r.error === 'aborted' || opts.signal?.aborted) { yield done('aborted'); return }
-      if (r.error === 'blocked') {
+      const error = opts.signal?.aborted ? 'aborted' : r.error
+      // Redacted first, then cut, so no part of the key is left at the cut. A block or an abort sends nothing.
+      const c = error ? '' : redact.text(r.context ?? '')
+      const sent = c.length > HOOK_CONTEXT_CAP ? c.slice(0, HOOK_CONTEXT_CAP) + `\n[truncated: ${c.length - HOOK_CONTEXT_CAP} more chars]` : c
+      yield ev({
+        type: 'prompt_hook', command: hook.command, args: hook.args ?? [], ms: r.ms, exitCode: r.exitCode, error, chars: sent.length,
+        ...(sent !== c ? { truncated: true } : {}), ...(r.stderr ? { stderr: r.stderr } : {}),
+      })
+      if (error === 'aborted') { yield done('aborted'); return }
+      if (error === 'blocked') {
         yield ev({ type: 'error', message: `the prompt hook blocked the task${r.reason ? `: ${r.reason}` : ''}` })
         yield done('aborted'); return
       }
-      // Redacted first, then cut, so no part of the key is left at the cut.
-      const c = redact.text(r.context ?? '')
-      const sent = c.length > HOOK_CONTEXT_CAP ? c.slice(0, HOOK_CONTEXT_CAP) + `\n[truncated: ${c.length - HOOK_CONTEXT_CAP} more chars]` : c
-      yield ev({
-        type: 'prompt_hook', command: hook.command, args: hook.args ?? [], ms: r.ms, exitCode: r.exitCode, error: r.error, chars: sent.length,
-        ...(sent !== c ? { truncated: true } : {}), ...(r.stderr ? { stderr: r.stderr } : {}),
-      })
       if (sent) task = sent + '\n\n' + task
     }
     // Anthropic needs a max_tokens: absent from the harness, it is the model's own cap (knobsOff refused when neither is known).

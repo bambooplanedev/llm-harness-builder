@@ -1283,6 +1283,8 @@ test('prompt hook: a block ends the run before any request', async () => {
     const err = ev.find(e => e.type === 'error') as Extract<HarnessEvent, { type: 'error' }>
     expect(err.message).toContain('the prompt hook blocked the task')
     expect(err.message).toContain(reason)
+    expect(hookEv(ev)).toMatchObject({ error: 'blocked', chars: 0, exitCode: mode === 'exit2' ? 2 : 0 })
+    expect(types(ev).slice(-3)).toEqual(['prompt_hook', 'error', 'done'])
     expect(last(ev).reason).toBe('aborted')
     expect(be.requests).toHaveLength(0)
   }
@@ -1339,7 +1341,20 @@ test('prompt hook: abort while the hook runs', async () => {
   })
   expect(last(ev).reason).toBe('aborted')
   expect(types(ev)).not.toContain('llm_request')
+  expect(hookEv(ev)).toMatchObject({ error: 'aborted', chars: 0 })
+  expect(types(ev).slice(-2)).toEqual(['prompt_hook', 'done'])
   expect(closed).toBe(true)
+})
+
+test('prompt hook: an abort that lands after the hook returned is aborted, its context is not sent', async () => {
+  const ac = new AbortController()
+  const be = Fake([{ content: 'done' }])
+  const ev = await collect({ config: base({ hooks: { userPrompt: { command: 'x' } } }), task: 'TASK', workdir: await wd() },
+    { backend: be, ...yes, signal: ac.signal, promptHook: async () => { ac.abort(); return { ms: 1, exitCode: 0, context: 'CTX' } } })
+  expect(hookEv(ev)).toMatchObject({ error: 'aborted', exitCode: 0, chars: 0 })
+  expect(types(ev).slice(-2)).toEqual(['prompt_hook', 'done'])
+  expect(last(ev).reason).toBe('aborted')
+  expect(be.requests).toHaveLength(0)
 })
 
 test('prompt hook: freshContext resends the context, the hook runs once', async () => {
