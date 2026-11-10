@@ -80,7 +80,7 @@
 <summary>Підказка 3</summary>
 
 На цій моделі thinking може з'їсти цілий хід. Один ключ `backend` його вимикає. Знайдіть його в
-таблиці [Файл харнесу](https://github.com/bambooplanedev/llm-harness-builder/blob/main/README.uk.md#файл-харнесу)
+таблиці [Файл харнесу](https://github.com/bambooplanedev/llm-harness-builder/blob/main/docs/configuration.uk.md#файл-харнесу)
 в README. Чи задає його `start.json`?
 
 </details>

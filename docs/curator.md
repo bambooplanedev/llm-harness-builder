@@ -56,7 +56,7 @@ rules sentence as `triage`.
 instead of retyping it. `curator-judge` has no tools, `enforceSchema: true` and `maxTurns: 2`, so
 the schema goes with the request. A step of your own takes the same route through
 `run --answer-schema <file.json>` (see "A schema for the final answer" under
-[Harness file](../README.md#harness-file)).
+[Harness file](configuration.md#harness-file)).
 
 ## What was measured
 
