@@ -7,6 +7,8 @@ import { track, untrack } from './procs.js'
 export type McpServerInfo = {
   server: string; command: string; args: string[]
   offered: number; tools: string[]; descriptionChars: number; schemaChars: number
+  /** The server's initialize `instructions`, kept only under useInstructions and when non-empty. */
+  instructions?: string
 }
 
 export type McpSession = {
@@ -150,7 +152,7 @@ export async function startServers(
       opts.signal?.addEventListener('abort', () => conn.close(), { once: true })
       conns.push(conn)
       try {
-        await conn.request('initialize', {
+        const init = await conn.request('initialize', {
           protocolVersion: PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: 'llm-harness-builder', version: '1' },
         }, handshake)
         conn.notify('notifications/initialized')
@@ -169,7 +171,9 @@ export async function startServers(
           tools.push(schema)
           byTool.set(t.name, conn)
         }
-        info.push({ server: name, command: cfg.command, args, offered: offered.length, tools: kept.map(t => t.name), descriptionChars, schemaChars })
+        const said = init?.result?.instructions
+        const instructions = cfg.useInstructions && typeof said === 'string' && said.trim() ? said.trim() : undefined
+        info.push({ server: name, command: cfg.command, args, offered: offered.length, tools: kept.map(t => t.name), descriptionChars, schemaChars, ...instructions ? { instructions } : {} })
       } catch (e) {
         const tail = conn.stderrTail.trim()
         throw new Error(`mcp server "${name}" failed to start: ${(e as Error).message}${tail ? `\n${tail}` : ''}`)

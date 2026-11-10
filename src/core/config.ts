@@ -108,7 +108,8 @@ export type Price = { input: number; output: number; cacheRead?: number; cacheWr
 export type ReasoningEffort = 'low' | 'medium' | 'high'
 export const REASONING_EFFORTS: ReasoningEffort[] = ['low', 'medium', 'high']
 
-export type McpServerConfig = { command: string; args?: string[]; tools?: string[] }
+/** useInstructions: the server's `instructions` from initialize go to the end of the system prompt, under its name. Off when absent. */
+export type McpServerConfig = { command: string; args?: string[]; tools?: string[]; useInstructions?: boolean }
 
 export type HarnessConfig = {
   name: string
@@ -144,7 +145,7 @@ const KEYS: Record<string, string[]> = {
   loop: ['maxTurns', 'maxRepeats', 'repeatTemperature', 'repeatThinkTokens', 'freshContext', 'untilBash'],
   notes: ['enabled', 'maxTokens'],
 }
-const MCP_SERVER_KEYS = ['command', 'args', 'tools']
+const MCP_SERVER_KEYS = ['command', 'args', 'tools', 'useInstructions']
 const PRICE_KEYS = ['input', 'output', 'cacheRead', 'cacheWrite']
 /** The thinking switch `loop.repeatThinkTokens` flips: a line of its own, which is how the qwen3 family writes it. */
 export const NO_THINK_LINE = /^\/no_think$/m
@@ -262,6 +263,7 @@ export function validateConfig(c: unknown): string[] {
       const strs = (x: unknown) => Array.isArray(x) && x.every(s => typeof s === 'string')
       if (v.args !== undefined && !strs(v.args)) e.push(`mcpServers.${k}.args must be an array of strings`)
       if (v.tools !== undefined && !strs(v.tools)) e.push(`mcpServers.${k}.tools must be an array of strings`)
+      if (v.useInstructions !== undefined && typeof v.useInstructions !== 'boolean') e.push(`mcpServers.${k}.useInstructions must be a boolean`)
     }
   }
   return e

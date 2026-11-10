@@ -63,11 +63,12 @@ test('mcpServers is optional and validated per server', () => {
   expect(validateConfig(noServers)).toEqual([])
 
   const bad = structuredClone(validConfig) as any
-  bad.mcpServers = { fs: { command: '', args: 'nope', tools: [1] }, '': { command: 'x' } }
+  bad.mcpServers = { fs: { command: '', args: 'nope', tools: [1], useInstructions: 'yes' }, '': { command: 'x' } }
   const errs = validateConfig(bad)
   expect(errs).toContain('mcpServers.fs.command must be a non-empty string')
   expect(errs).toContain('mcpServers.fs.args must be an array of strings')
   expect(errs).toContain('mcpServers.fs.tools must be an array of strings')
+  expect(errs).toContain('mcpServers.fs.useInstructions must be a boolean')
   expect(errs).toContain('mcpServers key must be a non-empty string')
 
   const notObj = structuredClone(validConfig) as any

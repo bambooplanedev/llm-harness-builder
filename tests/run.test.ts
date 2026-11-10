@@ -286,6 +286,23 @@ test('mcp: prompted mode renders the mcp tool into the system message the backen
   expect((be.requests[0].messages.find(m => m.role === 'system') as any).content).toContain('echo')
 })
 
+test('mcp: a server\'s instructions follow the system prompt under its name, before the prompted tools, and the start event keeps them', async () => {
+  const be = Fake([{ content: '{"calls":[],"final":"fin"}' }])
+  const config = withMcp({ toolCalls: { mode: 'prompted', enforceSchema: false, promptedTemplate: 'T:{{tools}}', parseErrorHint: 'HINT' } })
+  const servers = [{ ...fakeMcp().servers[0], instructions: 'Start with find.' }]
+  const ev = await collect({ config, task: 'do', workdir: await wd() }, { backend: be, mcp: async () => fakeMcp({ servers }), approve: async () => true })
+  const sys = (be.requests[0].messages.find(m => m.role === 'system') as any).content as string
+  expect(sys.startsWith(config.systemPrompt + '\n\nInstructions from MCP server "fs":\nStart with find.\n\nT:')).toBe(true)
+  expect((ev.find(e => e.type === 'mcp_server_start') as any).instructions).toBe('Start with find.')
+})
+
+test('mcp: without instructions the system prompt is the harness\'s own', async () => {
+  const be = Fake([{ content: 'fin' }])
+  const config = withMcp()
+  await collect({ config, task: 'do', workdir: await wd() }, { backend: be, mcp: async () => fakeMcp(), approve: async () => true })
+  expect((be.requests[0].messages.find(m => m.role === 'system') as any).content).toBe(config.systemPrompt)
+})
+
 test('mcp: refusing the server ends the run before any llm_request', async () => {
   const be = Fake([])
   const ev = await collect({ config: withMcp(), task: 'do', workdir: await wd() }, {
@@ -859,6 +876,16 @@ test('an mcp result that holds the key: tool_result and the next request carry t
   expect((ev.find(e => e.type === 'tool_result') as any).output).toBe(`token=${MARK}`)
   expect(leaked(ev)).toBe(false); expect(leaked(be.requests[1].messages)).toBe(false)
   expect(opts.dropEnv).toBe(KEY_NAME)
+}))
+
+test('a key in a server\'s instructions reaches the model as the mark', () => withKey(async () => {
+  const be = Fake([{ content: 'fin' }])
+  const servers = [{ ...fakeMcp().servers[0], instructions: `use ${KEY}` }]
+  await collect({ config: keyed({ mcpServers: { fs: { command: 'npx', args: ['.'] } } }), task: 'do', workdir: await wd() }, {
+    backend: be, approve: async () => true, mcp: async () => fakeMcp({ servers }),
+  })
+  expect((be.requests[0].messages[0] as any).content).toContain(`use ${MARK}`)
+  expect(leaked(be.requests[0].messages)).toBe(false)
 }))
 
 test('a key the cut would split is taken out first: no part of it is left, and the truncation counts the redacted text', () => withKey(async () => {

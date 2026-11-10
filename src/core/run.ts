@@ -120,9 +120,11 @@ export async function* runAgent(params: RunParams, opts: RunOpts = {}): AsyncGen
 
     // Depends on the '30s' in TOOL_SCHEMAS.bash.description (tools/index.ts).
     const schemas = [...config.tools.enabled.map(n => n === 'read_file' && config.tools.readRanges ? READ_FILE_RANGES : n === 'bash' && config.tools.bashTimeoutS ? { ...TOOL_SCHEMAS[n], description: TOOL_SCHEMAS[n].description.replace('30s', `${config.tools.bashTimeoutS}s`) } : TOOL_SCHEMAS[n]), ...(mcp?.tools ?? [])]
+    // mcpServers.<name>.useInstructions: each server's instructions after the prompt, under its name, redacted like its tool results.
+    const base = config.systemPrompt + (mcp?.servers ?? []).map(s => s.instructions ? `\n\nInstructions from MCP server "${s.server}":\n${redact.text(s.instructions)}` : '').join('')
     const system = prompted
-      ? config.systemPrompt + '\n\n' + config.toolCalls.promptedTemplate.split('{{tools}}').join(renderTools(schemas, config.toolCalls.format))
-      : config.systemPrompt
+      ? base + '\n\n' + config.toolCalls.promptedTemplate.split('{{tools}}').join(renderTools(schemas, config.toolCalls.format))
+      : base
     const messages: ChatMessage[] = [{ role: 'system', content: system }, { role: 'user', content: task }]
     if (block) yield ev({ type: 'notes_loaded', ids: params.notes!.map(n => n.id), chars: block.length })
     // loop.repeatThinkTokens: the system message of a thinking turn. It is sent for that turn only and never enters the history.
